@@ -12,6 +12,7 @@ import pages.facturen
 import pages.kosten
 import pages.bank
 import pages.jaarafsluiting
+import pages.instellingen
 
 DB_PATH = Path("data/boekhouding.sqlite3")
 
