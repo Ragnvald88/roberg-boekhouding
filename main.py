@@ -2,7 +2,16 @@
 
 from nicegui import app, ui
 from database import init_db
+from import_.seed_data import seed_all
 from pathlib import Path
+
+# Page imports (register @ui.page routes)
+import pages.dashboard
+import pages.werkdagen
+import pages.facturen
+import pages.kosten
+import pages.bank
+import pages.jaarafsluiting
 
 DB_PATH = Path("data/boekhouding.sqlite3")
 
@@ -13,12 +22,7 @@ async def startup():
     Path("data/uitgaven").mkdir(parents=True, exist_ok=True)
     Path("data/bank_csv").mkdir(parents=True, exist_ok=True)
     await init_db(DB_PATH)
-
-
-@ui.page('/')
-async def index():
-    ui.label('TestBV Boekhouding').classes('text-h4')
-    ui.label('Dashboard — onder constructie')
+    await seed_all(DB_PATH)
 
 
 ui.run(
