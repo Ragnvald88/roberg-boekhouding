@@ -1,0 +1,8 @@
+nicegui>=3.0
+aiosqlite
+openpyxl
+httpx
+jinja2
+weasyprint
+pytest
+pytest-asyncio
