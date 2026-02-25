@@ -9,11 +9,11 @@ from components.layout import create_layout
 from database import (
     get_fiscale_params,
     get_investeringen_voor_afschrijving,
+    get_investeringen,
     get_omzet_totaal,
     get_representatie_totaal,
     get_uitgaven_per_categorie,
     get_uren_totaal,
-    get_investeringen,
 )
 from fiscal.afschrijvingen import bereken_afschrijving
 from fiscal.berekeningen import FiscaalResultaat, bereken_volledig
@@ -63,8 +63,9 @@ async def jaarafsluiting_page():
     jaren = list(range(huidig_jaar, 2022, -1))  # e.g. 2026 down to 2023
     gekozen_jaar = {'value': huidig_jaar}
 
-    # References for dynamic containers
+    # References for dynamic containers and IB input fields
     result_container = {'ref': None}
+    ib_inputs = {'aov': None, 'woz': None, 'hypotheek': None, 'voorlopig': None}
 
     # State that persists across bereken/herbereken calls
     berekening_state = {
@@ -76,146 +77,27 @@ async def jaarafsluiting_page():
         'uren': 0.0,
         'params_dict': {},
         'kosten_per_cat': [],
-        'activastaat': [],  # list of dicts for the table
+        'activastaat': [],
+        'totaal_kosten_alle': 0.0,
     }
 
-    # --- Bereken handler ---
+    # --- Helper rendering functions ---
 
-    async def bereken(aov: float = 0, woz: float = 0,
-                      hypotheekrente: float = 0,
-                      voorlopige_aanslag: float = 0):
-        """Run fiscal engine and render all sections."""
-        jaar = gekozen_jaar['value']
-        container = result_container['ref']
-        if container is None:
-            return
+    def _wv_line(label: str, value: float, prefix: str = '',
+                 bold: bool = False):
+        """Render a W&V line with label and euro value."""
+        css = 'text-bold' if bold else ''
+        with ui.row().classes('w-full justify-between'):
+            text = f'{prefix}  {label}' if prefix else label
+            ui.label(text).classes(css)
+            ui.label(format_euro(value)).classes(f'{css} text-right')
 
-        # Fetch fiscal parameters
-        params = await get_fiscale_params(DB_PATH, jaar)
-        if params is None:
-            container.clear()
-            with container:
-                ui.label(f'Geen fiscale parameters gevonden voor {jaar}. '
-                         f'Voeg deze toe via Instellingen.').classes(
-                    'text-negative text-subtitle1')
-            return
-
-        params_dict = _fiscale_params_to_dict(params)
-        berekening_state['params_dict'] = params_dict
-
-        # Fetch data from database
-        omzet = await get_omzet_totaal(DB_PATH, jaar)
-        kosten_per_cat = await get_uitgaven_per_categorie(DB_PATH, jaar)
-        representatie = await get_representatie_totaal(DB_PATH, jaar)
-        investeringen = await get_investeringen_voor_afschrijving(DB_PATH, tot_jaar=jaar)
-        inv_dit_jaar = await get_investeringen(DB_PATH, jaar=jaar)
-        uren = await get_uren_totaal(DB_PATH, jaar, urennorm_only=True)
-
-        # Calculate total kosten (excl. investments — those go via afschrijving)
-        totaal_kosten_alle = sum(r['totaal'] for r in kosten_per_cat)
-        inv_dit_jaar_bedrag = sum(
-            (u.aanschaf_bedrag or u.bedrag) for u in inv_dit_jaar
-        )
-        kosten_excl_inv = totaal_kosten_alle - inv_dit_jaar_bedrag
-
-        # Calculate afschrijvingen (activastaat)
-        activastaat = []
-        totaal_afschrijvingen = 0.0
-        for u in investeringen:
-            aanschaf_bedrag = u.aanschaf_bedrag or u.bedrag
-            levensduur = u.levensduur_jaren or 5
-            aanschaf_maand = int(u.datum[5:7])
-            aanschaf_jaar = int(u.datum[0:4])
-            result = bereken_afschrijving(
-                aanschaf_bedrag=aanschaf_bedrag,
-                restwaarde_pct=u.restwaarde_pct,
-                levensduur=levensduur,
-                aanschaf_maand=aanschaf_maand,
-                aanschaf_jaar=aanschaf_jaar,
-                bereken_jaar=jaar,
-            )
-            activastaat.append({
-                'omschrijving': u.omschrijving,
-                'aanschaf_jaar': aanschaf_jaar,
-                'aanschaf_bedrag': aanschaf_bedrag,
-                'afschrijving_jaar': result['per_jaar'],
-                'afschrijving_dit_jaar': result['afschrijving'],
-                'boekwaarde': result['boekwaarde'],
-            })
-            totaal_afschrijvingen += result['afschrijving']
-
-        # Investeringen totaal this year (for KIA)
-        inv_totaal_dit_jaar = sum(
-            (u.aanschaf_bedrag or u.bedrag) for u in inv_dit_jaar
-        )
-
-        # Save state for herbereken
-        berekening_state['omzet'] = omzet
-        berekening_state['kosten'] = kosten_excl_inv
-        berekening_state['afschrijvingen_totaal'] = totaal_afschrijvingen
-        berekening_state['representatie'] = representatie
-        berekening_state['investeringen_dit_jaar'] = inv_totaal_dit_jaar
-        berekening_state['uren'] = uren
-        berekening_state['kosten_per_cat'] = kosten_per_cat
-        berekening_state['activastaat'] = activastaat
-
-        # Run fiscal engine
-        fiscaal = bereken_volledig(
-            omzet=omzet,
-            kosten=kosten_excl_inv,
-            afschrijvingen=totaal_afschrijvingen,
-            representatie=representatie,
-            investeringen_totaal=inv_totaal_dit_jaar,
-            uren=uren,
-            params=params_dict,
-            aov=aov,
-            woz=woz,
-            hypotheekrente=hypotheekrente,
-            voorlopige_aanslag=voorlopige_aanslag,
-        )
-
-        # Render all sections
-        _render_resultaat(
-            container, jaar, fiscaal, kosten_per_cat, activastaat,
-            totaal_kosten_alle, kosten_excl_inv, totaal_afschrijvingen,
-            aov, woz, hypotheekrente, voorlopige_aanslag,
-        )
-
-    async def herbereken():
-        """Re-run fiscal engine with IB-input values."""
-        s = berekening_state
-        if not s['params_dict']:
-            ui.notify('Voer eerst een berekening uit', type='warning')
-            return
-
-        aov_val = float(input_aov.value or 0)
-        woz_val = float(input_woz.value or 0)
-        hyp_val = float(input_hypotheek.value or 0)
-        va_val = float(input_voorlopig.value or 0)
-
-        jaar = gekozen_jaar['value']
-        container = result_container['ref']
-
-        fiscaal = bereken_volledig(
-            omzet=s['omzet'],
-            kosten=s['kosten'],
-            afschrijvingen=s['afschrijvingen_totaal'],
-            representatie=s['representatie'],
-            investeringen_totaal=s['investeringen_dit_jaar'],
-            uren=s['uren'],
-            params=s['params_dict'],
-            aov=aov_val,
-            woz=woz_val,
-            hypotheekrente=hyp_val,
-            voorlopige_aanslag=va_val,
-        )
-
-        _render_resultaat(
-            container, jaar, fiscaal, s['kosten_per_cat'], s['activastaat'],
-            s['kosten'] + s['investeringen_dit_jaar'],  # totaal_kosten_alle
-            s['kosten'], s['afschrijvingen_totaal'],
-            aov_val, woz_val, hyp_val, va_val,
-        )
+    def _waterfall_line(label: str, value: float, bold: bool = False):
+        """Render a fiscal waterfall line."""
+        css = 'text-bold' if bold else ''
+        with ui.row().classes('w-full justify-between'):
+            ui.label(label).classes(css)
+            ui.label(format_euro(value)).classes(f'{css} text-right')
 
     def _render_resultaat(
         container, jaar: int, fiscaal: FiscaalResultaat,
@@ -243,13 +125,13 @@ async def jaarafsluiting_page():
                     'text-subtitle1 text-bold')
 
                 if kosten_per_cat:
-                    kosten_rows = []
-                    for r in kosten_per_cat:
-                        kosten_rows.append({
+                    kosten_rows = [
+                        {
                             'categorie': r['categorie'],
                             'bedrag': format_euro(r['totaal']),
-                        })
-
+                        }
+                        for r in kosten_per_cat
+                    ]
                     kosten_columns = [
                         {'name': 'categorie', 'label': 'Categorie',
                          'field': 'categorie', 'align': 'left'},
@@ -276,17 +158,18 @@ async def jaarafsluiting_page():
                     'text-subtitle1 text-bold')
 
                 if activastaat:
-                    activa_rows = []
-                    for a in activastaat:
-                        activa_rows.append({
+                    activa_rows = [
+                        {
                             'omschrijving': a['omschrijving'],
                             'aanschaf': str(a['aanschaf_jaar']),
                             'bedrag': format_euro(a['aanschaf_bedrag']),
                             'afschr_jr': format_euro(a['afschrijving_jaar']),
-                            'afschr_dit': format_euro(a['afschrijving_dit_jaar']),
+                            'afschr_dit': format_euro(
+                                a['afschrijving_dit_jaar']),
                             'boekwaarde': format_euro(a['boekwaarde']),
-                        })
-
+                        }
+                        for a in activastaat
+                    ]
                     activa_columns = [
                         {'name': 'omschrijving', 'label': 'Omschrijving',
                          'field': 'omschrijving', 'align': 'left'},
@@ -298,7 +181,7 @@ async def jaarafsluiting_page():
                          'field': 'afschr_jr', 'align': 'right'},
                         {'name': 'afschr_dit', 'label': f'Afschr {jaar}',
                          'field': 'afschr_dit', 'align': 'right'},
-                        {'name': 'boekwaarde', 'label': f'Boekwaarde 31-12',
+                        {'name': 'boekwaarde', 'label': 'Boekwaarde 31-12',
                          'field': 'boekwaarde', 'align': 'right'},
                     ]
                     ui.table(
@@ -323,7 +206,8 @@ async def jaarafsluiting_page():
                 _wv_line('Netto-omzet', fiscaal.omzet)
                 _wv_line('Bedrijfslasten (excl. investeringen)',
                          kosten_excl_inv, prefix='-/-')
-                _wv_line('Afschrijvingen', totaal_afschrijvingen, prefix='-/-')
+                _wv_line('Afschrijvingen', totaal_afschrijvingen,
+                         prefix='-/-')
                 ui.separator()
                 _wv_line('Winst', fiscaal.winst, bold=True)
 
@@ -335,11 +219,12 @@ async def jaarafsluiting_page():
                 _waterfall_line('Winst jaarrekening', fiscaal.winst)
                 _waterfall_line('+ Bijtelling representatie (20%)',
                                 fiscaal.repr_bijtelling)
-                _waterfall_line('- Kleinschaligheidsinvesteringsaftrek (KIA)',
-                                fiscaal.kia)
+                _waterfall_line(
+                    '- Kleinschaligheidsinvesteringsaftrek (KIA)',
+                    fiscaal.kia)
                 ui.separator().classes('my-1')
-                _waterfall_line('= Fiscale winst', fiscaal.fiscale_winst,
-                                bold=True)
+                _waterfall_line('= Fiscale winst',
+                                fiscaal.fiscale_winst, bold=True)
 
                 ui.separator().classes('my-1')
                 _waterfall_line('- Zelfstandigenaftrek',
@@ -361,26 +246,25 @@ async def jaarafsluiting_page():
                 ui.label(f'6. Inkomstenbelasting schatting {jaar}').classes(
                     'text-subtitle1 text-bold')
 
-                # Manual input fields
-                ui.label('Persoonlijke gegevens (Box 1 aftrekposten)').classes(
-                    'text-caption text-grey q-mt-sm')
+                # Manual input fields for personal deductions
+                ui.label(
+                    'Persoonlijke gegevens (Box 1 aftrekposten)'
+                ).classes('text-caption text-grey q-mt-sm')
                 with ui.row().classes('w-full items-end gap-4 flex-wrap'):
-                    nonlocal input_aov, input_woz, input_hypotheek, \
-                        input_voorlopig
-                    input_aov = ui.number(
-                        'AOV premie (€)', value=aov,
+                    ib_inputs['aov'] = ui.number(
+                        'AOV premie (\u20ac)', value=aov,
                         format='%.2f', min=0, step=100,
                     ).classes('w-44')
-                    input_woz = ui.number(
-                        'WOZ waarde (€)', value=woz,
+                    ib_inputs['woz'] = ui.number(
+                        'WOZ waarde (\u20ac)', value=woz,
                         format='%.0f', min=0, step=1000,
                     ).classes('w-44')
-                    input_hypotheek = ui.number(
-                        'Hypotheekrente (€)', value=hypotheekrente,
+                    ib_inputs['hypotheek'] = ui.number(
+                        'Hypotheekrente (\u20ac)', value=hypotheekrente,
                         format='%.2f', min=0, step=100,
                     ).classes('w-44')
-                    input_voorlopig = ui.number(
-                        'Voorlopige aanslag betaald (€)',
+                    ib_inputs['voorlopig'] = ui.number(
+                        'Voorlopige aanslag betaald (\u20ac)',
                         value=voorlopige_aanslag,
                         format='%.2f', min=0, step=100,
                     ).classes('w-52')
@@ -400,8 +284,10 @@ async def jaarafsluiting_page():
                 ui.separator().classes('my-1')
                 _waterfall_line('Bruto inkomstenbelasting',
                                 fiscaal.bruto_ib)
-                _waterfall_line('- Algemene heffingskorting', fiscaal.ahk)
-                _waterfall_line('- Arbeidskorting', fiscaal.arbeidskorting)
+                _waterfall_line('- Algemene heffingskorting',
+                                fiscaal.ahk)
+                _waterfall_line('- Arbeidskorting',
+                                fiscaal.arbeidskorting)
                 _waterfall_line('= Netto inkomstenbelasting',
                                 fiscaal.netto_ib, bold=True)
 
@@ -414,10 +300,9 @@ async def jaarafsluiting_page():
 
                 ui.separator().classes('my-2')
 
-                # Result with color
+                # Result with color coding
                 resultaat = fiscaal.resultaat
                 if resultaat < 0:
-                    # Teruggave
                     with ui.row().classes(
                             'w-full justify-between items-center'):
                         ui.label('Terug te ontvangen').classes(
@@ -425,7 +310,6 @@ async def jaarafsluiting_page():
                         ui.label(format_euro(abs(resultaat))).classes(
                             'text-bold text-h6 text-positive')
                 elif resultaat > 0:
-                    # Bijbetalen
                     with ui.row().classes(
                             'w-full justify-between items-center'):
                         ui.label('Bij te betalen').classes(
@@ -435,8 +319,10 @@ async def jaarafsluiting_page():
                 else:
                     with ui.row().classes(
                             'w-full justify-between items-center'):
-                        ui.label('Resultaat').classes('text-bold text-h6')
-                        ui.label(format_euro(0)).classes('text-bold text-h6')
+                        ui.label('Resultaat').classes(
+                            'text-bold text-h6')
+                        ui.label(format_euro(0)).classes(
+                            'text-bold text-h6')
 
             # === Section 7: Controles ===
             with ui.card().classes('w-full'):
@@ -454,20 +340,24 @@ async def jaarafsluiting_page():
 
                 with ui.row().classes('items-center gap-2'):
                     ui.label('Kosten/omzet ratio:')
-                    ui.badge(f'{ratio:.1f}%', color=ratio_color).classes(
-                        'text-sm')
+                    ui.badge(
+                        f'{ratio:.1f}%', color=ratio_color,
+                    ).classes('text-sm')
 
                 # Urencriterium
-                uren = fiscaal.uren_criterium
+                uren_val = fiscaal.uren_criterium
                 gehaald = fiscaal.uren_criterium_gehaald
                 uren_color = 'positive' if gehaald else 'negative'
-                uren_text = f'{uren:.0f} uur'
-                uren_label = ' (gehaald)' if gehaald else ' (NIET gehaald)'
+                uren_text = f'{uren_val:.0f} uur'
+                if gehaald:
+                    uren_text += ' (gehaald)'
+                else:
+                    uren_text += ' (NIET gehaald)'
 
                 with ui.row().classes('items-center gap-2'):
                     ui.label('Urencriterium (>= 1.225 uur):')
                     ui.badge(
-                        uren_text + uren_label, color=uren_color,
+                        uren_text, color=uren_color,
                     ).classes('text-sm')
 
                 # Waarschuwingen
@@ -481,29 +371,150 @@ async def jaarafsluiting_page():
                                 'text-sm')
                             ui.label(w).classes('text-negative')
 
-    # --- Helper rendering functions ---
+    # --- Bereken handler ---
 
-    def _wv_line(label: str, value: float, prefix: str = '',
-                 bold: bool = False):
-        """Render a W&V line with label and euro value."""
-        css = 'text-bold' if bold else ''
-        with ui.row().classes('w-full justify-between'):
-            text = f'{prefix}  {label}' if prefix else label
-            ui.label(text).classes(css)
-            ui.label(format_euro(value)).classes(f'{css} text-right')
+    async def bereken(aov: float = 0, woz: float = 0,
+                      hypotheekrente: float = 0,
+                      voorlopige_aanslag: float = 0):
+        """Fetch data, run fiscal engine, and render all sections."""
+        jaar = gekozen_jaar['value']
+        container = result_container['ref']
+        if container is None:
+            return
 
-    def _waterfall_line(label: str, value: float, bold: bool = False):
-        """Render a fiscal waterfall line."""
-        css = 'text-bold' if bold else ''
-        with ui.row().classes('w-full justify-between'):
-            ui.label(label).classes(css)
-            ui.label(format_euro(value)).classes(f'{css} text-right')
+        # Fetch fiscal parameters
+        params = await get_fiscale_params(DB_PATH, jaar)
+        if params is None:
+            container.clear()
+            with container:
+                ui.label(
+                    f'Geen fiscale parameters gevonden voor {jaar}. '
+                    f'Voeg deze toe via Instellingen.'
+                ).classes('text-negative text-subtitle1')
+            return
 
-    # === IB input fields (declared at page scope, updated in _render_resultaat) ===
-    input_aov = None
-    input_woz = None
-    input_hypotheek = None
-    input_voorlopig = None
+        params_dict = _fiscale_params_to_dict(params)
+
+        # Fetch data from database
+        omzet = await get_omzet_totaal(DB_PATH, jaar)
+        kosten_per_cat = await get_uitgaven_per_categorie(DB_PATH, jaar)
+        representatie = await get_representatie_totaal(DB_PATH, jaar)
+        investeringen = await get_investeringen_voor_afschrijving(
+            DB_PATH, tot_jaar=jaar)
+        inv_dit_jaar = await get_investeringen(DB_PATH, jaar=jaar)
+        uren = await get_uren_totaal(DB_PATH, jaar, urennorm_only=True)
+
+        # Total kosten from all categories (incl. investments)
+        totaal_kosten_alle = sum(r['totaal'] for r in kosten_per_cat)
+
+        # Investment amounts this year (they go via depreciation, not costs)
+        inv_dit_jaar_bedrag = sum(
+            (u.aanschaf_bedrag or u.bedrag) for u in inv_dit_jaar
+        )
+        kosten_excl_inv = totaal_kosten_alle - inv_dit_jaar_bedrag
+
+        # Calculate depreciation per investment (activastaat)
+        activastaat = []
+        totaal_afschrijvingen = 0.0
+        for u in investeringen:
+            aanschaf_bedrag = u.aanschaf_bedrag or u.bedrag
+            levensduur = u.levensduur_jaren or 5
+            aanschaf_maand = int(u.datum[5:7])
+            aanschaf_jaar = int(u.datum[0:4])
+            result = bereken_afschrijving(
+                aanschaf_bedrag=aanschaf_bedrag,
+                restwaarde_pct=u.restwaarde_pct,
+                levensduur=levensduur,
+                aanschaf_maand=aanschaf_maand,
+                aanschaf_jaar=aanschaf_jaar,
+                bereken_jaar=jaar,
+            )
+            activastaat.append({
+                'omschrijving': u.omschrijving,
+                'aanschaf_jaar': aanschaf_jaar,
+                'aanschaf_bedrag': aanschaf_bedrag,
+                'afschrijving_jaar': result['per_jaar'],
+                'afschrijving_dit_jaar': result['afschrijving'],
+                'boekwaarde': result['boekwaarde'],
+            })
+            totaal_afschrijvingen += result['afschrijving']
+
+        # KIA: total investments this year
+        inv_totaal_dit_jaar = sum(
+            (u.aanschaf_bedrag or u.bedrag) for u in inv_dit_jaar
+        )
+
+        # Save state for herbereken
+        berekening_state.update({
+            'omzet': omzet,
+            'kosten': kosten_excl_inv,
+            'afschrijvingen_totaal': totaal_afschrijvingen,
+            'representatie': representatie,
+            'investeringen_dit_jaar': inv_totaal_dit_jaar,
+            'uren': uren,
+            'params_dict': params_dict,
+            'kosten_per_cat': kosten_per_cat,
+            'activastaat': activastaat,
+            'totaal_kosten_alle': totaal_kosten_alle,
+        })
+
+        # Run fiscal engine
+        fiscaal = bereken_volledig(
+            omzet=omzet,
+            kosten=kosten_excl_inv,
+            afschrijvingen=totaal_afschrijvingen,
+            representatie=representatie,
+            investeringen_totaal=inv_totaal_dit_jaar,
+            uren=uren,
+            params=params_dict,
+            aov=aov,
+            woz=woz,
+            hypotheekrente=hypotheekrente,
+            voorlopige_aanslag=voorlopige_aanslag,
+        )
+
+        # Render result
+        _render_resultaat(
+            container, jaar, fiscaal, kosten_per_cat, activastaat,
+            totaal_kosten_alle, kosten_excl_inv, totaal_afschrijvingen,
+            aov, woz, hypotheekrente, voorlopige_aanslag,
+        )
+
+    async def herbereken():
+        """Re-run fiscal engine with updated IB-input values."""
+        s = berekening_state
+        if not s['params_dict']:
+            ui.notify('Voer eerst een berekening uit', type='warning')
+            return
+
+        aov_val = float(ib_inputs['aov'].value or 0)
+        woz_val = float(ib_inputs['woz'].value or 0)
+        hyp_val = float(ib_inputs['hypotheek'].value or 0)
+        va_val = float(ib_inputs['voorlopig'].value or 0)
+
+        jaar = gekozen_jaar['value']
+        container = result_container['ref']
+
+        fiscaal = bereken_volledig(
+            omzet=s['omzet'],
+            kosten=s['kosten'],
+            afschrijvingen=s['afschrijvingen_totaal'],
+            representatie=s['representatie'],
+            investeringen_totaal=s['investeringen_dit_jaar'],
+            uren=s['uren'],
+            params=s['params_dict'],
+            aov=aov_val,
+            woz=woz_val,
+            hypotheekrente=hyp_val,
+            voorlopige_aanslag=va_val,
+        )
+
+        _render_resultaat(
+            container, jaar, fiscaal, s['kosten_per_cat'],
+            s['activastaat'], s['totaal_kosten_alle'],
+            s['kosten'], s['afschrijvingen_totaal'],
+            aov_val, woz_val, hyp_val, va_val,
+        )
 
     # === PAGE LAYOUT ===
 
@@ -526,5 +537,5 @@ async def jaarafsluiting_page():
                 on_click=lambda: bereken(),
             ).props('color=primary')
 
-        # --- Results container ---
+        # --- Results container (filled by bereken) ---
         result_container['ref'] = ui.column().classes('w-full gap-4')
