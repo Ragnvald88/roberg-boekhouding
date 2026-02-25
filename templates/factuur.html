@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="UTF-8">
+<style>
+  @page { size: A4; margin: 20mm 20mm 25mm 20mm; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+         font-size: 9.5pt; line-height: 1.45; color: #2c3e50; }
+
+  .header { display: flex; justify-content: space-between;
+            margin-bottom: 15mm; }
+  .sender h1 { font-size: 15pt; color: #1a5276; margin-bottom: 2mm; }
+  .sender p { font-size: 8.5pt; color: #555; }
+
+  .meta { text-align: right; }
+  .meta h2 { font-size: 18pt; color: #1a5276; margin-bottom: 3mm;
+             letter-spacing: 1px; }
+  .meta table td { padding: 1mm 0; font-size: 9pt; }
+  .meta table td:first-child { color: #777; padding-right: 4mm; }
+
+  .client-box { margin-bottom: 10mm; padding: 4mm 5mm;
+                background: #f7f9fb; border-left: 3px solid #1a5276; }
+
+  table.lines { width: 100%; border-collapse: collapse; margin-bottom: 8mm; }
+  table.lines th { background: #1a5276; color: #fff; padding: 2.5mm 3mm;
+                   text-align: left; font-size: 8.5pt; font-weight: 600; }
+  table.lines td { padding: 2mm 3mm; border-bottom: 0.5pt solid #dee2e6; }
+  table.lines tr:nth-child(even) td { background: #f8f9fa; }
+  .r { text-align: right; }
+
+  .totals { width: 45%; margin-left: auto; margin-bottom: 8mm; }
+  .totals td { padding: 1.5mm 3mm; }
+  .totals .grand { font-weight: 700; font-size: 11pt;
+                   border-top: 2pt solid #1a5276; padding-top: 2mm; }
+
+  .vat-notice { font-size: 7.5pt; font-style: italic; color: #777;
+                margin-bottom: 8mm; }
+
+  .payment { padding: 4mm 5mm; background: #eaf2f8;
+             border: 0.5pt solid #aed6f1; margin-bottom: 8mm; }
+  .payment strong { color: #1a5276; }
+
+  .footer { position: fixed; bottom: 0; left: 0; right: 0;
+            padding: 3mm 20mm; font-size: 7pt; color: #999;
+            border-top: 0.5pt solid #ddd; text-align: center; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="sender">
+    <h1>TestBV</h1>
+    <p>
+      R.J.P. Gebruiker<br>
+      Waarnemend huisarts<br>
+      Prinsesseweg 36<br>
+      9717 HA Groningen<br>
+      KvK: 00000000
+    </p>
+  </div>
+  <div class="meta">
+    <h2>FACTUUR</h2>
+    <table>
+      <tr><td>Factuurnummer</td><td><strong>{{ nummer }}</strong></td></tr>
+      <tr><td>Factuurdatum</td><td>{{ datum }}</td></tr>
+      <tr><td>Vervaldatum</td><td>{{ vervaldatum }}</td></tr>
+    </table>
+  </div>
+</div>
+
+<div class="client-box">
+  <strong>{{ klant.naam }}</strong><br>
+  {% if klant.adres %}{{ klant.adres }}{% endif %}
+</div>
+
+<table class="lines">
+  <thead>
+    <tr>
+      <th style="width:15%">Datum</th>
+      <th>Omschrijving</th>
+      <th class="r" style="width:10%">Aantal</th>
+      <th class="r" style="width:14%">Tarief</th>
+      <th class="r" style="width:14%">Bedrag</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for regel in regels %}
+    <tr>
+      <td>{{ regel.datum | format_datum }}</td>
+      <td>{{ regel.omschrijving }}</td>
+      <td class="r">{{ "%.2f"|format(regel.aantal) }}</td>
+      <td class="r">{{ regel.tarief | format_euro }}</td>
+      <td class="r">{{ regel.bedrag | format_euro }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<table class="totals">
+  {% if subtotaal_werk != totaal %}
+  <tr>
+    <td>Subtotaal waarnemingen</td>
+    <td class="r">{{ subtotaal_werk | format_euro }}</td>
+  </tr>
+  <tr>
+    <td>Subtotaal reiskosten</td>
+    <td class="r">{{ subtotaal_km | format_euro }}</td>
+  </tr>
+  {% endif %}
+  <tr class="grand">
+    <td>Totaal</td>
+    <td class="r">{{ totaal | format_euro }}</td>
+  </tr>
+</table>
+
+<p class="vat-notice">
+  BTW vrijgesteld op grond van artikel 11, lid 1, sub g,
+  Wet op de omzetbelasting 1968.
+</p>
+
+<div class="payment">
+  <strong>Betaalinformatie</strong><br>
+  Gelieve het totaalbedrag van {{ totaal | format_euro }} over te maken op:<br>
+  <strong>IBAN:</strong> NL69 RABO 0379 3899 63<br>
+  <strong>t.n.v.:</strong> R.J.P. Gebruiker<br>
+  <strong>Referentie:</strong> {{ nummer }}
+</div>
+
+<div class="footer">
+  TestBV — R.J.P. Gebruiker — KvK 00000000 — IBAN NL69 RABO 0379 3899 63
+</div>
+
+</body>
+</html>

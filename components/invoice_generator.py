@@ -1,0 +1,102 @@
+"""WeasyPrint PDF factuur generator."""
+
+from pathlib import Path
+from datetime import datetime, timedelta
+from jinja2 import Environment, FileSystemLoader
+from weasyprint import HTML
+
+TEMPLATE_DIR = Path("templates")
+
+
+def format_euro(value: float) -> str:
+    """Format as Dutch currency: € 1.234,56"""
+    if value is None:
+        return "€ 0,00"
+    return f"€ {value:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def format_datum(iso_date: str) -> str:
+    """Convert YYYY-MM-DD to DD-MM-YYYY for display."""
+    if not iso_date:
+        return ""
+    parts = iso_date.split("-")
+    if len(parts) == 3:
+        return f"{parts[2]}-{parts[1]}-{parts[0]}"
+    return iso_date
+
+
+def generate_invoice(factuur_nummer: str, klant: dict, werkdagen: list[dict],
+                     output_dir: Path, factuur_datum: str = None) -> Path:
+    """Render Jinja2 HTML template to PDF via WeasyPrint.
+
+    Args:
+        factuur_nummer: e.g. "2026-001"
+        klant: dict with naam, adres
+        werkdagen: list of dicts with datum, activiteit/locatie, uren, tarief, km, km_tarief
+        output_dir: directory to save PDF
+        factuur_datum: ISO date string, defaults to today
+
+    Returns: Path to generated PDF
+    """
+    env = Environment(loader=FileSystemLoader(TEMPLATE_DIR))
+    env.filters['format_euro'] = format_euro
+    env.filters['format_datum'] = format_datum
+    template = env.get_template('factuur.html')
+
+    if factuur_datum:
+        datum = datetime.strptime(factuur_datum, '%Y-%m-%d')
+    else:
+        datum = datetime.now()
+    vervaldatum = datum + timedelta(days=14)
+
+    # Build line items
+    regels = []
+    subtotaal_werk = 0.0
+    subtotaal_km = 0.0
+
+    for wd in werkdagen:
+        bedrag = wd['uren'] * wd['tarief']
+        regels.append({
+            'datum': wd['datum'],
+            'omschrijving': wd.get('activiteit', 'Waarneming dagpraktijk'),
+            'aantal': wd['uren'],
+            'tarief': wd['tarief'],
+            'bedrag': bedrag,
+        })
+        subtotaal_werk += bedrag
+
+        km = wd.get('km', 0) or 0
+        km_tarief = wd.get('km_tarief', 0.23) or 0.23
+        if km > 0:
+            km_bedrag = km * km_tarief
+            locatie = wd.get('locatie', '')
+            omschr = f"Reiskosten retour Groningen – {locatie}" if locatie else "Reiskosten"
+            regels.append({
+                'datum': wd['datum'],
+                'omschrijving': omschr,
+                'aantal': km,
+                'tarief': km_tarief,
+                'bedrag': km_bedrag,
+            })
+            subtotaal_km += km_bedrag
+
+    totaal = subtotaal_werk + subtotaal_km
+
+    html_content = template.render(
+        nummer=factuur_nummer,
+        datum=format_datum(datum.strftime('%Y-%m-%d')),
+        vervaldatum=format_datum(vervaldatum.strftime('%Y-%m-%d')),
+        klant=klant,
+        regels=regels,
+        subtotaal_werk=subtotaal_werk,
+        subtotaal_km=subtotaal_km,
+        totaal=totaal,
+    )
+
+    # Sanitize filename
+    klant_naam = klant.get('naam', 'Onbekend').replace(' ', '_').replace("'", '')
+    output_path = output_dir / f"{factuur_nummer}_{klant_naam}.pdf"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    HTML(string=html_content, base_url=str(TEMPLATE_DIR)).write_pdf(str(output_path))
+    return output_path

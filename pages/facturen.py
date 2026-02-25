@@ -1,11 +1,318 @@
-"""Facturen pagina — factuur aanmaken + betaalstatus."""
+"""Facturen pagina — factuur aanmaken, overzicht en betaalstatus."""
+
+from datetime import date, datetime
+from pathlib import Path
 
 from nicegui import ui
+
 from components.layout import create_layout
+from components.invoice_generator import generate_invoice, format_euro, format_datum
+from database import (
+    get_facturen, add_factuur, get_next_factuurnummer,
+    mark_betaald, get_klanten, get_werkdagen_ongefactureerd,
+    link_werkdagen_to_factuur,
+)
+
+DB_PATH = Path("data/boekhouding.sqlite3")
+PDF_DIR = Path("data/facturen")
 
 
 @ui.page('/facturen')
 async def facturen_page():
     create_layout('Facturen', '/facturen')
-    with ui.column().classes('w-full p-4 max-w-6xl mx-auto'):
-        ui.label('Facturen — onder constructie').classes('text-h5')
+
+    current_year = date.today().year
+    table_ref = {'ref': None}
+
+    with ui.column().classes('w-full p-4 max-w-7xl mx-auto'):
+        # Header + filter
+        with ui.row().classes('w-full items-center gap-4 q-mb-md'):
+            jaar_select = ui.select(
+                {y: str(y) for y in range(2023, current_year + 2)},
+                value=current_year, label='Jaar',
+            ).classes('w-28')
+
+            ui.space()
+
+            ui.button('Nieuwe factuur', icon='add',
+                      on_click=lambda: open_new_factuur_dialog()) \
+                .props('color=primary')
+
+        # Facturen table
+        columns = [
+            {'name': 'nummer', 'label': 'Nummer', 'field': 'nummer',
+             'sortable': True, 'align': 'left'},
+            {'name': 'datum', 'label': 'Datum', 'field': 'datum_fmt',
+             'sortable': True, 'align': 'left'},
+            {'name': 'klant', 'label': 'Klant', 'field': 'klant_naam',
+             'sortable': True, 'align': 'left'},
+            {'name': 'uren', 'label': 'Uren', 'field': 'totaal_uren',
+             'align': 'right'},
+            {'name': 'bedrag', 'label': 'Bedrag', 'field': 'bedrag_fmt',
+             'sortable': True, 'align': 'right'},
+            {'name': 'status', 'label': 'Status', 'field': 'status',
+             'sortable': True, 'align': 'center'},
+            {'name': 'actions', 'label': '', 'field': 'actions', 'align': 'center'},
+        ]
+
+        table = ui.table(
+            columns=columns, rows=[], row_key='id',
+            pagination={'rowsPerPage': 20, 'sortBy': 'nummer', 'descending': True},
+        ).classes('w-full')
+        table_ref['ref'] = table
+
+        table.add_slot('body-cell-status', '''
+            <q-td :props="props">
+                <q-badge :color="props.row.betaald ? 'green' : 'orange'"
+                         :label="props.row.betaald ? 'Betaald' : 'Openstaand'" />
+            </q-td>
+        ''')
+
+        table.add_slot('body-cell-actions', '''
+            <q-td :props="props">
+                <q-btn v-if="!props.row.betaald" icon="check_circle" flat dense
+                       round size="sm" color="green"
+                       @click="() => $parent.$emit('markbetaald', props.row)"
+                       title="Markeer als betaald" />
+                <q-btn v-if="props.row.pdf_pad" icon="download" flat dense
+                       round size="sm"
+                       @click="() => $parent.$emit('download', props.row)"
+                       title="Download PDF" />
+            </q-td>
+        ''')
+
+        # Summary
+        summary_row = ui.row().classes('w-full justify-end gap-8 q-mt-sm')
+
+        async def refresh_table():
+            jaar = jaar_select.value
+            facturen = await get_facturen(DB_PATH, jaar=jaar)
+            rows = []
+            totaal = 0
+            openstaand = 0
+            for f in facturen:
+                rows.append({
+                    'id': f.id,
+                    'nummer': f.nummer,
+                    'datum': f.datum,
+                    'datum_fmt': format_datum(f.datum),
+                    'klant_naam': f.klant_naam,
+                    'totaal_uren': f.totaal_uren,
+                    'bedrag_fmt': format_euro(f.totaal_bedrag),
+                    'totaal_bedrag': f.totaal_bedrag,
+                    'betaald': f.betaald,
+                    'betaald_datum': f.betaald_datum,
+                    'pdf_pad': f.pdf_pad,
+                    'type': f.type,
+                })
+                totaal += f.totaal_bedrag
+                if not f.betaald:
+                    openstaand += f.totaal_bedrag
+
+            table.rows = rows
+            table.update()
+
+            summary_row.clear()
+            with summary_row:
+                ui.label(f'{len(rows)} facturen').classes('text-body2')
+                ui.label(f'Totaal: {format_euro(totaal)}') \
+                    .classes('text-body1 text-weight-bold')
+                if openstaand > 0:
+                    ui.label(f'Openstaand: {format_euro(openstaand)}') \
+                        .classes('text-body1 text-orange')
+
+        async def on_mark_betaald(e):
+            row = e.args
+            await mark_betaald(DB_PATH, factuur_id=row['id'],
+                               datum=date.today().isoformat())
+            ui.notify(f"Factuur {row['nummer']} gemarkeerd als betaald", type='positive')
+            await refresh_table()
+
+        async def on_download(e):
+            row = e.args
+            pdf_path = row.get('pdf_pad', '')
+            if pdf_path and Path(pdf_path).exists():
+                ui.download(pdf_path)
+            else:
+                ui.notify('PDF niet gevonden', type='warning')
+
+        table.on('markbetaald', on_mark_betaald)
+        table.on('download', on_download)
+
+        async def open_new_factuur_dialog():
+            klanten = await get_klanten(DB_PATH, alleen_actief=True)
+            if not klanten:
+                ui.notify('Geen actieve klanten gevonden', type='warning')
+                return
+
+            with ui.dialog() as dialog, ui.card().classes('w-full max-w-2xl'):
+                ui.label('Nieuwe factuur aanmaken').classes('text-h6 q-mb-md')
+
+                # Step 1: Select klant
+                klant_options = {k.id: k.naam for k in klanten}
+                klant_select = ui.select(
+                    klant_options, label='Klant',
+                ).classes('w-full q-mb-md')
+
+                # Werkdagen selection container
+                werkdagen_container = ui.column().classes('w-full')
+                selected_werkdagen = {'ids': set(), 'data': []}
+                preview_container = ui.column().classes('w-full q-mt-md')
+
+                async def load_werkdagen():
+                    kid = klant_select.value
+                    if not kid:
+                        return
+                    werkdagen = await get_werkdagen_ongefactureerd(DB_PATH, klant_id=kid)
+                    werkdagen_container.clear()
+                    selected_werkdagen['ids'] = set()
+                    selected_werkdagen['data'] = werkdagen
+
+                    with werkdagen_container:
+                        if not werkdagen:
+                            ui.label('Geen ongefactureerde werkdagen voor deze klant.') \
+                                .classes('text-grey')
+                        else:
+                            ui.label(f'{len(werkdagen)} ongefactureerde werkdagen:') \
+                                .classes('text-subtitle2')
+                            for w in werkdagen:
+                                bedrag = w.uren * w.tarief + w.km * 0.23
+                                cb = ui.checkbox(
+                                    f'{w.datum} — {w.uren}u × {format_euro(w.tarief)} '
+                                    f'+ {w.km} km = {format_euro(bedrag)}',
+                                    value=True,
+                                )
+                                selected_werkdagen['ids'].add(w.id)
+
+                                def make_handler(wid, checkbox):
+                                    def handler(e):
+                                        if checkbox.value:
+                                            selected_werkdagen['ids'].add(wid)
+                                        else:
+                                            selected_werkdagen['ids'].discard(wid)
+                                        update_preview()
+                                    return handler
+
+                                cb.on_value_change(make_handler(w.id, cb))
+                    update_preview()
+
+                def update_preview():
+                    preview_container.clear()
+                    ids = selected_werkdagen['ids']
+                    data = selected_werkdagen['data']
+                    selected = [w for w in data if w.id in ids]
+
+                    if not selected:
+                        return
+
+                    totaal_uren = sum(w.uren for w in selected)
+                    totaal_km = sum(w.km for w in selected)
+                    totaal_werk = sum(w.uren * w.tarief for w in selected)
+                    totaal_reis = sum(w.km * 0.23 for w in selected)
+                    totaal = totaal_werk + totaal_reis
+
+                    with preview_container:
+                        ui.separator()
+                        ui.label('Preview').classes('text-subtitle2')
+                        with ui.row().classes('gap-8'):
+                            ui.label(f'Uren: {totaal_uren:.1f}')
+                            ui.label(f'Km: {totaal_km:.0f}')
+                            ui.label(f'Waarnemingen: {format_euro(totaal_werk)}')
+                            ui.label(f'Reiskosten: {format_euro(totaal_reis)}')
+                        ui.label(f'Totaal: {format_euro(totaal)}') \
+                            .classes('text-h6 text-weight-bold')
+
+                klant_select.on_value_change(lambda _: load_werkdagen())
+
+                # Date input
+                datum_input = ui.input(
+                    'Factuurdatum', value=date.today().isoformat()
+                ).classes('w-48 q-mt-md')
+
+                with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
+                    ui.button('Annuleren', on_click=dialog.close).props('flat')
+
+                    async def genereer_factuur():
+                        kid = klant_select.value
+                        if not kid:
+                            ui.notify('Selecteer een klant', type='warning')
+                            return
+
+                        ids = selected_werkdagen['ids']
+                        data = selected_werkdagen['data']
+                        selected = [w for w in data if w.id in ids]
+
+                        if not selected:
+                            ui.notify('Selecteer werkdagen', type='warning')
+                            return
+
+                        klant = next(k for k in klanten if k.id == kid)
+                        factuur_datum = datum_input.value or date.today().isoformat()
+                        jaar = int(factuur_datum[:4])
+                        nummer = await get_next_factuurnummer(DB_PATH, jaar=jaar)
+
+                        # Prepare werkdagen data for invoice generator
+                        wd_dicts = []
+                        for w in selected:
+                            wd_dicts.append({
+                                'datum': w.datum,
+                                'activiteit': w.activiteit,
+                                'locatie': w.locatie or klant.adres,
+                                'uren': w.uren,
+                                'tarief': w.tarief,
+                                'km': w.km,
+                                'km_tarief': w.km_tarief,
+                            })
+
+                        klant_dict = {'naam': klant.naam, 'adres': klant.adres}
+
+                        # Generate PDF
+                        try:
+                            pdf_path = generate_invoice(
+                                nummer, klant_dict, wd_dicts, PDF_DIR,
+                                factuur_datum=factuur_datum
+                            )
+                        except Exception as ex:
+                            ui.notify(f'PDF generatie mislukt: {ex}', type='negative')
+                            return
+
+                        # Calculate totals
+                        totaal_uren = sum(w.uren for w in selected)
+                        totaal_km = sum(w.km for w in selected)
+                        totaal_bedrag = sum(
+                            w.uren * w.tarief + w.km * 0.23 for w in selected
+                        )
+
+                        # Save factuur record
+                        await add_factuur(
+                            DB_PATH,
+                            nummer=nummer,
+                            klant_id=kid,
+                            datum=factuur_datum,
+                            totaal_uren=totaal_uren,
+                            totaal_km=totaal_km,
+                            totaal_bedrag=totaal_bedrag,
+                            pdf_pad=str(pdf_path),
+                        )
+
+                        # Link werkdagen
+                        await link_werkdagen_to_factuur(
+                            DB_PATH,
+                            werkdag_ids=list(ids),
+                            factuurnummer=nummer,
+                        )
+
+                        dialog.close()
+                        ui.notify(
+                            f'Factuur {nummer} aangemaakt ({format_euro(totaal_bedrag)})',
+                            type='positive'
+                        )
+                        await refresh_table()
+
+                    ui.button('Genereer factuur', icon='receipt',
+                              on_click=genereer_factuur).props('color=primary')
+
+            dialog.open()
+
+        jaar_select.on_value_change(lambda _: refresh_table())
+        await refresh_table()
