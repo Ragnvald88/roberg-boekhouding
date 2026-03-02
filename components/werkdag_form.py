@@ -1,11 +1,10 @@
 """Herbruikbaar werkdag formulier component."""
 
 from nicegui import ui
-from database import get_klanten, add_werkdag, update_werkdag
-from pathlib import Path
+from components.utils import format_euro
+from database import get_klanten, add_werkdag, update_werkdag, get_fiscale_params, DB_PATH
 from datetime import date
-
-DB_PATH = Path("data/boekhouding.sqlite3")
+_KM_TARIEF_FALLBACK = 0.23
 
 # Activiteitscodes
 CODES = {
@@ -20,13 +19,6 @@ CODES = {
 }
 
 
-def format_euro(value: float) -> str:
-    """Format as Dutch currency: EUR 1.234,56"""
-    if value is None:
-        return "€ 0,00"
-    return f"€ {value:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-
-
 async def werkdag_form(on_save=None, werkdag=None):
     """Render werkdag add/edit form. werkdag=None for new entry."""
     klanten = await get_klanten(DB_PATH, alleen_actief=True)
@@ -34,6 +26,13 @@ async def werkdag_form(on_save=None, werkdag=None):
     klant_data = {k.id: k for k in klanten}
 
     is_edit = werkdag is not None
+
+    # Get km_tarief from fiscal params for the current year (or from werkdag in edit mode)
+    if is_edit:
+        km_tarief = werkdag.km_tarief or _KM_TARIEF_FALLBACK
+    else:
+        fp = await get_fiscale_params(DB_PATH, jaar=date.today().year)
+        km_tarief = fp.km_tarief if fp else _KM_TARIEF_FALLBACK
 
     # State
     selected_klant = werkdag.klant_id if is_edit else None
@@ -55,7 +54,7 @@ async def werkdag_form(on_save=None, werkdag=None):
                     with ui.date(
                         value=werkdag.datum if is_edit else date.today().isoformat()
                     ).bind_value(datum_input) as date_picker:
-                        pass
+                        date_picker.on('update:model-value', lambda: menu.close())
                 with datum_input.add_slot('append'):
                     ui.icon('edit_calendar').on('click', menu.open).classes('cursor-pointer')
 
@@ -87,9 +86,10 @@ async def werkdag_form(on_save=None, werkdag=None):
             )
 
         # Auto-calculated display
-        tarief_label = ui.label('').classes('text-body2 text-grey-8')
-        km_label = ui.label('').classes('text-body2 text-grey-8')
-        totaal_label = ui.label('').classes('text-body1 text-weight-bold')
+        tarief_label = ui.label('').classes('text-body2').style('color: #64748B')
+        km_label = ui.label('').classes('text-body2').style('color: #64748B')
+        totaal_label = ui.label('').classes('text-body1 text-weight-bold') \
+            .style('color: #0F172A')
 
         # Opmerking
         opmerking_input = ui.input(
@@ -104,8 +104,8 @@ async def werkdag_form(on_save=None, werkdag=None):
                 km = k.retour_km
                 u = uren_input.value or 0
                 tarief_label.text = f'Tarief: {format_euro(t)}/uur'
-                km_label.text = f'Reiskosten: {km} km × € 0,23 = {format_euro(km * 0.23)}'
-                totaal_label.text = f'Totaal: {u} × {format_euro(t)} + {format_euro(km * 0.23)} = {format_euro(u * t + km * 0.23)}'
+                km_label.text = f'Reiskosten: {km} km × {format_euro(km_tarief)} = {format_euro(km * km_tarief)}'
+                totaal_label.text = f'Totaal: {u} × {format_euro(t)} + {format_euro(km * km_tarief)} = {format_euro(u * t + km * km_tarief)}'
             else:
                 tarief_label.text = ''
                 km_label.text = ''
@@ -122,7 +122,7 @@ async def werkdag_form(on_save=None, werkdag=None):
         def on_code_change(e):
             if e.value == 'ACHTERWACHT':
                 urennorm_check.value = False
-            elif not is_edit:
+            else:
                 urennorm_check.value = True
 
         code_select.on_value_change(on_code_change)
@@ -145,7 +145,7 @@ async def werkdag_form(on_save=None, werkdag=None):
                 uren=uren_input.value,
                 km=k.retour_km,
                 tarief=k.tarief_uur,
-                km_tarief=0.23,
+                km_tarief=km_tarief,
                 urennorm=1 if urennorm_check.value else 0,
                 opmerking=opmerking_input.value or '',
             )
@@ -163,4 +163,4 @@ async def werkdag_form(on_save=None, werkdag=None):
         ui.button(
             'Opslaan' if is_edit else 'Toevoegen',
             on_click=save, icon='save'
-        ).classes('q-mt-md')
+        ).props('color=primary').classes('q-mt-md')

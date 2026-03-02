@@ -1,4 +1,4 @@
-"""Fiscale berekeningen engine voor TestBV Boekhouding.
+"""Fiscale berekeningen engine.
 
 Volledige fiscale waterval van winst tot netto IB, met Decimal precisie.
 Alle tussenwaarden worden bewaard in FiscaalResultaat voor display en tests.
@@ -127,9 +127,13 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
     d_fiscale_winst = d_winst + d_repr_bijtelling - d_kia
     r.fiscale_winst = euro(d_fiscale_winst)
 
-    # === 3. Ondernemersaftrek ===
-    d_za = D(params['zelfstandigenaftrek'])
-    d_sa = D(params.get('startersaftrek') or 0)
+    # === 3. Ondernemersaftrek (alleen bij urencriterium >= 1225) ===
+    if uren >= 1225:
+        d_za = D(params['zelfstandigenaftrek'])
+        d_sa = D(params.get('startersaftrek') or 0)
+    else:
+        d_za = D('0')
+        d_sa = D('0')
     r.zelfstandigenaftrek = euro(d_za)
     r.startersaftrek = euro(d_sa)
 
@@ -182,12 +186,13 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
 
     # === 7. Heffingskortingen ===
     jaar = params.get('jaar', 0)
-    # AHK berekening met verzamelinkomen als float (heffingskortingen module)
+    # AHK: afbouw op basis van verzamelinkomen (sinds 2025; voor Box-1-only maakt het niet uit)
     ahk = bereken_algemene_heffingskorting(r.verzamelinkomen, jaar, params)
     r.ahk = ahk
 
-    # Arbeidskorting op basis van verzamelinkomen (winst uit onderneming = arbeidsinkomen)
-    ak = bereken_arbeidskorting(r.verzamelinkomen, jaar)
+    # Arbeidskorting: op basis van arbeidsinkomen = belastbare winst uit onderneming
+    # (NIET verzamelinkomen — AOV en eigen woning verlagen het arbeidsinkomen niet)
+    ak = bereken_arbeidskorting(r.belastbare_winst, jaar)
     r.arbeidskorting = ak
 
     # === 8. Netto IB ===
@@ -195,8 +200,8 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
     r.netto_ib = euro(d_netto_ib)
 
     # === 9. ZVW-bijdrage (apart van IB, via aanslag) ===
-    # Grondslag = belastbare winst (conform fiscale-berekening SKILL)
-    d_zvw_grondslag = min(d_belastbare_winst, D(params['zvw_max_grondslag']))
+    # Grondslag = verzamelinkomen (bijdrage-inkomen, gecapped op maximum)
+    d_zvw_grondslag = min(d_verzamelinkomen, D(params['zvw_max_grondslag']))
     d_zvw = d_zvw_grondslag * D(params['zvw_pct']) / D('100')
     r.zvw = euro(d_zvw)
 

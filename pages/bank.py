@@ -1,29 +1,15 @@
 """Bank pagina — Rabobank CSV import + categoriseren."""
 
 from datetime import datetime
-from pathlib import Path
 
 from nicegui import ui
 
 from components.layout import create_layout
+from components.utils import format_euro, BANK_CATEGORIEEN
 from database import (
-    get_banktransacties, add_banktransacties, update_banktransactie,
+    get_banktransacties, add_banktransacties, update_banktransactie, DB_PATH,
 )
 from import_.rabobank_csv import parse_rabobank_csv
-
-DB_PATH = Path("data/boekhouding.sqlite3")
-
-BANK_CATEGORIEEN = [
-    '', 'Omzet', 'Pensioenpremie SPH', 'Telefoon/KPN', 'Verzekeringen',
-    'Accountancy/software', 'Representatie', 'Lidmaatschappen',
-    'Kleine aankopen', 'Scholingskosten', 'Bankkosten', 'Investeringen',
-    'Prive', 'Belasting', 'AOV',
-]
-
-
-def format_euro(value: float) -> str:
-    """Format float as Dutch euro string: € 1.234,56."""
-    return f"\u20ac {value:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 
 @ui.page('/bank')
@@ -110,8 +96,15 @@ async def bank_page():
             ui.notify("Geen transacties gevonden in CSV.", type='warning')
             return
 
+        # Check for duplicate CSV import
+        bestaande = await get_banktransacties(DB_PATH, jaar=selected_jaar['value'])
+        bestaande_csvs = {t.csv_bestand for t in bestaande if t.csv_bestand}
+        if any(csv.endswith(f'_{filename}') for csv in bestaande_csvs):
+            ui.notify(f"CSV '{filename}' is al eerder geimporteerd", type='warning')
+            return
+
         # Archive CSV to data/bank_csv/
-        csv_dir = Path("data/bank_csv")
+        csv_dir = DB_PATH.parent / "bank_csv"
         csv_dir.mkdir(parents=True, exist_ok=True)
         archive_name = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{filename}"
         archive_path = csv_dir / archive_name
@@ -139,8 +132,9 @@ async def bank_page():
         await refresh_table()
 
     # --- Page layout ---
-    with ui.column().classes('w-full p-4 max-w-7xl mx-auto'):
-        ui.label('Banktransacties').classes('text-h5')
+    with ui.column().classes('w-full p-6 max-w-7xl mx-auto gap-6'):
+        ui.label('Banktransacties').classes('text-h5') \
+            .style('color: #0F172A; font-weight: 700')
 
         # Top bar: filters + upload
         with ui.row().classes('w-full items-center gap-4 q-mb-md'):
@@ -154,10 +148,6 @@ async def bank_page():
             ).classes('w-32')
 
             # Month selector
-            maand_opties = {0: 'Alle maanden'}
-            for m in range(1, 13):
-                maand_opties[m] = datetime(2026, m, 1).strftime('%B').capitalize()
-            # Dutch month names
             nl_maanden = {
                 0: 'Alle maanden', 1: 'Januari', 2: 'Februari', 3: 'Maart',
                 4: 'April', 5: 'Mei', 6: 'Juni', 7: 'Juli', 8: 'Augustus',
@@ -209,13 +199,13 @@ async def bank_page():
         table.add_slot('body', r'''
             <q-tr :props="props"
                    :class="{
-                       'bg-green-1': props.row.status === 'gekoppeld',
-                       'bg-orange-1': props.row.status === 'gecategoriseerd',
+                       'bg-teal-1': props.row.status === 'gekoppeld',
+                       'bg-amber-1': props.row.status === 'gecategoriseerd',
                        'bg-red-1': props.row.status === 'niet-gekoppeld'
                    }">
                 <q-td key="datum" :props="props">{{ props.row.datum }}</q-td>
                 <q-td key="bedrag_fmt" :props="props"
-                       :class="props.row.bedrag >= 0 ? 'text-green-8 text-bold' : 'text-red-8 text-bold'"
+                       :class="props.row.bedrag >= 0 ? 'text-teal-8 text-bold' : 'text-red-8 text-bold'"
                        style="text-align: right">
                     {{ props.row.bedrag_fmt }}
                 </q-td>
@@ -240,8 +230,9 @@ async def bank_page():
         table.on('cat_change', lambda e: handle_categorie_change(e.args['id'], e.args['cat']))
 
         # Imported CSV files section
-        ui.separator().classes('q-my-lg')
-        ui.label('Geimporteerde CSV-bestanden').classes('text-h6 q-mb-sm')
+        ui.separator().classes('q-my-md')
+        ui.label('Geimporteerde CSV-bestanden').classes('text-subtitle1') \
+            .style('color: #0F172A; font-weight: 600')
 
         csv_container = ui.column().classes('w-full')
         csv_list_container['ref'] = csv_container

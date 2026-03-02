@@ -1,7 +1,20 @@
-"""Dataclasses for TestBV Boekhouding — plain Python, geen ORM."""
+"""Dataclasses voor boekhouding — plain Python, geen ORM."""
 
 from dataclasses import dataclass, field
 from typing import Optional
+
+
+@dataclass
+class Bedrijfsgegevens:
+    id: int = 1
+    bedrijfsnaam: str = ''
+    naam: str = ''
+    functie: str = ''
+    adres: str = ''
+    postcode_plaats: str = ''
+    kvk: str = ''
+    iban: str = ''
+    thuisplaats: str = ''
 
 
 @dataclass

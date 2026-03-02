@@ -1,4 +1,4 @@
-"""Afschrijvingsberekeningen voor TestBV Boekhouding.
+"""Afschrijvingsberekeningen.
 
 Lineair, met restwaarde en pro-rata eerste jaar.
 """

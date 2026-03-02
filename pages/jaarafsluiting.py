@@ -1,11 +1,11 @@
 """Jaarafsluiting pagina — fiscale berekeningen + rapporten."""
 
 from datetime import date
-from pathlib import Path
 
 from nicegui import ui
 
 from components.layout import create_layout
+from components.utils import format_euro
 from database import (
     get_fiscale_params,
     get_investeringen_voor_afschrijving,
@@ -14,18 +14,10 @@ from database import (
     get_representatie_totaal,
     get_uitgaven_per_categorie,
     get_uren_totaal,
+    DB_PATH,
 )
 from fiscal.afschrijvingen import bereken_afschrijving
 from fiscal.berekeningen import FiscaalResultaat, bereken_volledig
-
-DB_PATH = Path("data/boekhouding.sqlite3")
-
-
-def format_euro(value: float) -> str:
-    """Format float as Dutch euro string: € 1.234,56"""
-    if value is None:
-        return "€ 0,00"
-    return f"€ {value:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 
 def _fiscale_params_to_dict(params) -> dict:
@@ -417,7 +409,9 @@ async def jaarafsluiting_page():
         activastaat = []
         totaal_afschrijvingen = 0.0
         for u in investeringen:
-            aanschaf_bedrag = u.aanschaf_bedrag or u.bedrag
+            aanschaf_bedrag_bruto = u.aanschaf_bedrag or u.bedrag
+            zakelijk_factor = (u.zakelijk_pct or 100) / 100
+            aanschaf_bedrag = aanschaf_bedrag_bruto * zakelijk_factor
             levensduur = u.levensduur_jaren or 5
             aanschaf_maand = int(u.datum[5:7])
             aanschaf_jaar = int(u.datum[0:4])
@@ -439,9 +433,10 @@ async def jaarafsluiting_page():
             })
             totaal_afschrijvingen += result['afschrijving']
 
-        # KIA: total investments this year
+        # KIA: total investments this year (zakelijk deel)
         inv_totaal_dit_jaar = sum(
-            (u.aanschaf_bedrag or u.bedrag) for u in inv_dit_jaar
+            (u.aanschaf_bedrag or u.bedrag) * ((u.zakelijk_pct or 100) / 100)
+            for u in inv_dit_jaar
         )
 
         # Save state for herbereken
@@ -518,24 +513,39 @@ async def jaarafsluiting_page():
 
     # === PAGE LAYOUT ===
 
-    with ui.column().classes('w-full p-4 max-w-6xl mx-auto gap-4'):
+    with ui.column().classes('w-full p-6 max-w-7xl mx-auto gap-6'):
 
-        # --- Year selector + Bereken button ---
+        # --- Header + Year selector ---
         with ui.row().classes('w-full items-center gap-4'):
+            ui.label('Jaarafsluiting').classes('text-h5') \
+                .style('color: #0F172A; font-weight: 700')
+            ui.space()
             jaar_select = ui.select(
                 {j: str(j) for j in jaren},
                 label='Jaar', value=huidig_jaar,
             ).classes('w-32')
 
-            def on_jaar_change():
+            async def on_jaar_change():
                 gekozen_jaar['value'] = jaar_select.value
+                # Clear stale state so herbereken can't mix years
+                berekening_state['params_dict'] = {}
+                # Preserve IB input values across year changes
+                aov_val = float(ib_inputs['aov'].value or 0) if ib_inputs['aov'] else 0
+                woz_val = float(ib_inputs['woz'].value or 0) if ib_inputs['woz'] else 0
+                hyp_val = float(ib_inputs['hypotheek'].value or 0) if ib_inputs['hypotheek'] else 0
+                va_val = float(ib_inputs['voorlopig'].value or 0) if ib_inputs['voorlopig'] else 0
+                await bereken(aov=aov_val, woz=woz_val,
+                              hypotheekrente=hyp_val, voorlopige_aanslag=va_val)
 
-            jaar_select.on('update:model-value', lambda: on_jaar_change())
+            jaar_select.on_value_change(lambda _: on_jaar_change())
 
             ui.button(
-                'Bereken', icon='calculate',
+                'Herbereken', icon='refresh',
                 on_click=lambda: bereken(),
-            ).props('color=primary')
+            ).props('outline color=primary')
 
         # --- Results container (filled by bereken) ---
         result_container['ref'] = ui.column().classes('w-full gap-4')
+
+    # Auto-calculate on page load
+    await bereken()

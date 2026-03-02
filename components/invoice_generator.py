@@ -5,28 +5,14 @@ from datetime import datetime, timedelta
 from jinja2 import Environment, FileSystemLoader
 from weasyprint import HTML
 
-TEMPLATE_DIR = Path("templates")
+from components.utils import format_euro, format_datum
 
-
-def format_euro(value: float) -> str:
-    """Format as Dutch currency: € 1.234,56"""
-    if value is None:
-        return "€ 0,00"
-    return f"€ {value:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-
-
-def format_datum(iso_date: str) -> str:
-    """Convert YYYY-MM-DD to DD-MM-YYYY for display."""
-    if not iso_date:
-        return ""
-    parts = iso_date.split("-")
-    if len(parts) == 3:
-        return f"{parts[2]}-{parts[1]}-{parts[0]}"
-    return iso_date
+TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates"
 
 
 def generate_invoice(factuur_nummer: str, klant: dict, werkdagen: list[dict],
-                     output_dir: Path, factuur_datum: str = None) -> Path:
+                     output_dir: Path, factuur_datum: str = None,
+                     bedrijfsgegevens: dict = None) -> Path:
     """Render Jinja2 HTML template to PDF via WeasyPrint.
 
     Args:
@@ -35,9 +21,12 @@ def generate_invoice(factuur_nummer: str, klant: dict, werkdagen: list[dict],
         werkdagen: list of dicts with datum, activiteit/locatie, uren, tarief, km, km_tarief
         output_dir: directory to save PDF
         factuur_datum: ISO date string, defaults to today
+        bedrijfsgegevens: dict with bedrijfsnaam, naam, functie, adres, postcode_plaats, kvk, iban, thuisplaats
 
     Returns: Path to generated PDF
     """
+    if bedrijfsgegevens is None:
+        bedrijfsgegevens = {}
     env = Environment(loader=FileSystemLoader(TEMPLATE_DIR))
     env.filters['format_euro'] = format_euro
     env.filters['format_datum'] = format_datum
@@ -70,7 +59,13 @@ def generate_invoice(factuur_nummer: str, klant: dict, werkdagen: list[dict],
         if km > 0:
             km_bedrag = km * km_tarief
             locatie = wd.get('locatie', '')
-            omschr = f"Reiskosten retour Groningen – {locatie}" if locatie else "Reiskosten"
+            thuisplaats = bedrijfsgegevens.get('thuisplaats', '')
+            if locatie and thuisplaats:
+                omschr = f"Reiskosten retour {thuisplaats} – {locatie}"
+            elif locatie:
+                omschr = f"Reiskosten retour – {locatie}"
+            else:
+                omschr = "Reiskosten"
             regels.append({
                 'datum': wd['datum'],
                 'omschrijving': omschr,
@@ -87,6 +82,7 @@ def generate_invoice(factuur_nummer: str, klant: dict, werkdagen: list[dict],
         datum=format_datum(datum.strftime('%Y-%m-%d')),
         vervaldatum=format_datum(vervaldatum.strftime('%Y-%m-%d')),
         klant=klant,
+        bedrijf=bedrijfsgegevens,
         regels=regels,
         subtotaal_werk=subtotaal_werk,
         subtotaal_km=subtotaal_km,

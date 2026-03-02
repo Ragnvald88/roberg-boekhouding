@@ -1,16 +1,14 @@
 """Werkdagen pagina — uren/km registratie met tabel en formulier."""
 
-from nicegui import ui
+from nicegui import app, ui
 from components.layout import create_layout
-from components.werkdag_form import werkdag_form, format_euro
+from components.utils import format_euro
+from components.werkdag_form import werkdag_form
 from database import (
     get_werkdagen, get_klanten, delete_werkdag,
-    get_werkdagen_ongefactureerd,
+    get_werkdagen_ongefactureerd, DB_PATH,
 )
-from pathlib import Path
 from datetime import date
-
-DB_PATH = Path("data/boekhouding.sqlite3")
 
 MAANDEN = {
     0: 'Alle', 1: 'Jan', 2: 'Feb', 3: 'Mar', 4: 'Apr', 5: 'Mei', 6: 'Jun',
@@ -41,17 +39,20 @@ async def werkdagen_page():
     form_container = {'ref': None}
     summary_container = {'ref': None}
 
-    with ui.column().classes('w-full p-4 max-w-7xl mx-auto'):
+    with ui.column().classes('w-full p-6 max-w-7xl mx-auto gap-6'):
         # Filter row
-        with ui.row().classes('w-full items-end gap-4 q-mb-md'):
+        with ui.row().classes('w-full items-center gap-4'):
+            ui.label('Werkdagen').classes('text-h5') \
+                .style('color: #0F172A; font-weight: 700')
+        with ui.row().classes('w-full items-end gap-4'):
             jaar_select = ui.select(
                 {y: str(y) for y in range(2023, current_year + 2)},
                 value=current_year, label='Jaar',
-            ).classes('w-28')
+            ).classes('w-32')
 
             maand_select = ui.select(
                 MAANDEN, value=0, label='Maand',
-            ).classes('w-28')
+            ).classes('w-32')
 
             klant_sel = ui.select(
                 klant_options, value=0, label='Klant',
@@ -62,7 +63,7 @@ async def werkdagen_page():
             ui.button(
                 'Vernieuwen', icon='refresh',
                 on_click=lambda: refresh_table()
-            ).props('outline')
+            ).props('outline color=primary')
 
         # Table
         columns = [
@@ -89,8 +90,8 @@ async def werkdagen_page():
         # Custom cell rendering for status colors and action buttons
         table.add_slot('body-cell-status', '''
             <q-td :props="props">
-                <q-badge :color="props.row.status === 'betaald' ? 'green' :
-                                  props.row.status === 'gefactureerd' ? 'blue' : 'grey'"
+                <q-badge :color="props.row.status === 'betaald' ? 'positive' :
+                                  props.row.status === 'gefactureerd' ? 'primary' : 'grey'"
                          :label="props.row.status" />
             </q-td>
         ''')
@@ -102,11 +103,17 @@ async def werkdagen_page():
             </q-td>
         ''')
 
+        table.add_slot('no-data', '''
+            <q-tr><q-td colspan="100%" class="text-center q-pa-lg text-grey">
+                Geen werkdagen gevonden.
+            </q-td></q-tr>
+        ''')
+
         table.add_slot('body-cell-actions', '''
             <q-td :props="props">
                 <q-btn icon="edit" flat dense round size="sm"
                     @click="() => $parent.$emit('edit', props.row)" />
-                <q-btn icon="delete" flat dense round size="sm" color="red"
+                <q-btn icon="delete" flat dense round size="sm" color="negative"
                     @click="() => $parent.$emit('delete', props.row)" />
             </q-td>
         ''')
@@ -116,10 +123,18 @@ async def werkdagen_page():
 
         # Factuur button
         with ui.row().classes('w-full q-mt-md gap-4'):
+            async def ga_naar_factuur():
+                ids = list(selected_ids['value'])
+                if not ids:
+                    ui.notify('Selecteer eerst werkdagen', type='warning')
+                    return
+                app.storage.user['selected_werkdagen'] = ids
+                ui.navigate.to('/facturen')
+
             factuur_btn = ui.button(
                 'Maak factuur van selectie', icon='receipt',
-                on_click=lambda: ui.navigate.to('/facturen'),
-            ).props('color=primary')
+                on_click=ga_naar_factuur,
+            ).props('color=primary disabled')
 
         ui.separator().classes('q-my-lg')
 
@@ -137,9 +152,31 @@ async def werkdagen_page():
             month = maand_select.value if maand_select.value != 0 else None
             klant_id = klant_sel.value if klant_sel.value != 0 else None
 
-            werkdagen = await get_werkdagen(
-                DB_PATH, jaar=year, maand=month, klant_id=klant_id
+            # Fetch all werkdagen for year+month (without klant filter)
+            # so we can update the klant dropdown with relevant customers
+            all_werkdagen = await get_werkdagen(
+                DB_PATH, jaar=year, maand=month,
             )
+
+            # Update klant dropdown: only customers with werkdagen in this period
+            seen = {}
+            for w in all_werkdagen:
+                if w.klant_id not in seen:
+                    seen[w.klant_id] = w.klant_naam
+            new_options = {0: 'Alle'} | dict(
+                sorted(seen.items(), key=lambda x: x[1])
+            )
+            klant_sel.options = new_options
+            if klant_id and klant_id not in new_options:
+                klant_sel.set_value(0)
+                klant_id = None
+            klant_sel.update()
+
+            # Filter by klant in Python (avoids second DB query)
+            werkdagen = [
+                w for w in all_werkdagen
+                if klant_id is None or w.klant_id == klant_id
+            ]
 
             rows = []
             totaal_uren = 0
@@ -147,7 +184,7 @@ async def werkdagen_page():
             totaal_bedrag = 0
 
             for w in werkdagen:
-                bedrag = w.uren * w.tarief + w.km * 0.23
+                bedrag = w.uren * w.tarief + w.km * w.km_tarief
                 rows.append({
                     'id': w.id,
                     'datum': w.datum,
@@ -196,7 +233,7 @@ async def werkdagen_page():
                 with ui.row():
                     ui.button('Ja, verwijderen',
                               on_click=lambda: confirm_delete(row['id'], dialog)) \
-                        .props('color=red')
+                        .props('color=negative')
                     ui.button('Annuleren', on_click=dialog.close)
             dialog.open()
 
@@ -206,6 +243,18 @@ async def werkdagen_page():
             ui.notify('Werkdag verwijderd', type='positive')
             await refresh_table()
 
+        def on_select(e):
+            row = e.args
+            wid = row['id']
+            if row.get('selected'):
+                selected_ids['value'].add(wid)
+            else:
+                selected_ids['value'].discard(wid)
+            factuur_btn.props(
+                'disabled' if not selected_ids['value'] else remove='disabled'
+            )
+
+        table.on('select', on_select)
         table.on('edit', on_edit)
         table.on('delete', on_delete)
 

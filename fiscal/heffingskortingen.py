@@ -1,4 +1,4 @@
-"""Heffingskortingen berekeningen voor TestBV Boekhouding.
+"""Heffingskortingen berekeningen.
 
 Bevat jaar-specifieke tabellen voor arbeidskorting en berekening van de
 algemene heffingskorting. Bron: Belastingdienst tabellen per jaar.
@@ -31,11 +31,11 @@ ARBEIDSKORTING_BRACKETS: dict[int, list[tuple]] = {
         (129078, None, 0, 0),
     ],
     2026: [
-        (0, 12740, 0.08425, 0),
-        (12740, 27461, 0.30030, 1073),
-        (27461, 43836, 0.02258, 5491),
-        (43836, 131072, -0.06510, 5685),
-        (131072, None, 0, 0),
+        (0, 11965, 0.08324, 0),
+        (11965, 25845, 0.31009, 996),
+        (25845, 45592, 0.01950, 5300),
+        (45592, 132920, -0.06510, 5685),
+        (132920, None, 0, 0),
     ],
 }
 

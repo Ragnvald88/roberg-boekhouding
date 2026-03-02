@@ -1,37 +1,18 @@
 """Kosten pagina — uitgaven registratie + categorisatie."""
 
 from datetime import date
-from pathlib import Path
 
 from nicegui import ui
 
 from components.layout import create_layout
+from components.utils import format_euro, KOSTEN_CATEGORIEEN as CATEGORIEEN
 from database import (
     add_uitgave, delete_uitgave, get_uitgaven, get_uitgaven_per_categorie,
-    update_uitgave,
+    get_investeringen_voor_afschrijving, update_uitgave, DB_PATH,
 )
-
-DB_PATH = Path("data/boekhouding.sqlite3")
-
-CATEGORIEEN = [
-    'Pensioenpremie SPH',
-    'Telefoon/KPN',
-    'Verzekeringen',
-    'Accountancy/software',
-    'Representatie',
-    'Lidmaatschappen',
-    'Kleine aankopen',
-    'Scholingskosten',
-    'Bankkosten',
-    'Investeringen',
-]
+from fiscal.afschrijvingen import bereken_afschrijving
 
 LEVENSDUUR_OPTIES = {3: '3 jaar', 4: '4 jaar', 5: '5 jaar'}
-
-
-def format_euro(value: float) -> str:
-    """Format float as Dutch euro string: € 1.234,56"""
-    return f"€ {value:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 
 @ui.page('/kosten')
@@ -47,6 +28,7 @@ async def kosten_page():
     # References to dynamic UI elements
     tabel_container = {'ref': None}
     summary_container = {'ref': None}
+    activastaat_container = {'ref': None}
 
     # --- Helpers ---
 
@@ -62,19 +44,34 @@ async def kosten_page():
 
         rows = []
         for u in uitgaven:
-            rows.append({
+            row = {
                 'id': u.id,
                 'datum': u.datum,
                 'categorie': u.categorie,
                 'omschrijving': u.omschrijving,
                 'bedrag': u.bedrag,
                 'bedrag_fmt': format_euro(u.bedrag),
-                'investering': 'Ja' if u.is_investering else 'Nee',
+                'investering': 'Ja' if u.is_investering else '',
                 'is_investering': u.is_investering,
                 'restwaarde_pct': u.restwaarde_pct,
                 'levensduur_jaren': u.levensduur_jaren,
                 'zakelijk_pct': u.zakelijk_pct,
-            })
+                'levensduur_fmt': '',
+                'boekwaarde_fmt': '',
+            }
+            if u.is_investering and u.levensduur_jaren:
+                row['levensduur_fmt'] = f'{u.levensduur_jaren} jaar'
+                aanschaf = (u.aanschaf_bedrag or u.bedrag) * ((u.zakelijk_pct or 100) / 100)
+                result = bereken_afschrijving(
+                    aanschaf_bedrag=aanschaf,
+                    restwaarde_pct=u.restwaarde_pct or 10,
+                    levensduur=u.levensduur_jaren,
+                    aanschaf_maand=int(u.datum[5:7]),
+                    aanschaf_jaar=int(u.datum[0:4]),
+                    bereken_jaar=jaar,
+                )
+                row['boekwaarde_fmt'] = format_euro(result['boekwaarde'])
+            rows.append(row)
 
         columns = [
             {'name': 'datum', 'label': 'Datum', 'field': 'datum', 'sortable': True,
@@ -85,8 +82,12 @@ async def kosten_page():
              'align': 'left'},
             {'name': 'bedrag', 'label': 'Bedrag', 'field': 'bedrag_fmt',
              'sortable': True, 'align': 'right'},
-            {'name': 'investering', 'label': 'Investering', 'field': 'investering',
+            {'name': 'investering', 'label': 'Inv.', 'field': 'investering',
              'align': 'center'},
+            {'name': 'levensduur', 'label': 'Levensduur', 'field': 'levensduur_fmt',
+             'align': 'center'},
+            {'name': 'boekwaarde', 'label': 'Boekwaarde', 'field': 'boekwaarde_fmt',
+             'align': 'right'},
             {'name': 'acties', 'label': 'Acties', 'field': 'acties', 'align': 'center'},
         ]
 
@@ -130,10 +131,56 @@ async def kosten_page():
             else:
                 ui.label('Geen uitgaven gevonden.').classes('text-grey')
 
+    async def laad_activastaat():
+        """Render activastaat card showing current book values."""
+        container = activastaat_container['ref']
+        if container is None:
+            return
+        container.clear()
+        jaar = filter_jaar['value']
+        investeringen = await get_investeringen_voor_afschrijving(DB_PATH, tot_jaar=jaar)
+        if not investeringen:
+            return
+
+        with container:
+            ui.label(f'Activastaat per 31-12-{jaar}').classes('text-subtitle1 text-bold')
+            activa_rows = []
+            for u in investeringen:
+                aanschaf = (u.aanschaf_bedrag or u.bedrag) * ((u.zakelijk_pct or 100) / 100)
+                result = bereken_afschrijving(
+                    aanschaf_bedrag=aanschaf,
+                    restwaarde_pct=u.restwaarde_pct or 10,
+                    levensduur=u.levensduur_jaren or 5,
+                    aanschaf_maand=int(u.datum[5:7]),
+                    aanschaf_jaar=int(u.datum[0:4]),
+                    bereken_jaar=jaar,
+                )
+                activa_rows.append({
+                    'omschrijving': u.omschrijving,
+                    'aanschaf': format_euro(aanschaf),
+                    'afschr_jaar': format_euro(result['per_jaar']),
+                    'boekwaarde': format_euro(result['boekwaarde']),
+                })
+
+            columns = [
+                {'name': 'omschrijving', 'label': 'Omschrijving',
+                 'field': 'omschrijving', 'align': 'left'},
+                {'name': 'aanschaf', 'label': 'Aanschaf (zakelijk)',
+                 'field': 'aanschaf', 'align': 'right'},
+                {'name': 'afschr_jaar', 'label': 'Afschr/jaar',
+                 'field': 'afschr_jaar', 'align': 'right'},
+                {'name': 'boekwaarde', 'label': 'Boekwaarde',
+                 'field': 'boekwaarde', 'align': 'right'},
+            ]
+            ui.table(
+                columns=columns, rows=activa_rows, row_key='omschrijving',
+            ).classes('w-full').props('dense flat')
+
     async def ververs():
-        """Refresh table and summary."""
+        """Refresh table, summary and activastaat."""
         await laad_tabel()
         await laad_summary()
+        await laad_activastaat()
 
     # --- Add expense form ---
 
@@ -284,7 +331,7 @@ async def kosten_page():
 
                 async def verwijder():
                     await delete_uitgave(DB_PATH, uitgave_id=row['id'])
-                    ui.notify('Uitgave verwijderd', type='negative')
+                    ui.notify('Uitgave verwijderd', type='positive')
                     dialog.close()
                     await ververs()
 
@@ -293,11 +340,13 @@ async def kosten_page():
 
     # === PAGE LAYOUT ===
 
-    with ui.column().classes('w-full p-4 max-w-6xl mx-auto gap-4'):
+    with ui.column().classes('w-full p-6 max-w-7xl mx-auto gap-6'):
 
-        # --- Filter row ---
+        # --- Header + filter row ---
         with ui.row().classes('w-full items-center gap-4'):
-            ui.label('Filters:').classes('text-subtitle2')
+            ui.label('Kosten').classes('text-h5') \
+                .style('color: #0F172A; font-weight: 700')
+            ui.space()
             jaar_select = ui.select(
                 {j: str(j) for j in jaren},
                 label='Jaar', value=huidig_jaar,
@@ -407,6 +456,10 @@ async def kosten_page():
         # --- Summary ---
         with ui.card().classes('w-full'):
             summary_container['ref'] = ui.column().classes('w-full gap-1')
+
+        # --- Activastaat ---
+        with ui.card().classes('w-full'):
+            activastaat_container['ref'] = ui.column().classes('w-full gap-1')
 
     # Initial load
     await ververs()

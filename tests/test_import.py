@@ -34,11 +34,9 @@ async def test_import_urenregister(db):
     all_werkdagen = await get_werkdagen(db)
     assert len(all_werkdagen) == result['imported']
 
-    # Verify klanten were created for unknown names
+    # Verify klanten were created from Excel data
     klanten = await get_klanten(db)
-    klant_names = {k.naam for k in klanten}
-    assert "HAP K6" in klant_names  # From seed data, matched
-    assert len(klanten) >= 5  # At least the 5 seeded ones
+    assert len(klanten) >= 5  # At least 5 unique customers in Excel
 
 
 @pytest.mark.skipif(not XLSM_PATH.exists(), reason="Urenregister.xlsm not found")

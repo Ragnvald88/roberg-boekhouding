@@ -27,7 +27,7 @@ def make_csv_row(
     datum: str = "2026-01-15",
     bedrag: str = "-77,50",
     tegenrekening: str = "NL12RABO0123456789",
-    tegenpartij: str = "HAP Klant6",
+    tegenpartij: str = "Klant A",
     omschrijving1: str = "Betaling factuur",
     omschrijving2: str = "januari 2026",
     omschrijving3: str = "",
@@ -51,12 +51,12 @@ def test_parse_rabobank_csv_basic():
     """Parse a simple CSV with two transactions."""
     csv_bytes = build_csv([
         make_csv_row(datum="2026-01-15", bedrag="-77,50",
-                     tegenpartij="HAP Klant6",
+                     tegenpartij="Klant A",
                      omschrijving1="Betaling factuur",
                      omschrijving2="januari 2026"),
         make_csv_row(datum="2026-01-20", bedrag="+1500,00",
                      tegenrekening="NL99ABNA0987654321",
-                     tegenpartij="K. Klant7",
+                     tegenpartij="Klant B",
                      omschrijving1="Factuur 2026-001"),
     ])
 
@@ -68,7 +68,7 @@ def test_parse_rabobank_csv_basic():
     t1 = result[0]
     assert t1['datum'] == '2026-01-15'
     assert t1['bedrag'] == pytest.approx(-77.50)
-    assert t1['tegenpartij'] == 'HAP Klant6'
+    assert t1['tegenpartij'] == 'Klant A'
     assert 'Betaling factuur' in t1['omschrijving']
     assert 'januari 2026' in t1['omschrijving']
 
@@ -76,7 +76,7 @@ def test_parse_rabobank_csv_basic():
     t2 = result[1]
     assert t2['datum'] == '2026-01-20'
     assert t2['bedrag'] == pytest.approx(1500.00)
-    assert t2['tegenpartij'] == 'K. Klant7'
+    assert t2['tegenpartij'] == 'Klant B'
     assert t2['tegenrekening'] == 'NL99ABNA0987654321'
 
 
@@ -204,7 +204,7 @@ def test_parse_large_amounts():
     """Amounts over 1000 with Dutch formatting (no thousands separator)."""
     csv_bytes = build_csv([
         make_csv_row(datum="2026-01-31", bedrag="+12345,67",
-                     tegenpartij="HAP K14",
+                     tegenpartij="Klant C",
                      omschrijving1="Grote betaling"),
     ])
 
@@ -224,7 +224,7 @@ async def test_import_and_retrieve(db):
                      tegenpartij="KPN",
                      omschrijving1="Telefoonrekening"),
         make_csv_row(datum="2026-02-15", bedrag="+775,00",
-                     tegenpartij="HAP Klant6",
+                     tegenpartij="Klant A",
                      omschrijving1="Factuur 2026-003"),
     ])
 
@@ -241,7 +241,7 @@ async def test_import_and_retrieve(db):
     # Transactions are ordered by datum DESC
     t_feb15 = next(t for t in transacties if t.datum == '2026-02-15')
     assert t_feb15.bedrag == pytest.approx(775.00)
-    assert t_feb15.tegenpartij == 'HAP Klant6'
+    assert t_feb15.tegenpartij == 'Klant A'
     assert 'Factuur 2026-003' in t_feb15.omschrijving
     assert t_feb15.csv_bestand == 'test_import.csv'
 

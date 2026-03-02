@@ -21,6 +21,9 @@ async def db(tmp_path):
 @pytest.fixture
 async def seeded_db(db):
     await seed_all(db)
+    # Add a test klant (seed_all no longer seeds klanten)
+    await add_klant(db, naam='Testpraktijk', tarief_uur=77.50, retour_km=50,
+                    adres='Testlaan 1, 1234 AB Teststad')
     return db
 
 
@@ -103,32 +106,46 @@ def test_format_datum():
 
 def test_invoice_generator_creates_pdf(tmp_path):
     """WeasyPrint genereert een geldige PDF."""
-    klant = {'naam': "HAP K6", 'adres': 'Hoofdstraat 3, 9363 EV Marum'}
+    klant = {'naam': 'Testpraktijk', 'adres': 'Testlaan 1, 1234 AB Teststad'}
+    bedrijf = {
+        'bedrijfsnaam': 'MijnBedrijf', 'naam': 'J. de Test',
+        'functie': 'Adviseur', 'adres': 'Hoofdstraat 1',
+        'postcode_plaats': '5678 CD Dorp', 'kvk': '12345678',
+        'iban': 'NL00 TEST 0000 0000 00', 'thuisplaats': 'Dorp',
+    }
     werkdagen = [
         {'datum': '2026-02-01', 'activiteit': 'Waarneming dagpraktijk',
-         'locatie': 'Marum', 'uren': 9, 'tarief': 77.50, 'km': 52, 'km_tarief': 0.23},
+         'locatie': 'Teststad', 'uren': 9, 'tarief': 77.50, 'km': 52, 'km_tarief': 0.23},
         {'datum': '2026-02-02', 'activiteit': 'Waarneming dagpraktijk',
-         'locatie': 'Marum', 'uren': 8, 'tarief': 77.50, 'km': 52, 'km_tarief': 0.23},
+         'locatie': 'Teststad', 'uren': 8, 'tarief': 77.50, 'km': 52, 'km_tarief': 0.23},
     ]
     output_dir = tmp_path / "facturen"
     pdf_path = generate_invoice("2026-001", klant, werkdagen, output_dir,
-                                factuur_datum="2026-02-15")
+                                factuur_datum="2026-02-15",
+                                bedrijfsgegevens=bedrijf)
 
     assert pdf_path.exists()
     assert pdf_path.stat().st_size > 1000  # Non-trivial PDF
     assert "2026-001" in pdf_path.name
-    assert "Klant6" in pdf_path.name
+    assert "Testpraktijk" in pdf_path.name
 
 
 def test_invoice_totals_correct(tmp_path):
     """Factuur totaal klopt: uren × tarief + km × km_tarief."""
     klant = {'naam': 'Test Klant', 'adres': 'Teststraat 1'}
+    bedrijf = {
+        'bedrijfsnaam': 'TestBedrijf', 'naam': 'A. Tester',
+        'functie': 'Tester', 'adres': 'Testweg 2',
+        'postcode_plaats': '1111 ZZ Testdorp', 'kvk': '99999999',
+        'iban': 'NL00 TEST 0000 0000 00', 'thuisplaats': 'Testdorp',
+    }
     werkdagen = [
-        {'datum': '2026-02-01', 'activiteit': 'Waarneming', 'locatie': 'Marum',
+        {'datum': '2026-02-01', 'activiteit': 'Waarneming', 'locatie': 'Teststad',
          'uren': 9, 'tarief': 80.00, 'km': 44, 'km_tarief': 0.23},
     ]
     # Expected: 9 × 80 + 44 × 0.23 = 720 + 10.12 = 730.12
     output_dir = tmp_path / "facturen"
     pdf_path = generate_invoice("2026-TEST", klant, werkdagen, output_dir,
-                                factuur_datum="2026-02-15")
+                                factuur_datum="2026-02-15",
+                                bedrijfsgegevens=bedrijf)
     assert pdf_path.exists()

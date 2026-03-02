@@ -1,47 +1,7 @@
-"""Seed data: klanten en fiscale parameters voor TestBV Boekhouding."""
+"""Seed data: fiscale parameters (publieke belastingdienst-gegevens)."""
 
 from pathlib import Path
-from database import add_klant, get_klanten, upsert_fiscale_params, get_all_fiscale_params
-
-# === Klanten ===
-
-KLANTEN = [
-    {
-        'naam': "HAP K6",
-        'tarief_uur': 77.50,
-        'retour_km': 52,
-        'adres': 'Hoofdstraat 3, 9363 EV Marum',
-        'actief': 1,
-    },
-    {
-        'naam': 'K. Klant7',
-        'tarief_uur': 77.50,
-        'retour_km': 52,
-        'adres': 'Hoofdstraat 3, 9363 EV Marum',
-        'actief': 1,
-    },
-    {
-        'naam': 'HAP K14',
-        'tarief_uur': 80.00,
-        'retour_km': 44,
-        'adres': 'Hoofdstraat 1, 1234 AB Plaats14',
-        'actief': 1,
-    },
-    {
-        'naam': 'Klant2',
-        'tarief_uur': 70.00,
-        'retour_km': 108,
-        'adres': 'Hoofdstraat 2, 1234 AB Plaats2',
-        'actief': 0,
-    },
-    {
-        'naam': 'K. Klant15',
-        'tarief_uur': 98.44,
-        'retour_km': 0,
-        'adres': 'Nieuw-Weerdinge',
-        'actief': 1,
-    },
-]
+from database import upsert_fiscale_params, get_all_fiscale_params
 
 # === Fiscale parameters per jaar ===
 
@@ -51,7 +11,7 @@ FISCALE_PARAMS: dict[int, dict] = {
         'zelfstandigenaftrek': 5030,
         'startersaftrek': 2123,
         'mkb_vrijstelling_pct': 14.0,
-        'kia_ondergrens': 2401,
+        'kia_ondergrens': 2601,
         'kia_bovengrens': 69764,
         'kia_pct': 28,
         'km_tarief': 0.21,
@@ -127,26 +87,14 @@ FISCALE_PARAMS: dict[int, dict] = {
         'schijf2_pct': 37.56,
         'schijf3_pct': 49.50,
         'ahk_max': 3115,
-        'ahk_afbouw_pct': 6.337,
-        'ahk_drempel': 28800,
+        'ahk_afbouw_pct': 6.398,
+        'ahk_drempel': 29736,
         'ak_max': 5685,
         'zvw_pct': 4.85,
         'zvw_max_grondslag': 79409,
         'repr_aftrek_pct': 80,
     },
 }
-
-
-async def seed_klanten(db_path: Path) -> int:
-    """Insert klanten if table is empty. Returns number of klanten inserted."""
-    bestaande = await get_klanten(db_path)
-    if bestaande:
-        return 0
-    count = 0
-    for klant in KLANTEN:
-        await add_klant(db_path, **klant)
-        count += 1
-    return count
 
 
 async def seed_fiscale_params(db_path: Path) -> int:
@@ -162,6 +110,5 @@ async def seed_fiscale_params(db_path: Path) -> int:
 
 
 async def seed_all(db_path: Path) -> None:
-    """Seed klanten en fiscale parameters."""
-    await seed_klanten(db_path)
+    """Seed fiscale parameters."""
     await seed_fiscale_params(db_path)

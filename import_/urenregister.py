@@ -5,23 +5,9 @@ from pathlib import Path
 from datetime import datetime
 from database import get_db, get_klanten, add_klant
 
-# Map Excel klant names to our klant names
-KLANT_MAPPING = {
-    "Praktijk K6": "HAP K6",
-    "K. Klant7": "K. Klant7",
-    "Praktijk K14": "HAP K14",
-    "Praktijk K2": "Klant2",
-    "K. Klant15": "K. Klant15",
-    # Extra klanten die in Excel voorkomen maar niet in de seed data
-    "HAP NoordOost": "HAP NoordOost",
-    "HAP MiddenLand": "HAP MiddenLand",
-    "Praktijk K10": "Praktijk K10",
-    "Praktijk K11": "Praktijk K11",
-    "Praktijk K9": "Praktijk K9",
-    "Praktijk K12": "Praktijk K12",
-    "Praktijk K13": "Praktijk K13",
-    "TestBV Huisartswaarnemer": "TestBV Huisartswaarnemer",
-}
+# Optional mapping from Excel klant names to cleaner names.
+# Pass custom mapping via klant_mapping parameter, or leave empty to use Excel names as-is.
+DEFAULT_KLANT_MAPPING: dict[str, str] = {}
 
 # Codes die NIET meetellen voor urencriterium
 ACHTERWACHT_CODES = {
@@ -32,11 +18,14 @@ ACHTERWACHT_CODES = {
 }
 
 
-async def import_urenregister(xlsm_path: Path, db_path: Path) -> dict:
+async def import_urenregister(xlsm_path: Path, db_path: Path,
+                              klant_mapping: dict[str, str] = None) -> dict:
     """Import Urenregister.xlsm into werkdagen table.
 
     Returns dict with counts: imported, skipped, errors.
     """
+    mapping = klant_mapping if klant_mapping is not None else DEFAULT_KLANT_MAPPING
+
     wb = openpyxl.load_workbook(str(xlsm_path), keep_vba=True, data_only=True)
     ws = wb['Urentabel']
 
@@ -73,7 +62,7 @@ async def import_urenregister(xlsm_path: Path, db_path: Path) -> dict:
                 skipped += 1
                 continue
 
-            klant_naam = KLANT_MAPPING.get(klant_excel, klant_excel)
+            klant_naam = mapping.get(klant_excel, klant_excel)
 
             # Create klant if not exists
             if klant_naam not in klant_name_to_id:
@@ -176,14 +165,18 @@ async def import_facturen_from_pdfs(inkomsten_base: Path, db_path: Path) -> dict
                 continue
 
             for pdf in sorted(inkomsten_dir.rglob("*.pdf")):
-                # Try to parse YYYY-NNN from filename
-                match = re.match(r'(\d{4}-\d{3})[_\s](.+)\.pdf', pdf.name)
+                # Parse YYYY-NNN from filename (supports 2-5+ digit numbers)
+                # Formats: 2024-001_Klant.pdf, 2023-00001.pdf, 2023-016.pdf, 2023-09_DDG.pdf
+                match = re.match(r'(\d{4}-\d{2,5})(?:[_\s](.+))?\.pdf', pdf.name)
                 if not match:
                     skipped += 1
                     continue
 
-                nummer = match.group(1)
-                klant_hint = match.group(2).replace('_', ' ').strip()
+                raw_nummer = match.group(1)
+                # Normalize to YYYY-NNN (3 digits)
+                year_part, num_part = raw_nummer.split('-')
+                nummer = f"{year_part}-{int(num_part):03d}"
+                klant_hint = (match.group(2) or '').replace('_', ' ').strip()
 
                 # Check if factuur already exists
                 cursor = await conn.execute(

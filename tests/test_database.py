@@ -25,7 +25,7 @@ async def test_init_creates_tables(db):
         )
         tables = {row[0] for row in await cursor.fetchall()}
     expected = {'klanten', 'werkdagen', 'facturen', 'uitgaven',
-                'banktransacties', 'fiscale_params'}
+                'banktransacties', 'fiscale_params', 'bedrijfsgegevens'}
     assert tables >= expected
 
 
@@ -53,11 +53,11 @@ async def test_pragma_wal_mode(db):
 
 @pytest.mark.asyncio
 async def test_klant_crud(db):
-    kid = await add_klant(db, naam="HAP Klant6", tarief_uur=77.50, retour_km=52)
+    kid = await add_klant(db, naam="Testpraktijk", tarief_uur=77.50, retour_km=52)
     assert kid > 0
     klanten = await get_klanten(db)
     assert len(klanten) == 1
-    assert klanten[0].naam == "HAP Klant6"
+    assert klanten[0].naam == "Testpraktijk"
     assert klanten[0].tarief_uur == 77.50
     assert klanten[0].retour_km == 52
 

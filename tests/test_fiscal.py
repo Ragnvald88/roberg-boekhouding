@@ -21,7 +21,7 @@ FISCALE_PARAMS = {
         "jaar": 2023,
         "zelfstandigenaftrek": 5030, "startersaftrek": 2123,
         "mkb_vrijstelling_pct": 14.0,
-        "kia_ondergrens": 2401, "kia_bovengrens": 69764, "kia_pct": 28,
+        "kia_ondergrens": 2601, "kia_bovengrens": 69764, "kia_pct": 28,
         "km_tarief": 0.21,
         "schijf1_grens": 73031, "schijf1_pct": 36.93,
         "schijf2_grens": 73031, "schijf2_pct": 36.93,  # same as schijf1 (2 brackets)
@@ -68,7 +68,7 @@ FISCALE_PARAMS = {
         "schijf1_grens": 38883, "schijf1_pct": 35.75,
         "schijf2_grens": 78426, "schijf2_pct": 37.56,
         "schijf3_pct": 49.50,
-        "ahk_max": 3115, "ahk_afbouw_pct": 6.337, "ahk_drempel": 28800,
+        "ahk_max": 3115, "ahk_afbouw_pct": 6.398, "ahk_drempel": 29736,
         "ak_max": 5685,
         "zvw_pct": 4.85, "zvw_max_grondslag": 79409,
         "repr_aftrek_pct": 80,
@@ -420,6 +420,26 @@ class TestVolledig:
         )
         assert result.uren_criterium_gehaald is False
         assert any("Urencriterium" in w for w in result.waarschuwingen)
+
+    def test_volledig_urencriterium_blokkeert_ondernemersaftrek(self):
+        """Urencriterium niet gehaald: geen zelfstandigen- of startersaftrek."""
+        params = FISCALE_PARAMS[2024]
+        result = bereken_volledig(
+            omzet=80000, kosten=10000, afschrijvingen=0,
+            representatie=0, investeringen_totaal=0,
+            uren=1000, params=params,  # < 1225
+        )
+        assert result.zelfstandigenaftrek == 0
+        assert result.startersaftrek == 0
+        # MKB-winstvrijstelling is still applied (no urencriterium needed)
+        assert result.mkb_vrijstelling > 0
+        # Higher belastbare_winst because no ondernemersaftrek
+        result_met = bereken_volledig(
+            omzet=80000, kosten=10000, afschrijvingen=0,
+            representatie=0, investeringen_totaal=0,
+            uren=1400, params=params,  # >= 1225
+        )
+        assert result.belastbare_winst > result_met.belastbare_winst
 
     def test_volledig_startersaftrek_none(self):
         """2026: startersaftrek = None, moet als 0 behandeld worden."""

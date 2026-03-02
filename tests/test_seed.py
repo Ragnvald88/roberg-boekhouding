@@ -1,8 +1,8 @@
-"""Tests voor seed data: klanten en fiscale parameters."""
+"""Tests voor seed data: fiscale parameters."""
 
 import pytest
 from database import init_db, get_klanten, get_fiscale_params, get_all_fiscale_params
-from import_.seed_data import seed_klanten, seed_fiscale_params, seed_all
+from import_.seed_data import seed_fiscale_params, seed_all
 
 
 @pytest.fixture
@@ -13,17 +13,11 @@ async def db(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_seed_creates_5_klanten(db):
-    count = await seed_klanten(db)
-    assert count == 5
+async def test_seed_creates_no_klanten(db):
+    """Seed should not create any klanten (they come from import)."""
+    await seed_all(db)
     klanten = await get_klanten(db)
-    assert len(klanten) == 5
-    namen = {k.naam for k in klanten}
-    assert "HAP K6" in namen
-    assert "K. Klant7" in namen
-    assert "HAP K14" in namen
-    assert "Klant2" in namen
-    assert "K. Klant15" in namen
+    assert len(klanten) == 0
 
 
 @pytest.mark.asyncio
@@ -63,14 +57,10 @@ async def test_seed_creates_fiscale_params(db):
 async def test_seed_idempotent(db):
     # First run: inserts data
     await seed_all(db)
-    klanten_1 = await get_klanten(db)
     params_1 = await get_all_fiscale_params(db)
-    assert len(klanten_1) == 5
     assert len(params_1) == 4
 
     # Second run: should NOT duplicate
     await seed_all(db)
-    klanten_2 = await get_klanten(db)
     params_2 = await get_all_fiscale_params(db)
-    assert len(klanten_2) == 5
     assert len(params_2) == 4

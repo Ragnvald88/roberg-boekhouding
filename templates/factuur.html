@@ -50,13 +50,13 @@
 
 <div class="header">
   <div class="sender">
-    <h1>TestBV</h1>
+    <h1>{{ bedrijf.bedrijfsnaam }}</h1>
     <p>
-      R.J.P. Gebruiker<br>
-      Waarnemend huisarts<br>
-      Prinsesseweg 36<br>
-      9717 HA Groningen<br>
-      KvK: 00000000
+      {{ bedrijf.naam }}<br>
+      {{ bedrijf.functie }}<br>
+      {{ bedrijf.adres }}<br>
+      {{ bedrijf.postcode_plaats }}<br>
+      KvK: {{ bedrijf.kvk }}
     </p>
   </div>
   <div class="meta">
@@ -122,13 +122,13 @@
 <div class="payment">
   <strong>Betaalinformatie</strong><br>
   Gelieve het totaalbedrag van {{ totaal | format_euro }} over te maken op:<br>
-  <strong>IBAN:</strong> NL69 RABO 0379 3899 63<br>
-  <strong>t.n.v.:</strong> R.J.P. Gebruiker<br>
+  <strong>IBAN:</strong> {{ bedrijf.iban }}<br>
+  <strong>t.n.v.:</strong> {{ bedrijf.naam }}<br>
   <strong>Referentie:</strong> {{ nummer }}
 </div>
 
 <div class="footer">
-  TestBV — R.J.P. Gebruiker — KvK 00000000 — IBAN NL69 RABO 0379 3899 63
+  {{ bedrijf.bedrijfsnaam }} — {{ bedrijf.naam }} — KvK {{ bedrijf.kvk }} — IBAN {{ bedrijf.iban }}
 </div>
 
 </body>

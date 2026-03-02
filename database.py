@@ -1,12 +1,14 @@
-"""SQLite database: schema, connectie, en alle queries voor TestBV Boekhouding."""
+"""SQLite database: schema, connectie, en alle queries."""
 
 import aiosqlite
 from pathlib import Path
 from models import (
-    Klant, Werkdag, Factuur, Uitgave, Banktransactie, FiscaleParams
+    Bedrijfsgegevens, Klant, Werkdag, Factuur, Uitgave, Banktransactie,
+    FiscaleParams,
 )
 
-DB_PATH = Path("data/boekhouding.sqlite3")
+_PROJECT_ROOT = Path(__file__).resolve().parent
+DB_PATH = _PROJECT_ROOT / "data" / "boekhouding.sqlite3"
 
 SCHEMA_SQL = """
 PRAGMA journal_mode = WAL;
@@ -112,6 +114,18 @@ CREATE TABLE IF NOT EXISTS fiscale_params (
     zvw_max_grondslag REAL,
     repr_aftrek_pct REAL DEFAULT 80
 );
+
+CREATE TABLE IF NOT EXISTS bedrijfsgegevens (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    bedrijfsnaam TEXT NOT NULL DEFAULT '',
+    naam TEXT NOT NULL DEFAULT '',
+    functie TEXT NOT NULL DEFAULT '',
+    adres TEXT NOT NULL DEFAULT '',
+    postcode_plaats TEXT NOT NULL DEFAULT '',
+    kvk TEXT NOT NULL DEFAULT '',
+    iban TEXT NOT NULL DEFAULT '',
+    thuisplaats TEXT NOT NULL DEFAULT ''
+);
 """
 
 
@@ -130,6 +144,42 @@ async def init_db(db_path: Path = DB_PATH) -> None:
     async with aiosqlite.connect(db_path) as conn:
         await conn.executescript(SCHEMA_SQL)
         await conn.commit()
+
+
+# === Bedrijfsgegevens ===
+
+async def get_bedrijfsgegevens(db_path: Path = DB_PATH) -> Bedrijfsgegevens | None:
+    conn = await get_db(db_path)
+    try:
+        cursor = await conn.execute("SELECT * FROM bedrijfsgegevens WHERE id = 1")
+        r = await cursor.fetchone()
+        if not r:
+            return None
+        return Bedrijfsgegevens(
+            id=1, bedrijfsnaam=r['bedrijfsnaam'], naam=r['naam'],
+            functie=r['functie'], adres=r['adres'],
+            postcode_plaats=r['postcode_plaats'], kvk=r['kvk'],
+            iban=r['iban'], thuisplaats=r['thuisplaats'],
+        )
+    finally:
+        await conn.close()
+
+
+async def upsert_bedrijfsgegevens(db_path: Path = DB_PATH, **kwargs) -> None:
+    conn = await get_db(db_path)
+    try:
+        await conn.execute(
+            """INSERT OR REPLACE INTO bedrijfsgegevens
+               (id, bedrijfsnaam, naam, functie, adres, postcode_plaats, kvk, iban, thuisplaats)
+               VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (kwargs.get('bedrijfsnaam', ''), kwargs.get('naam', ''),
+             kwargs.get('functie', ''), kwargs.get('adres', ''),
+             kwargs.get('postcode_plaats', ''), kwargs.get('kvk', ''),
+             kwargs.get('iban', ''), kwargs.get('thuisplaats', ''))
+        )
+        await conn.commit()
+    finally:
+        await conn.close()
 
 
 # === Klanten ===
@@ -721,10 +771,10 @@ async def get_kpis(db_path: Path = DB_PATH, jaar: int = 2026) -> dict:
         )
         omzet = (await cur.fetchone())[0]
 
-        # Kosten
+        # Kosten (excl. investeringen — die gaan via afschrijving)
         cur = await conn.execute(
             "SELECT COALESCE(SUM(bedrag), 0) FROM uitgaven "
-            "WHERE substr(datum, 1, 4) = ?", (jaar_str,)
+            "WHERE substr(datum, 1, 4) = ? AND is_investering = 0", (jaar_str,)
         )
         kosten = (await cur.fetchone())[0]
 
@@ -751,6 +801,91 @@ async def get_kpis(db_path: Path = DB_PATH, jaar: int = 2026) -> dict:
             'uren': uren,
             'openstaand': openstaand,
         }
+    finally:
+        await conn.close()
+
+
+async def get_omzet_per_klant(db_path: Path = DB_PATH, jaar: int = 2026) -> list[dict]:
+    """Revenue breakdown per customer for a given year."""
+    conn = await get_db(db_path)
+    try:
+        cursor = await conn.execute(
+            """SELECT k.naam, SUM(f.totaal_uren) as uren,
+                      SUM(f.totaal_km) as km, SUM(f.totaal_bedrag) as bedrag
+               FROM facturen f JOIN klanten k ON f.klant_id = k.id
+               WHERE substr(f.datum, 1, 4) = ? AND f.type = 'factuur'
+               GROUP BY k.naam ORDER BY bedrag DESC""",
+            (str(jaar),)
+        )
+        rows = await cursor.fetchall()
+        return [{'naam': r['naam'], 'uren': r['uren'] or 0,
+                 'km': r['km'] or 0, 'bedrag': r['bedrag'] or 0} for r in rows]
+    finally:
+        await conn.close()
+
+
+async def get_recente_facturen(db_path: Path = DB_PATH,
+                                limit: int = 5) -> list[Factuur]:
+    """Get most recent invoices across all years."""
+    conn = await get_db(db_path)
+    try:
+        cursor = await conn.execute(
+            """SELECT f.*, k.naam as klant_naam
+               FROM facturen f JOIN klanten k ON f.klant_id = k.id
+               WHERE f.type = 'factuur'
+               ORDER BY f.datum DESC LIMIT ?""",
+            (limit,)
+        )
+        rows = await cursor.fetchall()
+        return [Factuur(
+            id=r['id'], nummer=r['nummer'], klant_id=r['klant_id'],
+            klant_naam=r['klant_naam'], datum=r['datum'],
+            totaal_uren=r['totaal_uren'] or 0, totaal_km=r['totaal_km'] or 0,
+            totaal_bedrag=r['totaal_bedrag'],
+            pdf_pad=r['pdf_pad'] or '', betaald=bool(r['betaald']),
+            betaald_datum=r['betaald_datum'] or '',
+            type=r['type'] or 'factuur'
+        ) for r in rows]
+    finally:
+        await conn.close()
+
+
+async def get_openstaande_facturen(db_path: Path = DB_PATH,
+                                    jaar: int = None) -> list[Factuur]:
+    """Get unpaid invoices."""
+    conn = await get_db(db_path)
+    try:
+        sql = """SELECT f.*, k.naam as klant_naam
+                 FROM facturen f JOIN klanten k ON f.klant_id = k.id
+                 WHERE f.betaald = 0 AND f.type = 'factuur'"""
+        params = []
+        if jaar:
+            sql += " AND substr(f.datum, 1, 4) = ?"
+            params.append(str(jaar))
+        sql += " ORDER BY f.datum"
+        cursor = await conn.execute(sql, params)
+        rows = await cursor.fetchall()
+        return [Factuur(
+            id=r['id'], nummer=r['nummer'], klant_id=r['klant_id'],
+            klant_naam=r['klant_naam'], datum=r['datum'],
+            totaal_uren=r['totaal_uren'] or 0, totaal_km=r['totaal_km'] or 0,
+            totaal_bedrag=r['totaal_bedrag'],
+            pdf_pad=r['pdf_pad'] or '', betaald=False,
+            betaald_datum='', type=r['type'] or 'factuur'
+        ) for r in rows]
+    finally:
+        await conn.close()
+
+
+async def get_factuur_count(db_path: Path = DB_PATH, jaar: int = 2026) -> int:
+    """Count invoices for a year."""
+    conn = await get_db(db_path)
+    try:
+        cur = await conn.execute(
+            "SELECT COUNT(*) FROM facturen WHERE substr(datum, 1, 4) = ? AND type = 'factuur'",
+            (str(jaar),)
+        )
+        return (await cur.fetchone())[0]
     finally:
         await conn.close()
 

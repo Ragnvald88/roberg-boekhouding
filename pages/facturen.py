@@ -1,20 +1,21 @@
 """Facturen pagina — factuur aanmaken, overzicht en betaalstatus."""
 
 from datetime import date, datetime
+
+from nicegui import app, ui
+
 from pathlib import Path
 
-from nicegui import ui
-
 from components.layout import create_layout
-from components.invoice_generator import generate_invoice, format_euro, format_datum
+from components.invoice_generator import generate_invoice
+from components.utils import format_euro, format_datum
 from database import (
     get_facturen, add_factuur, get_next_factuurnummer,
     mark_betaald, get_klanten, get_werkdagen_ongefactureerd,
-    link_werkdagen_to_factuur,
+    link_werkdagen_to_factuur, get_bedrijfsgegevens, DB_PATH,
 )
 
-DB_PATH = Path("data/boekhouding.sqlite3")
-PDF_DIR = Path("data/facturen")
+PDF_DIR = DB_PATH.parent / "facturen"
 
 
 @ui.page('/facturen')
@@ -24,15 +25,16 @@ async def facturen_page():
     current_year = date.today().year
     table_ref = {'ref': None}
 
-    with ui.column().classes('w-full p-4 max-w-7xl mx-auto'):
+    with ui.column().classes('w-full p-6 max-w-7xl mx-auto gap-6'):
         # Header + filter
-        with ui.row().classes('w-full items-center gap-4 q-mb-md'):
+        with ui.row().classes('w-full items-center gap-4'):
+            ui.label('Facturen').classes('text-h5') \
+                .style('color: #0F172A; font-weight: 700')
+            ui.space()
             jaar_select = ui.select(
                 {y: str(y) for y in range(2023, current_year + 2)},
                 value=current_year, label='Jaar',
-            ).classes('w-28')
-
-            ui.space()
+            ).classes('w-32')
 
             ui.button('Nieuwe factuur', icon='add',
                       on_click=lambda: open_new_factuur_dialog()) \
@@ -63,15 +65,21 @@ async def facturen_page():
 
         table.add_slot('body-cell-status', '''
             <q-td :props="props">
-                <q-badge :color="props.row.betaald ? 'green' : 'orange'"
+                <q-badge :color="props.row.betaald ? 'positive' : 'warning'"
                          :label="props.row.betaald ? 'Betaald' : 'Openstaand'" />
             </q-td>
+        ''')
+
+        table.add_slot('no-data', '''
+            <q-tr><q-td colspan="100%" class="text-center q-pa-lg text-grey">
+                Geen facturen gevonden.
+            </q-td></q-tr>
         ''')
 
         table.add_slot('body-cell-actions', '''
             <q-td :props="props">
                 <q-btn v-if="!props.row.betaald" icon="check_circle" flat dense
-                       round size="sm" color="green"
+                       round size="sm" color="positive"
                        @click="() => $parent.$emit('markbetaald', props.row)"
                        title="Markeer als betaald" />
                 <q-btn v-if="props.row.pdf_pad" icon="download" flat dense
@@ -123,10 +131,22 @@ async def facturen_page():
 
         async def on_mark_betaald(e):
             row = e.args
-            await mark_betaald(DB_PATH, factuur_id=row['id'],
-                               datum=date.today().isoformat())
-            ui.notify(f"Factuur {row['nummer']} gemarkeerd als betaald", type='positive')
-            await refresh_table()
+            with ui.dialog() as dialog, ui.card():
+                ui.label(f"Factuur {row['nummer']} markeren als betaald?")
+                ui.label(f"{row['klant_naam']} — {row['bedrag_fmt']}").classes('text-grey')
+                with ui.row().classes('w-full justify-end gap-2 mt-2'):
+                    ui.button('Annuleren', on_click=dialog.close).props('flat')
+
+                    async def do_mark():
+                        await mark_betaald(DB_PATH, factuur_id=row['id'],
+                                           datum=date.today().isoformat())
+                        dialog.close()
+                        ui.notify(f"Factuur {row['nummer']} gemarkeerd als betaald",
+                                  type='positive')
+                        await refresh_table()
+
+                    ui.button('Ja, betaald', on_click=do_mark).props('color=positive')
+            dialog.open()
 
         async def on_download(e):
             row = e.args
@@ -176,7 +196,7 @@ async def facturen_page():
                             ui.label(f'{len(werkdagen)} ongefactureerde werkdagen:') \
                                 .classes('text-subtitle2')
                             for w in werkdagen:
-                                bedrag = w.uren * w.tarief + w.km * 0.23
+                                bedrag = w.uren * w.tarief + w.km * w.km_tarief
                                 cb = ui.checkbox(
                                     f'{w.datum} — {w.uren}u × {format_euro(w.tarief)} '
                                     f'+ {w.km} km = {format_euro(bedrag)}',
@@ -208,7 +228,7 @@ async def facturen_page():
                     totaal_uren = sum(w.uren for w in selected)
                     totaal_km = sum(w.km for w in selected)
                     totaal_werk = sum(w.uren * w.tarief for w in selected)
-                    totaal_reis = sum(w.km * 0.23 for w in selected)
+                    totaal_reis = sum(w.km * w.km_tarief for w in selected)
                     totaal = totaal_werk + totaal_reis
 
                     with preview_container:
@@ -266,11 +286,23 @@ async def facturen_page():
 
                         klant_dict = {'naam': klant.naam, 'adres': klant.adres}
 
+                        # Load business info for invoice
+                        bg = await get_bedrijfsgegevens(DB_PATH)
+                        bg_dict = {}
+                        if bg:
+                            bg_dict = {
+                                'bedrijfsnaam': bg.bedrijfsnaam, 'naam': bg.naam,
+                                'functie': bg.functie, 'adres': bg.adres,
+                                'postcode_plaats': bg.postcode_plaats, 'kvk': bg.kvk,
+                                'iban': bg.iban, 'thuisplaats': bg.thuisplaats,
+                            }
+
                         # Generate PDF
                         try:
                             pdf_path = generate_invoice(
                                 nummer, klant_dict, wd_dicts, PDF_DIR,
-                                factuur_datum=factuur_datum
+                                factuur_datum=factuur_datum,
+                                bedrijfsgegevens=bg_dict,
                             )
                         except Exception as ex:
                             ui.notify(f'PDF generatie mislukt: {ex}', type='negative')
@@ -280,7 +312,8 @@ async def facturen_page():
                         totaal_uren = sum(w.uren for w in selected)
                         totaal_km = sum(w.km for w in selected)
                         totaal_bedrag = sum(
-                            w.uren * w.tarief + w.km * 0.23 for w in selected
+                            w.uren * w.tarief + w.km * w.km_tarief
+                            for w in selected
                         )
 
                         # Save factuur record
@@ -316,3 +349,8 @@ async def facturen_page():
 
         jaar_select.on_value_change(lambda _: refresh_table())
         await refresh_table()
+
+        # Auto-open factuur dialog if coming from werkdagen with pre-selected IDs
+        pre_selected = app.storage.user.pop('selected_werkdagen', None)
+        if pre_selected:
+            await open_new_factuur_dialog()

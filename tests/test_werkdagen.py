@@ -19,6 +19,11 @@ async def db(tmp_path):
 @pytest.fixture
 async def seeded_db(db):
     await seed_all(db)
+    # Add test klanten (seed_all no longer seeds klanten)
+    await add_klant(db, naam='Testpraktijk A', tarief_uur=77.50, retour_km=52,
+                    adres='Testlaan 1, 1234 AB Teststad')
+    await add_klant(db, naam='Testpraktijk B', tarief_uur=80.00, retour_km=44,
+                    adres='Testweg 2, 5678 CD Testdorp')
     return db
 
 
@@ -27,11 +32,11 @@ async def test_add_werkdag_with_klant(seeded_db):
     """Werkdag toevoegen met klantgegevens."""
     from database import get_klanten
     klanten = await get_klanten(seeded_db)
-    klant6 = next(k for k in klanten if 'Klant6' in k.naam)
+    klant = klanten[0]
 
     wid = await add_werkdag(
-        seeded_db, datum='2026-02-23', klant_id=klant6.id,
-        uren=9, km=klant6.retour_km, tarief=klant6.tarief_uur,
+        seeded_db, datum='2026-02-23', klant_id=klant.id,
+        uren=9, km=klant.retour_km, tarief=klant.tarief_uur,
         code='WERKDAG', activiteit='Waarneming dagpraktijk',
     )
     assert wid > 0
@@ -39,10 +44,10 @@ async def test_add_werkdag_with_klant(seeded_db):
     werkdagen = await get_werkdagen(seeded_db, jaar=2026)
     assert len(werkdagen) == 1
     w = werkdagen[0]
-    assert w.klant_naam == klant6.naam
+    assert w.klant_naam == klant.naam
     assert w.uren == 9
-    assert w.km == 52
-    assert w.tarief == 77.50
+    assert w.km == klant.retour_km
+    assert w.tarief == klant.tarief_uur
 
 
 @pytest.mark.asyncio

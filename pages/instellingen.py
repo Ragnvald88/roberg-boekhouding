@@ -1,40 +1,76 @@
 """Instellingen pagina — klanten beheer, fiscale parameters, backup."""
 
 from datetime import date
-from pathlib import Path
 import io
 import zipfile
 
 from nicegui import ui
 
 from components.layout import create_layout
+from components.utils import format_euro
 from database import (
     get_klanten, add_klant, update_klant, delete_klant,
     get_all_fiscale_params, upsert_fiscale_params,
+    get_bedrijfsgegevens, upsert_bedrijfsgegevens, DB_PATH,
 )
-
-DB_PATH = Path("data/boekhouding.sqlite3")
-
-
-def format_euro(value: float) -> str:
-    if value is None:
-        return "€ 0,00"
-    return f"€ {value:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 
 @ui.page('/instellingen')
 async def instellingen_page():
     create_layout('Instellingen', '/instellingen')
 
-    with ui.column().classes('w-full p-4 max-w-6xl mx-auto'):
-        ui.label('Instellingen').classes('text-h5 q-mb-md')
+    with ui.column().classes('w-full p-6 max-w-7xl mx-auto gap-6'):
+        ui.label('Instellingen').classes('text-h5') \
+            .style('color: #0F172A; font-weight: 700')
 
         with ui.tabs().classes('w-full') as tabs:
+            tab_bedrijf = ui.tab('Bedrijfsgegevens')
             tab_klanten = ui.tab('Klanten')
             tab_fiscaal = ui.tab('Fiscale parameters')
             tab_backup = ui.tab('Backup')
 
-        with ui.tab_panels(tabs, value=tab_klanten).classes('w-full'):
+        with ui.tab_panels(tabs, value=tab_bedrijf).classes('w-full'):
+
+            # === TAB: Bedrijfsgegevens ===
+            with ui.tab_panel(tab_bedrijf):
+                bedrijf_container = ui.column().classes('w-full')
+
+                async def refresh_bedrijf():
+                    bedrijf_container.clear()
+                    bg = await get_bedrijfsgegevens(DB_PATH)
+
+                    with bedrijf_container:
+                        ui.label(
+                            'Deze gegevens worden gebruikt op facturen.'
+                        ).classes('text-body2 text-grey q-mb-md')
+
+                        with ui.card().classes('w-full'):
+                            fields = {}
+                            for label, key in [
+                                ('Bedrijfsnaam', 'bedrijfsnaam'),
+                                ('Naam', 'naam'),
+                                ('Functie', 'functie'),
+                                ('Adres', 'adres'),
+                                ('Postcode + Plaats', 'postcode_plaats'),
+                                ('KvK-nummer', 'kvk'),
+                                ('IBAN', 'iban'),
+                                ('Thuisplaats (voor reiskosten)', 'thuisplaats'),
+                            ]:
+                                val = getattr(bg, key, '') if bg else ''
+                                fields[key] = ui.input(
+                                    label, value=val or ''
+                                ).classes('w-full')
+
+                            async def save_bedrijf():
+                                kwargs = {k: v.value or '' for k, v in fields.items()}
+                                await upsert_bedrijfsgegevens(DB_PATH, **kwargs)
+                                ui.notify('Bedrijfsgegevens opgeslagen', type='positive')
+
+                            ui.button(
+                                'Opslaan', icon='save', on_click=save_bedrijf
+                            ).props('color=primary').classes('q-mt-md')
+
+                await refresh_bedrijf()
 
             # === TAB: Klanten ===
             with ui.tab_panel(tab_klanten):
@@ -50,7 +86,7 @@ async def instellingen_page():
                             ui.label('Klant toevoegen').classes('text-subtitle1 text-bold')
                             with ui.row().classes('w-full items-end gap-4 flex-wrap'):
                                 new_naam = ui.input('Naam').classes('w-48')
-                                new_tarief = ui.number('Tarief/uur (€)', value=77.50,
+                                new_tarief = ui.number('Tarief/uur (€)', value=0,
                                                         min=0, step=0.50).classes('w-32')
                                 new_km = ui.number('Retour km', value=0,
                                                     min=0).classes('w-24')
@@ -242,15 +278,15 @@ async def instellingen_page():
                         ui.notify('Database niet gevonden', type='warning')
                         return
 
-                    backup_name = f"roberg_backup_{date.today().isoformat()}.zip"
-                    backup_path = Path("data") / backup_name
+                    backup_name = f"boekhouding_backup_{date.today().isoformat()}.zip"
+                    backup_path = DB_PATH.parent / backup_name
 
                     with zipfile.ZipFile(backup_path, 'w', zipfile.ZIP_DEFLATED) as zf:
                         # Database
                         if DB_PATH.exists():
                             zf.write(DB_PATH, 'boekhouding.sqlite3')
                         # Factuur PDFs
-                        factuur_dir = Path("data/facturen")
+                        factuur_dir = DB_PATH.parent / "facturen"
                         if factuur_dir.exists():
                             for pdf in factuur_dir.glob("*.pdf"):
                                 zf.write(pdf, f"facturen/{pdf.name}")
