@@ -541,7 +541,7 @@ async def jaarafsluiting_page():
 
             ui.button(
                 'Herbereken', icon='refresh',
-                on_click=lambda: bereken(),
+                on_click=herbereken,
             ).props('outline color=primary')
 
         # --- Results container (filled by bereken) ---

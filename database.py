@@ -426,14 +426,47 @@ async def get_next_factuurnummer(db_path: Path = DB_PATH, jaar: int = 2026) -> s
 
 
 async def mark_betaald(db_path: Path = DB_PATH, factuur_id: int = 0,
-                       datum: str = '') -> None:
+                       datum: str = '', betaald: bool = True) -> None:
     conn = await get_db(db_path)
     try:
         await conn.execute(
-            "UPDATE facturen SET betaald = 1, betaald_datum = ? WHERE id = ?",
-            (datum, factuur_id)
+            "UPDATE facturen SET betaald = ?, betaald_datum = ? WHERE id = ?",
+            (1 if betaald else 0, datum, factuur_id)
         )
         await conn.commit()
+    finally:
+        await conn.close()
+
+
+async def delete_factuur(db_path: Path = DB_PATH, factuur_id: int = 0) -> None:
+    """Delete a factuur: unlink werkdagen, remove PDF, delete record."""
+    conn = await get_db(db_path)
+    try:
+        # Get factuur nummer and pdf_pad
+        cursor = await conn.execute(
+            "SELECT nummer, pdf_pad FROM facturen WHERE id = ?", (factuur_id,)
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return
+        nummer = row['nummer']
+        pdf_pad = row['pdf_pad']
+
+        # Unlink werkdagen
+        await conn.execute(
+            "UPDATE werkdagen SET status = 'ongefactureerd', factuurnummer = '' "
+            "WHERE factuurnummer = ?", (nummer,)
+        )
+
+        # Delete factuur record
+        await conn.execute("DELETE FROM facturen WHERE id = ?", (factuur_id,))
+        await conn.commit()
+
+        # Remove PDF file if it exists
+        if pdf_pad:
+            pdf_file = Path(pdf_pad)
+            if pdf_file.exists():
+                pdf_file.unlink()
     finally:
         await conn.close()
 
@@ -644,6 +677,24 @@ async def update_banktransactie(db_path: Path = DB_PATH, transactie_id: int = 0,
                 f"UPDATE banktransacties SET {', '.join(fields)} WHERE id = ?", values
             )
             await conn.commit()
+    finally:
+        await conn.close()
+
+
+async def delete_banktransacties(db_path: Path = DB_PATH,
+                                  transactie_ids: list[int] = None) -> int:
+    """Delete bank transactions by IDs. Returns count deleted."""
+    if not transactie_ids:
+        return 0
+    conn = await get_db(db_path)
+    try:
+        placeholders = ','.join('?' for _ in transactie_ids)
+        cursor = await conn.execute(
+            f"DELETE FROM banktransacties WHERE id IN ({placeholders})",
+            transactie_ids,
+        )
+        await conn.commit()
+        return cursor.rowcount
     finally:
         await conn.close()
 

@@ -7,7 +7,8 @@ from nicegui import ui
 from components.layout import create_layout
 from components.utils import format_euro, BANK_CATEGORIEEN
 from database import (
-    get_banktransacties, add_banktransacties, update_banktransactie, DB_PATH,
+    get_banktransacties, add_banktransacties, update_banktransactie,
+    delete_banktransacties, DB_PATH,
 )
 from import_.rabobank_csv import parse_rabobank_csv
 
@@ -20,9 +21,12 @@ async def bank_page():
     current_year = datetime.now().year
     selected_jaar = {'value': current_year}
     selected_maand = {'value': 0}  # 0 = alle maanden
+    selected_ids = {'value': set()}
 
     table_ref = {'table': None}
     csv_list_container = {'ref': None}
+    bulk_bar_ref = {'ref': None}
+    bulk_label_ref = {'ref': None}
 
     # --- Helper functions ---
 
@@ -56,15 +60,25 @@ async def bank_page():
                 'koppeling': f"{t.koppeling_type} #{t.koppeling_id}" if t.koppeling_type else '',
                 'status': status,
                 'csv_bestand': t.csv_bestand,
+                'selected': False,
             })
         return rows
 
+    def update_bulk_bar():
+        n = len(selected_ids['value'])
+        if bulk_bar_ref['ref']:
+            bulk_bar_ref['ref'].set_visibility(n > 0)
+        if bulk_label_ref['ref']:
+            bulk_label_ref['ref'].text = f'{n} transacties geselecteerd'
+
     async def refresh_table():
         """Reload data and update the table."""
+        selected_ids['value'].clear()
         rows = await load_transacties()
         if table_ref['table']:
             table_ref['table'].rows = rows
             table_ref['table'].update()
+        update_bulk_bar()
 
     async def refresh_csv_list():
         """Reload the list of imported CSV files."""
@@ -131,6 +145,56 @@ async def bank_page():
         selected_maand['value'] = new_maand
         await refresh_table()
 
+    async def on_delete_transactie(e):
+        row = e.args
+        with ui.dialog() as dialog, ui.card():
+            ui.label('Transactie verwijderen?').classes('text-h6')
+            ui.label(f"{row['datum']} — {row['tegenpartij']} — "
+                     f"{row['bedrag_fmt']}").classes('text-grey')
+            with ui.row().classes('w-full justify-end gap-2 mt-2'):
+                ui.button('Annuleren', on_click=dialog.close).props('flat')
+
+                async def do_delete():
+                    await delete_banktransacties(DB_PATH,
+                                                 transactie_ids=[row['id']])
+                    dialog.close()
+                    ui.notify('Transactie verwijderd', type='positive')
+                    await refresh_table()
+
+                ui.button('Verwijderen', on_click=do_delete) \
+                    .props('color=negative')
+        dialog.open()
+
+    def on_select(e):
+        row = e.args
+        wid = row['id']
+        if row.get('selected'):
+            selected_ids['value'].add(wid)
+        else:
+            selected_ids['value'].discard(wid)
+        update_bulk_bar()
+
+    async def on_bulk_delete():
+        ids = list(selected_ids['value'])
+        if not ids:
+            return
+        with ui.dialog() as dialog, ui.card():
+            ui.label(f'{len(ids)} transacties verwijderen?').classes('text-h6')
+            with ui.row().classes('w-full justify-end gap-2 mt-2'):
+                ui.button('Annuleren', on_click=dialog.close).props('flat')
+
+                async def do_bulk():
+                    await delete_banktransacties(DB_PATH, transactie_ids=ids)
+                    dialog.close()
+                    ui.notify(f'{len(ids)} transacties verwijderd',
+                              type='positive')
+                    await refresh_table()
+                    await refresh_csv_list()
+
+                ui.button('Verwijderen', on_click=do_bulk) \
+                    .props('color=negative')
+        dialog.open()
+
     # --- Page layout ---
     with ui.column().classes('w-full p-6 max-w-7xl mx-auto gap-6'):
         ui.label('Banktransacties').classes('text-h5') \
@@ -169,8 +233,20 @@ async def bank_page():
                 auto_upload=True,
             ).props('accept=".csv" flat color=primary').classes('w-48')
 
+        # Bulk action toolbar
+        bulk_bar = ui.row().classes('w-full items-center gap-4')
+        bulk_bar.set_visibility(False)
+        bulk_bar_ref['ref'] = bulk_bar
+        with bulk_bar:
+            bulk_label = ui.label('')
+            bulk_label_ref['ref'] = bulk_label
+            ui.button('Verwijder selectie', icon='delete',
+                      on_click=lambda: on_bulk_delete()) \
+                .props('color=negative outline')
+
         # Transactions table
         columns = [
+            {'name': 'select', 'label': '', 'field': 'select', 'align': 'center'},
             {'name': 'datum', 'label': 'Datum', 'field': 'datum', 'sortable': True,
              'align': 'left'},
             {'name': 'bedrag_fmt', 'label': 'Bedrag', 'field': 'bedrag_fmt',
@@ -183,6 +259,7 @@ async def bank_page():
              'sortable': True, 'align': 'left'},
             {'name': 'koppeling', 'label': 'Koppeling', 'field': 'koppeling',
              'align': 'left'},
+            {'name': 'actions', 'label': '', 'field': 'actions', 'align': 'center'},
         ]
 
         initial_rows = await load_transacties()
@@ -195,7 +272,7 @@ async def bank_page():
         ).classes('w-full')
         table_ref['table'] = table
 
-        # Custom cell rendering for bedrag color and categorie dropdown
+        # Custom cell rendering for bedrag color, categorie dropdown, checkbox, actions
         table.add_slot('body', r'''
             <q-tr :props="props"
                    :class="{
@@ -203,6 +280,10 @@ async def bank_page():
                        'bg-amber-1': props.row.status === 'gecategoriseerd',
                        'bg-red-1': props.row.status === 'niet-gekoppeld'
                    }">
+                <q-td key="select" :props="props">
+                    <q-checkbox v-model="props.row.selected" dense
+                        @update:model-value="() => $parent.$emit('select', props.row)" />
+                </q-td>
                 <q-td key="datum" :props="props">{{ props.row.datum }}</q-td>
                 <q-td key="bedrag_fmt" :props="props"
                        :class="props.row.bedrag >= 0 ? 'text-teal-8 text-bold' : 'text-red-8 text-bold'"
@@ -224,10 +305,23 @@ async def bank_page():
                     />
                 </q-td>
                 <q-td key="koppeling" :props="props">{{ props.row.koppeling }}</q-td>
+                <q-td key="actions" :props="props">
+                    <q-btn icon="delete" flat dense round size="sm" color="negative"
+                        @click="() => $parent.$emit('deletetransactie', props.row)"
+                        title="Verwijderen" />
+                </q-td>
             </q-tr>
         ''')
 
+        table.add_slot('no-data', '''
+            <q-tr><q-td colspan="100%" class="text-center q-pa-lg text-grey">
+                Geen transacties gevonden.
+            </q-td></q-tr>
+        ''')
+
         table.on('cat_change', lambda e: handle_categorie_change(e.args['id'], e.args['cat']))
+        table.on('select', on_select)
+        table.on('deletetransactie', on_delete_transactie)
 
         # Imported CSV files section
         ui.separator().classes('q-my-md')

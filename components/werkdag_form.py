@@ -19,7 +19,7 @@ CODES = {
 }
 
 
-async def werkdag_form(on_save=None, werkdag=None):
+async def werkdag_form(on_save=None, werkdag=None, on_cancel=None):
     """Render werkdag add/edit form. werkdag=None for new entry."""
     klanten = await get_klanten(DB_PATH, alleen_actief=True)
     klant_options = {k.id: k.naam for k in klanten}
@@ -160,7 +160,10 @@ async def werkdag_form(on_save=None, werkdag=None):
             if on_save:
                 await on_save()
 
-        ui.button(
-            'Opslaan' if is_edit else 'Toevoegen',
-            on_click=save, icon='save'
-        ).props('color=primary').classes('q-mt-md')
+        with ui.row().classes('q-mt-md gap-2'):
+            ui.button(
+                'Opslaan' if is_edit else 'Toevoegen',
+                on_click=save, icon='save'
+            ).props('color=primary')
+            if is_edit and on_cancel:
+                ui.button('Annuleren', on_click=on_cancel).props('flat')

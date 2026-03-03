@@ -104,6 +104,11 @@ async def kosten_page():
                            @click="$parent.$emit('delete', props.row)" />
                 </q-td>
             ''')
+            table.add_slot('no-data', '''
+                <q-tr><q-td colspan="100%" class="text-center q-pa-lg text-grey">
+                    Geen uitgaven gevonden.
+                </q-td></q-tr>
+            ''')
             table.on('edit', lambda e: open_edit_dialog(e.args))
             table.on('delete', lambda e: confirm_delete(e.args))
 

@@ -144,8 +144,16 @@ async def werkdagen_page():
         async def load_form(werkdag=None):
             container = form_container['ref']
             container.clear()
+
+            async def cancel_edit():
+                await load_form()
+
             with container:
-                await werkdag_form(on_save=refresh_table, werkdag=werkdag)
+                await werkdag_form(
+                    on_save=refresh_table,
+                    werkdag=werkdag,
+                    on_cancel=cancel_edit if werkdag else None,
+                )
 
         async def refresh_table():
             year = jaar_select.value
@@ -250,9 +258,10 @@ async def werkdagen_page():
                 selected_ids['value'].add(wid)
             else:
                 selected_ids['value'].discard(wid)
-            factuur_btn.props(
-                'disabled' if not selected_ids['value'] else remove='disabled'
-            )
+            if selected_ids['value']:
+                factuur_btn.props(remove='disabled')
+            else:
+                factuur_btn.props('disabled')
 
         table.on('select', on_select)
         table.on('edit', on_edit)

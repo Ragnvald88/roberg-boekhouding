@@ -94,7 +94,7 @@ async def dashboard_page():
             with ui.row().classes('w-full gap-4 flex-wrap'):
                 kpi_card('Bruto omzet', format_euro(kpis['omzet']),
                          'trending_up', '#0F766E',
-                         on_click=lambda: ui.navigate.to('/dashboard/omzet'))
+                         on_click=lambda: ui.navigate.to('/werkdagen'))
 
                 openstaand_count = len(openstaande)
                 openstaand_label = (f"{openstaand_count} ({format_euro(kpis['openstaand'])})"

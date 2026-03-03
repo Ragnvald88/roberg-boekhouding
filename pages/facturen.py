@@ -11,7 +11,7 @@ from components.invoice_generator import generate_invoice
 from components.utils import format_euro, format_datum
 from database import (
     get_facturen, add_factuur, get_next_factuurnummer,
-    mark_betaald, get_klanten, get_werkdagen_ongefactureerd,
+    mark_betaald, delete_factuur, get_klanten, get_werkdagen_ongefactureerd,
     link_werkdagen_to_factuur, get_bedrijfsgegevens, DB_PATH,
 )
 
@@ -24,6 +24,7 @@ async def facturen_page():
 
     current_year = date.today().year
     table_ref = {'ref': None}
+    bulk_bar_ref = {'ref': None}
 
     with ui.column().classes('w-full p-6 max-w-7xl mx-auto gap-6'):
         # Header + filter
@@ -39,6 +40,16 @@ async def facturen_page():
             ui.button('Nieuwe factuur', icon='add',
                       on_click=lambda: open_new_factuur_dialog()) \
                 .props('color=primary')
+
+        # Bulk action toolbar (hidden when nothing selected)
+        bulk_bar = ui.row().classes('w-full items-center gap-4')
+        bulk_bar.set_visibility(False)
+        bulk_bar_ref['ref'] = bulk_bar
+        with bulk_bar:
+            bulk_label = ui.label('')
+            ui.button('Verwijder selectie', icon='delete',
+                      on_click=lambda: on_bulk_delete()) \
+                .props('color=negative outline')
 
         # Facturen table
         columns = [
@@ -59,6 +70,7 @@ async def facturen_page():
 
         table = ui.table(
             columns=columns, rows=[], row_key='id',
+            selection='multiple',
             pagination={'rowsPerPage': 20, 'sortBy': 'nummer', 'descending': True},
         ).classes('w-full')
         table_ref['ref'] = table
@@ -82,15 +94,33 @@ async def facturen_page():
                        round size="sm" color="positive"
                        @click="() => $parent.$emit('markbetaald', props.row)"
                        title="Markeer als betaald" />
+                <q-btn v-if="props.row.betaald" icon="undo" flat dense
+                       round size="sm" color="grey"
+                       @click="() => $parent.$emit('markonbetaald', props.row)"
+                       title="Markeer als onbetaald" />
                 <q-btn v-if="props.row.pdf_pad" icon="download" flat dense
                        round size="sm"
                        @click="() => $parent.$emit('download', props.row)"
                        title="Download PDF" />
+                <q-btn icon="delete" flat dense round size="sm" color="negative"
+                       @click="() => $parent.$emit('deletefactuur', props.row)"
+                       title="Verwijderen" />
             </q-td>
         ''')
 
         # Summary
         summary_row = ui.row().classes('w-full justify-end gap-8 q-mt-sm')
+
+        def update_bulk_bar():
+            selected = table.selected
+            n = len(selected) if selected else 0
+            if n > 0:
+                bulk_bar.set_visibility(True)
+                bulk_label.text = f'{n} facturen geselecteerd'
+            else:
+                bulk_bar.set_visibility(False)
+
+        table.on('selection', lambda _: update_bulk_bar())
 
         async def refresh_table():
             jaar = jaar_select.value
@@ -118,7 +148,9 @@ async def facturen_page():
                     openstaand += f.totaal_bedrag
 
             table.rows = rows
+            table.selected.clear()
             table.update()
+            update_bulk_bar()
 
             summary_row.clear()
             with summary_row:
@@ -148,6 +180,67 @@ async def facturen_page():
                     ui.button('Ja, betaald', on_click=do_mark).props('color=positive')
             dialog.open()
 
+        async def on_mark_onbetaald(e):
+            row = e.args
+            await mark_betaald(DB_PATH, factuur_id=row['id'],
+                               datum='', betaald=False)
+            ui.notify(f"Factuur {row['nummer']} gemarkeerd als onbetaald",
+                      type='info')
+            await refresh_table()
+
+        async def on_delete_factuur(e):
+            row = e.args
+            with ui.dialog() as dialog, ui.card():
+                ui.label(f"Factuur {row['nummer']} verwijderen?") \
+                    .classes('text-h6')
+                ui.label(f"{row['klant_naam']} — {row['bedrag_fmt']}") \
+                    .classes('text-grey')
+                ui.label(
+                    'Werkdagen worden losgekoppeld en weer beschikbaar '
+                    'voor facturatie.'
+                ).classes('text-caption text-grey q-mt-sm')
+                with ui.row().classes('w-full justify-end gap-2 mt-2'):
+                    ui.button('Annuleren', on_click=dialog.close).props('flat')
+
+                    async def do_delete():
+                        await delete_factuur(DB_PATH, factuur_id=row['id'])
+                        dialog.close()
+                        ui.notify(f"Factuur {row['nummer']} verwijderd",
+                                  type='positive')
+                        await refresh_table()
+
+                    ui.button('Verwijderen', on_click=do_delete) \
+                        .props('color=negative')
+            dialog.open()
+
+        async def on_bulk_delete():
+            selected = table.selected
+            if not selected:
+                return
+            nummers = [r['nummer'] for r in selected]
+            with ui.dialog() as dialog, ui.card():
+                ui.label(f'{len(selected)} facturen verwijderen?') \
+                    .classes('text-h6')
+                ui.label(', '.join(nummers)).classes('text-grey')
+                ui.label(
+                    'Werkdagen worden losgekoppeld en weer beschikbaar '
+                    'voor facturatie.'
+                ).classes('text-caption text-grey q-mt-sm')
+                with ui.row().classes('w-full justify-end gap-2 mt-2'):
+                    ui.button('Annuleren', on_click=dialog.close).props('flat')
+
+                    async def do_bulk():
+                        for r in selected:
+                            await delete_factuur(DB_PATH, factuur_id=r['id'])
+                        dialog.close()
+                        ui.notify(f'{len(selected)} facturen verwijderd',
+                                  type='positive')
+                        await refresh_table()
+
+                    ui.button('Verwijderen', on_click=do_bulk) \
+                        .props('color=negative')
+            dialog.open()
+
         async def on_download(e):
             row = e.args
             pdf_path = row.get('pdf_pad', '')
@@ -157,6 +250,8 @@ async def facturen_page():
                 ui.notify('PDF niet gevonden', type='warning')
 
         table.on('markbetaald', on_mark_betaald)
+        table.on('markonbetaald', on_mark_onbetaald)
+        table.on('deletefactuur', on_delete_factuur)
         table.on('download', on_download)
 
         async def open_new_factuur_dialog():
@@ -165,13 +260,30 @@ async def facturen_page():
                 ui.notify('Geen actieve klanten gevonden', type='warning')
                 return
 
+            # Check for pre-selected werkdagen from werkdagen page
+            pre_selected_ids = app.storage.user.pop('selected_werkdagen', None)
+
             with ui.dialog() as dialog, ui.card().classes('w-full max-w-2xl'):
                 ui.label('Nieuwe factuur aanmaken').classes('text-h6 q-mb-md')
 
                 # Step 1: Select klant
                 klant_options = {k.id: k.naam for k in klanten}
+
+                # Pre-select klant if werkdagen were pre-selected
+                pre_klant_id = None
+                if pre_selected_ids:
+                    from database import get_werkdagen
+                    pre_werkdagen = await get_werkdagen(DB_PATH)
+                    pre_klant_ids = {
+                        w.klant_id for w in pre_werkdagen
+                        if w.id in pre_selected_ids
+                    }
+                    if len(pre_klant_ids) == 1:
+                        pre_klant_id = pre_klant_ids.pop()
+
                 klant_select = ui.select(
                     klant_options, label='Klant',
+                    value=pre_klant_id,
                 ).classes('w-full q-mb-md')
 
                 # Werkdagen selection container
@@ -197,6 +309,9 @@ async def facturen_page():
                                 .classes('text-subtitle2')
                             for w in werkdagen:
                                 bedrag = w.uren * w.tarief + w.km * w.km_tarief
+                                # Pre-check if this werkdag was pre-selected
+                                is_pre = (pre_selected_ids and
+                                          w.id in pre_selected_ids)
                                 cb = ui.checkbox(
                                     f'{w.datum} — {w.uren}u × {format_euro(w.tarief)} '
                                     f'+ {w.km} km = {format_euro(bedrag)}',
@@ -243,6 +358,10 @@ async def facturen_page():
                             .classes('text-h6 text-weight-bold')
 
                 klant_select.on_value_change(lambda _: load_werkdagen())
+
+                # Auto-load werkdagen if klant was pre-selected
+                if pre_klant_id:
+                    await load_werkdagen()
 
                 # Date input
                 datum_input = ui.input(
@@ -351,6 +470,6 @@ async def facturen_page():
         await refresh_table()
 
         # Auto-open factuur dialog if coming from werkdagen with pre-selected IDs
-        pre_selected = app.storage.user.pop('selected_werkdagen', None)
+        pre_selected = app.storage.user.get('selected_werkdagen', None)
         if pre_selected:
             await open_new_factuur_dialog()
