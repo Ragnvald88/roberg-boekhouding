@@ -29,6 +29,14 @@ class Klant:
 
 
 @dataclass
+class KlantLocatie:
+    id: int
+    klant_id: int
+    naam: str
+    retour_km: float
+
+
+@dataclass
 class Werkdag:
     id: int = 0
     datum: str = ''
@@ -45,6 +53,7 @@ class Werkdag:
     factuurnummer: str = ''
     opmerking: str = ''
     urennorm: bool = True
+    locatie_id: int | None = None
 
 
 @dataclass
@@ -124,3 +133,18 @@ class FiscaleParams:
     woz_waarde: float = 0.0
     hypotheekrente: float = 0.0
     voorlopige_aanslag_betaald: float = 0.0
+    # Partner inkomen (voor verzamelinkomen aangifte)
+    partner_bruto_loon: float = 0.0
+    partner_loonheffing: float = 0.0
+
+
+@dataclass
+class AangifteDocument:
+    id: int = 0
+    jaar: int = 0
+    categorie: str = ''
+    documenttype: str = ''
+    bestandsnaam: str = ''
+    bestandspad: str = ''
+    upload_datum: str = ''
+    notitie: str = ''

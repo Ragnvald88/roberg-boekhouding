@@ -37,7 +37,6 @@ async def kosten_page():
     tabel_container = {'ref': None}
     summary_container = {'ref': None}
     activastaat_container = {'ref': None}
-    upload_file = {}  # Stores pending upload file event
 
     # --- Helpers ---
 
@@ -208,68 +207,170 @@ async def kosten_page():
         await laad_summary()
         await laad_activastaat()
 
-    # --- Add expense form ---
+    # --- Add dialog ---
 
-    async def opslaan_uitgave():
-        """Save new expense from the form."""
-        # Validate
-        if not input_datum.value:
-            ui.notify('Vul een datum in', type='warning')
-            return
-        if not input_categorie.value:
-            ui.notify('Kies een categorie', type='warning')
-            return
-        if not input_omschrijving.value:
-            ui.notify('Vul een omschrijving in', type='warning')
-            return
-        if not input_bedrag.value or input_bedrag.value <= 0:
-            ui.notify('Vul een positief bedrag in', type='warning')
-            return
+    async def open_add_uitgave_dialog(and_new_state: dict | None = None):
+        """Open dialog to add a new expense."""
+        upload_file = {}
 
-        kwargs = {
-            'datum': input_datum.value,
-            'categorie': input_categorie.value,
-            'omschrijving': input_omschrijving.value,
-            'bedrag': float(input_bedrag.value),
-        }
+        with ui.dialog() as dialog, ui.card().classes('w-full max-w-lg q-pa-md'):
+            ui.label('Uitgave toevoegen').classes('text-h6 q-mb-md')
 
-        bedrag = float(input_bedrag.value)
-        if bedrag >= 450 and input_investering.value:
-            kwargs['is_investering'] = 1
-            kwargs['levensduur_jaren'] = input_levensduur.value
-            kwargs['restwaarde_pct'] = float(input_restwaarde.value or 10)
-            kwargs['zakelijk_pct'] = float(input_zakelijk.value or 100)
-            kwargs['aanschaf_bedrag'] = bedrag
+            input_datum = ui.input(
+                'Datum', value=and_new_state.get('datum', date.today().isoformat())
+                if and_new_state else date.today().isoformat(),
+            ).classes('w-40')
+            with input_datum:
+                with ui.menu().props('no-parent-event') as datum_menu:
+                    with ui.date(value=input_datum.value).bind_value(
+                            input_datum) as datum_picker:
+                        datum_picker.on('update:model-value',
+                                        lambda: datum_menu.close())
+                with input_datum.add_slot('append'):
+                    ui.icon('edit_calendar').on('click', datum_menu.open) \
+                        .classes('cursor-pointer')
 
-        uitgave_id = await add_uitgave(DB_PATH, **kwargs)
+            input_categorie = ui.select(
+                CATEGORIEEN, label='Categorie',
+                value=and_new_state.get('categorie') if and_new_state else None,
+            ).classes('w-full')
 
-        # Save uploaded file if present
-        if upload_file.get('event'):
-            await save_upload_for_uitgave(uitgave_id, upload_file['event'])
+            input_omschrijving = ui.input('Omschrijving').classes('w-full')
 
-        ui.notify('Uitgave opgeslagen', type='positive')
+            input_bedrag = ui.number(
+                'Bedrag incl. BTW (\u20ac)', format='%.2f',
+                min=0.01, step=0.01,
+            ).classes('w-full')
 
-        # Reset form
-        input_datum.value = date.today().isoformat()
-        input_categorie.value = None
-        input_omschrijving.value = ''
-        input_bedrag.value = None
-        input_investering.value = False
-        input_levensduur.value = 5
-        input_restwaarde.value = 10
-        input_zakelijk.value = 100
-        investering_velden.set_visibility(False)
-        representatie_note.set_visibility(False)
-        upload_file.clear()
-        add_upload.reset()
+            # Investering section
+            input_investering = ui.checkbox('Dit is een investering', value=False)
+            input_investering.set_visibility(False)
 
-        await ververs()
+            investering_velden = ui.column().classes('pl-8 gap-2')
+            investering_velden.set_visibility(False)
+            with investering_velden:
+                with ui.row().classes('items-end gap-4'):
+                    input_levensduur = ui.select(
+                        LEVENSDUUR_OPTIES, label='Levensduur', value=5,
+                    ).classes('w-32')
+                    input_restwaarde = ui.number(
+                        'Restwaarde %', value=10, min=0, max=100,
+                    ).classes('w-32')
+                    input_zakelijk = ui.number(
+                        'Zakelijk %', value=100, min=0, max=100,
+                    ).classes('w-32')
+
+            # Representatie note
+            bijtelling_pct = 100 - repr_aftrek_pct
+            representatie_note = ui.label(
+                f'{repr_aftrek_pct}% aftrekbaar, {bijtelling_pct}% bijtelling'
+            ).classes('text-caption text-orange')
+            representatie_note.set_visibility(False)
+
+            # Dynamic visibility
+            def on_bedrag_change():
+                val = input_bedrag.value or 0
+                if val >= 450:
+                    input_investering.set_visibility(True)
+                else:
+                    input_investering.set_visibility(False)
+                    input_investering.value = False
+                    investering_velden.set_visibility(False)
+
+            input_bedrag.on('update:model-value', lambda: on_bedrag_change())
+
+            def on_investering_change():
+                investering_velden.set_visibility(input_investering.value)
+
+            input_investering.on('update:model-value', lambda: on_investering_change())
+
+            def on_categorie_change():
+                representatie_note.set_visibility(
+                    input_categorie.value == 'Representatie'
+                )
+
+            input_categorie.on('update:model-value', lambda: on_categorie_change())
+
+            # Document upload
+            ui.separator().classes('q-my-sm')
+            ui.label('Bon/factuur (optioneel)').classes(
+                'text-caption').style('color: #64748B')
+            add_upload = ui.upload(
+                label='Sleep bestand of klik', auto_upload=True,
+                on_upload=lambda e: upload_file.update({'event': e}),
+                max_file_size=10_000_000,
+            ).classes('w-full').props('flat bordered accept=".pdf,.jpg,.jpeg,.png"')
+
+            async def opslaan(and_new: bool = False):
+                if not input_datum.value:
+                    ui.notify('Vul een datum in', type='warning')
+                    return
+                if not input_categorie.value:
+                    ui.notify('Kies een categorie', type='warning')
+                    return
+                if not input_omschrijving.value:
+                    ui.notify('Vul een omschrijving in', type='warning')
+                    return
+                if not input_bedrag.value or input_bedrag.value <= 0:
+                    ui.notify('Vul een positief bedrag in', type='warning')
+                    return
+
+                kwargs = {
+                    'datum': input_datum.value,
+                    'categorie': input_categorie.value,
+                    'omschrijving': input_omschrijving.value,
+                    'bedrag': float(input_bedrag.value),
+                }
+
+                bedrag = float(input_bedrag.value)
+                if bedrag >= 450 and input_investering.value:
+                    kwargs['is_investering'] = 1
+                    kwargs['levensduur_jaren'] = input_levensduur.value
+                    kwargs['restwaarde_pct'] = float(input_restwaarde.value or 10)
+                    kwargs['zakelijk_pct'] = float(input_zakelijk.value or 100)
+                    kwargs['aanschaf_bedrag'] = bedrag
+
+                uitgave_id = await add_uitgave(DB_PATH, **kwargs)
+
+                if upload_file.get('event'):
+                    await save_upload_for_uitgave(uitgave_id, upload_file['event'])
+
+                ui.notify('Uitgave opgeslagen', type='positive')
+                await ververs()
+
+                if and_new:
+                    # Reset form — keep categorie
+                    saved_cat = input_categorie.value
+                    input_datum.value = date.today().isoformat()
+                    input_omschrijving.value = ''
+                    input_bedrag.value = None
+                    input_investering.value = False
+                    input_investering.set_visibility(False)
+                    investering_velden.set_visibility(False)
+                    representatie_note.set_visibility(saved_cat == 'Representatie')
+                    upload_file.clear()
+                    add_upload.reset()
+                else:
+                    dialog.close()
+
+            with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
+                ui.button('Annuleren', on_click=dialog.close).props('flat')
+                ui.button(
+                    'Opslaan & Nieuw', icon='add',
+                    on_click=lambda: opslaan(and_new=True),
+                ).props('outline color=primary')
+                ui.button(
+                    'Opslaan', icon='save',
+                    on_click=lambda: opslaan(and_new=False),
+                ).props('color=primary')
+
+        dialog.open()
 
     # --- Edit dialog ---
 
     async def open_edit_dialog(row: dict):
         """Open dialog to edit an existing expense."""
-        with ui.dialog() as dialog, ui.card().classes('w-96'):
+        with ui.dialog() as dialog, ui.card().classes('w-full max-w-lg q-pa-md'):
             ui.label('Uitgave bewerken').classes('text-h6')
 
             edit_datum = ui.input('Datum', value=row['datum']).classes('w-full')
@@ -288,14 +389,14 @@ async def kosten_page():
                 'Omschrijving', value=row['omschrijving']
             ).classes('w-full')
             edit_bedrag = ui.number(
-                'Bedrag incl. BTW (€)', value=row['bedrag'],
+                'Bedrag incl. BTW (\u20ac)', value=row['bedrag'],
                 format='%.2f', min=0.01, step=0.01
             ).classes('w-full')
 
             # Investering fields
             is_inv = row.get('is_investering', False)
             edit_investering = ui.checkbox('Dit is een investering', value=is_inv)
-            with ui.column().bind_visibility_from(edit_investering, 'value') as inv_col:
+            with ui.column().bind_visibility_from(edit_investering, 'value'):
                 edit_levensduur = ui.select(
                     LEVENSDUUR_OPTIES, label='Levensduur',
                     value=row.get('levensduur_jaren', 5)
@@ -319,7 +420,6 @@ async def kosten_page():
                     edit_investering.value = False
 
             edit_bedrag.on('update:model-value', lambda: check_edit_bedrag())
-            # Initial visibility
             if (row.get('bedrag', 0) or 0) < 450:
                 edit_investering.set_visibility(False)
 
@@ -377,7 +477,6 @@ async def kosten_page():
                         kwargs['levensduur_jaren'] = None
                         kwargs['aanschaf_bedrag'] = None
                     await update_uitgave(DB_PATH, uitgave_id=row['id'], **kwargs)
-                    # Save uploaded file if present
                     if edit_upload_file.get('event'):
                         await save_upload_for_uitgave(
                             row['id'], edit_upload_file['event'])
@@ -419,12 +518,10 @@ async def kosten_page():
     async def save_upload_for_uitgave(uitgave_id: int, upload_event):
         """Save an uploaded file and link it to an uitgave."""
         UITGAVEN_DIR.mkdir(parents=True, exist_ok=True)
-        safe_name = Path(upload_event.name).name.replace(' ', '_')
+        safe_name = Path(upload_event.file.name).name.replace(' ', '_')
         filename = f'uitgave_{uitgave_id}_{safe_name}'
         filepath = UITGAVEN_DIR / filename
-        # Write content from the SpooledTemporaryFile
-        content = upload_event.content.read()
-        filepath.write_bytes(content)
+        await upload_event.file.save(filepath)
         await update_uitgave(DB_PATH, uitgave_id=uitgave_id,
                              pdf_pad=str(filepath))
         return filepath
@@ -466,6 +563,11 @@ async def kosten_page():
                 cat_opties, label='Categorie', value='',
             ).classes('w-48')
 
+            ui.button(
+                'Nieuwe uitgave', icon='add',
+                on_click=lambda: open_add_uitgave_dialog(),
+            ).props('color=primary')
+
             async def on_filter_change():
                 filter_jaar['value'] = jaar_select.value
                 filter_categorie['value'] = cat_select.value or None
@@ -473,98 +575,6 @@ async def kosten_page():
 
             jaar_select.on('update:model-value', lambda: on_filter_change())
             cat_select.on('update:model-value', lambda: on_filter_change())
-
-        # --- Add form ---
-        with ui.card().classes('w-full'):
-            ui.label('Uitgave toevoegen').classes('text-subtitle1 text-bold')
-            with ui.row().classes('w-full items-end gap-4 flex-wrap'):
-                input_datum = ui.input(
-                    'Datum', value=date.today().isoformat()
-                ).classes('w-40')
-                with input_datum:
-                    with ui.menu().props('no-parent-event') as datum_menu:
-                        with ui.date(value=date.today().isoformat()).bind_value(
-                                input_datum) as datum_picker:
-                            datum_picker.on('update:model-value',
-                                            lambda: datum_menu.close())
-                    with input_datum.add_slot('append'):
-                        ui.icon('edit_calendar').on('click', datum_menu.open).classes(
-                            'cursor-pointer')
-
-                input_categorie = ui.select(
-                    CATEGORIEEN, label='Categorie', value=None,
-                ).classes('w-48')
-
-                input_omschrijving = ui.input('Omschrijving').classes('w-64')
-
-                input_bedrag = ui.number(
-                    'Bedrag incl. BTW (€)', format='%.2f',
-                    min=0.01, step=0.01,
-                ).classes('w-40')
-
-            # Investering section (conditionally shown)
-            input_investering = ui.checkbox('Dit is een investering', value=False)
-            input_investering.set_visibility(False)
-
-            investering_velden = ui.column().classes('pl-8 gap-2')
-            investering_velden.set_visibility(False)
-            with investering_velden:
-                with ui.row().classes('items-end gap-4'):
-                    input_levensduur = ui.select(
-                        LEVENSDUUR_OPTIES, label='Levensduur', value=5,
-                    ).classes('w-32')
-                    input_restwaarde = ui.number(
-                        'Restwaarde %', value=10, min=0, max=100,
-                    ).classes('w-32')
-                    input_zakelijk = ui.number(
-                        'Zakelijk %', value=100, min=0, max=100,
-                    ).classes('w-32')
-
-            # Representatie note
-            bijtelling_pct = 100 - repr_aftrek_pct
-            representatie_note = ui.label(
-                f'{repr_aftrek_pct}% aftrekbaar, {bijtelling_pct}% bijtelling'
-            ).classes('text-caption text-orange')
-            representatie_note.set_visibility(False)
-
-            # Dynamic visibility based on bedrag
-            def on_bedrag_change():
-                val = input_bedrag.value or 0
-                if val >= 450:
-                    input_investering.set_visibility(True)
-                else:
-                    input_investering.set_visibility(False)
-                    input_investering.value = False
-                    investering_velden.set_visibility(False)
-
-            input_bedrag.on('update:model-value', lambda: on_bedrag_change())
-
-            # Show/hide investering fields based on checkbox
-            def on_investering_change():
-                investering_velden.set_visibility(input_investering.value)
-
-            input_investering.on('update:model-value', lambda: on_investering_change())
-
-            # Show representatie note
-            def on_categorie_change():
-                representatie_note.set_visibility(
-                    input_categorie.value == 'Representatie'
-                )
-
-            input_categorie.on('update:model-value', lambda: on_categorie_change())
-
-            # Document upload
-            ui.label('Bon/factuur (optioneel)').classes(
-                'text-caption q-mt-sm').style('color: #64748B')
-            add_upload = ui.upload(
-                label='Sleep bestand of klik', auto_upload=True,
-                on_upload=lambda e: upload_file.update({'event': e}),
-                max_file_size=10_000_000,
-            ).classes('w-full max-w-sm').props('flat bordered accept=".pdf,.jpg,.jpeg,.png"')
-
-            with ui.row().classes('w-full justify-end mt-2'):
-                ui.button('Opslaan', icon='save',
-                          on_click=opslaan_uitgave).props('color=primary')
 
         # --- Table ---
         with ui.card().classes('w-full'):

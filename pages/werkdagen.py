@@ -1,9 +1,9 @@
-"""Werkdagen pagina — uren/km registratie met tabel en formulier."""
+"""Werkdagen pagina — uren/km registratie met tabel en dialog."""
 
 from nicegui import app, ui
 from components.layout import create_layout
 from components.utils import format_euro, generate_csv
-from components.werkdag_form import werkdag_form
+from components.werkdag_form import open_werkdag_dialog
 from database import (
     get_werkdagen, get_klanten, delete_werkdag, DB_PATH,
 )
@@ -12,12 +12,6 @@ from datetime import date
 MAANDEN = {
     0: 'Alle', 1: 'Jan', 2: 'Feb', 3: 'Mar', 4: 'Apr', 5: 'Mei', 6: 'Jun',
     7: 'Jul', 8: 'Aug', 9: 'Sep', 10: 'Okt', 11: 'Nov', 12: 'Dec',
-}
-
-STATUS_COLORS = {
-    'ongefactureerd': 'grey',
-    'gefactureerd': 'blue',
-    'betaald': 'green',
 }
 
 
@@ -30,18 +24,16 @@ async def werkdagen_page():
     klant_options = {0: 'Alle'} | {k.id: k.naam for k in klanten}
 
     # State
-    year_filter = {'value': current_year}
-    month_filter = {'value': 0}
-    klant_filter = {'value': 0}
     table_ref = {'ref': None}
-    form_container = {'ref': None}
     summary_container = {'ref': None}
 
     with ui.column().classes('w-full p-6 max-w-7xl mx-auto gap-6'):
-        # Filter row
+        # Header row
         with ui.row().classes('w-full items-center gap-4'):
             ui.label('Werkdagen').classes('text-h5') \
                 .style('color: #0F172A; font-weight: 700')
+
+        # Filter + action row
         with ui.row().classes('w-full items-end gap-4'):
             jaar_select = ui.select(
                 {y: str(y) for y in range(2023, current_year + 2)},
@@ -78,12 +70,70 @@ async def werkdagen_page():
                 'Exporteer CSV', icon='download',
                 on_click=export_csv,
             ).props('outline color=primary')
-            ui.button(
-                'Vernieuwen', icon='refresh',
-                on_click=lambda: refresh_table()
-            ).props('outline color=primary')
 
-        # Table — column widths tuned to fit within ~1000px content area
+            ui.button(
+                'Nieuwe werkdag', icon='add',
+                on_click=lambda: open_werkdag_dialog(on_save=refresh_table),
+            ).props('color=primary')
+
+        # Bulk action toolbar (hidden when nothing selected)
+        bulk_bar = ui.row().classes('w-full items-center gap-4')
+        bulk_bar.set_visibility(False)
+        with bulk_bar:
+            bulk_label = ui.label('')
+
+            async def ga_naar_factuur():
+                selected = table_ref['ref'].selected
+                if not selected:
+                    ui.notify('Selecteer eerst werkdagen', type='warning')
+                    return
+                ids = [r['id'] for r in selected]
+                app.storage.user['selected_werkdagen'] = ids
+                ui.navigate.to('/facturen')
+
+            ui.button(
+                'Maak factuur van selectie', icon='receipt',
+                on_click=ga_naar_factuur,
+            ).props('color=primary')
+
+            async def verwijder_selectie():
+                selected = table_ref['ref'].selected
+                if not selected:
+                    return
+                ids = [r['id'] for r in selected]
+
+                async def confirm_bulk_delete():
+                    for wid in ids:
+                        await delete_werkdag(DB_PATH, werkdag_id=wid)
+                    dlg.close()
+                    ui.notify(f'{len(ids)} werkdag(en) verwijderd', type='positive')
+                    await refresh_table()
+
+                with ui.dialog() as dlg, ui.card():
+                    ui.label(f'{len(ids)} werkdag(en) verwijderen?')
+                    with ui.row():
+                        ui.button('Ja, verwijderen',
+                                  on_click=confirm_bulk_delete) \
+                            .props('color=negative')
+                        ui.button('Annuleren', on_click=dlg.close)
+                dlg.open()
+
+            ui.button(
+                'Verwijder selectie', icon='delete',
+                on_click=verwijder_selectie,
+            ).props('color=negative outline')
+
+        def update_bulk_bar():
+            tbl = table_ref['ref']
+            selected = tbl.selected if tbl else []
+            n = len(selected) if selected else 0
+            if n > 0:
+                bulk_bar.set_visibility(True)
+                bulk_label.text = f'{n} werkdag(en) geselecteerd'
+            else:
+                bulk_bar.set_visibility(False)
+
+        # Table
         _trunc = 'max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'
         columns = [
             {'name': 'datum', 'label': 'Datum', 'field': 'datum', 'sortable': True,
@@ -113,7 +163,6 @@ async def werkdagen_page():
         ).classes('w-full')
         table_ref['ref'] = table
 
-        # Custom cell rendering for status colors and action buttons
         table.add_slot('body-cell-status', '''
             <q-td :props="props">
                 <q-badge :color="props.row.status === 'betaald' ? 'positive' :
@@ -140,95 +189,18 @@ async def werkdagen_page():
         # Summary row
         summary_container['ref'] = ui.row().classes('w-full justify-end gap-8 q-mt-sm')
 
-        # Bulk action toolbar (hidden when nothing selected)
-        bulk_bar = ui.row().classes('w-full items-center gap-4')
-        bulk_bar.set_visibility(False)
-        with bulk_bar:
-            bulk_label = ui.label('')
-
-            async def ga_naar_factuur():
-                selected = table.selected
-                if not selected:
-                    ui.notify('Selecteer eerst werkdagen', type='warning')
-                    return
-                ids = [r['id'] for r in selected]
-                app.storage.user['selected_werkdagen'] = ids
-                ui.navigate.to('/facturen')
-
-            ui.button(
-                'Maak factuur van selectie', icon='receipt',
-                on_click=ga_naar_factuur,
-            ).props('color=primary')
-
-            async def verwijder_selectie():
-                selected = table.selected
-                if not selected:
-                    return
-                ids = [r['id'] for r in selected]
-
-                async def confirm_bulk_delete():
-                    for wid in ids:
-                        await delete_werkdag(DB_PATH, werkdag_id=wid)
-                    dialog.close()
-                    ui.notify(f'{len(ids)} werkdag(en) verwijderd', type='positive')
-                    await refresh_table()
-
-                with ui.dialog() as dialog, ui.card():
-                    ui.label(f'{len(ids)} werkdag(en) verwijderen?')
-                    with ui.row():
-                        ui.button('Ja, verwijderen',
-                                  on_click=confirm_bulk_delete) \
-                            .props('color=negative')
-                        ui.button('Annuleren', on_click=dialog.close)
-                dialog.open()
-
-            ui.button(
-                'Verwijder selectie', icon='delete',
-                on_click=verwijder_selectie,
-            ).props('color=negative outline')
-
-        def update_bulk_bar():
-            selected = table.selected
-            n = len(selected) if selected else 0
-            if n > 0:
-                bulk_bar.set_visibility(True)
-                bulk_label.text = f'{n} werkdag(en) geselecteerd'
-            else:
-                bulk_bar.set_visibility(False)
-
         table.on('selection', lambda _: update_bulk_bar())
-
-        ui.separator().classes('q-my-lg')
-
-        # Form container
-        form_container['ref'] = ui.column().classes('w-full')
-
-        async def load_form(werkdag=None):
-            container = form_container['ref']
-            container.clear()
-
-            async def cancel_edit():
-                await load_form()
-
-            with container:
-                await werkdag_form(
-                    on_save=refresh_table,
-                    werkdag=werkdag,
-                    on_cancel=cancel_edit if werkdag else None,
-                )
 
         async def refresh_table():
             year = jaar_select.value
             month = maand_select.value if maand_select.value != 0 else None
             klant_id = klant_sel.value if klant_sel.value != 0 else None
 
-            # Fetch all werkdagen for year+month (without klant filter)
-            # so we can update the klant dropdown with relevant customers
             all_werkdagen = await get_werkdagen(
                 DB_PATH, jaar=year, maand=month,
             )
 
-            # Update klant dropdown: only customers with werkdagen in this period
+            # Update klant dropdown with customers that have werkdagen
             seen = {}
             for w in all_werkdagen:
                 if w.klant_id not in seen:
@@ -242,7 +214,6 @@ async def werkdagen_page():
                 klant_id = None
             klant_sel.update()
 
-            # Filter by klant in Python (avoids second DB query)
             werkdagen = [
                 w for w in all_werkdagen
                 if klant_id is None or w.klant_id == klant_id
@@ -276,7 +247,6 @@ async def werkdagen_page():
             table.update()
             update_bulk_bar()
 
-            # Update summary
             s = summary_container['ref']
             s.clear()
             with s:
@@ -286,31 +256,30 @@ async def werkdagen_page():
                 ui.label(f'Bedrag: {format_euro(totaal_bedrag)}') \
                     .classes('text-body1 text-weight-bold')
 
-            # Reload form (fresh)
-            await load_form()
-
         # Event handlers
         async def on_edit(e):
             row = e.args
             werkdagen = await get_werkdagen(DB_PATH, jaar=jaar_select.value)
             werkdag = next((w for w in werkdagen if w.id == row['id']), None)
             if werkdag:
-                await load_form(werkdag)
+                await open_werkdag_dialog(
+                    on_save=refresh_table, werkdag=werkdag,
+                )
 
         async def on_delete(e):
             row = e.args
-            with ui.dialog() as dialog, ui.card():
+            with ui.dialog() as dlg, ui.card():
                 ui.label(f"Werkdag {row['datum']} verwijderen?")
                 with ui.row():
                     ui.button('Ja, verwijderen',
-                              on_click=lambda: confirm_delete(row['id'], dialog)) \
+                              on_click=lambda: confirm_delete(row['id'], dlg)) \
                         .props('color=negative')
-                    ui.button('Annuleren', on_click=dialog.close)
-            dialog.open()
+                    ui.button('Annuleren', on_click=dlg.close)
+            dlg.open()
 
-        async def confirm_delete(werkdag_id, dialog):
+        async def confirm_delete(werkdag_id, dlg):
             await delete_werkdag(DB_PATH, werkdag_id=werkdag_id)
-            dialog.close()
+            dlg.close()
             ui.notify('Werkdag verwijderd', type='positive')
             await refresh_table()
 

@@ -12,6 +12,7 @@ import pages.facturen
 import pages.kosten
 import pages.bank
 import pages.jaarafsluiting
+import pages.aangifte
 import pages.instellingen
 
 
@@ -21,6 +22,7 @@ async def startup():
     (data_dir / "facturen").mkdir(parents=True, exist_ok=True)
     (data_dir / "uitgaven").mkdir(parents=True, exist_ok=True)
     (data_dir / "bank_csv").mkdir(parents=True, exist_ok=True)
+    (data_dir / "aangifte").mkdir(parents=True, exist_ok=True)
     await init_db(DB_PATH)
     await seed_all(DB_PATH)
 

@@ -59,6 +59,7 @@ def create_layout(title: str, active_page: str = ''):
         ('Facturen', 'receipt', '/facturen'),
         ('Kosten', 'payments', '/kosten'),
         ('Bank', 'account_balance', '/bank'),
+        ('Aangifte', 'fact_check', '/aangifte'),
         ('Jaarafsluiting', 'bar_chart', '/jaarafsluiting'),
     ]
 

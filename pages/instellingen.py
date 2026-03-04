@@ -10,6 +10,7 @@ from components.layout import create_layout
 from components.utils import format_euro
 from database import (
     get_klanten, add_klant, update_klant, delete_klant,
+    get_klant_locaties, add_klant_locatie, delete_klant_locatie,
     get_all_fiscale_params, upsert_fiscale_params,
     get_bedrijfsgegevens, upsert_bedrijfsgegevens, DB_PATH,
 )
@@ -168,6 +169,96 @@ async def instellingen_page():
                                                       value=row['retour_km']).classes('w-full')
                                     ed_adres = ui.input('Adres',
                                                         value=row['adres']).classes('w-full')
+
+                                    # --- Locaties sub-section ---
+                                    ui.separator().classes('q-my-sm')
+                                    ui.label('Locaties').classes(
+                                        'text-subtitle2 text-weight-medium')
+                                    ui.label(
+                                        'Werklocaties met retourafstand (km). '
+                                        'Verschijnt als dropdown in het '
+                                        'werkdagformulier.'
+                                    ).classes('text-caption text-grey')
+
+                                    loc_container = ui.column().classes(
+                                        'w-full gap-1')
+
+                                    async def refresh_locaties():
+                                        loc_container.clear()
+                                        klant_id = row['id']
+                                        locaties = await get_klant_locaties(
+                                            DB_PATH, klant_id)
+                                        with loc_container:
+                                            for loc in locaties:
+                                                with ui.row().classes(
+                                                    'w-full items-center gap-2'
+                                                ):
+                                                    ui.label(loc.naam).classes(
+                                                        'flex-grow')
+                                                    ui.label(
+                                                        f'{loc.retour_km:.0f} km'
+                                                    ).classes(
+                                                        'text-caption text-grey')
+
+                                                    async def del_loc(
+                                                        lid=loc.id,
+                                                    ):
+                                                        await delete_klant_locatie(
+                                                            DB_PATH, lid)
+                                                        ui.notify(
+                                                            'Locatie verwijderd',
+                                                            type='info')
+                                                        await refresh_locaties()
+
+                                                    ui.button(
+                                                        icon='close',
+                                                        on_click=del_loc,
+                                                    ).props(
+                                                        'flat dense round '
+                                                        'size=sm color=negative'
+                                                    )
+
+                                            # Add new location row
+                                            with ui.row().classes(
+                                                'w-full items-end gap-2'
+                                            ):
+                                                new_loc_naam = ui.input(
+                                                    'Locatienaam',
+                                                ).classes(
+                                                    'flex-grow'
+                                                ).props('dense')
+                                                new_loc_km = ui.number(
+                                                    'Km retour', value=0,
+                                                    min=0,
+                                                ).classes('w-24').props('dense')
+
+                                                async def add_loc():
+                                                    naam = new_loc_naam.value
+                                                    km = new_loc_km.value or 0
+                                                    if not naam:
+                                                        ui.notify(
+                                                            'Vul een locatienaam'
+                                                            ' in',
+                                                            type='warning')
+                                                        return
+                                                    await add_klant_locatie(
+                                                        DB_PATH, row['id'],
+                                                        naam, km)
+                                                    ui.notify(
+                                                        f'Locatie "{naam}" '
+                                                        f'toegevoegd',
+                                                        type='positive')
+                                                    await refresh_locaties()
+
+                                                ui.button(
+                                                    icon='add',
+                                                    on_click=add_loc,
+                                                ).props(
+                                                    'flat dense round '
+                                                    'color=primary'
+                                                )
+
+                                    await refresh_locaties()
 
                                     with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
                                         ui.button('Annuleren', on_click=dialog.close).props('flat')
@@ -380,7 +471,7 @@ async def instellingen_page():
                         if DB_PATH.exists():
                             zf.write(DB_PATH, 'boekhouding.sqlite3')
                         # Include all data subdirectories
-                        for subdir in ['facturen', 'uitgaven', 'jaarafsluiting', 'bank_csv']:
+                        for subdir in ['facturen', 'uitgaven', 'jaarafsluiting', 'bank_csv', 'aangifte']:
                             dir_path = DB_PATH.parent / subdir
                             if dir_path.exists():
                                 for f in dir_path.rglob('*'):

@@ -125,6 +125,48 @@ async def seed_fiscale_params(db_path: Path) -> int:
     return count
 
 
+KLANT_LOCATIES = {
+    'HAP NoordOost': [
+        ('Groningen', 12), ('Zuidhorn', 52), ('Stadskanaal', 47),
+        ('Delfzijl', 64), ('Scheemda', 60),
+    ],
+    'HAP MiddenLand': [
+        ('Assen', 60), ('Hoogeveen', 128), ('Emmen', 102),
+    ],
+    'Praktijk K2': [('Vlagtwedde', 108)],
+    "Praktijk K6": [('Marum', 54)],
+    'K. Klant7': [('Marum', 54)],
+    'Praktijk K14': [('Winsum', 44)],
+    'Praktijk K10': [('Smilde', 78)],
+    'Praktijk K11': [('Marum', 40)],
+    'Praktijk K12': [('Marum', 54)],
+    'Praktijk K13': [('De Wilp', 46)],
+    'Praktijk K9': [('Sellingen', 92)],
+    'Klant8': [('Marum', 54)],
+}
+
+
+async def seed_klant_locaties(db_path):
+    """Seed locations for existing klanten. Skips if locations already exist."""
+    from database import get_klanten, add_klant_locatie, get_klant_locaties
+    klanten = await get_klanten(db_path, alleen_actief=False)
+    klant_by_naam = {k.naam: k for k in klanten}
+    count = 0
+    for klant_naam, locaties in KLANT_LOCATIES.items():
+        klant = klant_by_naam.get(klant_naam)
+        if not klant:
+            continue
+        existing = await get_klant_locaties(db_path, klant.id)
+        if existing:
+            continue  # Already seeded
+        for naam, km in locaties:
+            await add_klant_locatie(db_path, klant.id, naam, km)
+            count += 1
+    return count
+
+
 async def seed_all(db_path: Path) -> None:
-    """Seed fiscale parameters."""
-    await seed_fiscale_params(db_path)
+    """Seed fiscale parameters and klant locaties."""
+    fp_count = await seed_fiscale_params(db_path)
+    loc_count = await seed_klant_locaties(db_path)
+    return fp_count, loc_count

@@ -24,8 +24,9 @@ async def test_init_creates_tables(db):
             "SELECT name FROM sqlite_master WHERE type='table'"
         )
         tables = {row[0] for row in await cursor.fetchall()}
-    expected = {'klanten', 'werkdagen', 'facturen', 'uitgaven',
-                'banktransacties', 'fiscale_params', 'bedrijfsgegevens'}
+    expected = {'klanten', 'klant_locaties', 'werkdagen', 'facturen', 'uitgaven',
+                'banktransacties', 'fiscale_params', 'bedrijfsgegevens',
+                'aangifte_documenten'}
     assert tables >= expected
 
 
