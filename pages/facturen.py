@@ -8,7 +8,7 @@ from pathlib import Path
 
 from components.layout import create_layout
 from components.invoice_generator import generate_invoice
-from components.utils import format_euro, format_datum
+from components.utils import format_euro, format_datum, generate_csv
 from database import (
     get_facturen, add_factuur, get_next_factuurnummer,
     mark_betaald, delete_factuur, get_klanten, get_werkdagen_ongefactureerd,
@@ -37,6 +37,21 @@ async def facturen_page():
                 value=current_year, label='Jaar',
             ).classes('w-32')
 
+            async def export_csv():
+                facturen = await get_facturen(DB_PATH, jaar=jaar_select.value)
+                headers = ['Nummer', 'Datum', 'Klant', 'Uren', 'Km',
+                           'Bedrag', 'Status']
+                rows = [[f.nummer, f.datum, f.klant_naam, f.totaal_uren,
+                         f.totaal_km, f.totaal_bedrag,
+                         'Betaald' if f.betaald else 'Openstaand']
+                        for f in facturen]
+                csv_str = generate_csv(headers, rows)
+                ui.download.content(
+                    csv_str.encode('utf-8-sig'),
+                    f'facturen_{jaar_select.value}.csv')
+
+            ui.button('CSV', icon='download',
+                      on_click=export_csv).props('outline color=primary')
             ui.button('Nieuwe factuur', icon='add',
                       on_click=lambda: open_new_factuur_dialog()) \
                 .props('color=primary')

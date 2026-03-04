@@ -72,13 +72,15 @@ def bereken_arbeidskorting(arbeidsinkomen: float, jaar: int) -> float:
 
     Returns:
         Arbeidskorting in euros (rounded to 2 decimals, minimum 0).
-
-    Raises:
-        ValueError: If no bracket table exists for the given year.
+        Falls back to most recent known year if no table exists.
     """
     brackets = ARBEIDSKORTING_BRACKETS.get(jaar)
     if not brackets:
-        raise ValueError(f"Geen arbeidskorting-tabel voor jaar {jaar}")
+        # Fallback to most recent known year
+        known_years = sorted(ARBEIDSKORTING_BRACKETS.keys())
+        if not known_years:
+            return 0.0
+        brackets = ARBEIDSKORTING_BRACKETS[known_years[-1]]
 
     for lower, upper, rate, base in brackets:
         if upper is None or arbeidsinkomen <= upper:

@@ -112,7 +112,15 @@ CREATE TABLE IF NOT EXISTS fiscale_params (
     ak_max REAL,
     zvw_pct REAL,
     zvw_max_grondslag REAL,
-    repr_aftrek_pct REAL DEFAULT 80
+    repr_aftrek_pct REAL DEFAULT 80,
+    ew_forfait_pct REAL DEFAULT 0.35,
+    villataks_grens REAL DEFAULT 1350000,
+    wet_hillen_pct REAL DEFAULT 0,
+    urencriterium REAL DEFAULT 1225,
+    aov_premie REAL DEFAULT 0,
+    woz_waarde REAL DEFAULT 0,
+    hypotheekrente REAL DEFAULT 0,
+    voorlopige_aanslag_betaald REAL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS bedrijfsgegevens (
@@ -139,10 +147,40 @@ async def get_db(db_path: Path = DB_PATH) -> aiosqlite.Connection:
 
 
 async def init_db(db_path: Path = DB_PATH) -> None:
-    """Create all tables if they don't exist."""
+    """Create all tables if they don't exist, then run migrations."""
     db_path.parent.mkdir(parents=True, exist_ok=True)
     async with aiosqlite.connect(db_path) as conn:
         await conn.executescript(SCHEMA_SQL)
+        await conn.commit()
+        # Migrations: add columns to fiscale_params (idempotent)
+        for col, default in [
+            ('aov_premie', 0), ('woz_waarde', 0),
+            ('hypotheekrente', 0), ('voorlopige_aanslag_betaald', 0),
+            ('ew_forfait_pct', 0.35), ('villataks_grens', 1350000),
+            ('wet_hillen_pct', 0), ('urencriterium', 1225),
+        ]:
+            try:
+                await conn.execute(
+                    f"ALTER TABLE fiscale_params ADD COLUMN {col} REAL DEFAULT {default}"
+                )
+            except Exception:
+                pass  # Column already exists
+
+        # Data migration: set correct per-year values for newly added columns
+        year_data = {
+            2023: {'ew_forfait_pct': 0.35, 'villataks_grens': 1200000, 'wet_hillen_pct': 83.333, 'urencriterium': 1225},
+            2024: {'ew_forfait_pct': 0.35, 'villataks_grens': 1310000, 'wet_hillen_pct': 80.0, 'urencriterium': 1225},
+            2025: {'ew_forfait_pct': 0.35, 'villataks_grens': 1330000, 'wet_hillen_pct': 76.667, 'urencriterium': 1225},
+            2026: {'ew_forfait_pct': 0.35, 'villataks_grens': 1350000, 'wet_hillen_pct': 71.867, 'urencriterium': 1225},
+        }
+        for jaar, vals in year_data.items():
+            # Only update if wet_hillen_pct is still 0 (= not yet migrated)
+            await conn.execute(
+                """UPDATE fiscale_params SET ew_forfait_pct = ?, villataks_grens = ?,
+                   wet_hillen_pct = ?, urencriterium = ?
+                   WHERE jaar = ? AND wet_hillen_pct = 0""",
+                (vals['ew_forfait_pct'], vals['villataks_grens'],
+                 vals['wet_hillen_pct'], vals['urencriterium'], jaar))
         await conn.commit()
 
 
@@ -239,8 +277,16 @@ async def update_klant(db_path: Path = DB_PATH, klant_id: int = 0, **kwargs) -> 
 async def delete_klant(db_path: Path = DB_PATH, klant_id: int = 0) -> None:
     conn = await get_db(db_path)
     try:
-        await conn.execute("DELETE FROM klanten WHERE id = ?", (klant_id,))
-        await conn.commit()
+        try:
+            await conn.execute("DELETE FROM klanten WHERE id = ?", (klant_id,))
+            await conn.commit()
+        except Exception as exc:
+            if 'FOREIGN KEY' in str(exc):
+                raise ValueError(
+                    'Kan klant niet verwijderen: er zijn werkdagen of facturen '
+                    'gekoppeld aan deze klant.'
+                ) from exc
+            raise
     finally:
         await conn.close()
 
@@ -433,6 +479,17 @@ async def mark_betaald(db_path: Path = DB_PATH, factuur_id: int = 0,
             "UPDATE facturen SET betaald = ?, betaald_datum = ? WHERE id = ?",
             (1 if betaald else 0, datum, factuur_id)
         )
+        # Cascade status to linked werkdagen
+        cursor = await conn.execute(
+            "SELECT nummer FROM facturen WHERE id = ?", (factuur_id,)
+        )
+        row = await cursor.fetchone()
+        if row and row['nummer']:
+            new_status = 'betaald' if betaald else 'gefactureerd'
+            await conn.execute(
+                "UPDATE werkdagen SET status = ? WHERE factuurnummer = ?",
+                (new_status, row['nummer'])
+            )
         await conn.commit()
     finally:
         await conn.close()
@@ -480,7 +537,8 @@ async def link_werkdagen_to_factuur(db_path: Path = DB_PATH,
             placeholders = ','.join('?' for _ in werkdag_ids)
             await conn.execute(
                 f"UPDATE werkdagen SET status = 'gefactureerd', factuurnummer = ? "
-                f"WHERE id IN ({placeholders})",
+                f"WHERE id IN ({placeholders}) "
+                f"AND (status = 'ongefactureerd' OR factuurnummer = '' OR factuurnummer IS NULL)",
                 [factuurnummer] + werkdag_ids
             )
             await conn.commit()
@@ -564,8 +622,15 @@ async def update_uitgave(db_path: Path = DB_PATH, uitgave_id: int = 0, **kwargs)
 async def delete_uitgave(db_path: Path = DB_PATH, uitgave_id: int = 0) -> None:
     conn = await get_db(db_path)
     try:
+        cursor = await conn.execute(
+            "SELECT pdf_pad FROM uitgaven WHERE id = ?", (uitgave_id,))
+        row = await cursor.fetchone()
         await conn.execute("DELETE FROM uitgaven WHERE id = ?", (uitgave_id,))
         await conn.commit()
+        if row and row['pdf_pad']:
+            pdf_file = Path(row['pdf_pad'])
+            if pdf_file.exists():
+                pdf_file.unlink()
     finally:
         await conn.close()
 
@@ -701,6 +766,51 @@ async def delete_banktransacties(db_path: Path = DB_PATH,
 
 # === Fiscale Parameters ===
 
+def _safe_get(r, key, default, keys):
+    """Get value from row, returning default if column missing or NULL."""
+    if key not in keys:
+        return default
+    val = r[key]
+    return val if val is not None else default
+
+
+def _row_to_fiscale_params(r) -> FiscaleParams:
+    """Convert a database row to FiscaleParams, handling missing/NULL columns."""
+    keys = r.keys() if hasattr(r, 'keys') else []
+    return FiscaleParams(
+        jaar=r['jaar'],
+        zelfstandigenaftrek=r['zelfstandigenaftrek'] or 0,
+        startersaftrek=r['startersaftrek'] or 0,
+        mkb_vrijstelling_pct=r['mkb_vrijstelling_pct'],
+        kia_ondergrens=r['kia_ondergrens'],
+        kia_bovengrens=r['kia_bovengrens'],
+        kia_pct=r['kia_pct'],
+        km_tarief=r['km_tarief'],
+        schijf1_grens=r['schijf1_grens'],
+        schijf1_pct=r['schijf1_pct'],
+        schijf2_grens=r['schijf2_grens'],
+        schijf2_pct=r['schijf2_pct'],
+        schijf3_pct=r['schijf3_pct'],
+        ahk_max=r['ahk_max'],
+        ahk_afbouw_pct=r['ahk_afbouw_pct'],
+        ahk_drempel=r['ahk_drempel'],
+        ak_max=r['ak_max'],
+        zvw_pct=r['zvw_pct'],
+        zvw_max_grondslag=r['zvw_max_grondslag'],
+        repr_aftrek_pct=r['repr_aftrek_pct'] or 80,
+        ew_forfait_pct=_safe_get(r, 'ew_forfait_pct', 0.35, keys),
+        villataks_grens=_safe_get(r, 'villataks_grens', 1_350_000, keys),
+        wet_hillen_pct=_safe_get(r, 'wet_hillen_pct', 0, keys),
+        urencriterium=_safe_get(r, 'urencriterium', 1225, keys),
+        aov_premie=_safe_get(r, 'aov_premie', 0, keys),
+        woz_waarde=_safe_get(r, 'woz_waarde', 0, keys),
+        hypotheekrente=_safe_get(r, 'hypotheekrente', 0, keys),
+        voorlopige_aanslag_betaald=_safe_get(
+            r, 'voorlopige_aanslag_betaald', 0, keys
+        ),
+    )
+
+
 async def get_fiscale_params(db_path: Path = DB_PATH, jaar: int = 0) -> FiscaleParams:
     conn = await get_db(db_path)
     try:
@@ -708,28 +818,7 @@ async def get_fiscale_params(db_path: Path = DB_PATH, jaar: int = 0) -> FiscaleP
         r = await cursor.fetchone()
         if not r:
             return None
-        return FiscaleParams(
-            jaar=r['jaar'],
-            zelfstandigenaftrek=r['zelfstandigenaftrek'],
-            startersaftrek=r['startersaftrek'],
-            mkb_vrijstelling_pct=r['mkb_vrijstelling_pct'],
-            kia_ondergrens=r['kia_ondergrens'],
-            kia_bovengrens=r['kia_bovengrens'],
-            kia_pct=r['kia_pct'],
-            km_tarief=r['km_tarief'],
-            schijf1_grens=r['schijf1_grens'],
-            schijf1_pct=r['schijf1_pct'],
-            schijf2_grens=r['schijf2_grens'],
-            schijf2_pct=r['schijf2_pct'],
-            schijf3_pct=r['schijf3_pct'],
-            ahk_max=r['ahk_max'],
-            ahk_afbouw_pct=r['ahk_afbouw_pct'],
-            ahk_drempel=r['ahk_drempel'],
-            ak_max=r['ak_max'],
-            zvw_pct=r['zvw_pct'],
-            zvw_max_grondslag=r['zvw_max_grondslag'],
-            repr_aftrek_pct=r['repr_aftrek_pct'] or 80,
-        )
+        return _row_to_fiscale_params(r)
     finally:
         await conn.close()
 
@@ -739,28 +828,7 @@ async def get_all_fiscale_params(db_path: Path = DB_PATH) -> list[FiscaleParams]
     try:
         cursor = await conn.execute("SELECT * FROM fiscale_params ORDER BY jaar")
         rows = await cursor.fetchall()
-        return [FiscaleParams(
-            jaar=r['jaar'],
-            zelfstandigenaftrek=r['zelfstandigenaftrek'],
-            startersaftrek=r['startersaftrek'],
-            mkb_vrijstelling_pct=r['mkb_vrijstelling_pct'],
-            kia_ondergrens=r['kia_ondergrens'],
-            kia_bovengrens=r['kia_bovengrens'],
-            kia_pct=r['kia_pct'],
-            km_tarief=r['km_tarief'],
-            schijf1_grens=r['schijf1_grens'],
-            schijf1_pct=r['schijf1_pct'],
-            schijf2_grens=r['schijf2_grens'],
-            schijf2_pct=r['schijf2_pct'],
-            schijf3_pct=r['schijf3_pct'],
-            ahk_max=r['ahk_max'],
-            ahk_afbouw_pct=r['ahk_afbouw_pct'],
-            ahk_drempel=r['ahk_drempel'],
-            ak_max=r['ak_max'],
-            zvw_pct=r['zvw_pct'],
-            zvw_max_grondslag=r['zvw_max_grondslag'],
-            repr_aftrek_pct=r['repr_aftrek_pct'] or 80,
-        ) for r in rows]
+        return [_row_to_fiscale_params(r) for r in rows]
     finally:
         await conn.close()
 
@@ -768,14 +836,23 @@ async def get_all_fiscale_params(db_path: Path = DB_PATH) -> list[FiscaleParams]
 async def upsert_fiscale_params(db_path: Path = DB_PATH, **kwargs) -> None:
     conn = await get_db(db_path)
     try:
+        # Preserve IB-input values when overwriting from Instellingen
+        cur = await conn.execute(
+            "SELECT aov_premie, woz_waarde, hypotheekrente, "
+            "voorlopige_aanslag_betaald FROM fiscale_params WHERE jaar = ?",
+            (kwargs['jaar'],))
+        existing = await cur.fetchone()
         await conn.execute(
             """INSERT OR REPLACE INTO fiscale_params
                (jaar, zelfstandigenaftrek, startersaftrek, mkb_vrijstelling_pct,
                 kia_ondergrens, kia_bovengrens, kia_pct, km_tarief,
                 schijf1_grens, schijf1_pct, schijf2_grens, schijf2_pct, schijf3_pct,
                 ahk_max, ahk_afbouw_pct, ahk_drempel, ak_max,
-                zvw_pct, zvw_max_grondslag, repr_aftrek_pct)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                zvw_pct, zvw_max_grondslag, repr_aftrek_pct,
+                ew_forfait_pct, villataks_grens, wet_hillen_pct, urencriterium,
+                aov_premie, woz_waarde, hypotheekrente, voorlopige_aanslag_betaald)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                       ?, ?, ?, ?, ?, ?, ?, ?)""",
             (kwargs['jaar'], kwargs['zelfstandigenaftrek'], kwargs.get('startersaftrek'),
              kwargs['mkb_vrijstelling_pct'], kwargs['kia_ondergrens'],
              kwargs['kia_bovengrens'], kwargs['kia_pct'], kwargs['km_tarief'],
@@ -783,8 +860,35 @@ async def upsert_fiscale_params(db_path: Path = DB_PATH, **kwargs) -> None:
              kwargs['schijf2_grens'], kwargs['schijf2_pct'], kwargs['schijf3_pct'],
              kwargs['ahk_max'], kwargs['ahk_afbouw_pct'], kwargs['ahk_drempel'],
              kwargs['ak_max'], kwargs['zvw_pct'], kwargs['zvw_max_grondslag'],
-             kwargs.get('repr_aftrek_pct', 80))
+             kwargs.get('repr_aftrek_pct', 80),
+             kwargs.get('ew_forfait_pct', 0.35),
+             kwargs.get('villataks_grens', 1_350_000),
+             kwargs.get('wet_hillen_pct', 0),
+             kwargs.get('urencriterium', 1225),
+             existing['aov_premie'] if existing else 0,
+             existing['woz_waarde'] if existing else 0,
+             existing['hypotheekrente'] if existing else 0,
+             existing['voorlopige_aanslag_betaald'] if existing else 0)
         )
+        await conn.commit()
+    finally:
+        await conn.close()
+
+
+async def update_ib_inputs(db_path: Path = DB_PATH, jaar: int = 0,
+                           aov_premie: float = 0, woz_waarde: float = 0,
+                           hypotheekrente: float = 0,
+                           voorlopige_aanslag_betaald: float = 0) -> None:
+    """Update only the IB-input columns for a specific year."""
+    conn = await get_db(db_path)
+    try:
+        await conn.execute(
+            """UPDATE fiscale_params
+               SET aov_premie = ?, woz_waarde = ?,
+                   hypotheekrente = ?, voorlopige_aanslag_betaald = ?
+               WHERE jaar = ?""",
+            (aov_premie, woz_waarde, hypotheekrente,
+             voorlopige_aanslag_betaald, jaar))
         await conn.commit()
     finally:
         await conn.close()
@@ -977,6 +1081,39 @@ async def get_representatie_totaal(db_path: Path = DB_PATH, jaar: int = 2026) ->
             (str(jaar),)
         )
         return (await cur.fetchone())[0]
+    finally:
+        await conn.close()
+
+
+async def get_werkdagen_ongefactureerd_summary(
+        db_path: Path = DB_PATH, jaar: int = 2026) -> dict:
+    """Get count and estimated amount of unfactured werkdagen for a year."""
+    conn = await get_db(db_path)
+    try:
+        cur = await conn.execute(
+            """SELECT COUNT(*) as aantal,
+                      COALESCE(SUM(uren * tarief + km * km_tarief), 0) as bedrag
+               FROM werkdagen
+               WHERE status = 'ongefactureerd'
+                 AND substr(datum, 1, 4) = ?""",
+            (str(jaar),))
+        r = await cur.fetchone()
+        return {'aantal': r['aantal'], 'bedrag': r['bedrag']}
+    finally:
+        await conn.close()
+
+
+async def get_km_totaal(db_path: Path = DB_PATH, jaar: int = 2026) -> dict:
+    """Get total km and km-vergoeding for a year."""
+    conn = await get_db(db_path)
+    try:
+        cur = await conn.execute(
+            """SELECT COALESCE(SUM(km), 0) as km,
+                      COALESCE(SUM(km * km_tarief), 0) as vergoeding
+               FROM werkdagen WHERE substr(datum, 1, 4) = ?""",
+            (str(jaar),))
+        r = await cur.fetchone()
+        return {'km': r['km'], 'vergoeding': r['vergoeding']}
     finally:
         await conn.close()
 

@@ -149,3 +149,82 @@ def test_invoice_totals_correct(tmp_path):
                                 factuur_datum="2026-02-15",
                                 bedrijfsgegevens=bedrijf)
     assert pdf_path.exists()
+
+
+# ============================================================
+# Audit bug-fix regression tests (2026-03-03)
+# ============================================================
+
+@pytest.mark.asyncio
+async def test_mark_betaald_cascades_to_werkdagen(seeded_db):
+    """Bug #3: mark_betaald should cascade status to linked werkdagen."""
+    from database import get_klanten
+    klanten = await get_klanten(seeded_db)
+    kid = klanten[0].id
+
+    wid1 = await add_werkdag(seeded_db, datum="2026-03-01", klant_id=kid,
+                              uren=8, km=52, tarief=77.50)
+    wid2 = await add_werkdag(seeded_db, datum="2026-03-02", klant_id=kid,
+                              uren=9, km=52, tarief=77.50)
+
+    await add_factuur(seeded_db, nummer="2026-010", klant_id=kid,
+                      datum="2026-03-15", totaal_bedrag=1400)
+    await link_werkdagen_to_factuur(seeded_db, werkdag_ids=[wid1, wid2],
+                                     factuurnummer="2026-010")
+
+    # Mark as paid
+    facturen = await get_facturen(seeded_db, jaar=2026)
+    f = next(f for f in facturen if f.nummer == '2026-010')
+    await mark_betaald(seeded_db, factuur_id=f.id, datum="2026-03-20")
+
+    # Werkdagen should now be 'betaald'
+    werkdagen = await get_werkdagen(seeded_db, jaar=2026)
+    linked = [w for w in werkdagen if w.factuurnummer == '2026-010']
+    assert all(w.status == 'betaald' for w in linked)
+
+    # Mark as onbetaald — werkdagen should revert to 'gefactureerd'
+    await mark_betaald(seeded_db, factuur_id=f.id, datum='', betaald=False)
+    werkdagen = await get_werkdagen(seeded_db, jaar=2026)
+    linked = [w for w in werkdagen if w.factuurnummer == '2026-010']
+    assert all(w.status == 'gefactureerd' for w in linked)
+
+
+@pytest.mark.asyncio
+async def test_delete_klant_with_werkdagen_raises(seeded_db):
+    """Bug #9: delete_klant with linked werkdagen raises ValueError."""
+    from database import get_klanten, delete_klant
+    klanten = await get_klanten(seeded_db)
+    kid = klanten[0].id
+
+    await add_werkdag(seeded_db, datum="2026-03-01", klant_id=kid,
+                      uren=8, km=0, tarief=77.50)
+
+    with pytest.raises(ValueError, match='werkdagen of facturen'):
+        await delete_klant(seeded_db, klant_id=kid)
+
+
+@pytest.mark.asyncio
+async def test_link_werkdagen_only_ongefactureerd(seeded_db):
+    """Bug #6: link_werkdagen should only link ongefactureerde werkdagen."""
+    from database import get_klanten
+    klanten = await get_klanten(seeded_db)
+    kid = klanten[0].id
+
+    wid = await add_werkdag(seeded_db, datum="2026-03-01", klant_id=kid,
+                             uren=8, km=52, tarief=77.50)
+
+    # Link to first factuur
+    await add_factuur(seeded_db, nummer="2026-020", klant_id=kid,
+                      datum="2026-03-15", totaal_bedrag=700)
+    await link_werkdagen_to_factuur(seeded_db, werkdag_ids=[wid],
+                                     factuurnummer="2026-020")
+
+    # Try to re-link to second factuur — should NOT overwrite
+    await add_factuur(seeded_db, nummer="2026-021", klant_id=kid,
+                      datum="2026-03-20", totaal_bedrag=700)
+    await link_werkdagen_to_factuur(seeded_db, werkdag_ids=[wid],
+                                     factuurnummer="2026-021")
+
+    werkdagen = await get_werkdagen(seeded_db, jaar=2026)
+    w = next(w for w in werkdagen if w.id == wid)
+    assert w.factuurnummer == '2026-020'  # should NOT have changed

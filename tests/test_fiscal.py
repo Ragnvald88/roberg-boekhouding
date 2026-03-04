@@ -11,7 +11,10 @@ uit de Boekhouder verificatietraces zijn als assertions opgenomen.
 import pytest
 from fiscal.afschrijvingen import bereken_afschrijving
 from fiscal.heffingskortingen import bereken_arbeidskorting, bereken_algemene_heffingskorting
-from fiscal.berekeningen import bereken_volledig, bereken_wv, bereken_ib, FiscaalResultaat
+from fiscal.berekeningen import (
+    bereken_volledig, bereken_wv, bereken_ib, bereken_eigenwoningforfait,
+    FiscaalResultaat,
+)
 
 
 # === Fiscale parameters per jaar (identiek aan seed_data.py) ===
@@ -30,6 +33,8 @@ FISCALE_PARAMS = {
         "ak_max": 5052,
         "zvw_pct": 5.43, "zvw_max_grondslag": 66956,
         "repr_aftrek_pct": 80,
+        "ew_forfait_pct": 0.35, "villataks_grens": 1_200_000,
+        "wet_hillen_pct": 83.333, "urencriterium": 1225,
     },
     2024: {
         "jaar": 2024,
@@ -44,6 +49,8 @@ FISCALE_PARAMS = {
         "ak_max": 5532,
         "zvw_pct": 5.32, "zvw_max_grondslag": 71628,
         "repr_aftrek_pct": 80,
+        "ew_forfait_pct": 0.35, "villataks_grens": 1_310_000,
+        "wet_hillen_pct": 80.0, "urencriterium": 1225,
     },
     2025: {
         "jaar": 2025,
@@ -58,6 +65,8 @@ FISCALE_PARAMS = {
         "ak_max": 5599,
         "zvw_pct": 5.26, "zvw_max_grondslag": 75864,
         "repr_aftrek_pct": 80,
+        "ew_forfait_pct": 0.35, "villataks_grens": 1_330_000,
+        "wet_hillen_pct": 76.667, "urencriterium": 1225,
     },
     2026: {
         "jaar": 2026,
@@ -72,6 +81,8 @@ FISCALE_PARAMS = {
         "ak_max": 5685,
         "zvw_pct": 4.85, "zvw_max_grondslag": 79409,
         "repr_aftrek_pct": 80,
+        "ew_forfait_pct": 0.35, "villataks_grens": 1_350_000,
+        "wet_hillen_pct": 71.867, "urencriterium": 1225,
     },
 }
 
@@ -232,10 +243,13 @@ class TestHeffingskortingen:
         # 5052 + (-0.0651) * (45801 - 37691) = 5052 - 527.76 = 4524.24
         assert abs(ak - 4524) < 2
 
-    def test_arbeidskorting_invalid_year(self):
-        """Onbekend jaar: ValueError."""
-        with pytest.raises(ValueError):
-            bereken_arbeidskorting(50000, 2019)
+    def test_arbeidskorting_unknown_year_fallback(self):
+        """Onbekend jaar: valt terug op meest recent bekend jaar."""
+        # 2027 doesn't exist, should use 2026 brackets
+        ak_2027 = bereken_arbeidskorting(50000, 2027)
+        ak_2026 = bereken_arbeidskorting(50000, 2026)
+        assert ak_2027 == ak_2026
+        assert ak_2027 > 0
 
 
 # ============================================================
@@ -502,3 +516,228 @@ class TestVolledig:
         )
         assert result.belastbare_winst == 0
         assert result.netto_ib == 0
+
+
+# ============================================================
+# Eigenwoningforfait + Wet Hillen
+# ============================================================
+
+class TestEigenwoningforfait:
+    """Tests voor eigenwoningforfait berekening."""
+
+    def test_forfait_normaal(self):
+        """WOZ 655.000 at 0.35%: 2292.50."""
+        result = bereken_eigenwoningforfait(655_000, ew_forfait_pct=0.35)
+        assert abs(result - 2292.50) < 0.01
+
+    def test_forfait_nul_woz(self):
+        """WOZ 0: geen forfait."""
+        assert bereken_eigenwoningforfait(0) == 0.0
+
+    def test_forfait_villataks(self):
+        """WOZ boven villataks grens: verhoogd percentage."""
+        woz = 1_500_000
+        grens = 1_310_000
+        verwacht = grens * 0.0035 + (woz - grens) * 0.0235
+        result = bereken_eigenwoningforfait(woz, ew_forfait_pct=0.35, villataks_grens=grens)
+        assert abs(result - verwacht) < 0.01
+
+    def test_forfait_exact_op_grens(self):
+        """WOZ exact op villataks grens: normaal tarief."""
+        grens = 1_310_000
+        result = bereken_eigenwoningforfait(grens, ew_forfait_pct=0.35, villataks_grens=grens)
+        assert abs(result - grens * 0.0035) < 0.01
+
+    def test_forfait_default_grens(self):
+        """Default villataks_grens = 1.350.000."""
+        result = bereken_eigenwoningforfait(1_350_000)
+        assert abs(result - 4725.0) < 0.01
+
+
+class TestWetHillen:
+    """Tests voor Wet Hillen in bereken_volledig."""
+
+    def test_hillen_niet_van_toepassing(self):
+        """Rente > forfait: Wet Hillen niet van toepassing (saldo negatief)."""
+        params = FISCALE_PARAMS[2024]
+        result = bereken_volledig(
+            omzet=80000, kosten=0, afschrijvingen=0,
+            representatie=0, investeringen_totaal=0,
+            uren=1400, params=params,
+            woz=655_000, hypotheekrente=6951,
+        )
+        # forfait = 2292.50, rente = 6951, saldo = -4658.50
+        assert result.ew_forfait > 0
+        assert result.ew_saldo < 0
+        assert result.hillen_aftrek == 0  # Geen Hillen want saldo is negatief
+
+    def test_hillen_van_toepassing_2024(self):
+        """Forfait > rente: Wet Hillen verlaagt bijtelling (2024: 80%)."""
+        params = FISCALE_PARAMS[2024]
+        result = bereken_volledig(
+            omzet=80000, kosten=0, afschrijvingen=0,
+            representatie=0, investeringen_totaal=0,
+            uren=1400, params=params,
+            woz=500_000, hypotheekrente=500,
+        )
+        # forfait = 1750, rente = 500, bruto saldo = 1250
+        # hillen_aftrek = 1250 * 0.80 = 1000
+        # netto saldo = 1250 - 1000 = 250
+        assert abs(result.ew_forfait - 1750) < 0.01
+        assert abs(result.hillen_aftrek - 1000) < 1
+        assert abs(result.ew_saldo - 250) < 1
+
+    def test_hillen_geen_hypotheek(self):
+        """Geen hypotheek: volledig forfait als bijtelling, Hillen verlaagt het."""
+        params = FISCALE_PARAMS[2024]
+        result = bereken_volledig(
+            omzet=80000, kosten=0, afschrijvingen=0,
+            representatie=0, investeringen_totaal=0,
+            uren=1400, params=params,
+            woz=400_000, hypotheekrente=0,
+        )
+        # forfait = 1400, rente = 0, bruto saldo = 1400
+        # hillen_aftrek = 1400 * 0.80 = 1120
+        # netto saldo = 280
+        assert abs(result.ew_forfait - 1400) < 0.01
+        assert abs(result.hillen_aftrek - 1120) < 1
+        assert abs(result.ew_saldo - 280) < 1
+
+    def test_hillen_afbouw_2026(self):
+        """2026: Wet Hillen 71.867% (versnelde afbouw)."""
+        params = FISCALE_PARAMS[2026]
+        result = bereken_volledig(
+            omzet=80000, kosten=0, afschrijvingen=0,
+            representatie=0, investeringen_totaal=0,
+            uren=1400, params=params,
+            woz=500_000, hypotheekrente=0,
+        )
+        # forfait = 1750, rente = 0, bruto saldo = 1750
+        # hillen_aftrek = 1750 * 0.71867 = 1257.67
+        # netto saldo = 1750 - 1257.67 = 492.33
+        assert abs(result.hillen_aftrek - 1257.67) < 1
+        assert abs(result.ew_saldo - 492.33) < 1
+
+    def test_boekhouder_2024_unchanged(self):
+        """Boekhouder 2024 reference test still passes with new eigenwoningforfait logic.
+
+        WOZ=655.000, hyp=6951: saldo is negative, no Hillen, same result.
+        """
+        params = FISCALE_PARAMS[2024]
+        result = bereken_volledig(
+            omzet=95145, kosten=0, afschrijvingen=0,
+            representatie=550, investeringen_totaal=2919,
+            uren=1400, params=params,
+            aov=2998,
+            woz=655000, hypotheekrente=6951,
+            voorlopige_aanslag=28544,
+        )
+        assert abs(result.belastbare_winst - 76777) < 100
+        assert abs(result.verzamelinkomen - 69120) < 200
+        assert -3500 < result.resultaat < -2800
+
+
+# ============================================================
+# Audit bug-fix regression tests (2026-03-03)
+# ============================================================
+
+class TestKIABoundary:
+    """Bug #1: KIA should apply at exactly the ondergrens (>=, not >)."""
+
+    def test_kia_at_exact_ondergrens(self):
+        """Invest exactly EUR2,901 (2025 ondergrens) should get KIA."""
+        params = FISCALE_PARAMS[2025]
+        result = bereken_volledig(
+            omzet=80000, kosten=5000, afschrijvingen=0,
+            representatie=0, investeringen_totaal=2901,
+            uren=1400, params=params,
+        )
+        expected_kia = round(2901 * 0.28, 2)
+        assert result.kia == expected_kia
+
+    def test_kia_below_ondergrens(self):
+        """Invest EUR2,900 should NOT get KIA."""
+        params = FISCALE_PARAMS[2025]
+        result = bereken_volledig(
+            omzet=80000, kosten=5000, afschrijvingen=0,
+            representatie=0, investeringen_totaal=2900,
+            uren=1400, params=params,
+        )
+        assert result.kia == 0
+
+    def test_kia_at_exact_bovengrens(self):
+        """Invest exactly at bovengrens should still get KIA."""
+        params = FISCALE_PARAMS[2025]
+        result = bereken_volledig(
+            omzet=80000, kosten=5000, afschrijvingen=0,
+            representatie=0, investeringen_totaal=70602,
+            uren=1400, params=params,
+        )
+        assert result.kia > 0
+
+    def test_kia_above_bovengrens(self):
+        """Invest above bovengrens gets no KIA."""
+        params = FISCALE_PARAMS[2025]
+        result = bereken_volledig(
+            omzet=80000, kosten=5000, afschrijvingen=0,
+            representatie=0, investeringen_totaal=70603,
+            uren=1400, params=params,
+        )
+        assert result.kia == 0
+
+
+class TestAfschrijvingValidation:
+    """Bug #5: Input validation for bereken_afschrijving."""
+
+    def test_levensduur_zero_no_crash(self):
+        """levensduur=0 should return 0 depreciation, not ZeroDivisionError."""
+        result = bereken_afschrijving(1000, 10, 0, 6, 2024, 2024)
+        assert result['afschrijving'] == 0
+        assert result['per_jaar'] == 0
+
+    def test_negative_levensduur_no_crash(self):
+        """Negative levensduur returns 0."""
+        result = bereken_afschrijving(1000, 10, -3, 6, 2024, 2024)
+        assert result['afschrijving'] == 0
+
+    def test_negative_aanschaf_returns_zero(self):
+        """Negative purchase price returns 0."""
+        result = bereken_afschrijving(-1000, 10, 5, 6, 2024, 2024)
+        assert result['afschrijving'] == 0
+
+    def test_month_clamped_to_valid_range(self):
+        """Month 0 should be clamped to 1 (January), not produce 13/12."""
+        result_month0 = bereken_afschrijving(1000, 10, 5, 0, 2024, 2024)
+        result_month1 = bereken_afschrijving(1000, 10, 5, 1, 2024, 2024)
+        assert result_month0['afschrijving'] == result_month1['afschrijving']
+
+    def test_month_13_clamped_to_12(self):
+        """Month 13 should be clamped to 12 (December)."""
+        result_month13 = bereken_afschrijving(1000, 10, 5, 13, 2024, 2024)
+        result_month12 = bereken_afschrijving(1000, 10, 5, 12, 2024, 2024)
+        assert result_month13['afschrijving'] == result_month12['afschrijving']
+
+    def test_restwaarde_pct_clamped(self):
+        """restwaarde_pct > 100 should be clamped to 100 (0 depreciation)."""
+        result = bereken_afschrijving(1000, 150, 5, 6, 2024, 2024)
+        assert result['afschrijving'] == 0
+
+
+class TestFormatDatum:
+    """Bug #11: format_datum should handle already-NL dates."""
+
+    def test_iso_to_nl(self):
+        from components.utils import format_datum
+        assert format_datum("2026-03-15") == "15-03-2026"
+
+    def test_already_nl_passthrough(self):
+        from components.utils import format_datum
+        assert format_datum("15-03-2026") == "15-03-2026"
+
+    def test_empty_string(self):
+        from components.utils import format_datum
+        assert format_datum("") == ""
+
+    def test_none(self):
+        from components.utils import format_datum
+        assert format_datum(None) == ""

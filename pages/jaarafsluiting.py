@@ -1,7 +1,9 @@
 """Jaarafsluiting pagina — fiscale berekeningen + rapporten."""
 
 from datetime import date
+from pathlib import Path
 
+from jinja2 import Environment, FileSystemLoader
 from nicegui import ui
 
 from components.layout import create_layout
@@ -14,6 +16,7 @@ from database import (
     get_representatie_totaal,
     get_uitgaven_per_categorie,
     get_uren_totaal,
+    update_ib_inputs,
     DB_PATH,
 )
 from fiscal.afschrijvingen import bereken_afschrijving
@@ -43,6 +46,10 @@ def _fiscale_params_to_dict(params) -> dict:
         'zvw_pct': params.zvw_pct,
         'zvw_max_grondslag': params.zvw_max_grondslag,
         'repr_aftrek_pct': params.repr_aftrek_pct,
+        'ew_forfait_pct': params.ew_forfait_pct,
+        'villataks_grens': params.villataks_grens,
+        'wet_hillen_pct': params.wet_hillen_pct,
+        'urencriterium': params.urencriterium,
     }
 
 
@@ -267,9 +274,26 @@ async def jaarafsluiting_page():
 
                 ui.separator().classes('my-2')
 
-                # IB results
+                # Verzamelinkomen breakdown
                 _waterfall_line('Belastbare winst',
                                 fiscaal.belastbare_winst)
+                if woz > 0:
+                    ew_pct = berekening_state['params_dict'].get('ew_forfait_pct', 0.35)
+                    _waterfall_line(
+                        f'Eigenwoningforfait ({ew_pct}% van {format_euro(woz)})',
+                        fiscaal.ew_forfait)
+                    _waterfall_line(
+                        '- Hypotheekrente',
+                        hypotheekrente)
+                    if fiscaal.hillen_aftrek > 0:
+                        _waterfall_line(
+                            '- Wet Hillen aftrek',
+                            fiscaal.hillen_aftrek)
+                    _waterfall_line(
+                        '= Eigenwoningsaldo',
+                        fiscaal.ew_saldo)
+                if aov > 0:
+                    _waterfall_line('- AOV premie', aov)
                 _waterfall_line('Verzamelinkomen',
                                 fiscaal.verzamelinkomen, bold=True)
 
@@ -321,11 +345,11 @@ async def jaarafsluiting_page():
                 ui.label('7. Controles').classes(
                     'text-subtitle1 text-bold')
 
-                # Kosten/omzet ratio
+                # Kosten/omzet ratio (low = good)
                 ratio = fiscaal.kosten_omzet_ratio
-                if 20 <= ratio <= 25:
+                if ratio <= 25:
                     ratio_color = 'positive'
-                elif 25 < ratio <= 30:
+                elif ratio <= 35:
                     ratio_color = 'warning'
                 else:
                     ratio_color = 'negative'
@@ -365,16 +389,19 @@ async def jaarafsluiting_page():
 
     # --- Bereken handler ---
 
-    async def bereken(aov: float = 0, woz: float = 0,
-                      hypotheekrente: float = 0,
-                      voorlopige_aanslag: float = 0):
-        """Fetch data, run fiscal engine, and render all sections."""
+    async def bereken(aov: float = None, woz: float = None,
+                      hypotheekrente: float = None,
+                      voorlopige_aanslag: float = None):
+        """Fetch data, run fiscal engine, and render all sections.
+
+        If IB-input values are None, they are loaded from DB (fiscale_params).
+        """
         jaar = gekozen_jaar['value']
         container = result_container['ref']
         if container is None:
             return
 
-        # Fetch fiscal parameters
+        # Fetch fiscal parameters (includes IB-inputs)
         params = await get_fiscale_params(DB_PATH, jaar)
         if params is None:
             container.clear()
@@ -384,6 +411,16 @@ async def jaarafsluiting_page():
                     f'Voeg deze toe via Instellingen.'
                 ).classes('text-negative text-subtitle1')
             return
+
+        # Use DB values if not explicitly provided
+        if aov is None:
+            aov = params.aov_premie or 0
+        if woz is None:
+            woz = params.woz_waarde or 0
+        if hypotheekrente is None:
+            hypotheekrente = params.hypotheekrente or 0
+        if voorlopige_aanslag is None:
+            voorlopige_aanslag = params.voorlopige_aanslag_betaald or 0
 
         params_dict = _fiscale_params_to_dict(params)
 
@@ -476,7 +513,7 @@ async def jaarafsluiting_page():
         )
 
     async def herbereken():
-        """Re-run fiscal engine with updated IB-input values."""
+        """Re-run fiscal engine with updated IB-input values, saving to DB."""
         s = berekening_state
         if not s['params_dict']:
             ui.notify('Voer eerst een berekening uit', type='warning')
@@ -489,6 +526,13 @@ async def jaarafsluiting_page():
 
         jaar = gekozen_jaar['value']
         container = result_container['ref']
+
+        # Save IB-inputs to DB
+        await update_ib_inputs(
+            DB_PATH, jaar=jaar,
+            aov_premie=aov_val, woz_waarde=woz_val,
+            hypotheekrente=hyp_val, voorlopige_aanslag_betaald=va_val,
+        )
 
         fiscaal = bereken_volledig(
             omzet=s['omzet'],
@@ -511,6 +555,63 @@ async def jaarafsluiting_page():
             aov_val, woz_val, hyp_val, va_val,
         )
 
+    async def export_pdf():
+        """Generate PDF of the jaarafsluiting."""
+        s = berekening_state
+        if not s['params_dict']:
+            ui.notify('Voer eerst een berekening uit', type='warning')
+            return
+        jaar = gekozen_jaar['value']
+
+        # Re-run calculation with current input values
+        aov_val = float(ib_inputs['aov'].value or 0)
+        woz_val = float(ib_inputs['woz'].value or 0)
+        hyp_val = float(ib_inputs['hypotheek'].value or 0)
+        va_val = float(ib_inputs['voorlopig'].value or 0)
+        fiscaal = bereken_volledig(
+            omzet=s['omzet'], kosten=s['kosten'],
+            afschrijvingen=s['afschrijvingen_totaal'],
+            representatie=s['representatie'],
+            investeringen_totaal=s['investeringen_dit_jaar'],
+            uren=s['uren'], params=s['params_dict'],
+            aov=aov_val, woz=woz_val,
+            hypotheekrente=hyp_val, voorlopige_aanslag=va_val,
+        )
+
+        # Render HTML from Jinja2 template
+        templates_dir = Path(__file__).resolve().parent.parent / 'templates'
+        env = Environment(loader=FileSystemLoader(str(templates_dir)))
+        env.filters['euro'] = lambda v: format_euro(v) if v is not None else format_euro(0)
+        template = env.get_template('jaarafsluiting.html')
+
+        from database import get_bedrijfsgegevens
+        bedrijf = await get_bedrijfsgegevens(DB_PATH)
+
+        html = template.render(
+            jaar=jaar,
+            datum=date.today().strftime('%d-%m-%Y'),
+            bedrijfsnaam=bedrijf.bedrijfsnaam if bedrijf else '',
+            f=fiscaal,
+            kosten_per_cat=s['kosten_per_cat'],
+            totaal_kosten=s['totaal_kosten_alle'],
+            activastaat=s['activastaat'],
+            totaal_afschrijvingen=s['afschrijvingen_totaal'],
+            kosten_excl_inv=s['kosten'],
+            aov=aov_val,
+            woz=woz_val,
+            hypotheekrente=hyp_val,
+        )
+
+        # Generate PDF with WeasyPrint
+        from weasyprint import HTML
+        output_dir = DB_PATH.parent / 'jaarafsluiting'
+        output_dir.mkdir(parents=True, exist_ok=True)
+        pdf_path = output_dir / f'jaarafsluiting_{jaar}.pdf'
+        HTML(string=html).write_pdf(str(pdf_path))
+
+        ui.notify(f'PDF gegenereerd: jaarafsluiting_{jaar}.pdf', type='positive')
+        ui.download.file(str(pdf_path))
+
     # === PAGE LAYOUT ===
 
     with ui.column().classes('w-full p-6 max-w-7xl mx-auto gap-6'):
@@ -526,22 +627,32 @@ async def jaarafsluiting_page():
             ).classes('w-32')
 
             async def on_jaar_change():
+                # Save current year's IB-inputs before switching
+                old_jaar = gekozen_jaar['value']
+                if ib_inputs['aov'] and berekening_state['params_dict']:
+                    await update_ib_inputs(
+                        DB_PATH, jaar=old_jaar,
+                        aov_premie=float(ib_inputs['aov'].value or 0),
+                        woz_waarde=float(ib_inputs['woz'].value or 0),
+                        hypotheekrente=float(ib_inputs['hypotheek'].value or 0),
+                        voorlopige_aanslag_betaald=float(
+                            ib_inputs['voorlopig'].value or 0),
+                    )
                 gekozen_jaar['value'] = jaar_select.value
                 # Clear stale state so herbereken can't mix years
                 berekening_state['params_dict'] = {}
-                # Preserve IB input values across year changes
-                aov_val = float(ib_inputs['aov'].value or 0) if ib_inputs['aov'] else 0
-                woz_val = float(ib_inputs['woz'].value or 0) if ib_inputs['woz'] else 0
-                hyp_val = float(ib_inputs['hypotheek'].value or 0) if ib_inputs['hypotheek'] else 0
-                va_val = float(ib_inputs['voorlopig'].value or 0) if ib_inputs['voorlopig'] else 0
-                await bereken(aov=aov_val, woz=woz_val,
-                              hypotheekrente=hyp_val, voorlopige_aanslag=va_val)
+                # Load new year's values from DB (None = load from DB)
+                await bereken()
 
             jaar_select.on_value_change(lambda _: on_jaar_change())
 
             ui.button(
                 'Herbereken', icon='refresh',
                 on_click=herbereken,
+            ).props('outline color=primary')
+            ui.button(
+                'Exporteer PDF', icon='picture_as_pdf',
+                on_click=export_pdf,
             ).props('outline color=primary')
 
         # --- Results container (filled by bereken) ---

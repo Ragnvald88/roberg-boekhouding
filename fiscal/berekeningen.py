@@ -16,6 +16,23 @@ from fiscal.heffingskortingen import (
 )
 
 
+def bereken_eigenwoningforfait(woz: float, ew_forfait_pct: float = 0.35,
+                                villataks_grens: float = 1_350_000) -> float:
+    """Bereken eigenwoningforfait op basis van WOZ-waarde.
+
+    Args:
+        woz: WOZ-waarde eigen woning.
+        ew_forfait_pct: Forfait percentage (bijv. 0.35 = 0.35%).
+        villataks_grens: Boven dit bedrag geldt 2.35%.
+    """
+    if woz <= 0:
+        return 0.0
+    pct = ew_forfait_pct / 100
+    if woz <= villataks_grens:
+        return woz * pct
+    return villataks_grens * pct + (woz - villataks_grens) * 0.0235
+
+
 def D(v) -> Decimal:
     """Convert any numeric value to Decimal via string (avoids float imprecision)."""
     if v is None:
@@ -47,6 +64,11 @@ class FiscaalResultaat:
     na_ondernemersaftrek: float = 0.0
     mkb_vrijstelling: float = 0.0
     belastbare_winst: float = 0.0
+    # Eigen woning
+    ew_forfait: float = 0.0
+    ew_saldo: float = 0.0
+    hillen_aftrek: float = 0.0
+    aov: float = 0.0
     # IB
     verzamelinkomen: float = 0.0
     bruto_ib: float = 0.0
@@ -111,15 +133,16 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
     r.winst = euro(d_winst)
 
     # === 2. Fiscale correcties ===
-    # Representatie: 20% niet-aftrekbaar -> bijtelling
-    d_repr_bijtelling = d_repr * D('0.20')
+    # Representatie: niet-aftrekbaar deel -> bijtelling
+    d_repr_aftrek_pct = D(params.get('repr_aftrek_pct', 80)) / D('100')
+    d_repr_bijtelling = d_repr * (D('1') - d_repr_aftrek_pct)
     r.repr_bijtelling = euro(d_repr_bijtelling)
 
     # KIA: 28% als totaal investeringen binnen grenzen
     d_kia = D('0')
     d_kia_ondergrens = D(params['kia_ondergrens'])
     d_kia_bovengrens = D(params['kia_bovengrens'])
-    if d_kia_ondergrens < d_invest <= d_kia_bovengrens:
+    if d_kia_ondergrens <= d_invest <= d_kia_bovengrens:
         d_kia = d_invest * D(params['kia_pct']) / D('100')
     r.kia = euro(d_kia)
 
@@ -127,8 +150,9 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
     d_fiscale_winst = d_winst + d_repr_bijtelling - d_kia
     r.fiscale_winst = euro(d_fiscale_winst)
 
-    # === 3. Ondernemersaftrek (alleen bij urencriterium >= 1225) ===
-    if uren >= 1225:
+    # === 3. Ondernemersaftrek (alleen bij urencriterium gehaald) ===
+    uren_drempel = params.get('urencriterium', 1225)
+    if uren >= uren_drempel:
         d_za = D(params['zelfstandigenaftrek'])
         d_sa = D(params.get('startersaftrek') or 0)
     else:
@@ -151,11 +175,27 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
 
     # === 5. Verzamelinkomen Box 1 ===
     # Eigen woning saldo (forfait - rente, usually negative = aftrekpost)
+    jaar = params.get('jaar', 0)
+    d_ew_forfait = D('0')
     d_ew_saldo = D('0')
+    d_hillen_aftrek = D('0')
     if d_woz > 0:
-        # Eigenwoningforfait: 0.35% van WOZ-waarde (vereenvoudigd)
-        d_ew_forfait = d_woz * D('0.0035')
+        d_ew_forfait = D(str(bereken_eigenwoningforfait(
+            float(d_woz),
+            ew_forfait_pct=params.get('ew_forfait_pct', 0.35),
+            villataks_grens=params.get('villataks_grens', 1_350_000),
+        )))
         d_ew_saldo = d_ew_forfait - d_hypotheekrente
+        # Wet Hillen: als forfait > rente, verlaag de bijtelling
+        if d_ew_saldo > 0:
+            hillen_pct = D(str(params.get('wet_hillen_pct', 0))) / D('100')
+            d_hillen_aftrek = d_ew_saldo * hillen_pct
+            d_ew_saldo = d_ew_saldo - d_hillen_aftrek
+
+    r.ew_forfait = euro(d_ew_forfait)
+    r.ew_saldo = euro(d_ew_saldo)
+    r.hillen_aftrek = euro(d_hillen_aftrek)
+    r.aov = aov
 
     d_verzamelinkomen = d_belastbare_winst + d_ew_saldo - d_aov
     d_verzamelinkomen = max(D('0'), d_verzamelinkomen)
@@ -185,7 +225,6 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
     r.bruto_ib = euro(d_bruto_ib)
 
     # === 7. Heffingskortingen ===
-    jaar = params.get('jaar', 0)
     # AHK: afbouw op basis van verzamelinkomen (sinds 2025; voor Box-1-only maakt het niet uit)
     ahk = bereken_algemene_heffingskorting(r.verzamelinkomen, jaar, params)
     r.ahk = ahk
@@ -213,11 +252,11 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
 
     # === Controles ===
     r.uren_criterium = uren
-    r.uren_criterium_gehaald = uren >= 1225
+    r.uren_criterium_gehaald = uren >= uren_drempel
     r.kosten_omzet_ratio = round(kosten / omzet * 100, 1) if omzet > 0 else 0
 
     if not r.uren_criterium_gehaald:
-        w.append(f"Urencriterium niet gehaald: {uren:.0f} / 1.225 uur")
+        w.append(f"Urencriterium niet gehaald: {uren:.0f} / {uren_drempel:.0f} uur")
     if r.kosten_omzet_ratio > 30:
         w.append(f"Kosten/omzet ratio hoog: {r.kosten_omzet_ratio}%")
 

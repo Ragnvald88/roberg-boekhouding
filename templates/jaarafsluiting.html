@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="UTF-8">
+<style>
+  @page { size: A4; margin: 15mm 18mm 20mm 18mm; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+         font-size: 9pt; line-height: 1.5; color: #2c3e50; }
+
+  h1 { font-size: 16pt; color: #0F766E; margin-bottom: 2mm; }
+  h2 { font-size: 11pt; color: #0F766E; margin: 5mm 0 2mm 0;
+       border-bottom: 1px solid #0F766E; padding-bottom: 1mm; }
+
+  .header { display: flex; justify-content: space-between;
+            margin-bottom: 6mm; align-items: baseline; }
+  .header .meta { color: #64748B; font-size: 9pt; }
+
+  table { width: 100%; border-collapse: collapse; margin-bottom: 3mm; }
+  table td { padding: 1mm 2mm; }
+  table .label { color: #64748B; }
+  table .value { text-align: right; }
+  table .bold { font-weight: 700; }
+  table .sep td { border-top: 0.5pt solid #ccc; padding-top: 2mm; }
+  table .total td { border-top: 1.5pt solid #0F766E; font-weight: 700;
+                    padding-top: 2mm; }
+
+  .data-table { margin-bottom: 4mm; }
+  .data-table th { background: #0F766E; color: #fff; padding: 1.5mm 3mm;
+                   text-align: left; font-size: 8pt; font-weight: 600; }
+  .data-table td { padding: 1.5mm 3mm; border-bottom: 0.3pt solid #e2e8f0; }
+  .data-table .r { text-align: right; }
+
+  .result-box { padding: 3mm 4mm; margin: 3mm 0;
+                border-radius: 2mm; font-weight: 700; font-size: 11pt; }
+  .result-positive { background: #dcfce7; color: #059669; }
+  .result-negative { background: #fef2f2; color: #DC2626; }
+  .result-neutral { background: #f1f5f9; color: #0F172A; }
+
+  .badge { display: inline-block; padding: 0.5mm 2mm; border-radius: 1mm;
+           font-size: 8pt; font-weight: 600; }
+  .badge-ok { background: #dcfce7; color: #059669; }
+  .badge-warn { background: #fef3cd; color: #856404; }
+  .badge-bad { background: #fef2f2; color: #DC2626; }
+
+  .footer { margin-top: 6mm; font-size: 7.5pt; color: #94A3B8;
+            border-top: 0.5pt solid #e2e8f0; padding-top: 2mm; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Jaarafsluiting {{ jaar }}</h1>
+  <div class="meta">{{ bedrijfsnaam }}<br>Gegenereerd: {{ datum }}</div>
+</div>
+
+<!-- 1. Omzet -->
+<h2>1. Omzet</h2>
+<table><tr>
+  <td class="bold">Netto-omzet</td>
+  <td class="value bold">{{ f.omzet|euro }}</td>
+</tr></table>
+
+<!-- 2. Kosten -->
+<h2>2. Kosten</h2>
+{% if kosten_per_cat %}
+<table class="data-table">
+<tr><th>Categorie</th><th class="r">Bedrag</th></tr>
+{% for k in kosten_per_cat %}
+<tr><td>{{ k.categorie }}</td><td class="r">{{ k.totaal|euro }}</td></tr>
+{% endfor %}
+</table>
+<table><tr class="total">
+  <td>Totaal bedrijfslasten</td>
+  <td class="value">{{ totaal_kosten|euro }}</td>
+</tr></table>
+{% else %}
+<p style="color: #94A3B8">Geen uitgaven gevonden.</p>
+{% endif %}
+
+<!-- 3. Afschrijvingen -->
+<h2>3. Afschrijvingen</h2>
+{% if activastaat %}
+<table class="data-table">
+<tr><th>Omschrijving</th><th class="r">Aanschaf</th>
+    <th class="r">Afschr/jaar</th><th class="r">Afschr {{ jaar }}</th>
+    <th class="r">Boekwaarde</th></tr>
+{% for a in activastaat %}
+<tr>
+  <td>{{ a.omschrijving }}</td>
+  <td class="r">{{ a.aanschaf_bedrag|euro }}</td>
+  <td class="r">{{ a.afschrijving_jaar|euro }}</td>
+  <td class="r">{{ a.afschrijving_dit_jaar|euro }}</td>
+  <td class="r">{{ a.boekwaarde|euro }}</td>
+</tr>
+{% endfor %}
+</table>
+<table><tr class="total">
+  <td>Totaal afschrijvingen</td>
+  <td class="value">{{ totaal_afschrijvingen|euro }}</td>
+</tr></table>
+{% else %}
+<p style="color: #94A3B8">Geen afschrijvingen.</p>
+{% endif %}
+
+<!-- 4. W&V -->
+<h2>4. Winst- en verliesrekening</h2>
+<table>
+<tr><td>Netto-omzet</td><td class="value">{{ f.omzet|euro }}</td></tr>
+<tr><td>-/- Bedrijfslasten (excl. investeringen)</td>
+    <td class="value">{{ kosten_excl_inv|euro }}</td></tr>
+<tr><td>-/- Afschrijvingen</td>
+    <td class="value">{{ totaal_afschrijvingen|euro }}</td></tr>
+<tr class="total"><td>Winst</td><td class="value">{{ f.winst|euro }}</td></tr>
+</table>
+
+<!-- 5. Fiscale winstberekening -->
+<h2>5. Fiscale winstberekening</h2>
+<table>
+<tr><td>Winst jaarrekening</td><td class="value">{{ f.winst|euro }}</td></tr>
+<tr><td>+ Bijtelling representatie (20%)</td>
+    <td class="value">{{ f.repr_bijtelling|euro }}</td></tr>
+<tr><td>- KIA</td><td class="value">{{ f.kia|euro }}</td></tr>
+<tr class="sep"><td class="bold">= Fiscale winst</td>
+    <td class="value bold">{{ f.fiscale_winst|euro }}</td></tr>
+<tr><td>- Zelfstandigenaftrek</td>
+    <td class="value">{{ f.zelfstandigenaftrek|euro }}</td></tr>
+{% if f.startersaftrek > 0 %}
+<tr><td>- Startersaftrek</td>
+    <td class="value">{{ f.startersaftrek|euro }}</td></tr>
+{% endif %}
+<tr class="sep"><td class="bold">= Na ondernemersaftrek</td>
+    <td class="value bold">{{ f.na_ondernemersaftrek|euro }}</td></tr>
+<tr><td>- MKB-winstvrijstelling</td>
+    <td class="value">{{ f.mkb_vrijstelling|euro }}</td></tr>
+<tr class="total"><td>Belastbare winst</td>
+    <td class="value">{{ f.belastbare_winst|euro }}</td></tr>
+</table>
+
+<!-- 6. IB-schatting -->
+<h2>6. Inkomstenbelasting schatting</h2>
+<table>
+<tr><td>Belastbare winst</td>
+    <td class="value">{{ f.belastbare_winst|euro }}</td></tr>
+{% if woz > 0 %}
+<tr><td>Eigenwoningforfait</td>
+    <td class="value">{{ f.ew_forfait|euro }}</td></tr>
+<tr><td>- Hypotheekrente</td>
+    <td class="value">{{ hypotheekrente|euro }}</td></tr>
+{% if f.hillen_aftrek > 0 %}
+<tr><td>- Wet Hillen aftrek</td>
+    <td class="value">{{ f.hillen_aftrek|euro }}</td></tr>
+{% endif %}
+<tr><td>= Eigenwoningsaldo</td>
+    <td class="value">{{ f.ew_saldo|euro }}</td></tr>
+{% endif %}
+{% if aov > 0 %}
+<tr><td>- AOV premie</td><td class="value">{{ aov|euro }}</td></tr>
+{% endif %}
+<tr class="sep"><td class="bold">Verzamelinkomen</td>
+    <td class="value bold">{{ f.verzamelinkomen|euro }}</td></tr>
+<tr><td>Bruto IB</td><td class="value">{{ f.bruto_ib|euro }}</td></tr>
+<tr><td>- Algemene heffingskorting</td>
+    <td class="value">{{ f.ahk|euro }}</td></tr>
+<tr><td>- Arbeidskorting</td>
+    <td class="value">{{ f.arbeidskorting|euro }}</td></tr>
+<tr class="sep"><td class="bold">Netto IB</td>
+    <td class="value bold">{{ f.netto_ib|euro }}</td></tr>
+<tr><td>ZVW-bijdrage</td><td class="value">{{ f.zvw|euro }}</td></tr>
+{% if f.voorlopige_aanslag > 0 %}
+<tr><td>Voorlopige aanslag betaald</td>
+    <td class="value">{{ f.voorlopige_aanslag|euro }}</td></tr>
+{% endif %}
+</table>
+
+{% if f.resultaat < 0 %}
+<div class="result-box result-positive">
+  Terug te ontvangen: {{ f.resultaat|abs|euro }}
+</div>
+{% elif f.resultaat > 0 %}
+<div class="result-box result-negative">
+  Bij te betalen: {{ f.resultaat|euro }}
+</div>
+{% else %}
+<div class="result-box result-neutral">Resultaat: {{ 0|euro }}</div>
+{% endif %}
+
+<!-- 7. Controles -->
+<h2>7. Controles</h2>
+<p>Kosten/omzet ratio:
+  {% if f.kosten_omzet_ratio <= 25 %}
+  <span class="badge badge-ok">{{ f.kosten_omzet_ratio }}%</span>
+  {% elif f.kosten_omzet_ratio <= 30 %}
+  <span class="badge badge-warn">{{ f.kosten_omzet_ratio }}%</span>
+  {% else %}
+  <span class="badge badge-bad">{{ f.kosten_omzet_ratio }}%</span>
+  {% endif %}
+</p>
+<p>Urencriterium:
+  {% if f.uren_criterium_gehaald %}
+  <span class="badge badge-ok">{{ f.uren_criterium|int }} uur (gehaald)</span>
+  {% else %}
+  <span class="badge badge-bad">{{ f.uren_criterium|int }} uur (NIET gehaald)</span>
+  {% endif %}
+</p>
+
+{% if f.waarschuwingen %}
+<p style="margin-top: 2mm; color: #DC2626; font-weight: 600;">Waarschuwingen:</p>
+{% for w in f.waarschuwingen %}
+<p style="color: #DC2626;">{{ w }}</p>
+{% endfor %}
+{% endif %}
+
+<div class="footer">
+  Gegenereerd door Roberg Boekhouding op {{ datum }}. Dit is een schatting, geen aangifte.
+</div>
+
+</body>
+</html>

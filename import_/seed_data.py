@@ -27,6 +27,10 @@ FISCALE_PARAMS: dict[int, dict] = {
         'zvw_pct': 5.43,
         'zvw_max_grondslag': 66956,
         'repr_aftrek_pct': 80,
+        'ew_forfait_pct': 0.35,
+        'villataks_grens': 1_200_000,
+        'wet_hillen_pct': 83.333,
+        'urencriterium': 1225,
     },
     2024: {
         'jaar': 2024,
@@ -49,6 +53,10 @@ FISCALE_PARAMS: dict[int, dict] = {
         'zvw_pct': 5.32,
         'zvw_max_grondslag': 71628,
         'repr_aftrek_pct': 80,
+        'ew_forfait_pct': 0.35,
+        'villataks_grens': 1_310_000,
+        'wet_hillen_pct': 80.0,
+        'urencriterium': 1225,
     },
     2025: {
         'jaar': 2025,
@@ -71,6 +79,10 @@ FISCALE_PARAMS: dict[int, dict] = {
         'zvw_pct': 5.26,
         'zvw_max_grondslag': 75864,
         'repr_aftrek_pct': 80,
+        'ew_forfait_pct': 0.35,
+        'villataks_grens': 1_330_000,
+        'wet_hillen_pct': 76.667,
+        'urencriterium': 1225,
     },
     2026: {
         'jaar': 2026,
@@ -93,6 +105,10 @@ FISCALE_PARAMS: dict[int, dict] = {
         'zvw_pct': 4.85,
         'zvw_max_grondslag': 79409,
         'repr_aftrek_pct': 80,
+        'ew_forfait_pct': 0.35,
+        'villataks_grens': 1_350_000,
+        'wet_hillen_pct': 71.867,
+        'urencriterium': 1225,
     },
 }
 

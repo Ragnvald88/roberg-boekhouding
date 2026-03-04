@@ -20,6 +20,12 @@ def bereken_afschrijving(aanschaf_bedrag: float, restwaarde_pct: float,
     Returns:
         Dict with keys: afschrijving, boekwaarde, per_jaar.
     """
+    # Input validation
+    if levensduur <= 0 or aanschaf_bedrag <= 0:
+        return {'afschrijving': 0, 'boekwaarde': max(aanschaf_bedrag, 0), 'per_jaar': 0}
+    restwaarde_pct = max(0, min(restwaarde_pct, 100))
+    aanschaf_maand = max(1, min(aanschaf_maand, 12))
+
     restwaarde = aanschaf_bedrag * (restwaarde_pct / 100)
     afschrijfbaar = aanschaf_bedrag - restwaarde
     per_jaar = afschrijfbaar / levensduur

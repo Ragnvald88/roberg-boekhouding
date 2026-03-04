@@ -21,7 +21,6 @@ async def bank_page():
     current_year = datetime.now().year
     selected_jaar = {'value': current_year}
     selected_maand = {'value': 0}  # 0 = alle maanden
-    selected_ids = {'value': set()}
 
     table_ref = {'table': None}
     csv_list_container = {'ref': None}
@@ -60,12 +59,12 @@ async def bank_page():
                 'koppeling': f"{t.koppeling_type} #{t.koppeling_id}" if t.koppeling_type else '',
                 'status': status,
                 'csv_bestand': t.csv_bestand,
-                'selected': False,
             })
         return rows
 
     def update_bulk_bar():
-        n = len(selected_ids['value'])
+        selected = table_ref['table'].selected if table_ref['table'] else []
+        n = len(selected) if selected else 0
         if bulk_bar_ref['ref']:
             bulk_bar_ref['ref'].set_visibility(n > 0)
         if bulk_label_ref['ref']:
@@ -73,10 +72,10 @@ async def bank_page():
 
     async def refresh_table():
         """Reload data and update the table."""
-        selected_ids['value'].clear()
         rows = await load_transacties()
         if table_ref['table']:
             table_ref['table'].rows = rows
+            table_ref['table'].selected.clear()
             table_ref['table'].update()
         update_bulk_bar()
 
@@ -165,17 +164,9 @@ async def bank_page():
                     .props('color=negative')
         dialog.open()
 
-    def on_select(e):
-        row = e.args
-        wid = row['id']
-        if row.get('selected'):
-            selected_ids['value'].add(wid)
-        else:
-            selected_ids['value'].discard(wid)
-        update_bulk_bar()
-
     async def on_bulk_delete():
-        ids = list(selected_ids['value'])
+        selected = table_ref['table'].selected if table_ref['table'] else []
+        ids = [r['id'] for r in selected]
         if not ids:
             return
         with ui.dialog() as dialog, ui.card():
@@ -246,7 +237,6 @@ async def bank_page():
 
         # Transactions table
         columns = [
-            {'name': 'select', 'label': '', 'field': 'select', 'align': 'center'},
             {'name': 'datum', 'label': 'Datum', 'field': 'datum', 'sortable': True,
              'align': 'left'},
             {'name': 'bedrag_fmt', 'label': 'Bedrag', 'field': 'bedrag_fmt',
@@ -268,11 +258,12 @@ async def bank_page():
             columns=columns,
             rows=initial_rows,
             row_key='id',
+            selection='multiple',
             pagination={'rowsPerPage': 25, 'sortBy': 'datum', 'descending': True},
         ).classes('w-full')
         table_ref['table'] = table
 
-        # Custom cell rendering for bedrag color, categorie dropdown, checkbox, actions
+        # Custom cell rendering for bedrag color, categorie dropdown, actions
         table.add_slot('body', r'''
             <q-tr :props="props"
                    :class="{
@@ -280,9 +271,8 @@ async def bank_page():
                        'bg-amber-1': props.row.status === 'gecategoriseerd',
                        'bg-red-1': props.row.status === 'niet-gekoppeld'
                    }">
-                <q-td key="select" :props="props">
-                    <q-checkbox v-model="props.row.selected" dense
-                        @update:model-value="() => $parent.$emit('select', props.row)" />
+                <q-td auto-width>
+                    <q-checkbox v-model="props.selected" dense />
                 </q-td>
                 <q-td key="datum" :props="props">{{ props.row.datum }}</q-td>
                 <q-td key="bedrag_fmt" :props="props"
@@ -320,7 +310,7 @@ async def bank_page():
         ''')
 
         table.on('cat_change', lambda e: handle_categorie_change(e.args['id'], e.args['cat']))
-        table.on('select', on_select)
+        table.on('selection', lambda _: update_bulk_bar())
         table.on('deletetransactie', on_delete_transactie)
 
         # Imported CSV files section

@@ -2,11 +2,10 @@
 
 from nicegui import app, ui
 from components.layout import create_layout
-from components.utils import format_euro
+from components.utils import format_euro, generate_csv
 from components.werkdag_form import werkdag_form
 from database import (
-    get_werkdagen, get_klanten, delete_werkdag,
-    get_werkdagen_ongefactureerd, DB_PATH,
+    get_werkdagen, get_klanten, delete_werkdag, DB_PATH,
 )
 from datetime import date
 
@@ -34,7 +33,6 @@ async def werkdagen_page():
     year_filter = {'value': current_year}
     month_filter = {'value': 0}
     klant_filter = {'value': 0}
-    selected_ids = {'value': set()}
     table_ref = {'ref': None}
     form_container = {'ref': None}
     summary_container = {'ref': None}
@@ -60,30 +58,58 @@ async def werkdagen_page():
 
             ui.space()
 
+            async def export_csv():
+                year = jaar_select.value
+                month = maand_select.value if maand_select.value != 0 else None
+                werkdagen = await get_werkdagen(DB_PATH, jaar=year, maand=month)
+                headers = ['Datum', 'Klant', 'Code', 'Uren', 'Km', 'Tarief',
+                           'Km-tarief', 'Totaal', 'Status']
+                rows = []
+                for w in werkdagen:
+                    totaal = w.uren * w.tarief + w.km * w.km_tarief
+                    rows.append([w.datum, w.klant_naam, w.code, w.uren,
+                                 w.km, w.tarief, w.km_tarief,
+                                 round(totaal, 2), w.status])
+                csv_str = generate_csv(headers, rows)
+                ui.download.content(csv_str.encode('utf-8-sig'),
+                                    f'werkdagen_{year}.csv')
+
+            ui.button(
+                'Exporteer CSV', icon='download',
+                on_click=export_csv,
+            ).props('outline color=primary')
             ui.button(
                 'Vernieuwen', icon='refresh',
                 on_click=lambda: refresh_table()
             ).props('outline color=primary')
 
-        # Table
+        # Table — column widths tuned to fit within ~1000px content area
+        _trunc = 'max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'
         columns = [
-            {'name': 'select', 'label': '', 'field': 'select', 'align': 'center'},
             {'name': 'datum', 'label': 'Datum', 'field': 'datum', 'sortable': True,
-             'align': 'left'},
+             'align': 'left', 'style': 'width:90px'},
             {'name': 'klant', 'label': 'Klant', 'field': 'klant_naam', 'sortable': True,
-             'align': 'left'},
-            {'name': 'code', 'label': 'Code', 'field': 'code', 'align': 'left'},
+             'align': 'left', 'style': _trunc},
+            {'name': 'code', 'label': 'Code', 'field': 'code', 'align': 'left',
+             'style': 'max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'},
             {'name': 'uren', 'label': 'Uren', 'field': 'uren', 'sortable': True,
-             'align': 'right'},
-            {'name': 'km', 'label': 'Km', 'field': 'km', 'align': 'right'},
-            {'name': 'tarief', 'label': 'Tarief', 'field': 'tarief_fmt', 'align': 'right'},
-            {'name': 'totaal', 'label': 'Totaal', 'field': 'totaal_fmt', 'align': 'right'},
-            {'name': 'status', 'label': 'Status', 'field': 'status', 'align': 'center'},
-            {'name': 'actions', 'label': '', 'field': 'actions', 'align': 'center'},
+             'align': 'right', 'style': 'width:50px'},
+            {'name': 'km', 'label': 'Km', 'field': 'km', 'align': 'right',
+             'style': 'width:40px'},
+            {'name': 'tarief', 'label': 'Tarief', 'field': 'tarief_fmt', 'align': 'right',
+             'style': 'width:70px'},
+            {'name': 'totaal', 'label': 'Totaal', 'field': 'totaal_fmt', 'align': 'right',
+             'style': 'width:75px'},
+            {'name': 'status', 'label': 'Status', 'field': 'status', 'align': 'center',
+             'style': 'width:85px'},
+            {'name': 'actions', 'label': '', 'field': 'actions', 'align': 'center',
+             'style': 'width:70px'},
         ]
 
         table = ui.table(
             columns=columns, rows=[], row_key='id',
+            selection='multiple',
+            pagination={'rowsPerPage': 25, 'sortBy': 'datum', 'descending': True},
         ).classes('w-full')
         table_ref['ref'] = table
 
@@ -93,13 +119,6 @@ async def werkdagen_page():
                 <q-badge :color="props.row.status === 'betaald' ? 'positive' :
                                   props.row.status === 'gefactureerd' ? 'primary' : 'grey'"
                          :label="props.row.status" />
-            </q-td>
-        ''')
-
-        table.add_slot('body-cell-select', '''
-            <q-td :props="props">
-                <q-checkbox v-model="props.row.selected" dense
-                    @update:model-value="() => $parent.$emit('select', props.row)" />
             </q-td>
         ''')
 
@@ -121,20 +140,63 @@ async def werkdagen_page():
         # Summary row
         summary_container['ref'] = ui.row().classes('w-full justify-end gap-8 q-mt-sm')
 
-        # Factuur button
-        with ui.row().classes('w-full q-mt-md gap-4'):
+        # Bulk action toolbar (hidden when nothing selected)
+        bulk_bar = ui.row().classes('w-full items-center gap-4')
+        bulk_bar.set_visibility(False)
+        with bulk_bar:
+            bulk_label = ui.label('')
+
             async def ga_naar_factuur():
-                ids = list(selected_ids['value'])
-                if not ids:
+                selected = table.selected
+                if not selected:
                     ui.notify('Selecteer eerst werkdagen', type='warning')
                     return
+                ids = [r['id'] for r in selected]
                 app.storage.user['selected_werkdagen'] = ids
                 ui.navigate.to('/facturen')
 
-            factuur_btn = ui.button(
+            ui.button(
                 'Maak factuur van selectie', icon='receipt',
                 on_click=ga_naar_factuur,
-            ).props('color=primary disabled')
+            ).props('color=primary')
+
+            async def verwijder_selectie():
+                selected = table.selected
+                if not selected:
+                    return
+                ids = [r['id'] for r in selected]
+
+                async def confirm_bulk_delete():
+                    for wid in ids:
+                        await delete_werkdag(DB_PATH, werkdag_id=wid)
+                    dialog.close()
+                    ui.notify(f'{len(ids)} werkdag(en) verwijderd', type='positive')
+                    await refresh_table()
+
+                with ui.dialog() as dialog, ui.card():
+                    ui.label(f'{len(ids)} werkdag(en) verwijderen?')
+                    with ui.row():
+                        ui.button('Ja, verwijderen',
+                                  on_click=confirm_bulk_delete) \
+                            .props('color=negative')
+                        ui.button('Annuleren', on_click=dialog.close)
+                dialog.open()
+
+            ui.button(
+                'Verwijder selectie', icon='delete',
+                on_click=verwijder_selectie,
+            ).props('color=negative outline')
+
+        def update_bulk_bar():
+            selected = table.selected
+            n = len(selected) if selected else 0
+            if n > 0:
+                bulk_bar.set_visibility(True)
+                bulk_label.text = f'{n} werkdag(en) geselecteerd'
+            else:
+                bulk_bar.set_visibility(False)
+
+        table.on('selection', lambda _: update_bulk_bar())
 
         ui.separator().classes('q-my-lg')
 
@@ -204,14 +266,15 @@ async def werkdagen_page():
                     'tarief_fmt': format_euro(w.tarief),
                     'totaal_fmt': format_euro(bedrag),
                     'status': w.status,
-                    'selected': False,
                 })
                 totaal_uren += w.uren
                 totaal_km += w.km
                 totaal_bedrag += bedrag
 
             table.rows = rows
+            table.selected.clear()
             table.update()
+            update_bulk_bar()
 
             # Update summary
             s = summary_container['ref']
@@ -251,19 +314,6 @@ async def werkdagen_page():
             ui.notify('Werkdag verwijderd', type='positive')
             await refresh_table()
 
-        def on_select(e):
-            row = e.args
-            wid = row['id']
-            if row.get('selected'):
-                selected_ids['value'].add(wid)
-            else:
-                selected_ids['value'].discard(wid)
-            if selected_ids['value']:
-                factuur_btn.props(remove='disabled')
-            else:
-                factuur_btn.props('disabled')
-
-        table.on('select', on_select)
         table.on('edit', on_edit)
         table.on('delete', on_delete)
 

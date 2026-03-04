@@ -10,15 +10,21 @@ from components.utils import format_euro, format_datum
 from database import (
     get_kpis, get_omzet_per_maand, get_uitgaven_per_categorie,
     get_recente_facturen, get_openstaande_facturen, get_factuur_count,
+    get_werkdagen_ongefactureerd_summary, get_km_totaal,
+    get_fiscale_params, get_uren_totaal, get_omzet_totaal,
+    get_representatie_totaal, get_investeringen,
+    get_investeringen_voor_afschrijving,
     DB_PATH,
 )
+from fiscal.afschrijvingen import bereken_afschrijving
+from fiscal.berekeningen import bereken_volledig
 
-URENCRITERIUM = 1225
+URENCRITERIUM_DEFAULT = 1225
 
 
 def kpi_card(label: str, value: str, icon: str, color: str = '#0F766E',
-             extra=None, on_click=None):
-    """Render a single KPI card, optionally clickable."""
+             extra=None, on_click=None, delta_pct: float = None):
+    """Render a single KPI card, optionally clickable, with optional YoY delta."""
     card_props = 'q-pa-lg flex-1 min-w-52 kpi-card'
     if on_click:
         card_props += ' cursor-pointer'
@@ -32,8 +38,17 @@ def kpi_card(label: str, value: str, icon: str, color: str = '#0F766E',
             ui.icon(icon, size='1.5rem') \
                 .style(f'color: {color}; background-color: {color}15; '
                        'border-radius: 8px; padding: 8px')
-        ui.label(value).classes('text-h5 q-mt-sm') \
-            .style('color: #0F172A; font-weight: 700')
+        with ui.row().classes('items-end gap-2 q-mt-sm'):
+            ui.label(value).classes('text-h5') \
+                .style('color: #0F172A; font-weight: 700')
+            if delta_pct is not None:
+                sign = '+' if delta_pct >= 0 else ''
+                d_color = '#059669' if delta_pct >= 0 else '#DC2626'
+                d_icon = 'trending_up' if delta_pct >= 0 else 'trending_down'
+                with ui.row().classes('items-center gap-0'):
+                    ui.icon(d_icon, size='0.9rem').style(f'color: {d_color}')
+                    ui.label(f'{sign}{delta_pct:.0f}%').classes(
+                        'text-caption').style(f'color: {d_color}')
         if extra:
             extra()
 
@@ -76,15 +91,74 @@ async def dashboard_page():
                 on_click=lambda: ui.navigate.to('/facturen'),
             ).props('outline color=primary')
 
+    def _yoy_delta(current: float, previous: float) -> float | None:
+        """Calculate YoY delta percentage. Returns None if no previous data."""
+        if previous and previous > 0:
+            return (current - previous) / previous * 100
+        return None
+
+    async def _compute_ib_estimate(jaar: int) -> float | None:
+        """Compute estimated IB resultaat from DB data. Returns None if no params."""
+        params = await get_fiscale_params(DB_PATH, jaar)
+        if not params:
+            return None
+        from pages.jaarafsluiting import _fiscale_params_to_dict
+        params_dict = _fiscale_params_to_dict(params)
+        omzet = await get_omzet_totaal(DB_PATH, jaar)
+        repr_totaal = await get_representatie_totaal(DB_PATH, jaar)
+        kosten_per_cat = await get_uitgaven_per_categorie(DB_PATH, jaar)
+        totaal_kosten = sum(r['totaal'] for r in kosten_per_cat)
+        inv_dit_jaar = await get_investeringen(DB_PATH, jaar=jaar)
+        inv_bedrag = sum((u.aanschaf_bedrag or u.bedrag) for u in inv_dit_jaar)
+        kosten_excl_inv = totaal_kosten - inv_bedrag
+        investeringen = await get_investeringen_voor_afschrijving(
+            DB_PATH, tot_jaar=jaar)
+        totaal_afschr = 0.0
+        for u in investeringen:
+            aanschaf = (u.aanschaf_bedrag or u.bedrag) * (
+                (u.zakelijk_pct or 100) / 100)
+            result = bereken_afschrijving(
+                aanschaf_bedrag=aanschaf,
+                restwaarde_pct=u.restwaarde_pct or 10,
+                levensduur=u.levensduur_jaren or 5,
+                aanschaf_maand=int(u.datum[5:7]),
+                aanschaf_jaar=int(u.datum[0:4]),
+                bereken_jaar=jaar,
+            )
+            totaal_afschr += result['afschrijving']
+        inv_totaal = sum(
+            (u.aanschaf_bedrag or u.bedrag) * ((u.zakelijk_pct or 100) / 100)
+            for u in inv_dit_jaar
+        )
+        uren = await get_uren_totaal(DB_PATH, jaar, urennorm_only=True)
+        fiscaal = bereken_volledig(
+            omzet=omzet, kosten=kosten_excl_inv,
+            afschrijvingen=totaal_afschr, representatie=repr_totaal,
+            investeringen_totaal=inv_totaal, uren=uren,
+            params=params_dict,
+            aov=params.aov_premie or 0, woz=params.woz_waarde or 0,
+            hypotheekrente=params.hypotheekrente or 0,
+            voorlopige_aanslag=params.voorlopige_aanslag_betaald or 0,
+        )
+        return fiscaal.resultaat
+
     async def refresh_dashboard():
         jaar = jaar_select.value
         kpis = await get_kpis(DB_PATH, jaar=jaar)
+        kpis_vorig = await get_kpis(DB_PATH, jaar=jaar - 1)
         omzet_huidig = await get_omzet_per_maand(DB_PATH, jaar=jaar)
         omzet_vorig = await get_omzet_per_maand(DB_PATH, jaar=jaar - 1)
         kosten_per_cat = await get_uitgaven_per_categorie(DB_PATH, jaar=jaar)
         recente = await get_recente_facturen(DB_PATH, limit=5)
         openstaande = await get_openstaande_facturen(DB_PATH, jaar=jaar)
         factuur_count = await get_factuur_count(DB_PATH, jaar=jaar)
+        ongefact = await get_werkdagen_ongefactureerd_summary(DB_PATH, jaar=jaar)
+        km_data = await get_km_totaal(DB_PATH, jaar=jaar)
+        ib_resultaat = await _compute_ib_estimate(jaar)
+
+        # Read urencriterium from DB (fall back to default)
+        fp = await get_fiscale_params(DB_PATH, jaar)
+        uren_criterium = int(fp.urencriterium) if fp else URENCRITERIUM_DEFAULT
 
         # KPI cards
         kpi_row = kpi_container['ref']
@@ -94,7 +168,9 @@ async def dashboard_page():
             with ui.row().classes('w-full gap-4 flex-wrap'):
                 kpi_card('Bruto omzet', format_euro(kpis['omzet']),
                          'trending_up', '#0F766E',
-                         on_click=lambda: ui.navigate.to('/werkdagen'))
+                         on_click=lambda: ui.navigate.to('/werkdagen'),
+                         delta_pct=_yoy_delta(kpis['omzet'],
+                                              kpis_vorig['omzet']))
 
                 openstaand_count = len(openstaande)
                 openstaand_label = (f"{openstaand_count} ({format_euro(kpis['openstaand'])})"
@@ -107,19 +183,23 @@ async def dashboard_page():
                 resultaat = kpis['winst']
                 kpi_card('Resultaat', format_euro(resultaat),
                          'account_balance',
-                         '#059669' if resultaat >= 0 else '#DC2626')
+                         '#059669' if resultaat >= 0 else '#DC2626',
+                         delta_pct=_yoy_delta(kpis['winst'],
+                                              kpis_vorig['winst']))
 
             # Row 2: Operations KPIs
             with ui.row().classes('w-full gap-4 flex-wrap'):
                 kpi_card('Bedrijfslasten', format_euro(kpis['kosten']),
                          'payments', '#D97706',
-                         on_click=lambda: ui.navigate.to('/kosten'))
+                         on_click=lambda: ui.navigate.to('/kosten'),
+                         delta_pct=_yoy_delta(kpis['kosten'],
+                                              kpis_vorig['kosten']))
 
                 # Urencriterium with progress
                 uren = kpis['uren']
-                uren_voldaan = uren >= URENCRITERIUM
+                uren_voldaan = uren >= uren_criterium
                 uren_hex = '#059669' if uren_voldaan else '#D97706'
-                uren_pct = min(uren / URENCRITERIUM, 1.0) if URENCRITERIUM > 0 else 0
+                uren_pct = min(uren / uren_criterium, 1.0) if uren_criterium > 0 else 0
 
                 def uren_extra():
                     ui.linear_progress(
@@ -128,12 +208,33 @@ async def dashboard_page():
                     ).classes('w-full q-mt-sm').props('rounded size=8px')
 
                 kpi_card('Urencriterium',
-                         f"{uren:.0f} / {URENCRITERIUM:,} uur".replace(",", "."),
+                         f"{uren:.0f} / {uren_criterium:,} uur".replace(",", "."),
                          'schedule', uren_hex, uren_extra)
 
                 kpi_card('Facturen', f"{factuur_count} facturen",
                          'receipt', '#0F766E',
                          on_click=lambda: ui.navigate.to('/facturen'))
+
+            # Row 3: IB + Km
+            with ui.row().classes('w-full gap-4 flex-wrap'):
+                if ib_resultaat is not None:
+                    if ib_resultaat < 0:
+                        ib_label = f'Terug: {format_euro(abs(ib_resultaat))}'
+                        ib_color = '#059669'
+                    elif ib_resultaat > 0:
+                        ib_label = f'Bij: {format_euro(ib_resultaat)}'
+                        ib_color = '#DC2626'
+                    else:
+                        ib_label = format_euro(0)
+                        ib_color = '#0F766E'
+                    kpi_card('Geschatte IB', ib_label,
+                             'calculate', ib_color,
+                             on_click=lambda: ui.navigate.to('/jaarafsluiting'))
+
+                if km_data['km'] > 0:
+                    km_label = f"{km_data['km']:.0f} km ({format_euro(km_data['vergoeding'])})"
+                    kpi_card('Km-vergoeding', km_label,
+                             'directions_car', '#0F766E')
 
         # Charts + tables
         chart_row = chart_container['ref']
@@ -157,6 +258,22 @@ async def dashboard_page():
                     else:
                         ui.label('Geen uitgaven gevonden.') \
                             .classes('q-pa-md').style('color: #94A3B8')
+
+            # Ongefactureerde werkdagen alert
+            if ongefact['aantal'] > 0:
+                with ui.card().classes('w-full q-pa-md') \
+                        .style('background-color: #FFF7ED; border-color: #FDBA74'):
+                    with ui.row().classes('items-center justify-between w-full'):
+                        with ui.row().classes('items-center gap-2'):
+                            ui.icon('assignment_late', size='1.2rem') \
+                                .style('color: #D97706')
+                            ui.label(
+                                f"{ongefact['aantal']} ongefactureerde werkdagen "
+                                f"({format_euro(ongefact['bedrag'])})"
+                            ).style('color: #92400E; font-weight: 600')
+                        ui.button('Bekijk', icon='arrow_forward',
+                                  on_click=lambda: ui.navigate.to('/werkdagen')
+                                  ).props('flat dense color=warning')
 
             # Openstaande facturen detail list
             if openstaande:

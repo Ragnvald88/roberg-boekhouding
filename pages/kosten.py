@@ -1,16 +1,20 @@
 """Kosten pagina — uitgaven registratie + categorisatie."""
 
 from datetime import date
+from pathlib import Path
 
 from nicegui import ui
 
 from components.layout import create_layout
-from components.utils import format_euro, KOSTEN_CATEGORIEEN as CATEGORIEEN
+from components.utils import format_euro, generate_csv, KOSTEN_CATEGORIEEN as CATEGORIEEN
 from database import (
     add_uitgave, delete_uitgave, get_uitgaven, get_uitgaven_per_categorie,
-    get_investeringen_voor_afschrijving, update_uitgave, DB_PATH,
+    get_investeringen_voor_afschrijving, update_uitgave, get_fiscale_params,
+    DB_PATH,
 )
 from fiscal.afschrijvingen import bereken_afschrijving
+
+UITGAVEN_DIR = DB_PATH.parent / 'uitgaven'
 
 LEVENSDUUR_OPTIES = {3: '3 jaar', 4: '4 jaar', 5: '5 jaar'}
 
@@ -25,10 +29,15 @@ async def kosten_page():
     filter_jaar = {'value': huidig_jaar}
     filter_categorie = {'value': None}  # None = alle
 
+    # Read representatie percentage from DB
+    fp = await get_fiscale_params(DB_PATH, jaar=huidig_jaar)
+    repr_aftrek_pct = int(fp.repr_aftrek_pct) if fp else 80
+
     # References to dynamic UI elements
     tabel_container = {'ref': None}
     summary_container = {'ref': None}
     activastaat_container = {'ref': None}
+    upload_file = {}  # Stores pending upload file event
 
     # --- Helpers ---
 
@@ -58,6 +67,8 @@ async def kosten_page():
                 'zakelijk_pct': u.zakelijk_pct,
                 'levensduur_fmt': '',
                 'boekwaarde_fmt': '',
+                'has_bon': bool(u.pdf_pad),
+                'pdf_pad': u.pdf_pad,
             }
             if u.is_investering and u.levensduur_jaren:
                 row['levensduur_fmt'] = f'{u.levensduur_jaren} jaar'
@@ -74,6 +85,7 @@ async def kosten_page():
             rows.append(row)
 
         columns = [
+            {'name': 'bon', 'label': '', 'field': 'has_bon', 'align': 'center'},
             {'name': 'datum', 'label': 'Datum', 'field': 'datum', 'sortable': True,
              'align': 'left'},
             {'name': 'categorie', 'label': 'Categorie', 'field': 'categorie',
@@ -96,6 +108,14 @@ async def kosten_page():
                 columns=columns, rows=rows, row_key='id',
                 pagination={'rowsPerPage': 20},
             ).classes('w-full')
+            table.add_slot('body-cell-bon', '''
+                <q-td :props="props">
+                    <q-btn v-if="props.row.has_bon" icon="attach_file" flat dense
+                           round size="sm" color="primary"
+                           @click="$parent.$emit('viewdoc', props.row)"
+                           title="Bekijk bon" />
+                </q-td>
+            ''')
             table.add_slot('body-cell-acties', '''
                 <q-td :props="props">
                     <q-btn flat dense icon="edit" color="primary" size="sm"
@@ -111,6 +131,7 @@ async def kosten_page():
             ''')
             table.on('edit', lambda e: open_edit_dialog(e.args))
             table.on('delete', lambda e: confirm_delete(e.args))
+            table.on('viewdoc', lambda e: view_document(e.args))
 
     async def laad_summary():
         """Reload the summary card."""
@@ -220,7 +241,12 @@ async def kosten_page():
             kwargs['zakelijk_pct'] = float(input_zakelijk.value or 100)
             kwargs['aanschaf_bedrag'] = bedrag
 
-        await add_uitgave(DB_PATH, **kwargs)
+        uitgave_id = await add_uitgave(DB_PATH, **kwargs)
+
+        # Save uploaded file if present
+        if upload_file.get('event'):
+            await save_upload_for_uitgave(uitgave_id, upload_file['event'])
+
         ui.notify('Uitgave opgeslagen', type='positive')
 
         # Reset form
@@ -234,6 +260,8 @@ async def kosten_page():
         input_zakelijk.value = 100
         investering_velden.set_visibility(False)
         representatie_note.set_visibility(False)
+        upload_file.clear()
+        add_upload.reset()
 
         await ververs()
 
@@ -295,6 +323,39 @@ async def kosten_page():
             if (row.get('bedrag', 0) or 0) < 450:
                 edit_investering.set_visibility(False)
 
+            # Document section
+            ui.separator().classes('my-2')
+            edit_upload_file = {}
+            existing_pdf = row.get('pdf_pad', '')
+            if existing_pdf and Path(existing_pdf).exists():
+                with ui.row().classes('items-center gap-2'):
+                    ui.icon('attach_file', color='primary')
+                    ui.label(Path(existing_pdf).name).classes('text-body2')
+                    ui.button('Download', icon='download',
+                              on_click=lambda: ui.download.file(existing_pdf)
+                              ).props('flat dense size=sm')
+
+                    async def remove_bon():
+                        await update_uitgave(DB_PATH, uitgave_id=row['id'],
+                                             pdf_pad='')
+                        p = Path(existing_pdf)
+                        if p.exists():
+                            p.unlink()
+                        ui.notify('Bon verwijderd', type='positive')
+                        dialog.close()
+                        await ververs()
+
+                    ui.button('Verwijder bon', icon='delete',
+                              on_click=remove_bon).props(
+                                  'flat dense size=sm color=negative')
+            else:
+                ui.upload(
+                    label='Bon uploaden', auto_upload=True,
+                    on_upload=lambda e: edit_upload_file.update({'event': e}),
+                    max_file_size=10_000_000,
+                ).classes('w-full').props(
+                    'flat bordered accept=".pdf,.jpg,.jpeg,.png"')
+
             with ui.row().classes('w-full justify-end gap-2 mt-2'):
                 ui.button('Annuleren', on_click=dialog.close).props('flat')
 
@@ -316,6 +377,10 @@ async def kosten_page():
                         kwargs['levensduur_jaren'] = None
                         kwargs['aanschaf_bedrag'] = None
                     await update_uitgave(DB_PATH, uitgave_id=row['id'], **kwargs)
+                    # Save uploaded file if present
+                    if edit_upload_file.get('event'):
+                        await save_upload_for_uitgave(
+                            row['id'], edit_upload_file['event'])
                     ui.notify('Uitgave bijgewerkt', type='positive')
                     dialog.close()
                     await ververs()
@@ -343,6 +408,27 @@ async def kosten_page():
                 ui.button('Verwijderen', on_click=verwijder).props('color=negative')
         dialog.open()
 
+    def view_document(row: dict):
+        """Open the attached document file."""
+        pdf_pad = row.get('pdf_pad', '')
+        if pdf_pad and Path(pdf_pad).exists():
+            ui.download.file(pdf_pad)
+        else:
+            ui.notify('Bestand niet gevonden', type='warning')
+
+    async def save_upload_for_uitgave(uitgave_id: int, upload_event):
+        """Save an uploaded file and link it to an uitgave."""
+        UITGAVEN_DIR.mkdir(parents=True, exist_ok=True)
+        safe_name = Path(upload_event.name).name.replace(' ', '_')
+        filename = f'uitgave_{uitgave_id}_{safe_name}'
+        filepath = UITGAVEN_DIR / filename
+        # Write content from the SpooledTemporaryFile
+        content = upload_event.content.read()
+        filepath.write_bytes(content)
+        await update_uitgave(DB_PATH, uitgave_id=uitgave_id,
+                             pdf_pad=str(filepath))
+        return filepath
+
     # === PAGE LAYOUT ===
 
     with ui.column().classes('w-full p-6 max-w-7xl mx-auto gap-6'):
@@ -356,6 +442,23 @@ async def kosten_page():
                 {j: str(j) for j in jaren},
                 label='Jaar', value=huidig_jaar,
             ).classes('w-32')
+
+            async def export_csv_kosten():
+                uitgaven = await get_uitgaven(
+                    DB_PATH, jaar=filter_jaar['value'],
+                    categorie=filter_categorie['value'])
+                headers = ['Datum', 'Categorie', 'Omschrijving', 'Bedrag',
+                           'Investering', 'Zakelijk %']
+                rows = [[u.datum, u.categorie, u.omschrijving, u.bedrag,
+                         'Ja' if u.is_investering else 'Nee',
+                         u.zakelijk_pct] for u in uitgaven]
+                csv_str = generate_csv(headers, rows)
+                ui.download.content(
+                    csv_str.encode('utf-8-sig'),
+                    f'kosten_{filter_jaar["value"]}.csv')
+
+            ui.button('CSV', icon='download',
+                      on_click=export_csv_kosten).props('outline color=primary')
 
             cat_opties = {'': 'Alle'}
             cat_opties.update({c: c for c in CATEGORIEEN})
@@ -418,8 +521,9 @@ async def kosten_page():
                     ).classes('w-32')
 
             # Representatie note
+            bijtelling_pct = 100 - repr_aftrek_pct
             representatie_note = ui.label(
-                '80% aftrekbaar, 20% bijtelling'
+                f'{repr_aftrek_pct}% aftrekbaar, {bijtelling_pct}% bijtelling'
             ).classes('text-caption text-orange')
             representatie_note.set_visibility(False)
 
@@ -448,6 +552,15 @@ async def kosten_page():
                 )
 
             input_categorie.on('update:model-value', lambda: on_categorie_change())
+
+            # Document upload
+            ui.label('Bon/factuur (optioneel)').classes(
+                'text-caption q-mt-sm').style('color: #64748B')
+            add_upload = ui.upload(
+                label='Sleep bestand of klik', auto_upload=True,
+                on_upload=lambda e: upload_file.update({'event': e}),
+                max_file_size=10_000_000,
+            ).classes('w-full max-w-sm').props('flat bordered accept=".pdf,.jpg,.jpeg,.png"')
 
             with ui.row().classes('w-full justify-end mt-2'):
                 ui.button('Opslaan', icon='save',

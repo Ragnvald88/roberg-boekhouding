@@ -27,7 +27,7 @@ python main.py
 ## Tests
 ```bash
 DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib .venv/bin/python -m pytest tests/ -v
-# 82 tests, alle passing
+# 109 tests, alle passing
 ```
 
 ## Architectuur
@@ -70,7 +70,7 @@ roberg-boekhouding/
 │   └── seed_data.py            # Fiscale params pre-fill (2023-2026)
 ├── templates/
 │   └── factuur.html            # Jinja2 HTML factuur template
-├── tests/                      # 9 testbestanden, 82 tests
+├── tests/                      # 9 testbestanden, 109 tests
 ├── docs/plans/                 # Design + implementatie docs (referentie)
 ├── data/                       # NIET in git: SQLite + PDFs + CSV archief
 ├── start-boekhouding.command   # macOS dubbelklik launcher
@@ -91,7 +91,7 @@ roberg-boekhouding/
 | Route | Pagina | Status |
 |-------|--------|--------|
 | `/` | Dashboard | Werkend — 4 KPIs, omzet bar chart, kosten donut |
-| `/werkdagen` | Werkdagen | Werkend — tabel met filters, add/edit/delete formulier |
+| `/werkdagen` | Werkdagen | Werkend — tabel met filters, selectie, bulk delete, paginatie, add/edit/delete formulier |
 | `/facturen` | Facturen | Werkend — factuur genereren vanuit werkdagen, PDF, betaalstatus |
 | `/kosten` | Kosten | Werkend — uitgaven CRUD, categorieën, investering-vlag |
 | `/bank` | Bank | Werkend — CSV upload, inline categorisatie |
@@ -177,37 +177,50 @@ Datum, CODE, Klant, Activiteit, Locatie, Uren, Visite_km, Retourafstand_km, Uurt
 
 ## Bekende Bugs (prioriteit: hoog → laag)
 
-### HOOG — Functionaliteit kapot
-1. **Werkdagen selectie-checkboxen doen niets**: `werkdagen.py` rendert checkboxen in de tabel maar de `select` event is nooit geconnect aan een handler. `selected_ids` wordt nooit gevuld. De "Maak factuur van selectie" knop navigeert alleen naar `/facturen` zonder data mee te geven.
-2. **Async/lambda pattern in meerdere pages**: Sync lambdas die async functies aanroepen retourneren unawaited coroutines. NiceGUI >=2.0 handled dit meestal automatisch, maar het is onbetrouwbaar. Betreft:
-   - `bank.py`: `handle_categorie_change`, `handle_jaar_change`, `handle_maand_change`
-   - `kosten.py`: `open_edit_dialog`, `confirm_delete`
-   - **Test dit empirisch** — als het in de browser werkt, is het een code smell maar niet broken.
-3. **Mark-als-betaald heeft geen bevestigingsdialog**: `facturen.py` — onomkeerbare actie met één klik, geen undo.
+Volledige audit: `docs/audit-2026-03-03.md`
 
-### MEDIUM — Data-integriteit / UX
-4. **Geen dubbele-transactie detectie bij bank CSV import**: Zelfde CSV opnieuw uploaden maakt duplicaten.
-5. **Werkdag form: geen validatie op lege datum of uren=None**: Kan lege/null waarden naar DB schrijven.
-6. **Factuur genereren zonder bedrijfsgegevens geeft blanco PDF**: Geen waarschuwing als bedrijfsgegevens ontbreken.
-7. **Relatieve paden**: `bank.py` (line ~111) gebruikt `Path("data/bank_csv")` en `instellingen.py` (line ~282) gebruikt `Path("data")` — moet `DB_PATH.parent` zijn.
-8. **Werkdag form: date picker sluit niet na selectie** (ontbrekende `menu.close()` handler).
-9. **Lege tabellen tonen niets**: `werkdagen.py` en `facturen.py` tonen geen "Geen gegevens" melding bij 0 rijen.
-10. **Kosten delete notify is rood**: `kosten.py` line ~281 — `type='negative'` voor succesvolle verwijdering, moet `type='positive'` zijn.
+### KRITIEK — Foute belastingberekening
+1. **bereken_ib() vs bereken_volledig() divergentie**: Verschillende inkomensbasis voor arbeidskorting. €498 verschil bij 2024 Boekhouder case. NB: bereken_ib() wordt alleen in tests gebruikt, niet in de app.
+2. **mark_betaald cascadeert NIET naar werkdagen**: `database.py:466` — werkdagen blijven `gefactureerd` na factuur betaald markeren.
 
-### LAAG — Opruimen / verbetering
-11. **Duplicaat `format_euro`/`format_datum` in `invoice_generator.py`**: Moet importeren uit `components/utils.py`.
-12. **Dead code in `bank.py`**: Engelse maandnamen dict (line ~153-156) wordt aangemaakt maar direct overschreven door `nl_maanden`.
-13. **Jaarafsluiting IB-inputs verliezen waarden bij jaarwissel**: AOV/WOZ/hypotheek/voorlopige aanslag worden gereset naar 0 bij jaar-change.
-14. **Dashboard KPI kosten telt investeringen mee**: `get_kpis()` sommeert alle uitgaven; jaarafsluiting scheidt correct, maar dashboard niet.
-15. **Werkdag form urennorm bug in edit mode**: Code-change van ACHTERWACHT naar iets anders reset urennorm niet naar True.
-16. **Eigenwoningforfait hardcoded op 0.35%**: `fiscal/berekeningen.py` — is vereenvoudiging, klopt alleen voor WOZ <bepaalde grens.
+### HOOG — Crashes / data-integriteit
+3. **NULL doorgifte in _row_to_fiscale_params**: `database.py:749` — `in keys` is True bij NULL waarde → `Decimal(None)` crash.
+4. **link_werkdagen_to_factuur overschrijft bestaande koppeling**: `database.py:512` — geen check op status.
+5. **DD-MM-YYYY datums onzichtbaar**: `database.py:296` — `substr('15-03-2026',1,4)='15-0'`, 27+ werkdagen verborgen. Data-fix nodig.
+6. **Bank CSV: geen dedup op DB-niveau**: `database.py:687` — zelfde CSV importeren maakt duplicaten.
+7. **delete_klant crasht op FK violation**: `database.py:277` — onafgehandelde IntegrityError.
+8. **Investment kostenaftrek negeert zakelijk_pct**: `jaarafsluiting.py:443` — trekt bruto af, niet zakelijk deel.
+
+### MEDIUM — Randgevallen / UX
+9. **Wet Hillen: pct > 100** → negatief saldo (geen clamping).
+10. **Backup: geen WAL checkpoint** voor consistente snapshot.
+11. **€450 investeringsdrempel hardcoded** op 4 plekken in kosten.py.
+
+### OPGELOST (eerder gemeld, nu gefixt)
+- ~~Werkdagen selectie-checkboxen~~ → Werkend (Phase 1), herschreven met `selection='multiple'` (Phase 4)
+- ~~Bank selectie-checkboxen~~ → Werkend met `selection='multiple'` + `props.selected` (Phase 4)
+- ~~Async/lambda pattern~~ → NiceGUI 3.8 handled dit automatisch (bewezen via source code audit)
+- ~~Mark-als-betaald bevestigingsdialog~~ → Toegevoegd (Phase 1)
+- ~~Eigenwoningforfait hardcoded~~ → Nu in DB (Phase 3)
+- ~~IB-inputs verliezen waarden~~ → Persisted per jaar (Phase 2)
+- ~~Lege tabellen~~ → no-data slots toegevoegd (Phase 1)
+- ~~Factuur verwijderen~~ → Delete + bulk delete (Phase 1)
+- ~~Bon uploaden bij uitgave~~ → Upload widget (Phase 2)
+- ~~Jaarafsluiting PDF export~~ → WeasyPrint (Phase 2)
+- ~~KIA grens `<` i.p.v. `<=`~~ → Gefixt, `<=` op berekeningen.py:145
+- ~~ZeroDivisionError bij levensduur=0~~ → Input validation in afschrijvingen.py:24
+- ~~Afschrijving negatieve levensduur~~ → Geclamped in afschrijvingen.py:24
+- ~~Afschrijving maand=0~~ → Geclamped in afschrijvingen.py:27
+- ~~format_datum keert NL-datums om~~ → Correct: DD-MM-YYYY passthrough (utils.py:47)
+- ~~Backup mist uitgaven/jaarafsluiting/bank_csv dirs~~ → Alle data dirs in ZIP (Phase 4)
+- ~~Kosten/omzet ratio kleur omgekeerd~~ → Laag = groen (Phase 4)
+- ~~Dashboard URENCRITERIUM hardcoded~~ → Leest uit DB (Phase 4)
+- ~~Representatie "80%" label hardcoded~~ → Leest repr_aftrek_pct uit DB (Phase 4)
 
 ## Ontbrekende Features (backlog)
-- **Factuur verwijderen/bewerken** — geen manier om een foutieve factuur te corrigeren
-- **Bon/factuur uploaden bij uitgave** — `uitgaven.pdf_pad` kolom bestaat maar geen upload widget
 - **Bank koppelen aan factuur/uitgave** — `koppeling_type`/`koppeling_id` kolommen bestaan maar geen UI
-- **Jaarafsluiting export naar PDF** — alles rendert alleen in browser, niet printbaar/exporteerbaar
 - **Browser auto-open** — `main.py` heeft `show=False`, browser opent niet automatisch
+- **Bank CSV per-transactie dedup** — alleen bestandsnaam-check, geen inhoudelijke dedup
 
 ---
 
@@ -258,6 +271,8 @@ Geen: user auth, BTW-administratie, loon/voorraad, email, real-time bank-API, au
 - Python 3.12+, type hints op functies
 - Async voor DB operaties
 - `ui.table` (NIET AG Grid), `ui.echart` voor charts
+- **Tabel selectie**: ALTIJD `selection='multiple'` op `ui.table`. NOOIT custom checkbox slots met `$parent.$emit` — die werken niet betrouwbaar. Gebruik `table.selected` (lijst van row dicts) en `table.on('selection', handler)`. Referentie: facturen.py, werkdagen.py.
+- Bij full `body` slot met selectie: `<q-checkbox v-model="props.selected" dense />` (Quasar-managed), NIET `v-model="props.row.selected"`. Referentie: bank.py.
 - Shared layout via `components/layout.py`
 - Elke pagina is `@ui.page('/route')` in eigen bestand
 - Tests met pytest + pytest-asyncio

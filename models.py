@@ -114,3 +114,13 @@ class FiscaleParams:
     zvw_pct: float = 0.0
     zvw_max_grondslag: float = 0.0
     repr_aftrek_pct: float = 80.0
+    # Eigen woning / Hillen / urencriterium (per jaar)
+    ew_forfait_pct: float = 0.35
+    villataks_grens: float = 1_350_000
+    wet_hillen_pct: float = 0.0
+    urencriterium: float = 1225
+    # IB-input velden (per jaar opgeslagen)
+    aov_premie: float = 0.0
+    woz_waarde: float = 0.0
+    hypotheekrente: float = 0.0
+    voorlopige_aanslag_betaald: float = 0.0

@@ -151,6 +151,9 @@ async def instellingen_page():
                                         flat dense round size="sm"
                                         :color="props.row.actief ? 'orange' : 'green'"
                                         @click="() => $parent.$emit('toggle', props.row)" />
+                                    <q-btn icon="delete" flat dense round size="sm"
+                                        color="negative"
+                                        @click="() => $parent.$emit('deleteklant', props.row)" />
                                 </q-td>
                             ''')
 
@@ -194,8 +197,30 @@ async def instellingen_page():
                                 ui.notify(f"{row['naam']} {status}", type='info')
                                 await refresh_klanten()
 
+                            async def on_delete_klant(e):
+                                row = e.args
+                                with ui.dialog() as dialog, ui.card():
+                                    ui.label(f"Klant '{row['naam']}' verwijderen?").classes('text-h6')
+                                    ui.label(
+                                        'Let op: werkdagen en facturen gekoppeld aan deze '
+                                        'klant worden NIET verwijderd.'
+                                    ).classes('text-body2 text-grey')
+                                    with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
+                                        ui.button('Annuleren', on_click=dialog.close).props('flat')
+
+                                        async def confirm_del(kid=row['id'], dlg=dialog):
+                                            await delete_klant(DB_PATH, klant_id=kid)
+                                            dlg.close()
+                                            ui.notify(f"Klant verwijderd", type='positive')
+                                            await refresh_klanten()
+
+                                        ui.button('Verwijderen', on_click=confirm_del) \
+                                            .props('color=negative')
+                                dialog.open()
+
                             table.on('edit', on_edit)
                             table.on('toggle', on_toggle)
+                            table.on('deleteklant', on_delete_klant)
 
                 await refresh_klanten()
 
@@ -208,6 +233,70 @@ async def instellingen_page():
                     params_list = await get_all_fiscale_params(DB_PATH)
 
                     with fiscaal_container:
+                        # "Add year" button
+                        with ui.row().classes('w-full items-center gap-4 q-mb-md'):
+                            new_jaar_input = ui.number(
+                                'Nieuw jaar', value=date.today().year + 1,
+                                format='%.0f', min=2023, step=1,
+                            ).classes('w-32')
+
+                            async def add_jaar():
+                                jaar = int(new_jaar_input.value or 0)
+                                if jaar < 2023:
+                                    ui.notify('Ongeldig jaar', type='warning')
+                                    return
+                                existing = [p.jaar for p in params_list]
+                                if jaar in existing:
+                                    ui.notify(f'{jaar} bestaat al', type='warning')
+                                    return
+                                # Copy from most recent year as template
+                                if params_list:
+                                    latest = params_list[-1]
+                                    kwargs = {
+                                        'jaar': jaar,
+                                        'zelfstandigenaftrek': latest.zelfstandigenaftrek,
+                                        'startersaftrek': latest.startersaftrek,
+                                        'mkb_vrijstelling_pct': latest.mkb_vrijstelling_pct,
+                                        'kia_ondergrens': latest.kia_ondergrens,
+                                        'kia_bovengrens': latest.kia_bovengrens,
+                                        'kia_pct': latest.kia_pct,
+                                        'km_tarief': latest.km_tarief,
+                                        'schijf1_grens': latest.schijf1_grens,
+                                        'schijf1_pct': latest.schijf1_pct,
+                                        'schijf2_grens': latest.schijf2_grens,
+                                        'schijf2_pct': latest.schijf2_pct,
+                                        'schijf3_pct': latest.schijf3_pct,
+                                        'ahk_max': latest.ahk_max,
+                                        'ahk_afbouw_pct': latest.ahk_afbouw_pct,
+                                        'ahk_drempel': latest.ahk_drempel,
+                                        'ak_max': latest.ak_max,
+                                        'zvw_pct': latest.zvw_pct,
+                                        'zvw_max_grondslag': latest.zvw_max_grondslag,
+                                        'repr_aftrek_pct': latest.repr_aftrek_pct,
+                                        'ew_forfait_pct': latest.ew_forfait_pct,
+                                        'villataks_grens': latest.villataks_grens,
+                                        'wet_hillen_pct': latest.wet_hillen_pct,
+                                        'urencriterium': latest.urencriterium,
+                                    }
+                                else:
+                                    kwargs = {'jaar': jaar, 'zelfstandigenaftrek': 0,
+                                              'mkb_vrijstelling_pct': 12.70,
+                                              'kia_ondergrens': 2901, 'kia_bovengrens': 70602,
+                                              'kia_pct': 28, 'km_tarief': 0.23,
+                                              'schijf1_grens': 38883, 'schijf1_pct': 35.75,
+                                              'schijf2_grens': 78426, 'schijf2_pct': 37.56,
+                                              'schijf3_pct': 49.50, 'ahk_max': 3115,
+                                              'ahk_afbouw_pct': 6.398, 'ahk_drempel': 29736,
+                                              'ak_max': 5685, 'zvw_pct': 4.85,
+                                              'zvw_max_grondslag': 79409}
+                                await upsert_fiscale_params(DB_PATH, **kwargs)
+                                ui.notify(f'Jaar {jaar} toegevoegd (kopieer van {params_list[-1].jaar if params_list else "standaard"})',
+                                          type='positive')
+                                await refresh_fiscaal()
+
+                            ui.button('Jaar toevoegen', icon='add',
+                                      on_click=add_jaar).props('color=primary')
+
                         if not params_list:
                             ui.label('Geen fiscale parameters gevonden.') \
                                 .classes('text-grey')
@@ -227,6 +316,7 @@ async def instellingen_page():
                                         ('KIA bovengrens', 'kia_bovengrens'),
                                         ('KIA %', 'kia_pct'),
                                         ('Km-tarief', 'km_tarief'),
+                                        ('Representatie aftrek %', 'repr_aftrek_pct'),
                                         ('Schijf 1 grens', 'schijf1_grens'),
                                         ('Schijf 1 %', 'schijf1_pct'),
                                         ('Schijf 2 grens', 'schijf2_grens'),
@@ -238,6 +328,10 @@ async def instellingen_page():
                                         ('AK max', 'ak_max'),
                                         ('ZVW %', 'zvw_pct'),
                                         ('ZVW max grondslag', 'zvw_max_grondslag'),
+                                        ('EW forfait %', 'ew_forfait_pct'),
+                                        ('Villataks grens', 'villataks_grens'),
+                                        ('Wet Hillen %', 'wet_hillen_pct'),
+                                        ('Urencriterium', 'urencriterium'),
                                     ]
                                     inputs = {}
                                     for label, key in fields:
@@ -249,7 +343,7 @@ async def instellingen_page():
                                         inputs[key] = inp
 
                                 async def save_params(jaar=params.jaar, inps=inputs):
-                                    kwargs = {'jaar': jaar, 'repr_aftrek_pct': 80}
+                                    kwargs = {'jaar': jaar}
                                     for label, key in fields:
                                         val = inps[key].value
                                         kwargs[key] = val if val else 0
@@ -285,11 +379,13 @@ async def instellingen_page():
                         # Database
                         if DB_PATH.exists():
                             zf.write(DB_PATH, 'boekhouding.sqlite3')
-                        # Factuur PDFs
-                        factuur_dir = DB_PATH.parent / "facturen"
-                        if factuur_dir.exists():
-                            for pdf in factuur_dir.glob("*.pdf"):
-                                zf.write(pdf, f"facturen/{pdf.name}")
+                        # Include all data subdirectories
+                        for subdir in ['facturen', 'uitgaven', 'jaarafsluiting', 'bank_csv']:
+                            dir_path = DB_PATH.parent / subdir
+                            if dir_path.exists():
+                                for f in dir_path.rglob('*'):
+                                    if f.is_file():
+                                        zf.write(f, f"{subdir}/{f.relative_to(dir_path)}")
 
                     ui.download(str(backup_path))
                     ui.notify(f'Backup {backup_name} aangemaakt', type='positive')
