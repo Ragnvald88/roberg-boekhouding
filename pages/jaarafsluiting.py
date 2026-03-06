@@ -6,6 +6,7 @@ from pathlib import Path
 from jinja2 import Environment, FileSystemLoader
 from nicegui import ui
 
+from components.fiscal_utils import fiscale_params_to_dict
 from components.layout import create_layout
 from components.utils import format_euro
 from database import (
@@ -21,41 +22,6 @@ from database import (
 )
 from fiscal.afschrijvingen import bereken_afschrijving
 from fiscal.berekeningen import FiscaalResultaat, bereken_volledig
-
-
-def _fiscale_params_to_dict(params) -> dict:
-    """Convert FiscaleParams dataclass to dict for bereken_volledig."""
-    return {
-        'jaar': params.jaar,
-        'zelfstandigenaftrek': params.zelfstandigenaftrek,
-        'startersaftrek': params.startersaftrek,
-        'mkb_vrijstelling_pct': params.mkb_vrijstelling_pct,
-        'kia_ondergrens': params.kia_ondergrens,
-        'kia_bovengrens': params.kia_bovengrens,
-        'kia_pct': params.kia_pct,
-        'km_tarief': params.km_tarief,
-        'schijf1_grens': params.schijf1_grens,
-        'schijf1_pct': params.schijf1_pct,
-        'schijf2_grens': params.schijf2_grens,
-        'schijf2_pct': params.schijf2_pct,
-        'schijf3_pct': params.schijf3_pct,
-        'ahk_max': params.ahk_max,
-        'ahk_afbouw_pct': params.ahk_afbouw_pct,
-        'ahk_drempel': params.ahk_drempel,
-        'ak_max': params.ak_max,
-        'zvw_pct': params.zvw_pct,
-        'zvw_max_grondslag': params.zvw_max_grondslag,
-        'repr_aftrek_pct': params.repr_aftrek_pct,
-        'ew_forfait_pct': params.ew_forfait_pct,
-        'villataks_grens': params.villataks_grens,
-        'wet_hillen_pct': params.wet_hillen_pct,
-        'urencriterium': params.urencriterium,
-        'pvv_premiegrondslag': params.pvv_premiegrondslag,
-        'pvv_aow_pct': params.pvv_aow_pct,
-        'pvv_anw_pct': params.pvv_anw_pct,
-        'pvv_wlz_pct': params.pvv_wlz_pct,
-        'arbeidskorting_brackets': params.arbeidskorting_brackets,
-    }
 
 
 @ui.page('/jaarafsluiting')
@@ -484,7 +450,7 @@ async def jaarafsluiting_page():
 
         ew_naar_partner = getattr(params, 'ew_naar_partner', True)
 
-        params_dict = _fiscale_params_to_dict(params)
+        params_dict = fiscale_params_to_dict(params)
 
         # Fetch data from database
         omzet = await get_omzet_totaal(DB_PATH, jaar)
@@ -604,7 +570,9 @@ async def jaarafsluiting_page():
             voorlopige_aanslag_zvw=va_zvw_val,
         )
 
-        # Update ew_naar_partner in state
+        # Save ew_naar_partner to DB and update state
+        from database import update_ew_naar_partner
+        await update_ew_naar_partner(DB_PATH, jaar=jaar, value=ew_partner_val)
         s['ew_naar_partner'] = ew_partner_val
 
         fiscaal = bereken_volledig(

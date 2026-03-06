@@ -102,8 +102,8 @@ async def dashboard_page():
         params = await get_fiscale_params(DB_PATH, jaar)
         if not params:
             return None
-        from pages.jaarafsluiting import _fiscale_params_to_dict
-        params_dict = _fiscale_params_to_dict(params)
+        from components.fiscal_utils import fiscale_params_to_dict
+        params_dict = fiscale_params_to_dict(params)
         omzet = await get_omzet_totaal(DB_PATH, jaar)
         repr_totaal = await get_representatie_totaal(DB_PATH, jaar)
         kosten_per_cat = await get_uitgaven_per_categorie(DB_PATH, jaar)

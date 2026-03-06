@@ -15,7 +15,7 @@ source .venv/bin/activate
 export DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib
 python main.py  # → http://127.0.0.1:8085
 
-# Tests (247 passing)
+# Tests (260 passing)
 DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib .venv/bin/python -m pytest tests/ -v
 ```
 
@@ -35,6 +35,7 @@ DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib .venv/bin/python -m pytest tests/ -
 - Shared layout via `components/layout.py`
 - Elke pagina is `@ui.page('/route')` in eigen bestand
 - `format_euro`/`format_datum` ALLEEN uit `components/utils.py`
+- **Fiscal utils**: `components/fiscal_utils.py` (shared `fiscale_params_to_dict` + `fetch_fiscal_data`)
 - **Fiscal engine**: `fiscal/berekeningen.py` (bereken_volledig waterfall + bereken_box3)
 - **Heffingskortingen**: `fiscal/heffingskortingen.py` (AK brackets + AHK)
 
@@ -64,7 +65,7 @@ Geen: user auth, BTW-administratie, loon/voorraad, email, real-time bank-API, au
 - **PVV rates**: `pvv_aow/anw/wlz_pct` columns (default 17.90/0.10/9.65), fallback to constants
 - **Box 3**: Per-jaar rendementen (bank/overig/schuld), heffingsvrij vermogen, tarief
 - **Alle andere**: ZA, SA, MKB%, KIA, AHK, AK, ZVW, schijf1/2/3, EW forfait, villataks, Wet Hillen, etc.
-- **Input velden** (preserved across param upserts): AOV, WOZ, hypotheekrente, VA IB, VA ZVW, partner, Box 3 saldi
+- **Input velden** (preserved across param upserts): AOV, WOZ, hypotheekrente, VA IB, VA ZVW, partner, Box 3 saldi, ew_naar_partner
 
 ### Fiscal engine
 - **Arbeidskorting input** = fiscale_winst (vóór ZA/SA/MKB), NOT belastbare_winst
@@ -78,11 +79,12 @@ Geen: user auth, BTW-administratie, loon/voorraad, email, real-time bank-API, au
 - **2023**: winst €62.522 → belastbare winst €45.801 → IB terug €415
 - **2024**: winst €95.145 → belastbare winst €76.776 → IB terug €3.137
 
-## Aangifte pagina
-5-tab interface: Overzicht (tax summary Box 1+3), Box 3 (input+calc), Partner, Documenten (checklist), Export (PDF placeholder)
+## Aangifte pagina (Invulhulp)
+5-tab invulhulp mirroring Belastingdienst IB-aangifte structure. Year defaults to vorig jaar.
+Each value shows BD field label + copy-to-clipboard (raw integer for portal input).
+Tabs: Winst uit onderneming, Prive & aftrek (inputs save to DB), Box 3 (inputs+calc), Overzicht (final summary), Documenten (upload checklist)
 
 ## Bekende Bugs
 
-- **DD-MM-YYYY datums**: 27+ werkdagen met verkeerd formaat in DB, onzichtbaar bij filters (`substr(datum,1,4)` faalt). Data-fix + input-validatie nodig.
 - **Bank CSV geen dedup**: Alleen bestandsnaam-check, geen per-transactie dedup. Dezelfde CSV met andere naam → duplicaten.
 - **delete_klant UI**: DB vangt FK violation, maar `instellingen.py` vangt de ValueError niet → geen nette foutmelding.

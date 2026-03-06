@@ -1,5 +1,8 @@
 """SQLite database: schema, connectie, en alle queries."""
 
+import re
+from datetime import date as _date
+
 import aiosqlite
 from pathlib import Path
 from models import (
@@ -245,7 +248,32 @@ async def init_db(db_path: Path = DB_PATH) -> None:
                     "WHERE jaar = ? AND box3_rendement_bank_pct = 1.03 "
                     "AND box3_heffingsvrij_vermogen = 57000",
                     (b3['heffingsvrij'], b3['bank'], b3['overig'], b3['schuld'], b3['tarief'], jaar))
+
+        # Data migration: fix DD-MM-YYYY dates → YYYY-MM-DD in uitgaven and werkdagen
+        for table in ('uitgaven', 'werkdagen'):
+            await conn.execute(
+                f"""UPDATE {table}
+                    SET datum = substr(datum,7,4) || '-' || substr(datum,4,2) || '-' || substr(datum,1,2)
+                    WHERE datum GLOB '[0-3][0-9]-[0-1][0-9]-[0-9][0-9][0-9][0-9]'"""
+            )
+
         await conn.commit()
+
+
+def _validate_datum(datum: str) -> str:
+    """Validate datum is a valid YYYY-MM-DD date. Raises ValueError if not."""
+    if not re.match(r'^\d{4}-\d{2}-\d{2}$', datum):
+        raise ValueError(
+            f"Datum moet YYYY-MM-DD formaat zijn, kreeg: '{datum}'"
+        )
+    # Also validate it's an actual calendar date
+    try:
+        _date.fromisoformat(datum)
+    except ValueError:
+        raise ValueError(
+            f"Ongeldige datum: '{datum}'"
+        )
+    return datum
 
 
 # === Bedrijfsgegevens ===
@@ -394,6 +422,7 @@ async def get_werkdagen(db_path: Path = DB_PATH, jaar: int = None,
 
 
 async def add_werkdag(db_path: Path = DB_PATH, **kwargs) -> int:
+    _validate_datum(kwargs['datum'])
     conn = await get_db(db_path)
     try:
         cursor = await conn.execute(
@@ -417,6 +446,8 @@ async def add_werkdag(db_path: Path = DB_PATH, **kwargs) -> int:
 
 
 async def update_werkdag(db_path: Path = DB_PATH, werkdag_id: int = 0, **kwargs) -> None:
+    if 'datum' in kwargs:
+        _validate_datum(kwargs['datum'])
     conn = await get_db(db_path)
     try:
         fields = []
@@ -645,6 +676,7 @@ async def get_uitgaven(db_path: Path = DB_PATH, jaar: int = None,
 
 
 async def add_uitgave(db_path: Path = DB_PATH, **kwargs) -> int:
+    _validate_datum(kwargs['datum'])
     conn = await get_db(db_path)
     try:
         cursor = await conn.execute(
@@ -666,6 +698,8 @@ async def add_uitgave(db_path: Path = DB_PATH, **kwargs) -> int:
 
 
 async def update_uitgave(db_path: Path = DB_PATH, uitgave_id: int = 0, **kwargs) -> None:
+    if 'datum' in kwargs:
+        _validate_datum(kwargs['datum'])
     conn = await get_db(db_path)
     try:
         fields = []
@@ -921,12 +955,13 @@ async def get_all_fiscale_params(db_path: Path = DB_PATH) -> list[FiscaleParams]
 async def upsert_fiscale_params(db_path: Path = DB_PATH, **kwargs) -> None:
     conn = await get_db(db_path)
     try:
-        # Preserve IB-input, partner, and box3 input values when overwriting from Instellingen
+        # Preserve IB-input, partner, box3 input, and ew_naar_partner when overwriting from Instellingen
         cur = await conn.execute(
             "SELECT aov_premie, woz_waarde, hypotheekrente, "
             "voorlopige_aanslag_betaald, voorlopige_aanslag_zvw, "
             "partner_bruto_loon, partner_loonheffing, "
-            "box3_bank_saldo, box3_overige_bezittingen, box3_schulden "
+            "box3_bank_saldo, box3_overige_bezittingen, box3_schulden, "
+            "ew_naar_partner "
             "FROM fiscale_params WHERE jaar = ?",
             (kwargs['jaar'],))
         existing = await cur.fetchone()
@@ -944,10 +979,11 @@ async def upsert_fiscale_params(db_path: Path = DB_PATH, **kwargs) -> None:
                 box3_rendement_overig_pct, box3_rendement_schuld_pct, box3_tarief_pct,
                 aov_premie, woz_waarde, hypotheekrente, voorlopige_aanslag_betaald,
                 voorlopige_aanslag_zvw, partner_bruto_loon, partner_loonheffing,
-                box3_bank_saldo, box3_overige_bezittingen, box3_schulden)
+                box3_bank_saldo, box3_overige_bezittingen, box3_schulden,
+                ew_naar_partner)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                       ?, ?, ?, ?)""",
+                       ?, ?, ?, ?, ?)""",
             (kwargs['jaar'], kwargs['zelfstandigenaftrek'], kwargs.get('startersaftrek'),
              kwargs['mkb_vrijstelling_pct'], kwargs['kia_ondergrens'],
              kwargs['kia_bovengrens'], kwargs['kia_pct'], kwargs['km_tarief'],
@@ -979,7 +1015,8 @@ async def upsert_fiscale_params(db_path: Path = DB_PATH, **kwargs) -> None:
              existing['partner_loonheffing'] if existing else 0,
              existing['box3_bank_saldo'] if existing else 0,
              existing['box3_overige_bezittingen'] if existing else 0,
-             existing['box3_schulden'] if existing else 0)
+             existing['box3_schulden'] if existing else 0,
+             existing['ew_naar_partner'] if existing else 1)
         )
         await conn.commit()
     finally:
@@ -1003,6 +1040,23 @@ async def update_ib_inputs(db_path: Path = DB_PATH, jaar: int = 0,
             (aov_premie, woz_waarde, hypotheekrente,
              voorlopige_aanslag_betaald, voorlopige_aanslag_zvw, jaar))
         await conn.commit()
+    finally:
+        await conn.close()
+
+
+async def update_ew_naar_partner(db_path: Path = DB_PATH, jaar: int = 0,
+                                  value: bool = True) -> bool:
+    """Update ew_naar_partner flag for a specific year.
+
+    Returns True if a row was updated, False if no fiscale_params row exists.
+    """
+    conn = await get_db(db_path)
+    try:
+        cursor = await conn.execute(
+            "UPDATE fiscale_params SET ew_naar_partner = ? WHERE jaar = ?",
+            (1 if value else 0, jaar))
+        await conn.commit()
+        return cursor.rowcount > 0
     finally:
         await conn.close()
 
