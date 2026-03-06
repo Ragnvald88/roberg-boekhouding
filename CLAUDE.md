@@ -15,7 +15,7 @@ source .venv/bin/activate
 export DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib
 python main.py  # → http://127.0.0.1:8085
 
-# Tests (123 passing)
+# Tests (247 passing)
 DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib .venv/bin/python -m pytest tests/ -v
 ```
 
@@ -35,6 +35,8 @@ DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib .venv/bin/python -m pytest tests/ -
 - Shared layout via `components/layout.py`
 - Elke pagina is `@ui.page('/route')` in eigen bestand
 - `format_euro`/`format_datum` ALLEEN uit `components/utils.py`
+- **Fiscal engine**: `fiscal/berekeningen.py` (bereken_volledig waterfall + bereken_box3)
+- **Heffingskortingen**: `fiscal/heffingskortingen.py` (AK brackets + AHK)
 
 ### NiceGUI Patronen
 - `ui.table` (NIET AG Grid), `ui.echart` voor charts
@@ -47,6 +49,8 @@ DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib .venv/bin/python -m pytest tests/ -
 Geen: user auth, BTW-administratie, loon/voorraad, email, real-time bank-API, auto-matching, CI/CD, multi-language
 
 ## Domeinkennis (fiscaal)
+
+### Basisregels
 - **BTW-vrijgesteld** (art. 11 Wet OB) → kosten INCL BTW, geen BTW-aangifte
 - **Urencriterium**: 1.225 uur/jaar. Achterwacht (urennorm=0) telt NIET mee
 - **AOV**: GEEN bedrijfskosten → Box 1 inkomensvoorziening
@@ -55,13 +59,30 @@ Geen: user auth, BTW-administratie, loon/voorraad, email, real-time bank-API, au
 - **Representatie**: 80%-regeling (configureerbaar in `fiscale_params`)
 - **Factuur vereisten**: naam+adres+KvK, factuurnummer YYYY-NNN, vervaldatum 14d, BTW-vrijstellingstekst
 
+### DB-driven parameters (alle configureerbaar in Instellingen)
+- **Arbeidskorting**: JSON brackets in `arbeidskorting_brackets` column, fallback to Python constants in `heffingskortingen.py`
+- **PVV rates**: `pvv_aow/anw/wlz_pct` columns (default 17.90/0.10/9.65), fallback to constants
+- **Box 3**: Per-jaar rendementen (bank/overig/schuld), heffingsvrij vermogen, tarief
+- **Alle andere**: ZA, SA, MKB%, KIA, AHK, AK, ZVW, schijf1/2/3, EW forfait, villataks, Wet Hillen, etc.
+- **Input velden** (preserved across param upserts): AOV, WOZ, hypotheekrente, VA IB, VA ZVW, partner, Box 3 saldi
+
+### Fiscal engine
+- **Arbeidskorting input** = fiscale_winst (vóór ZA/SA/MKB), NOT belastbare_winst
+- **Tariefsaanpassing**: Since 2023, deductions at basistarief only. Excess clawed back.
+- **Eigen woning**: Configurable `ew_naar_partner`. Default True (Boekhouder practice).
+- **ZVW grondslag** = belastbare_winst, NOT verzamelinkomen
+- **PVV** = 27.65% over min(verzamelinkomen, premiegrondslag)
+- **PVV premiegrondslag**: 2024=38098, 2025+ = schijf1_grens
+
 ### Boekhouder referentiecijfers (tests valideren hiertegen)
 - **2023**: winst €62.522 → belastbare winst €45.801 → IB terug €415
 - **2024**: winst €95.145 → belastbare winst €76.776 → IB terug €3.137
+
+## Aangifte pagina
+5-tab interface: Overzicht (tax summary Box 1+3), Box 3 (input+calc), Partner, Documenten (checklist), Export (PDF placeholder)
 
 ## Bekende Bugs
 
 - **DD-MM-YYYY datums**: 27+ werkdagen met verkeerd formaat in DB, onzichtbaar bij filters (`substr(datum,1,4)` faalt). Data-fix + input-validatie nodig.
 - **Bank CSV geen dedup**: Alleen bestandsnaam-check, geen per-transactie dedup. Dezelfde CSV met andere naam → duplicaten.
 - **delete_klant UI**: DB vangt FK violation, maar `instellingen.py` vangt de ValueError niet → geen nette foutmelding.
-- **fiscale_params NULL-risico**: 15 velden in `_row_to_fiscale_params` missen NULL-guards. Geen crash nu, maar bij ontbrekende DB-waarden kan None in berekeningen terechtkomen.
