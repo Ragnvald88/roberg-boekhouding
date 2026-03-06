@@ -48,7 +48,7 @@ FISCALE_PARAMS = {
         "schijf3_pct": 49.50,
         "ahk_max": 3362, "ahk_afbouw_pct": 6.63, "ahk_drempel": 24812,
         "ak_max": 5532,
-        "zvw_pct": 5.32, "zvw_max_grondslag": 71628,
+        "zvw_pct": 5.32, "zvw_max_grondslag": 71624,
         "repr_aftrek_pct": 80,
         "ew_forfait_pct": 0.35, "villataks_grens": 1_310_000,
         "wet_hillen_pct": 80.0, "urencriterium": 1225,
@@ -65,7 +65,7 @@ FISCALE_PARAMS = {
         "schijf3_pct": 49.50,
         "ahk_max": 3068, "ahk_afbouw_pct": 6.337, "ahk_drempel": 28406,
         "ak_max": 5599,
-        "zvw_pct": 5.26, "zvw_max_grondslag": 75864,
+        "zvw_pct": 5.26, "zvw_max_grondslag": 75860,
         "repr_aftrek_pct": 80,
         "ew_forfait_pct": 0.35, "villataks_grens": 1_330_000,
         "wet_hillen_pct": 76.667, "urencriterium": 1225,
@@ -73,7 +73,7 @@ FISCALE_PARAMS = {
     },
     2026: {
         "jaar": 2026,
-        "zelfstandigenaftrek": 1200, "startersaftrek": None,
+        "zelfstandigenaftrek": 1200, "startersaftrek": 2123,
         "mkb_vrijstelling_pct": 12.70,
         "kia_ondergrens": 2901, "kia_bovengrens": 70602, "kia_pct": 28,
         "km_tarief": 0.23,
@@ -456,9 +456,10 @@ class TestVolledig:
         )
         assert result.belastbare_winst > result_met.belastbare_winst
 
-    def test_volledig_startersaftrek_none(self):
-        """2026: startersaftrek = None, moet als 0 behandeld worden."""
-        params = FISCALE_PARAMS[2026]
+    def test_volledig_startersaftrek_none_treated_as_zero(self):
+        """When startersaftrek is explicitly None/0 in params, it should be 0."""
+        params = FISCALE_PARAMS[2026].copy()
+        params['startersaftrek'] = None
         result = bereken_volledig(
             omzet=80000, kosten=10000, afschrijvingen=0,
             representatie=0, investeringen_totaal=0,
@@ -517,6 +518,16 @@ class TestVolledig:
         )
         assert result.belastbare_winst == 0
         assert result.netto_ib == 0
+
+    def test_startersaftrek_2026_not_abolished(self):
+        """Startersaftrek 2026 is still EUR 2,123 (confirmed by Belastingdienst)."""
+        params = FISCALE_PARAMS[2026].copy()
+        result = bereken_volledig(
+            omzet=80000, kosten=0, afschrijvingen=0,
+            representatie=0, investeringen_totaal=0,
+            uren=1400, params=params,
+        )
+        assert result.startersaftrek == 2123
 
 
 # ============================================================
