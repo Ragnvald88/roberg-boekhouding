@@ -318,6 +318,24 @@ async def jaarafsluiting_page():
                 ui.separator().classes('my-1')
                 _waterfall_line('Bruto inkomstenbelasting',
                                 fiscaal.bruto_ib)
+                if fiscaal.tariefsaanpassing > 0:
+                    _waterfall_line('+ Tariefsaanpassing (beperking aftrek)',
+                                    fiscaal.tariefsaanpassing)
+
+                # IB/PVV split (expandable)
+                with ui.expansion('IB/PVV uitsplitsing').classes(
+                        'w-full text-caption').props('dense'):
+                    _waterfall_line('IB (excl. premies)',
+                                    fiscaal.ib_alleen)
+                    _waterfall_line('PVV premies volksverzekeringen',
+                                    fiscaal.pvv, bold=True)
+                    _waterfall_line('  - AOW premie (17,90%)',
+                                    fiscaal.pvv_aow)
+                    _waterfall_line('  - Anw premie (0,10%)',
+                                    fiscaal.pvv_anw)
+                    _waterfall_line('  - Wlz premie (9,65%)',
+                                    fiscaal.pvv_wlz)
+
                 _waterfall_line('- Algemene heffingskorting',
                                 fiscaal.ahk)
                 _waterfall_line('- Arbeidskorting',
@@ -328,25 +346,46 @@ async def jaarafsluiting_page():
                 ui.separator().classes('my-1')
                 _waterfall_line('ZVW-bijdrage', fiscaal.zvw)
 
-                if fiscaal.voorlopige_aanslag > 0:
-                    _waterfall_line('Voorlopige aanslag betaald',
-                                    fiscaal.voorlopige_aanslag)
-
                 ui.separator().classes('my-2')
 
-                # Result with color coding
+                # Separate IB and ZVW results
+                def _result_line(label, bedrag):
+                    color = ('text-positive' if bedrag < 0
+                             else 'text-negative' if bedrag > 0
+                             else '')
+                    prefix = 'terug' if bedrag < 0 else 'bij' if bedrag > 0 else ''
+                    tekst = (f'{format_euro(abs(bedrag))} ({prefix})'
+                             if bedrag != 0 else format_euro(0))
+                    with ui.row().classes(
+                            'w-full justify-between items-center'):
+                        ui.label(label).classes('text-body2')
+                        ui.label(tekst).classes(f'text-body2 {color}')
+
+                if fiscaal.voorlopige_aanslag > 0 or fiscaal.voorlopige_aanslag_zvw > 0:
+                    ui.label('Resultaat').classes('text-subtitle2 q-mt-sm')
+                    _result_line(
+                        f'IB: {format_euro(fiscaal.netto_ib)} − VA '
+                        f'{format_euro(fiscaal.voorlopige_aanslag)}',
+                        fiscaal.resultaat_ib)
+                    _result_line(
+                        f'ZVW: {format_euro(fiscaal.zvw)} − VA '
+                        f'{format_euro(fiscaal.voorlopige_aanslag_zvw)}',
+                        fiscaal.resultaat_zvw)
+                    ui.separator().classes('my-1')
+
+                # Total result with color coding
                 resultaat = fiscaal.resultaat
                 if resultaat < 0:
                     with ui.row().classes(
                             'w-full justify-between items-center'):
-                        ui.label('Terug te ontvangen').classes(
+                        ui.label('Totaal terug te ontvangen').classes(
                             'text-bold text-h6')
                         ui.label(format_euro(abs(resultaat))).classes(
                             'text-bold text-h6 text-positive')
                 elif resultaat > 0:
                     with ui.row().classes(
                             'w-full justify-between items-center'):
-                        ui.label('Bij te betalen').classes(
+                        ui.label('Totaal bij te betalen').classes(
                             'text-bold text-h6')
                         ui.label(format_euro(resultaat)).classes(
                             'text-bold text-h6 text-negative')

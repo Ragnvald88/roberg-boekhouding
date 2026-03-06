@@ -2,6 +2,7 @@
 
 from datetime import date
 import io
+import json
 import zipfile
 
 from nicegui import ui
@@ -376,6 +377,15 @@ async def instellingen_page():
                                         'villataks_grens': latest.villataks_grens,
                                         'wet_hillen_pct': latest.wet_hillen_pct,
                                         'urencriterium': latest.urencriterium,
+                                        'arbeidskorting_brackets': latest.arbeidskorting_brackets,
+                                        'pvv_aow_pct': latest.pvv_aow_pct,
+                                        'pvv_anw_pct': latest.pvv_anw_pct,
+                                        'pvv_wlz_pct': latest.pvv_wlz_pct,
+                                        'box3_heffingsvrij_vermogen': latest.box3_heffingsvrij_vermogen,
+                                        'box3_rendement_bank_pct': latest.box3_rendement_bank_pct,
+                                        'box3_rendement_overig_pct': latest.box3_rendement_overig_pct,
+                                        'box3_rendement_schuld_pct': latest.box3_rendement_schuld_pct,
+                                        'box3_tarief_pct': latest.box3_tarief_pct,
                                     }
                                 else:
                                     kwargs = {'jaar': jaar, 'zelfstandigenaftrek': 0,
@@ -442,14 +452,126 @@ async def instellingen_page():
                                         ).classes('w-full')
                                         inputs[key] = inp
 
-                                async def save_params(jaar=params.jaar, inps=inputs):
+                                # --- PVV premies ---
+                                ui.label('PVV premies').classes(
+                                    'text-subtitle2 mt-4')
+                                pvv_fields = [
+                                    ('AOW premie %', 'pvv_aow_pct'),
+                                    ('Anw premie %', 'pvv_anw_pct'),
+                                    ('Wlz premie %', 'pvv_wlz_pct'),
+                                ]
+                                with ui.row().classes('gap-4'):
+                                    for label, key in pvv_fields:
+                                        val = getattr(params, key)
+                                        inp = ui.number(
+                                            label,
+                                            value=val if val is not None else 0,
+                                            format='%.2f', step=0.01,
+                                        )
+                                        inputs[key] = inp
+
+                                # --- Box 3 parameters ---
+                                ui.label('Box 3 parameters').classes(
+                                    'text-subtitle2 mt-4')
+                                box3_fields = [
+                                    ('Heffingsvrij vermogen p.p. \u20ac',
+                                     'box3_heffingsvrij_vermogen', '%.0f', 1),
+                                    ('Rendement bank %',
+                                     'box3_rendement_bank_pct', '%.2f', 0.01),
+                                    ('Rendement overig %',
+                                     'box3_rendement_overig_pct', '%.2f', 0.01),
+                                    ('Rendement schuld %',
+                                     'box3_rendement_schuld_pct', '%.2f', 0.01),
+                                    ('Box 3 tarief %',
+                                     'box3_tarief_pct', '%.0f', 1),
+                                ]
+                                with ui.row().classes('gap-4 flex-wrap'):
+                                    for label, key, fmt, step in box3_fields:
+                                        val = getattr(params, key)
+                                        inp = ui.number(
+                                            label,
+                                            value=val if val is not None else 0,
+                                            format=fmt, step=step,
+                                        )
+                                        inputs[key] = inp
+
+                                # --- Arbeidskorting schijven (read-only) ---
+                                ui.label('Arbeidskorting schijven').classes(
+                                    'text-subtitle2 mt-4')
+                                if params.arbeidskorting_brackets:
+                                    try:
+                                        brackets = json.loads(
+                                            params.arbeidskorting_brackets)
+                                        ak_columns = [
+                                            {'name': 'lower',
+                                             'label': 'Ondergrens',
+                                             'field': 'lower',
+                                             'align': 'right'},
+                                            {'name': 'upper',
+                                             'label': 'Bovengrens',
+                                             'field': 'upper',
+                                             'align': 'right'},
+                                            {'name': 'rate',
+                                             'label': 'Tarief %',
+                                             'field': 'rate',
+                                             'align': 'right'},
+                                            {'name': 'base',
+                                             'label': 'Basisbedrag',
+                                             'field': 'base',
+                                             'align': 'right'},
+                                        ]
+                                        ak_rows = []
+                                        for b in brackets:
+                                            ak_rows.append({
+                                                'lower': (
+                                                    f"\u20ac {b['lower']:,.0f}"),
+                                                'upper': (
+                                                    f"\u20ac {b['upper']:,.0f}"
+                                                    if b['upper']
+                                                    else '\u221e'),
+                                                'rate': (
+                                                    f"{b['rate']*100:.3f}%"),
+                                                'base': (
+                                                    f"\u20ac {b['base']:,.0f}"),
+                                            })
+                                        ui.table(
+                                            columns=ak_columns, rows=ak_rows,
+                                        ).classes('w-full').props(
+                                            'dense flat')
+                                    except (json.JSONDecodeError, KeyError):
+                                        ui.label(
+                                            'Geen bracket data beschikbaar'
+                                        ).classes('text-grey')
+                                else:
+                                    ui.label(
+                                        'Brackets uit standaard Python-code'
+                                    ).classes('text-grey')
+
+                                # --- Save button ---
+                                # Capture all_fields for save closure
+                                all_fields = (
+                                    fields
+                                    + pvv_fields
+                                    + [(l, k) for l, k, _f, _s
+                                       in box3_fields]
+                                )
+
+                                async def save_params(
+                                    jaar=params.jaar, inps=inputs,
+                                    af=all_fields,
+                                    ak_json=params.arbeidskorting_brackets,
+                                ):
                                     kwargs = {'jaar': jaar}
-                                    for label, key in fields:
+                                    for _label, key in af:
                                         val = inps[key].value
                                         kwargs[key] = val if val else 0
-                                    await upsert_fiscale_params(DB_PATH, **kwargs)
-                                    ui.notify(f'Parameters {jaar} opgeslagen',
-                                              type='positive')
+                                    # Pass through AK brackets unchanged
+                                    kwargs['arbeidskorting_brackets'] = ak_json
+                                    await upsert_fiscale_params(
+                                        DB_PATH, **kwargs)
+                                    ui.notify(
+                                        f'Parameters {jaar} opgeslagen',
+                                        type='positive')
 
                                 ui.button(
                                     f'Opslaan {params.jaar}', icon='save',

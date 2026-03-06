@@ -160,6 +160,20 @@
 <tr class="sep"><td class="bold">Verzamelinkomen</td>
     <td class="value bold">{{ f.verzamelinkomen|euro }}</td></tr>
 <tr><td>Bruto IB</td><td class="value">{{ f.bruto_ib|euro }}</td></tr>
+{% if f.tariefsaanpassing > 0 %}
+<tr><td>+ Tariefsaanpassing (beperking aftrek)</td>
+    <td class="value">{{ f.tariefsaanpassing|euro }}</td></tr>
+{% endif %}
+<tr><td style="padding-left:8mm">IB (excl. premies)</td>
+    <td class="value">{{ f.ib_alleen|euro }}</td></tr>
+<tr><td style="padding-left:8mm">PVV premies (27,65%)</td>
+    <td class="value">{{ f.pvv|euro }}</td></tr>
+<tr><td style="padding-left:12mm; font-size:0.85em">AOW (17,90%)</td>
+    <td class="value" style="font-size:0.85em">{{ f.pvv_aow|euro }}</td></tr>
+<tr><td style="padding-left:12mm; font-size:0.85em">Anw (0,10%)</td>
+    <td class="value" style="font-size:0.85em">{{ f.pvv_anw|euro }}</td></tr>
+<tr><td style="padding-left:12mm; font-size:0.85em">Wlz (9,65%)</td>
+    <td class="value" style="font-size:0.85em">{{ f.pvv_wlz|euro }}</td></tr>
 <tr><td>- Algemene heffingskorting</td>
     <td class="value">{{ f.ahk|euro }}</td></tr>
 <tr><td>- Arbeidskorting</td>
@@ -167,19 +181,30 @@
 <tr class="sep"><td class="bold">Netto IB</td>
     <td class="value bold">{{ f.netto_ib|euro }}</td></tr>
 <tr><td>ZVW-bijdrage</td><td class="value">{{ f.zvw|euro }}</td></tr>
-{% if f.voorlopige_aanslag > 0 %}
-<tr><td>Voorlopige aanslag betaald</td>
-    <td class="value">{{ f.voorlopige_aanslag|euro }}</td></tr>
-{% endif %}
 </table>
+
+{% if f.voorlopige_aanslag > 0 or f.voorlopige_aanslag_zvw > 0 %}
+<table style="width:100%; margin-top:3mm">
+<tr><td class="bold">Resultaat IB</td>
+    <td class="value">{{ f.netto_ib|euro }} − VA {{ f.voorlopige_aanslag|euro }} =
+    {% if f.resultaat_ib < 0 %}<span style="color:#16A34A">{{ f.resultaat_ib|abs|euro }} terug</span>
+    {% elif f.resultaat_ib > 0 %}<span style="color:#DC2626">{{ f.resultaat_ib|euro }} bij</span>
+    {% else %}{{ 0|euro }}{% endif %}</td></tr>
+<tr><td class="bold">Resultaat ZVW</td>
+    <td class="value">{{ f.zvw|euro }} − VA {{ f.voorlopige_aanslag_zvw|euro }} =
+    {% if f.resultaat_zvw < 0 %}<span style="color:#16A34A">{{ f.resultaat_zvw|abs|euro }} terug</span>
+    {% elif f.resultaat_zvw > 0 %}<span style="color:#DC2626">{{ f.resultaat_zvw|euro }} bij</span>
+    {% else %}{{ 0|euro }}{% endif %}</td></tr>
+</table>
+{% endif %}
 
 {% if f.resultaat < 0 %}
 <div class="result-box result-positive">
-  Terug te ontvangen: {{ f.resultaat|abs|euro }}
+  Totaal terug te ontvangen: {{ f.resultaat|abs|euro }}
 </div>
 {% elif f.resultaat > 0 %}
 <div class="result-box result-negative">
-  Bij te betalen: {{ f.resultaat|euro }}
+  Totaal bij te betalen: {{ f.resultaat|euro }}
 </div>
 {% else %}
 <div class="result-box result-neutral">Resultaat: {{ 0|euro }}</div>
