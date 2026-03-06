@@ -844,6 +844,42 @@ class TestArbeidskortingInput:
         assert result.arbeidskorting < 2100
 
 
+class TestDBDrivenArbeidskorting:
+    """Arbeidskorting should work with JSON brackets from DB."""
+
+    def test_json_brackets_match_python_constants_2024(self):
+        """JSON brackets produce same result as Python constants."""
+        import json
+        brackets_json = json.dumps([
+            {"lower": 0, "upper": 11491, "rate": 0.08425, "base": 0},
+            {"lower": 11491, "upper": 24821, "rate": 0.31433, "base": 968},
+            {"lower": 24821, "upper": 39958, "rate": 0.02471, "base": 5158},
+            {"lower": 39958, "upper": 124935, "rate": -0.06510, "base": 5532},
+            {"lower": 124935, "upper": None, "rate": 0, "base": 0},
+        ])
+        # Compare JSON-driven vs Python-constant for several incomes
+        for income in [5000, 15000, 30000, 50000, 80000, 130000]:
+            from_json = bereken_arbeidskorting(income, 2024, brackets_json=brackets_json)
+            from_python = bereken_arbeidskorting(income, 2024)
+            assert from_json == from_python, f"Mismatch at income {income}: {from_json} != {from_python}"
+
+    def test_json_brackets_custom_future_year(self):
+        """Custom brackets for a hypothetical future year."""
+        import json
+        brackets_json = json.dumps([
+            {"lower": 0, "upper": 10000, "rate": 0.10, "base": 0},
+            {"lower": 10000, "upper": None, "rate": 0, "base": 1000},
+        ])
+        result = bereken_arbeidskorting(5000, 2099, brackets_json=brackets_json)
+        assert result == 500.0  # 5000 * 0.10
+
+    def test_empty_brackets_json_falls_back(self):
+        """Empty brackets_json should fall back to Python constants."""
+        result = bereken_arbeidskorting(50000, 2024, brackets_json='')
+        from_python = bereken_arbeidskorting(50000, 2024)
+        assert result == from_python
+
+
 class TestIBPVVSplit:
     """IB/PVV split and separate voorlopige aanslag (Task 4+9)."""
 
@@ -1173,6 +1209,84 @@ class TestAfschrijvingValidation:
         """restwaarde_pct > 100 should be clamped to 100 (0 depreciation)."""
         result = bereken_afschrijving(1000, 150, 5, 6, 2024, 2024)
         assert result['afschrijving'] == 0
+
+
+class TestDBDrivenPVV:
+    """PVV rates should be configurable via params."""
+
+    def test_pvv_from_params_matches_constants(self):
+        """DB-driven PVV with default rates should match constant-based."""
+        params = FISCALE_PARAMS[2024].copy()
+        params['pvv_aow_pct'] = 17.90
+        params['pvv_anw_pct'] = 0.10
+        params['pvv_wlz_pct'] = 9.65
+        result = bereken_volledig(
+            omzet=95145.69, kosten=29192.35, afschrijvingen=960,
+            representatie=533.55, investeringen_totaal=0,
+            uren=1400, params=params,
+        )
+        # Should match the Boekhouder reference
+        assert abs(result.pvv - 10526) < 20
+
+
+class TestBox3:
+    """Tests for Box 3 forfaitair rendement calculation."""
+
+    def test_box3_zero_vermogen(self):
+        """No assets = no tax."""
+        from fiscal.berekeningen import bereken_box3
+        params = {'box3_bank_saldo': 0, 'box3_overige_bezittingen': 0, 'box3_schulden': 0}
+        result = bereken_box3(params)
+        assert result.belasting == 0
+        assert result.grondslag == 0
+
+    def test_box3_below_heffingsvrij(self):
+        """Assets below heffingsvrij vermogen = no tax."""
+        from fiscal.berekeningen import bereken_box3
+        params = {
+            'box3_bank_saldo': 50000, 'box3_overige_bezittingen': 0, 'box3_schulden': 0,
+            'box3_heffingsvrij_vermogen': 57000, 'box3_rendement_bank_pct': 1.03,
+            'box3_rendement_overig_pct': 6.17, 'box3_rendement_schuld_pct': 2.46,
+            'box3_tarief_pct': 36,
+        }
+        result = bereken_box3(params, fiscaal_partner=True)
+        # 50000 < 57000*2 = 114000, so grondslag = 0
+        assert result.grondslag == 0
+        assert result.belasting == 0
+
+    def test_box3_with_partner(self):
+        """Partner doubles heffingsvrij vermogen."""
+        from fiscal.berekeningen import bereken_box3
+        params = {
+            'box3_bank_saldo': 100000, 'box3_overige_bezittingen': 0, 'box3_schulden': 0,
+            'box3_heffingsvrij_vermogen': 57000, 'box3_rendement_bank_pct': 1.03,
+            'box3_rendement_overig_pct': 6.17, 'box3_rendement_schuld_pct': 2.46,
+            'box3_tarief_pct': 36,
+        }
+        with_partner = bereken_box3(params, fiscaal_partner=True)
+        without_partner = bereken_box3(params, fiscaal_partner=False)
+        # With partner: 100000 - 114000 = 0 (below threshold)
+        assert with_partner.grondslag == 0
+        # Without partner: 100000 - 57000 = 43000
+        assert without_partner.grondslag == 43000
+        assert without_partner.belasting > 0
+
+    def test_box3_2024_realistic(self):
+        """Realistic 2024 scenario with bank + beleggingen."""
+        from fiscal.berekeningen import bereken_box3
+        params = {
+            'box3_bank_saldo': 80000, 'box3_overige_bezittingen': 50000, 'box3_schulden': 10000,
+            'box3_heffingsvrij_vermogen': 57000, 'box3_rendement_bank_pct': 1.03,
+            'box3_rendement_overig_pct': 6.17, 'box3_rendement_schuld_pct': 2.46,
+            'box3_tarief_pct': 36,
+        }
+        result = bereken_box3(params, fiscaal_partner=False)
+        # bezittingen=130000, schulden=10000, netto=120000, heffingsvrij=57000, grondslag=63000
+        assert result.totaal_bezittingen == 130000
+        assert result.grondslag == 63000
+        assert result.rendement_bank == round(80000 * 0.0103, 2)
+        assert result.rendement_overig == round(50000 * 0.0617, 2)
+        assert result.belasting > 0
 
 
 class TestFormatDatum:

@@ -63,17 +63,31 @@ def bereken_algemene_heffingskorting(verzamelinkomen: float, jaar: int,
     return max(0, round(ahk_max - afbouw, 2))
 
 
-def bereken_arbeidskorting(arbeidsinkomen: float, jaar: int) -> float:
+def bereken_arbeidskorting(arbeidsinkomen: float, jaar: int,
+                           brackets_json: str = '') -> float:
     """Calculate arbeidskorting using full year-specific bracket tables.
 
     Args:
         arbeidsinkomen: Labour income (winst uit onderneming counts).
         jaar: Tax year (must be in ARBEIDSKORTING_BRACKETS).
+        brackets_json: Optional JSON string with bracket definitions from DB.
+            Format: [{"lower": 0, "upper": 11491, "rate": 0.08425, "base": 0}, ...]
+            If provided and non-empty, overrides Python constant lookup.
 
     Returns:
         Arbeidskorting in euros (rounded to 2 decimals, minimum 0).
         Falls back to most recent known year if no table exists.
     """
+    if brackets_json:
+        import json
+        json_brackets = json.loads(brackets_json)
+        for b in json_brackets:
+            lower, upper, rate, base = b['lower'], b['upper'], b['rate'], b['base']
+            if upper is None or arbeidsinkomen <= upper:
+                korting = base + rate * (arbeidsinkomen - lower)
+                return round(max(0, korting), 2)
+        return 0.0
+
     brackets = ARBEIDSKORTING_BRACKETS.get(jaar)
     if not brackets:
         # Fallback to most recent known year

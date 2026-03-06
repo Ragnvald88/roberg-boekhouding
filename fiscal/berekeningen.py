@@ -104,6 +104,72 @@ class FiscaalResultaat:
     waarschuwingen: list[str] = field(default_factory=list)
 
 
+@dataclass
+class Box3Resultaat:
+    """Result of Box 3 (sparen en beleggen) calculation."""
+    bank_saldo: float = 0.0
+    overige_bezittingen: float = 0.0
+    schulden: float = 0.0
+    totaal_bezittingen: float = 0.0
+    rendement_bank: float = 0.0
+    rendement_overig: float = 0.0
+    rendement_schuld: float = 0.0
+    totaal_rendement: float = 0.0
+    heffingsvrij: float = 0.0
+    grondslag: float = 0.0
+    belasting: float = 0.0
+
+
+def bereken_box3(params: dict, fiscaal_partner: bool = True) -> Box3Resultaat:
+    """Calculate Box 3 forfaitair rendement (2023+ method).
+
+    Args:
+        params: Dict with box3_* keys from fiscale_params.
+        fiscaal_partner: If True, double the heffingsvrij vermogen.
+    """
+    bank = float(params.get('box3_bank_saldo', 0))
+    overig = float(params.get('box3_overige_bezittingen', 0))
+    schulden = float(params.get('box3_schulden', 0))
+
+    rend_bank_pct = float(params.get('box3_rendement_bank_pct', 1.03)) / 100
+    rend_overig_pct = float(params.get('box3_rendement_overig_pct', 6.17)) / 100
+    rend_schuld_pct = float(params.get('box3_rendement_schuld_pct', 2.46)) / 100
+    tarief_pct = float(params.get('box3_tarief_pct', 36)) / 100
+    heffingsvrij_pp = float(params.get('box3_heffingsvrij_vermogen', 57000))
+
+    totaal_bezittingen = bank + overig
+    rendement_bank = bank * rend_bank_pct
+    rendement_overig = overig * rend_overig_pct
+    rendement_schuld = schulden * rend_schuld_pct
+    totaal_rendement = rendement_bank + rendement_overig - rendement_schuld
+
+    heffingsvrij = heffingsvrij_pp * (2 if fiscaal_partner else 1)
+    grondslag = max(0, totaal_bezittingen - schulden - heffingsvrij)
+
+    # Grondslag can't exceed total rendement proportion
+    if totaal_bezittingen - schulden > 0:
+        rendement_ratio = totaal_rendement / (totaal_bezittingen - schulden) if (totaal_bezittingen - schulden) > 0 else 0
+        voordeel = grondslag * rendement_ratio
+    else:
+        voordeel = 0
+
+    belasting = round(max(0, voordeel) * tarief_pct, 2)
+
+    return Box3Resultaat(
+        bank_saldo=bank,
+        overige_bezittingen=overig,
+        schulden=schulden,
+        totaal_bezittingen=totaal_bezittingen,
+        rendement_bank=round(rendement_bank, 2),
+        rendement_overig=round(rendement_overig, 2),
+        rendement_schuld=round(rendement_schuld, 2),
+        totaal_rendement=round(totaal_rendement, 2),
+        heffingsvrij=heffingsvrij,
+        grondslag=grondslag,
+        belasting=belasting,
+    )
+
+
 def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
                      representatie: float, investeringen_totaal: float,
                      uren: float, params: dict, aov: float = 0,
@@ -285,9 +351,14 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
         d_premie_grondslag = D(params['schijf1_grens'])  # fallback for older DB
     d_pvv_basis = min(d_vi, d_premie_grondslag)
 
-    d_pvv_aow = d_pvv_basis * PVV_AOW_PCT / D('100')
-    d_pvv_anw = d_pvv_basis * PVV_ANW_PCT / D('100')
-    d_pvv_wlz = d_pvv_basis * PVV_WLZ_PCT / D('100')
+    # PVV rates from params (DB-driven) with fallback to constants
+    pvv_aow_pct = D(str(params.get('pvv_aow_pct', PVV_AOW_PCT)))
+    pvv_anw_pct = D(str(params.get('pvv_anw_pct', PVV_ANW_PCT)))
+    pvv_wlz_pct = D(str(params.get('pvv_wlz_pct', PVV_WLZ_PCT)))
+
+    d_pvv_aow = d_pvv_basis * pvv_aow_pct / D('100')
+    d_pvv_anw = d_pvv_basis * pvv_anw_pct / D('100')
+    d_pvv_wlz = d_pvv_basis * pvv_wlz_pct / D('100')
     d_pvv = d_pvv_aow + d_pvv_anw + d_pvv_wlz
 
     r.pvv = euro(d_pvv)
@@ -303,7 +374,8 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
 
     # Arbeidskorting: op basis van arbeidsinkomen = fiscale winst
     # (= winst uit onderneming VÓÓR zelfstandigenaftrek, startersaftrek en MKB-vrijstelling)
-    ak = bereken_arbeidskorting(r.fiscale_winst, jaar)
+    ak = bereken_arbeidskorting(r.fiscale_winst, jaar,
+                                brackets_json=params.get('arbeidskorting_brackets', ''))
     r.arbeidskorting = ak
 
     # === 8. Netto IB ===

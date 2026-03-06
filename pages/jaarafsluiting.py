@@ -51,6 +51,10 @@ def _fiscale_params_to_dict(params) -> dict:
         'wet_hillen_pct': params.wet_hillen_pct,
         'urencriterium': params.urencriterium,
         'pvv_premiegrondslag': params.pvv_premiegrondslag,
+        'pvv_aow_pct': params.pvv_aow_pct,
+        'pvv_anw_pct': params.pvv_anw_pct,
+        'pvv_wlz_pct': params.pvv_wlz_pct,
+        'arbeidskorting_brackets': params.arbeidskorting_brackets,
     }
 
 
