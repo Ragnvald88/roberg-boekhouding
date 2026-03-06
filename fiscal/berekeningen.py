@@ -229,9 +229,9 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
     ahk = bereken_algemene_heffingskorting(r.verzamelinkomen, jaar, params)
     r.ahk = ahk
 
-    # Arbeidskorting: op basis van arbeidsinkomen = belastbare winst uit onderneming
-    # (NIET verzamelinkomen — AOV en eigen woning verlagen het arbeidsinkomen niet)
-    ak = bereken_arbeidskorting(r.belastbare_winst, jaar)
+    # Arbeidskorting: op basis van arbeidsinkomen = fiscale winst
+    # (= winst uit onderneming VÓÓR zelfstandigenaftrek, startersaftrek en MKB-vrijstelling)
+    ak = bereken_arbeidskorting(r.fiscale_winst, jaar)
     r.arbeidskorting = ak
 
     # === 8. Netto IB ===
