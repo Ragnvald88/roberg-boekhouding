@@ -1007,6 +1007,29 @@ async def update_ib_inputs(db_path: Path = DB_PATH, jaar: int = 0,
         await conn.close()
 
 
+async def update_box3_inputs(db_path: Path = DB_PATH, jaar: int = 0,
+                             bank_saldo: float = 0,
+                             overige_bezittingen: float = 0,
+                             schulden: float = 0) -> bool:
+    """Update Box 3 input fields in fiscale_params for a year.
+
+    Returns True if a row was updated, False if no fiscale_params row exists.
+    """
+    conn = await get_db(db_path)
+    try:
+        cursor = await conn.execute(
+            """UPDATE fiscale_params
+               SET box3_bank_saldo = ?,
+                   box3_overige_bezittingen = ?,
+                   box3_schulden = ?
+               WHERE jaar = ?""",
+            (bank_saldo, overige_bezittingen, schulden, jaar))
+        await conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        await conn.close()
+
+
 # === Aggregation queries (voor dashboard + jaarafsluiting) ===
 
 async def get_omzet_per_maand(db_path: Path = DB_PATH, jaar: int = 2026) -> list[float]:
