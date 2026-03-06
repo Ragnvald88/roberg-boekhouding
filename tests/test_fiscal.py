@@ -379,8 +379,13 @@ class TestVolledig:
         # Arbeidskorting now uses fiscale_winst (94437)
         assert abs(result.arbeidskorting - 1985) < 10
 
-        # Resultaat (without tariefsaanpassing, EW in verzamelinkomen)
-        assert -2000 < result.resultaat < -1500
+        # Tariefsaanpassing now included (EW still in income_without)
+        # income_without = 94437 - 4659 - 2998 = 86780, excess = 86780 - 75518 = 11262
+        # ta = 11262 * 12.53% = 1411
+        assert abs(result.tariefsaanpassing - 1411) < 50
+
+        # Resultaat (with tariefsaanpassing, EW in verzamelinkomen, VA=28544)
+        assert -500 < result.resultaat < 0
 
         # Urencriterium check
         assert result.uren_criterium_gehaald is True
@@ -634,6 +639,92 @@ class TestWetHillen:
 # ============================================================
 # Audit bug-fix regression tests (2026-03-03)
 # ============================================================
+
+class TestTariefsaanpassing:
+    """Beperking aftrekbare posten (tariefsaanpassing) since 2023."""
+
+    def test_tariefsaanpassing_2024_boekhouder(self):
+        """Boekhouder 2024: beperking = 12.53% over 15.921 = 1.994.
+
+        income_without_deductions = fiscale_winst - aov = 94437 - 2998 = 91439
+        (EW to partner, so no ew_saldo)
+        schijf1_grens = 75518 (= top bracket boundary for 2024)
+        excess = 91439 - 75518 = 15921
+        deductions = ZA(3750) + SA(2123) + MKB(11788) = 17661
+        subject = min(17661, 15921) = 15921
+        tariefsaanpassing = 15921 * (49.50 - 36.97) / 100 = 15921 * 12.53% = 1995
+        """
+        params = FISCALE_PARAMS[2024]
+        result = bereken_volledig(
+            omzet=95145, kosten=0, afschrijvingen=0,
+            representatie=550, investeringen_totaal=2919,
+            uren=1400, params=params,
+            aov=2998,
+        )
+        # Boekhouder: tariefsaanpassing = 1994
+        assert abs(result.tariefsaanpassing - 1994) < 50
+
+    def test_tariefsaanpassing_income_below_schijf1_no_beperking(self):
+        """If income without deductions stays within schijf 1, no tariefsaanpassing."""
+        params = FISCALE_PARAMS[2024]
+        result = bereken_volledig(
+            omzet=50000, kosten=0, afschrijvingen=0,
+            representatie=0, investeringen_totaal=0,
+            uren=1400, params=params,
+        )
+        # fiscale_winst = 50000, which is < schijf1_grens (75518)
+        assert result.tariefsaanpassing == 0
+
+    def test_tariefsaanpassing_only_excess_in_top_bracket(self):
+        """Only the portion of deductions that removes income from top bracket."""
+        params = FISCALE_PARAMS[2024]
+        # fiscale_winst just above schijf1_grens (75518)
+        result = bereken_volledig(
+            omzet=76000, kosten=0, afschrijvingen=0,
+            representatie=0, investeringen_totaal=0,
+            uren=1400, params=params,
+        )
+        # income_without = fiscale_winst = 76000, no aov/ew
+        # Amount in top bracket: 76000 - 75518 = 482
+        # Deductions (ZA+SA+MKB): ~3750 + 2123 + ~9328 = ~15201
+        # Subject to beperking: min(15201, 482) = 482
+        # Tariefsaanpassing = 482 * 0.1253 = ~60
+        assert 40 < result.tariefsaanpassing < 80
+
+    def test_tariefsaanpassing_2025_three_brackets(self):
+        """2025 has 3 brackets. Tariefsaanpassing uses toptarief (49.50) minus schijf2 rate (37.48)."""
+        params = FISCALE_PARAMS[2025]
+        result = bereken_volledig(
+            omzet=95000, kosten=0, afschrijvingen=0,
+            representatie=0, investeringen_totaal=0,
+            uren=1400, params=params,
+        )
+        # Tariefsaanpassing should use 49.50 - 37.48 = 12.02%
+        # fiscale_winst = 95000, schijf2_grens = 76817
+        # excess = 95000 - 76817 = 18183
+        # deductions: ZA(2470) + SA(2123) + MKB ~11484 = ~16077
+        # subject = min(16077, 18183) = 16077
+        # ta = 16077 * 12.02% = 1932
+        assert result.tariefsaanpassing > 1500
+
+    def test_tariefsaanpassing_no_urencriterium_no_deductions(self):
+        """Without urencriterium, no ZA/SA, only MKB. Still can have tariefsaanpassing."""
+        params = FISCALE_PARAMS[2024]
+        result = bereken_volledig(
+            omzet=95000, kosten=0, afschrijvingen=0,
+            representatie=0, investeringen_totaal=0,
+            uren=1000, params=params,  # < 1225, no urencriterium
+        )
+        # No ZA/SA, only MKB. Deductions are smaller, but still above grens.
+        # fiscale_winst = 95000
+        # income_without = 95000
+        # MKB-only deduction: 95000 * 13.31% = 12645
+        # belastbare_winst = 95000 - 12645 = 82355
+        # excess = 95000 - 75518 = 19482
+        # subject = min(12645, 19482) = 12645
+        # ta = 12645 * 12.53% = 1584
+        assert result.tariefsaanpassing > 1000
+
 
 class TestArbeidskortingInput:
     """Arbeidskorting should use fiscale_winst (vóór ZA/SA/MKB), not belastbare_winst."""

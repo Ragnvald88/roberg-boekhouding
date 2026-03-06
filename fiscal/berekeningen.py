@@ -71,6 +71,7 @@ class FiscaalResultaat:
     aov: float = 0.0
     # IB
     verzamelinkomen: float = 0.0
+    tariefsaanpassing: float = 0.0  # beperking aftrekbare posten
     bruto_ib: float = 0.0
     ahk: float = 0.0
     arbeidskorting: float = 0.0
@@ -201,6 +202,34 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
     d_verzamelinkomen = max(D('0'), d_verzamelinkomen)
     r.verzamelinkomen = euro(d_verzamelinkomen)
 
+    # === 5b. Tariefsaanpassing (beperking aftrekbare posten) ===
+    # Since 2023: deductions (ZA, SA, MKB) are capped at the basistarief.
+    # If income without these deductions exceeds the top bracket boundary,
+    # the excess benefit is clawed back at (toptarief - basistarief).
+    d_deductions = d_za + d_sa + d_mkb
+
+    # Determine the bracket boundary and rate difference
+    if D(params['schijf1_grens']) == D(params['schijf2_grens']):
+        # 2023-2024: 2 brackets, aftrektarief = schijf1_pct
+        d_aftrektarief = D(params['schijf1_pct'])
+        d_ta_grens = D(params['schijf1_grens'])
+    else:
+        # 2025+: 3 brackets, aftrektarief = schijf2_pct
+        d_aftrektarief = D(params['schijf2_pct'])
+        d_ta_grens = D(params['schijf2_grens'])
+
+    d_toptarief = D(params['schijf3_pct'])
+    d_ta_pct = (d_toptarief - d_aftrektarief) / D('100')
+
+    # Income without deductions = what would be taxed without ZA/SA/MKB
+    d_income_without = d_fiscale_winst + d_ew_saldo - d_aov
+    # Amount that was in the top bracket before deductions
+    d_excess = max(D('0'), d_income_without - d_ta_grens)
+    d_subject = min(d_deductions, d_excess)
+
+    d_tariefsaanpassing = d_subject * d_ta_pct
+    r.tariefsaanpassing = euro(d_tariefsaanpassing)
+
     # === 6. IB Box 1 (schijventarief) ===
     d_vi = d_verzamelinkomen
 
@@ -221,7 +250,7 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
     d_s3 = max(d_vi - d_s2_grens, D('0'))
     d_ib3 = d_s3 * d_s3_pct
 
-    d_bruto_ib = d_ib1 + d_ib2 + d_ib3
+    d_bruto_ib = d_ib1 + d_ib2 + d_ib3 + d_tariefsaanpassing
     r.bruto_ib = euro(d_bruto_ib)
 
     # === 7. Heffingskortingen ===
