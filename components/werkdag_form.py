@@ -95,7 +95,7 @@ async def open_werkdag_dialog(on_save=None, werkdag=None):
         # Row 3: Tarief + Km (editable, auto-fill from klant)
         with ui.row().classes('w-full gap-4 items-end'):
             tarief_input = ui.number(
-                'Tarief (EUR/uur)',
+                'Tarief (\u20ac/uur)',
                 value=werkdag.tarief if is_edit else 0,
                 format='%.2f', min=0, step=0.50,
             ).classes('w-36')
@@ -107,7 +107,7 @@ async def open_werkdag_dialog(on_save=None, werkdag=None):
             ).classes('w-28')
 
             km_tarief_input = ui.number(
-                'Km-tarief (EUR/km)',
+                'Km-tarief (\u20ac/km)',
                 value=werkdag.km_tarief if is_edit else default_km_tarief,
                 format='%.2f', min=0, step=0.01,
             ).classes('w-36')

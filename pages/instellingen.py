@@ -241,9 +241,16 @@ async def instellingen_page():
                                                             ' in',
                                                             type='warning')
                                                         return
-                                                    await add_klant_locatie(
-                                                        DB_PATH, row['id'],
-                                                        naam, km)
+                                                    try:
+                                                        await add_klant_locatie(
+                                                            DB_PATH, row['id'],
+                                                            naam, km)
+                                                    except Exception:
+                                                        ui.notify(
+                                                            f'Locatie "{naam}" '
+                                                            f'bestaat al',
+                                                            type='warning')
+                                                        return
                                                     ui.notify(
                                                         f'Locatie "{naam}" '
                                                         f'toegevoegd',

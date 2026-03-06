@@ -165,7 +165,7 @@ async def seed_klant_locaties(db_path):
     return count
 
 
-async def seed_all(db_path: Path) -> None:
+async def seed_all(db_path: Path) -> tuple[int, int]:
     """Seed fiscale parameters and klant locaties."""
     fp_count = await seed_fiscale_params(db_path)
     loc_count = await seed_klant_locaties(db_path)

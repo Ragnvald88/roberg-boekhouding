@@ -15,12 +15,12 @@ source .venv/bin/activate
 export DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib
 python main.py  # → http://127.0.0.1:8085
 
-# Tests (117 passing)
+# Tests (123 passing)
 DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib .venv/bin/python -m pytest tests/ -v
 ```
 
 ## Database
-8 tabellen: `klanten`, `werkdagen`, `facturen`, `uitgaven`, `banktransacties`, `fiscale_params`, `bedrijfsgegevens`, `aangifte_documenten`
+9 tabellen: `klanten`, `klant_locaties`, `werkdagen`, `facturen`, `uitgaven`, `banktransacties`, `fiscale_params`, `bedrijfsgegevens`, `aangifte_documenten`
 
 - Raw SQL, `?` placeholders — GEEN f-strings in SQL
 - Bedragen REAL, datums TEXT (YYYY-MM-DD)

@@ -1261,7 +1261,6 @@ async def get_klant_locaties(db_path, klant_id):
     """Get all locations for a klant, ordered by name."""
     conn = await get_db(db_path)
     try:
-        conn.row_factory = aiosqlite.Row
         cur = await conn.execute(
             "SELECT id, klant_id, naam, retour_km FROM klant_locaties "
             "WHERE klant_id = ? ORDER BY naam",
