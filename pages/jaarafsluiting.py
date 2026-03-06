@@ -50,6 +50,7 @@ def _fiscale_params_to_dict(params) -> dict:
         'villataks_grens': params.villataks_grens,
         'wet_hillen_pct': params.wet_hillen_pct,
         'urencriterium': params.urencriterium,
+        'pvv_premiegrondslag': params.pvv_premiegrondslag,
     }
 
 
@@ -65,7 +66,7 @@ async def jaarafsluiting_page():
     # References for dynamic containers and IB input fields
     result_container = {'ref': None}
     ib_inputs = {'aov': None, 'woz': None, 'hypotheek': None, 'voorlopig': None,
-                  'ew_partner': None}
+                  'voorlopig_zvw': None, 'ew_partner': None}
 
     # State that persists across bereken/herbereken calls
     berekening_state = {
@@ -106,6 +107,7 @@ async def jaarafsluiting_page():
         totaal_afschrijvingen: float,
         aov: float, woz: float, hypotheekrente: float,
         voorlopige_aanslag: float,
+        voorlopige_aanslag_zvw: float = 0,
         ew_naar_partner: bool = True,
     ):
         """Render all result sections into the container."""
@@ -265,8 +267,13 @@ async def jaarafsluiting_page():
                         format='%.2f', min=0, step=100,
                     ).classes('w-44')
                     ib_inputs['voorlopig'] = ui.number(
-                        'Voorlopige aanslag betaald (\u20ac)',
+                        'Voorlopige aanslag IB (\u20ac)',
                         value=voorlopige_aanslag,
+                        format='%.2f', min=0, step=100,
+                    ).classes('w-52')
+                    ib_inputs['voorlopig_zvw'] = ui.number(
+                        'Voorlopige aanslag ZVW (\u20ac)',
+                        value=voorlopige_aanslag_zvw,
                         format='%.2f', min=0, step=100,
                     ).classes('w-52')
                 ib_inputs['ew_partner'] = ui.checkbox(
@@ -398,7 +405,8 @@ async def jaarafsluiting_page():
 
     async def bereken(aov: float = None, woz: float = None,
                       hypotheekrente: float = None,
-                      voorlopige_aanslag: float = None):
+                      voorlopige_aanslag: float = None,
+                      voorlopige_aanslag_zvw: float = None):
         """Fetch data, run fiscal engine, and render all sections.
 
         If IB-input values are None, they are loaded from DB (fiscale_params).
@@ -428,6 +436,8 @@ async def jaarafsluiting_page():
             hypotheekrente = params.hypotheekrente or 0
         if voorlopige_aanslag is None:
             voorlopige_aanslag = params.voorlopige_aanslag_betaald or 0
+        if voorlopige_aanslag_zvw is None:
+            voorlopige_aanslag_zvw = params.voorlopige_aanslag_zvw or 0
 
         ew_naar_partner = getattr(params, 'ew_naar_partner', True)
 
@@ -513,6 +523,7 @@ async def jaarafsluiting_page():
             woz=woz,
             hypotheekrente=hypotheekrente,
             voorlopige_aanslag=voorlopige_aanslag,
+            voorlopige_aanslag_zvw=voorlopige_aanslag_zvw,
             ew_naar_partner=ew_naar_partner,
         )
 
@@ -521,6 +532,7 @@ async def jaarafsluiting_page():
             container, jaar, fiscaal, kosten_per_cat, activastaat,
             totaal_kosten_alle, kosten_excl_inv, totaal_afschrijvingen,
             aov, woz, hypotheekrente, voorlopige_aanslag,
+            voorlopige_aanslag_zvw=voorlopige_aanslag_zvw,
             ew_naar_partner=ew_naar_partner,
         )
 
@@ -535,6 +547,7 @@ async def jaarafsluiting_page():
         woz_val = float(ib_inputs['woz'].value or 0)
         hyp_val = float(ib_inputs['hypotheek'].value or 0)
         va_val = float(ib_inputs['voorlopig'].value or 0)
+        va_zvw_val = float(ib_inputs['voorlopig_zvw'].value or 0)
         ew_partner_val = ib_inputs['ew_partner'].value if ib_inputs['ew_partner'] else True
 
         jaar = gekozen_jaar['value']
@@ -545,6 +558,7 @@ async def jaarafsluiting_page():
             DB_PATH, jaar=jaar,
             aov_premie=aov_val, woz_waarde=woz_val,
             hypotheekrente=hyp_val, voorlopige_aanslag_betaald=va_val,
+            voorlopige_aanslag_zvw=va_zvw_val,
         )
 
         # Update ew_naar_partner in state
@@ -562,6 +576,7 @@ async def jaarafsluiting_page():
             woz=woz_val,
             hypotheekrente=hyp_val,
             voorlopige_aanslag=va_val,
+            voorlopige_aanslag_zvw=va_zvw_val,
             ew_naar_partner=ew_partner_val,
         )
 
@@ -570,6 +585,7 @@ async def jaarafsluiting_page():
             s['activastaat'], s['totaal_kosten_alle'],
             s['kosten'], s['afschrijvingen_totaal'],
             aov_val, woz_val, hyp_val, va_val,
+            voorlopige_aanslag_zvw=va_zvw_val,
             ew_naar_partner=ew_partner_val,
         )
 
@@ -586,6 +602,7 @@ async def jaarafsluiting_page():
         woz_val = float(ib_inputs['woz'].value or 0)
         hyp_val = float(ib_inputs['hypotheek'].value or 0)
         va_val = float(ib_inputs['voorlopig'].value or 0)
+        va_zvw_val = float(ib_inputs['voorlopig_zvw'].value or 0)
         ew_partner_val = ib_inputs['ew_partner'].value if ib_inputs['ew_partner'] else True
         fiscaal = bereken_volledig(
             omzet=s['omzet'], kosten=s['kosten'],
@@ -595,6 +612,7 @@ async def jaarafsluiting_page():
             uren=s['uren'], params=s['params_dict'],
             aov=aov_val, woz=woz_val,
             hypotheekrente=hyp_val, voorlopige_aanslag=va_val,
+            voorlopige_aanslag_zvw=va_zvw_val,
             ew_naar_partner=ew_partner_val,
         )
 
@@ -657,6 +675,8 @@ async def jaarafsluiting_page():
                         hypotheekrente=float(ib_inputs['hypotheek'].value or 0),
                         voorlopige_aanslag_betaald=float(
                             ib_inputs['voorlopig'].value or 0),
+                        voorlopige_aanslag_zvw=float(
+                            ib_inputs['voorlopig_zvw'].value or 0),
                     )
                 gekozen_jaar['value'] = jaar_select.value
                 # Clear stale state so herbereken can't mix years

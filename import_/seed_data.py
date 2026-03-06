@@ -31,6 +31,7 @@ FISCALE_PARAMS: dict[int, dict] = {
         'villataks_grens': 1_200_000,
         'wet_hillen_pct': 83.333,
         'urencriterium': 1225,
+        'pvv_premiegrondslag': 37149,
     },
     2024: {
         'jaar': 2024,
@@ -57,6 +58,7 @@ FISCALE_PARAMS: dict[int, dict] = {
         'villataks_grens': 1_310_000,
         'wet_hillen_pct': 80.0,
         'urencriterium': 1225,
+        'pvv_premiegrondslag': 38098,
     },
     2025: {
         'jaar': 2025,
@@ -83,6 +85,7 @@ FISCALE_PARAMS: dict[int, dict] = {
         'villataks_grens': 1_330_000,
         'wet_hillen_pct': 76.667,
         'urencriterium': 1225,
+        'pvv_premiegrondslag': 38441,
     },
     2026: {
         'jaar': 2026,
@@ -109,6 +112,7 @@ FISCALE_PARAMS: dict[int, dict] = {
         'villataks_grens': 1_350_000,
         'wet_hillen_pct': 71.867,
         'urencriterium': 1225,
+        'pvv_premiegrondslag': 38883,
     },
 }
 

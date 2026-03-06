@@ -179,6 +179,7 @@ async def init_db(db_path: Path = DB_PATH) -> None:
             ('ew_forfait_pct', 0.35), ('villataks_grens', 1350000),
             ('wet_hillen_pct', 0), ('urencriterium', 1225),
             ('partner_bruto_loon', 0), ('partner_loonheffing', 0),
+            ('pvv_premiegrondslag', 0),
             ('ew_naar_partner', 1), ('voorlopige_aanslag_zvw', 0),
         ]:
             try:
@@ -843,6 +844,7 @@ def _row_to_fiscale_params(r) -> FiscaleParams:
         voorlopige_aanslag_betaald=_safe_get(
             r, 'voorlopige_aanslag_betaald', 0, keys
         ),
+        pvv_premiegrondslag=_safe_get(r, 'pvv_premiegrondslag', 0, keys),
         ew_naar_partner=bool(_safe_get(r, 'ew_naar_partner', 1, keys)),
         voorlopige_aanslag_zvw=_safe_get(r, 'voorlopige_aanslag_zvw', 0, keys),
         partner_bruto_loon=_safe_get(r, 'partner_bruto_loon', 0, keys),
@@ -878,7 +880,8 @@ async def upsert_fiscale_params(db_path: Path = DB_PATH, **kwargs) -> None:
         # Preserve IB-input + partner values when overwriting from Instellingen
         cur = await conn.execute(
             "SELECT aov_premie, woz_waarde, hypotheekrente, "
-            "voorlopige_aanslag_betaald, partner_bruto_loon, partner_loonheffing "
+            "voorlopige_aanslag_betaald, voorlopige_aanslag_zvw, "
+            "partner_bruto_loon, partner_loonheffing "
             "FROM fiscale_params WHERE jaar = ?",
             (kwargs['jaar'],))
         existing = await cur.fetchone()
@@ -890,10 +893,11 @@ async def upsert_fiscale_params(db_path: Path = DB_PATH, **kwargs) -> None:
                 ahk_max, ahk_afbouw_pct, ahk_drempel, ak_max,
                 zvw_pct, zvw_max_grondslag, repr_aftrek_pct,
                 ew_forfait_pct, villataks_grens, wet_hillen_pct, urencriterium,
+                pvv_premiegrondslag,
                 aov_premie, woz_waarde, hypotheekrente, voorlopige_aanslag_betaald,
-                partner_bruto_loon, partner_loonheffing)
+                voorlopige_aanslag_zvw, partner_bruto_loon, partner_loonheffing)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (kwargs['jaar'], kwargs['zelfstandigenaftrek'], kwargs.get('startersaftrek'),
              kwargs['mkb_vrijstelling_pct'], kwargs['kia_ondergrens'],
              kwargs['kia_bovengrens'], kwargs['kia_pct'], kwargs['km_tarief'],
@@ -906,10 +910,12 @@ async def upsert_fiscale_params(db_path: Path = DB_PATH, **kwargs) -> None:
              kwargs.get('villataks_grens', 1_350_000),
              kwargs.get('wet_hillen_pct', 0),
              kwargs.get('urencriterium', 1225),
+             kwargs.get('pvv_premiegrondslag', 0),
              existing['aov_premie'] if existing else 0,
              existing['woz_waarde'] if existing else 0,
              existing['hypotheekrente'] if existing else 0,
              existing['voorlopige_aanslag_betaald'] if existing else 0,
+             existing['voorlopige_aanslag_zvw'] if existing else 0,
              existing['partner_bruto_loon'] if existing else 0,
              existing['partner_loonheffing'] if existing else 0)
         )
@@ -921,17 +927,19 @@ async def upsert_fiscale_params(db_path: Path = DB_PATH, **kwargs) -> None:
 async def update_ib_inputs(db_path: Path = DB_PATH, jaar: int = 0,
                            aov_premie: float = 0, woz_waarde: float = 0,
                            hypotheekrente: float = 0,
-                           voorlopige_aanslag_betaald: float = 0) -> None:
+                           voorlopige_aanslag_betaald: float = 0,
+                           voorlopige_aanslag_zvw: float = 0) -> None:
     """Update only the IB-input columns for a specific year."""
     conn = await get_db(db_path)
     try:
         await conn.execute(
             """UPDATE fiscale_params
                SET aov_premie = ?, woz_waarde = ?,
-                   hypotheekrente = ?, voorlopige_aanslag_betaald = ?
+                   hypotheekrente = ?, voorlopige_aanslag_betaald = ?,
+                   voorlopige_aanslag_zvw = ?
                WHERE jaar = ?""",
             (aov_premie, woz_waarde, hypotheekrente,
-             voorlopige_aanslag_betaald, jaar))
+             voorlopige_aanslag_betaald, voorlopige_aanslag_zvw, jaar))
         await conn.commit()
     finally:
         await conn.close()

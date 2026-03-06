@@ -33,6 +33,13 @@ def bereken_eigenwoningforfait(woz: float, ew_forfait_pct: float = 0.35,
     return villataks_grens * pct + (woz - villataks_grens) * 0.0235
 
 
+# PVV component percentages (premies volksverzekeringen, stable across years)
+PVV_AOW_PCT = Decimal('17.90')
+PVV_ANW_PCT = Decimal('0.10')
+PVV_WLZ_PCT = Decimal('9.65')
+PVV_TOTAAL_PCT = PVV_AOW_PCT + PVV_ANW_PCT + PVV_WLZ_PCT  # 27.65
+
+
 def D(v) -> Decimal:
     """Convert any numeric value to Decimal via string (avoids float imprecision)."""
     if v is None:
@@ -73,13 +80,22 @@ class FiscaalResultaat:
     verzamelinkomen: float = 0.0
     tariefsaanpassing: float = 0.0  # beperking aftrekbare posten
     bruto_ib: float = 0.0
+    # IB/PVV split (bruto_ib = ib_alleen + pvv)
+    ib_alleen: float = 0.0  # IB excluding PVV
+    pvv: float = 0.0  # Premies volksverzekeringen total
+    pvv_aow: float = 0.0  # AOW component (17.90%)
+    pvv_anw: float = 0.0  # Anw component (0.10%)
+    pvv_wlz: float = 0.0  # Wlz component (9.65%)
     ahk: float = 0.0
     arbeidskorting: float = 0.0
     netto_ib: float = 0.0
     zvw: float = 0.0
     # Resultaat
     voorlopige_aanslag: float = 0.0
-    resultaat: float = 0.0  # negatief = teruggave, positief = bijbetalen
+    voorlopige_aanslag_zvw: float = 0.0
+    resultaat_ib: float = 0.0  # netto_ib - VA_IB (negatief = teruggave)
+    resultaat_zvw: float = 0.0  # zvw - VA_ZVW (positief = bijbetalen)
+    resultaat: float = 0.0  # resultaat_ib + resultaat_zvw
     # Controles
     uren_criterium: float = 0.0
     uren_criterium_gehaald: bool = False
@@ -93,6 +109,7 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
                      uren: float, params: dict, aov: float = 0,
                      woz: float = 0, hypotheekrente: float = 0,
                      voorlopige_aanslag: float = 0,
+                     voorlopige_aanslag_zvw: float = 0,
                      ew_naar_partner: bool = False) -> FiscaalResultaat:
     """Complete fiscal waterfall using Decimal precision.
 
@@ -260,6 +277,25 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
     d_bruto_ib = d_ib1 + d_ib2 + d_ib3 + d_tariefsaanpassing
     r.bruto_ib = euro(d_bruto_ib)
 
+    # === 6b. IB/PVV split ===
+    # PVV = 27.65% over min(verzamelinkomen, premiegrondslag)
+    # premiegrondslag differs from schijf1_grens in 2023-2024
+    d_premie_grondslag = D(params.get('pvv_premiegrondslag', 0))
+    if d_premie_grondslag == 0:
+        d_premie_grondslag = D(params['schijf1_grens'])  # fallback for older DB
+    d_pvv_basis = min(d_vi, d_premie_grondslag)
+
+    d_pvv_aow = d_pvv_basis * PVV_AOW_PCT / D('100')
+    d_pvv_anw = d_pvv_basis * PVV_ANW_PCT / D('100')
+    d_pvv_wlz = d_pvv_basis * PVV_WLZ_PCT / D('100')
+    d_pvv = d_pvv_aow + d_pvv_anw + d_pvv_wlz
+
+    r.pvv = euro(d_pvv)
+    r.pvv_aow = euro(d_pvv_aow)
+    r.pvv_anw = euro(d_pvv_anw)
+    r.pvv_wlz = euro(d_pvv_wlz)
+    r.ib_alleen = euro(d_bruto_ib - d_pvv)
+
     # === 7. Heffingskortingen ===
     # AHK: afbouw op basis van verzamelinkomen (sinds 2025; voor Box-1-only maakt het niet uit)
     ahk = bereken_algemene_heffingskorting(r.verzamelinkomen, jaar, params)
@@ -283,9 +319,19 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
 
     # === 10. Eindresultaat ===
     r.voorlopige_aanslag = voorlopige_aanslag
-    # Negatief = teruggave (meer betaald dan verschuldigd)
-    d_resultaat = d_netto_ib + d_zvw - d_voorlopige
-    r.resultaat = euro(d_resultaat)
+    r.voorlopige_aanslag_zvw = voorlopige_aanslag_zvw
+
+    # IB resultaat: netto_ib - VA_IB (negatief = teruggave)
+    d_va_zvw = D(voorlopige_aanslag_zvw)
+    d_resultaat_ib = d_netto_ib - d_voorlopige
+    r.resultaat_ib = euro(d_resultaat_ib)
+
+    # ZVW resultaat: zvw - VA_ZVW (positief = bijbetalen)
+    d_resultaat_zvw = d_zvw - d_va_zvw
+    r.resultaat_zvw = euro(d_resultaat_zvw)
+
+    # Total resultaat
+    r.resultaat = euro(d_resultaat_ib + d_resultaat_zvw)
 
     # === Controles ===
     r.uren_criterium = uren

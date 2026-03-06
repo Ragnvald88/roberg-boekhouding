@@ -133,6 +133,8 @@ class FiscaleParams:
     woz_waarde: float = 0.0
     hypotheekrente: float = 0.0
     voorlopige_aanslag_betaald: float = 0.0
+    # PVV premiegrondslag (2024: 38098, 2025+: = schijf1_grens)
+    pvv_premiegrondslag: float = 0.0
     # Eigen woning toerekening
     ew_naar_partner: bool = True  # Default: allocate to partner (Boekhouder practice)
     # Voorlopige aanslag ZVW (apart van IB)

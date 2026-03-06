@@ -35,6 +35,7 @@ FISCALE_PARAMS = {
         "repr_aftrek_pct": 80,
         "ew_forfait_pct": 0.35, "villataks_grens": 1_200_000,
         "wet_hillen_pct": 83.333, "urencriterium": 1225,
+        "pvv_premiegrondslag": 37149,
     },
     2024: {
         "jaar": 2024,
@@ -51,6 +52,7 @@ FISCALE_PARAMS = {
         "repr_aftrek_pct": 80,
         "ew_forfait_pct": 0.35, "villataks_grens": 1_310_000,
         "wet_hillen_pct": 80.0, "urencriterium": 1225,
+        "pvv_premiegrondslag": 38098,
     },
     2025: {
         "jaar": 2025,
@@ -67,6 +69,7 @@ FISCALE_PARAMS = {
         "repr_aftrek_pct": 80,
         "ew_forfait_pct": 0.35, "villataks_grens": 1_330_000,
         "wet_hillen_pct": 76.667, "urencriterium": 1225,
+        "pvv_premiegrondslag": 38441,  # = schijf1_grens for 2025+
     },
     2026: {
         "jaar": 2026,
@@ -83,6 +86,7 @@ FISCALE_PARAMS = {
         "repr_aftrek_pct": 80,
         "ew_forfait_pct": 0.35, "villataks_grens": 1_350_000,
         "wet_hillen_pct": 71.867, "urencriterium": 1225,
+        "pvv_premiegrondslag": 38883,  # = schijf1_grens for 2025+
     },
 }
 
@@ -827,6 +831,142 @@ class TestArbeidskortingInput:
         assert abs(result.arbeidskorting - 1986) < 10
         # NOT 3136 (which is what belastbare_winst would give)
         assert result.arbeidskorting < 2100
+
+
+class TestIBPVVSplit:
+    """IB/PVV split and separate voorlopige aanslag (Task 4+9)."""
+
+    def test_pvv_2024_boekhouder(self):
+        """Boekhouder 2024: PVV = 27.65% × min(73778, 38098) = 27.65% × 38098 = 10534."""
+        params = FISCALE_PARAMS[2024]
+        result = bereken_volledig(
+            omzet=95145, kosten=0, afschrijvingen=0,
+            representatie=550, investeringen_totaal=2919,
+            uren=1400, params=params,
+            aov=2998, woz=655000, hypotheekrente=6951,
+            ew_naar_partner=True,
+        )
+        assert abs(result.pvv - 10534) < 5
+
+    def test_ib_alleen_2024_boekhouder(self):
+        """Boekhouder 2024: IB (incl tariefsaanpassing) = bruto_ib - PVV = 18734."""
+        params = FISCALE_PARAMS[2024]
+        result = bereken_volledig(
+            omzet=95145, kosten=0, afschrijvingen=0,
+            representatie=550, investeringen_totaal=2919,
+            uren=1400, params=params,
+            aov=2998, woz=655000, hypotheekrente=6951,
+            ew_naar_partner=True,
+        )
+        assert abs(result.ib_alleen - 18734) < 15
+
+    def test_pvv_components_2024(self):
+        """PVV split: AOW 17.90%, Anw 0.10%, Wlz 9.65% over premiegrondslag."""
+        params = FISCALE_PARAMS[2024]
+        result = bereken_volledig(
+            omzet=95145, kosten=0, afschrijvingen=0,
+            representatie=550, investeringen_totaal=2919,
+            uren=1400, params=params,
+            aov=2998, woz=655000, hypotheekrente=6951,
+            ew_naar_partner=True,
+        )
+        # 17.90% × 38098 = 6819.54
+        assert abs(result.pvv_aow - 6820) < 5
+        # 0.10% × 38098 = 38.10
+        assert abs(result.pvv_anw - 38) < 2
+        # 9.65% × 38098 = 3676.46
+        assert abs(result.pvv_wlz - 3676) < 5
+        # Components sum to total
+        assert abs(result.pvv - (result.pvv_aow + result.pvv_anw + result.pvv_wlz)) < 1
+
+    def test_pvv_capped_at_premiegrondslag(self):
+        """PVV uses min(verzamelinkomen, premiegrondslag), not full income."""
+        params = FISCALE_PARAMS[2024]
+        result = bereken_volledig(
+            omzet=95145, kosten=0, afschrijvingen=0,
+            representatie=550, investeringen_totaal=2919,
+            uren=1400, params=params,
+            aov=2998, woz=655000, hypotheekrente=6951,
+            ew_naar_partner=True,
+        )
+        # verzamelinkomen (73778) > premiegrondslag (38098)
+        # PVV should be 27.65% × 38098, NOT 27.65% × 73778
+        max_pvv = 38098 * 0.2765
+        assert abs(result.pvv - max_pvv) < 5
+
+    def test_pvv_low_income_below_premiegrondslag(self):
+        """When verzamelinkomen < premiegrondslag, PVV based on verzamelinkomen."""
+        params = FISCALE_PARAMS[2024]
+        result = bereken_volledig(
+            omzet=30000, kosten=0, afschrijvingen=0,
+            representatie=0, investeringen_totaal=0,
+            uren=1400, params=params,
+        )
+        # verzamelinkomen after ZA+SA+MKB is well below premiegrondslag (38098)
+        assert result.verzamelinkomen < 38098
+        expected_pvv = result.verzamelinkomen * 0.2765
+        assert abs(result.pvv - expected_pvv) < 5
+
+    def test_resultaat_ib_2024_boekhouder(self):
+        """Boekhouder 2024: IB terug 3137 = netto_ib - VA_IB (30303)."""
+        params = FISCALE_PARAMS[2024]
+        result = bereken_volledig(
+            omzet=95145, kosten=0, afschrijvingen=0,
+            representatie=550, investeringen_totaal=2919,
+            uren=1400, params=params,
+            aov=2998, woz=655000, hypotheekrente=6951,
+            ew_naar_partner=True,
+            voorlopige_aanslag=30303,
+            voorlopige_aanslag_zvw=2667,
+        )
+        # Boekhouder: IB terug = -3137 (negative = teruggave)
+        assert abs(result.resultaat_ib - (-3137)) < 20
+
+    def test_resultaat_zvw_2024_boekhouder(self):
+        """Boekhouder 2024: ZVW bij 1143 = zvw (3810) - VA_ZVW (2667)."""
+        params = FISCALE_PARAMS[2024]
+        result = bereken_volledig(
+            omzet=95145, kosten=0, afschrijvingen=0,
+            representatie=550, investeringen_totaal=2919,
+            uren=1400, params=params,
+            aov=2998, woz=655000, hypotheekrente=6951,
+            ew_naar_partner=True,
+            voorlopige_aanslag=30303,
+            voorlopige_aanslag_zvw=2667,
+        )
+        # Boekhouder: ZVW bij = 1143
+        assert abs(result.resultaat_zvw - 1143) < 10
+
+    def test_resultaat_total_is_sum(self):
+        """Total resultaat = resultaat_ib + resultaat_zvw."""
+        params = FISCALE_PARAMS[2024]
+        result = bereken_volledig(
+            omzet=95145, kosten=0, afschrijvingen=0,
+            representatie=550, investeringen_totaal=2919,
+            uren=1400, params=params,
+            aov=2998, woz=655000, hypotheekrente=6951,
+            ew_naar_partner=True,
+            voorlopige_aanslag=30303,
+            voorlopige_aanslag_zvw=2667,
+        )
+        assert abs(result.resultaat - (result.resultaat_ib + result.resultaat_zvw)) < 1
+
+    def test_backward_compat_no_va_zvw(self):
+        """Without voorlopige_aanslag_zvw, old behavior: resultaat_zvw = zvw."""
+        params = FISCALE_PARAMS[2024]
+        result = bereken_volledig(
+            omzet=95145, kosten=0, afschrijvingen=0,
+            representatie=550, investeringen_totaal=2919,
+            uren=1400, params=params,
+            aov=2998, woz=655000, hypotheekrente=6951,
+            ew_naar_partner=True,
+            voorlopige_aanslag=28544,
+            # No voorlopige_aanslag_zvw -> defaults to 0
+        )
+        # resultaat_zvw = zvw - 0 = zvw
+        assert abs(result.resultaat_zvw - result.zvw) < 1
+        # resultaat_ib = netto_ib - 28544
+        assert abs(result.resultaat_ib - (result.netto_ib - 28544)) < 1
 
 
 class TestKIABoundary:
