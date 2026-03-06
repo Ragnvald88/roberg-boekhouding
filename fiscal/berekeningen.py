@@ -92,7 +92,8 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
                      representatie: float, investeringen_totaal: float,
                      uren: float, params: dict, aov: float = 0,
                      woz: float = 0, hypotheekrente: float = 0,
-                     voorlopige_aanslag: float = 0) -> FiscaalResultaat:
+                     voorlopige_aanslag: float = 0,
+                     ew_naar_partner: bool = False) -> FiscaalResultaat:
     """Complete fiscal waterfall using Decimal precision.
 
     Args:
@@ -198,7 +199,10 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
     r.hillen_aftrek = euro(d_hillen_aftrek)
     r.aov = aov
 
-    d_verzamelinkomen = d_belastbare_winst + d_ew_saldo - d_aov
+    if ew_naar_partner:
+        d_verzamelinkomen = d_belastbare_winst - d_aov
+    else:
+        d_verzamelinkomen = d_belastbare_winst + d_ew_saldo - d_aov
     d_verzamelinkomen = max(D('0'), d_verzamelinkomen)
     r.verzamelinkomen = euro(d_verzamelinkomen)
 
@@ -222,7 +226,10 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
     d_ta_pct = (d_toptarief - d_aftrektarief) / D('100')
 
     # Income without deductions = what would be taxed without ZA/SA/MKB
-    d_income_without = d_fiscale_winst + d_ew_saldo - d_aov
+    if ew_naar_partner:
+        d_income_without = d_fiscale_winst - d_aov
+    else:
+        d_income_without = d_fiscale_winst + d_ew_saldo - d_aov
     # Amount that was in the top bracket before deductions
     d_excess = max(D('0'), d_income_without - d_ta_grens)
     d_subject = min(d_deductions, d_excess)
@@ -268,8 +275,9 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
     r.netto_ib = euro(d_netto_ib)
 
     # === 9. ZVW-bijdrage (apart van IB, via aanslag) ===
-    # Grondslag = verzamelinkomen (bijdrage-inkomen, gecapped op maximum)
-    d_zvw_grondslag = min(d_verzamelinkomen, D(params['zvw_max_grondslag']))
+    # Grondslag = belastbare winst (bijdrage-inkomen, gecapped op maximum)
+    # Boekhouder 2024 confirms: "Inkomen Zvw = 76.776" (= belastbare winst, not verzamelinkomen)
+    d_zvw_grondslag = min(d_belastbare_winst, D(params['zvw_max_grondslag']))
     d_zvw = d_zvw_grondslag * D(params['zvw_pct']) / D('100')
     r.zvw = euro(d_zvw)
 

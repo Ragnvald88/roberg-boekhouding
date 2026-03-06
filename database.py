@@ -179,6 +179,7 @@ async def init_db(db_path: Path = DB_PATH) -> None:
             ('ew_forfait_pct', 0.35), ('villataks_grens', 1350000),
             ('wet_hillen_pct', 0), ('urencriterium', 1225),
             ('partner_bruto_loon', 0), ('partner_loonheffing', 0),
+            ('ew_naar_partner', 1), ('voorlopige_aanslag_zvw', 0),
         ]:
             try:
                 await conn.execute(
@@ -842,6 +843,8 @@ def _row_to_fiscale_params(r) -> FiscaleParams:
         voorlopige_aanslag_betaald=_safe_get(
             r, 'voorlopige_aanslag_betaald', 0, keys
         ),
+        ew_naar_partner=bool(_safe_get(r, 'ew_naar_partner', 1, keys)),
+        voorlopige_aanslag_zvw=_safe_get(r, 'voorlopige_aanslag_zvw', 0, keys),
         partner_bruto_loon=_safe_get(r, 'partner_bruto_loon', 0, keys),
         partner_loonheffing=_safe_get(r, 'partner_loonheffing', 0, keys),
     )

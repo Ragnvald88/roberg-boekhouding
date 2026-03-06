@@ -640,6 +640,88 @@ class TestWetHillen:
 # Audit bug-fix regression tests (2026-03-03)
 # ============================================================
 
+class TestEWNaarPartner:
+    """Eigen woning allocation to partner."""
+
+    def test_ew_naar_partner_excludes_from_verzamelinkomen(self):
+        """When EW allocated to partner, verzamelinkomen excludes EW saldo."""
+        params = FISCALE_PARAMS[2024]
+        result = bereken_volledig(
+            omzet=95145, kosten=0, afschrijvingen=0,
+            representatie=550, investeringen_totaal=2919,
+            uren=1400, params=params,
+            aov=2998,
+            woz=655000, hypotheekrente=6951,
+            ew_naar_partner=True,
+        )
+        # Boekhouder: verzamelinkomen = 76776 - 2998 = 73778 (no EW saldo)
+        assert abs(result.verzamelinkomen - 73778) < 50
+
+    def test_ew_niet_naar_partner_includes_in_verzamelinkomen(self):
+        """When EW NOT allocated to partner, verzamelinkomen includes EW saldo."""
+        params = FISCALE_PARAMS[2024]
+        result = bereken_volledig(
+            omzet=95145, kosten=0, afschrijvingen=0,
+            representatie=550, investeringen_totaal=2919,
+            uren=1400, params=params,
+            aov=2998,
+            woz=655000, hypotheekrente=6951,
+            ew_naar_partner=False,
+        )
+        # EW saldo = 2292.5 - 6951 = -4658.5
+        # verzamelinkomen = 76776 - 4659 - 2998 = 69119
+        assert abs(result.verzamelinkomen - 69119) < 50
+
+    def test_ew_naar_partner_tariefsaanpassing_higher(self):
+        """With EW to partner, tariefsaanpassing should be higher (more income above grens)."""
+        params = FISCALE_PARAMS[2024]
+        result_partner = bereken_volledig(
+            omzet=95145, kosten=0, afschrijvingen=0,
+            representatie=550, investeringen_totaal=2919,
+            uren=1400, params=params,
+            aov=2998, woz=655000, hypotheekrente=6951,
+            ew_naar_partner=True,
+        )
+        result_self = bereken_volledig(
+            omzet=95145, kosten=0, afschrijvingen=0,
+            representatie=550, investeringen_totaal=2919,
+            uren=1400, params=params,
+            aov=2998, woz=655000, hypotheekrente=6951,
+            ew_naar_partner=False,
+        )
+        # With negative EW saldo, excluding it raises income_without
+        assert result_partner.tariefsaanpassing > result_self.tariefsaanpassing
+
+    def test_zvw_uses_belastbare_winst(self):
+        """ZVW grondslag = belastbare winst, not verzamelinkomen.
+
+        Boekhouder 2024: Inkomen Zvw = 76.776 (belastbare winst).
+        ZVW = 5.32% × min(76776, 71628) = 5.32% × 71628 = 3810.
+        """
+        params = FISCALE_PARAMS[2024]
+        result = bereken_volledig(
+            omzet=95145, kosten=0, afschrijvingen=0,
+            representatie=550, investeringen_totaal=2919,
+            uren=1400, params=params,
+            aov=2998, woz=655000, hypotheekrente=6951,
+            ew_naar_partner=True,
+        )
+        # Boekhouder: ZVW = 3810
+        assert abs(result.zvw - 3810) < 50
+
+    def test_default_ew_naar_partner_is_false(self):
+        """Default behavior (no ew_naar_partner parameter) keeps EW in verzamelinkomen."""
+        params = FISCALE_PARAMS[2024]
+        result = bereken_volledig(
+            omzet=95145, kosten=0, afschrijvingen=0,
+            representatie=550, investeringen_totaal=2919,
+            uren=1400, params=params,
+            aov=2998, woz=655000, hypotheekrente=6951,
+        )
+        # Default: EW included, verzamelinkomen = 69120
+        assert abs(result.verzamelinkomen - 69120) < 200
+
+
 class TestTariefsaanpassing:
     """Beperking aftrekbare posten (tariefsaanpassing) since 2023."""
 
