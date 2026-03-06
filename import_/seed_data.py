@@ -1,7 +1,49 @@
 """Seed data: fiscale parameters (publieke belastingdienst-gegevens)."""
 
+import json
 from pathlib import Path
 from database import upsert_fiscale_params, get_all_fiscale_params
+
+# Arbeidskorting brackets per year (same data as heffingskortingen.py constants).
+# Format: [{"lower", "upper", "rate", "base"}, ...]
+AK_BRACKETS = {
+    2023: [
+        {"lower": 0, "upper": 10741, "rate": 0.08231, "base": 0},
+        {"lower": 10741, "upper": 23201, "rate": 0.29861, "base": 884},
+        {"lower": 23201, "upper": 37691, "rate": 0.03085, "base": 4605},
+        {"lower": 37691, "upper": 115295, "rate": -0.06510, "base": 5052},
+        {"lower": 115295, "upper": None, "rate": 0, "base": 0},
+    ],
+    2024: [
+        {"lower": 0, "upper": 11491, "rate": 0.08425, "base": 0},
+        {"lower": 11491, "upper": 24821, "rate": 0.31433, "base": 968},
+        {"lower": 24821, "upper": 39958, "rate": 0.02471, "base": 5158},
+        {"lower": 39958, "upper": 124935, "rate": -0.06510, "base": 5532},
+        {"lower": 124935, "upper": None, "rate": 0, "base": 0},
+    ],
+    2025: [
+        {"lower": 0, "upper": 12169, "rate": 0.08053, "base": 0},
+        {"lower": 12169, "upper": 26288, "rate": 0.30030, "base": 980},
+        {"lower": 26288, "upper": 43071, "rate": 0.02258, "base": 5220},
+        {"lower": 43071, "upper": 129078, "rate": -0.06510, "base": 5599},
+        {"lower": 129078, "upper": None, "rate": 0, "base": 0},
+    ],
+    2026: [
+        {"lower": 0, "upper": 11965, "rate": 0.08324, "base": 0},
+        {"lower": 11965, "upper": 25845, "rate": 0.31009, "base": 996},
+        {"lower": 25845, "upper": 45592, "rate": 0.01950, "base": 5300},
+        {"lower": 45592, "upper": 132920, "rate": -0.06510, "base": 5685},
+        {"lower": 132920, "upper": None, "rate": 0, "base": 0},
+    ],
+}
+
+# Box 3 forfaitair rendement percentages per year (Belastingdienst)
+BOX3_DEFAULTS = {
+    2023: {'heffingsvrij': 57000, 'bank': 0.36, 'overig': 6.17, 'schuld': 2.57, 'tarief': 32},
+    2024: {'heffingsvrij': 57000, 'bank': 1.03, 'overig': 6.17, 'schuld': 2.46, 'tarief': 36},
+    2025: {'heffingsvrij': 57684, 'bank': 1.28, 'overig': 6.04, 'schuld': 2.47, 'tarief': 36},
+    2026: {'heffingsvrij': 57684, 'bank': 1.28, 'overig': 6.00, 'schuld': 2.70, 'tarief': 36},
+}
 
 # === Fiscale parameters per jaar ===
 
@@ -32,6 +74,11 @@ FISCALE_PARAMS: dict[int, dict] = {
         'wet_hillen_pct': 83.333,
         'urencriterium': 1225,
         'pvv_premiegrondslag': 37149,
+        'arbeidskorting_brackets': json.dumps(AK_BRACKETS[2023]),
+        'pvv_aow_pct': 17.90, 'pvv_anw_pct': 0.10, 'pvv_wlz_pct': 9.65,
+        'box3_heffingsvrij_vermogen': 57000, 'box3_rendement_bank_pct': 0.36,
+        'box3_rendement_overig_pct': 6.17, 'box3_rendement_schuld_pct': 2.57,
+        'box3_tarief_pct': 32,
     },
     2024: {
         'jaar': 2024,
@@ -59,6 +106,11 @@ FISCALE_PARAMS: dict[int, dict] = {
         'wet_hillen_pct': 80.0,
         'urencriterium': 1225,
         'pvv_premiegrondslag': 38098,
+        'arbeidskorting_brackets': json.dumps(AK_BRACKETS[2024]),
+        'pvv_aow_pct': 17.90, 'pvv_anw_pct': 0.10, 'pvv_wlz_pct': 9.65,
+        'box3_heffingsvrij_vermogen': 57000, 'box3_rendement_bank_pct': 1.03,
+        'box3_rendement_overig_pct': 6.17, 'box3_rendement_schuld_pct': 2.46,
+        'box3_tarief_pct': 36,
     },
     2025: {
         'jaar': 2025,
@@ -86,6 +138,11 @@ FISCALE_PARAMS: dict[int, dict] = {
         'wet_hillen_pct': 76.667,
         'urencriterium': 1225,
         'pvv_premiegrondslag': 38441,
+        'arbeidskorting_brackets': json.dumps(AK_BRACKETS[2025]),
+        'pvv_aow_pct': 17.90, 'pvv_anw_pct': 0.10, 'pvv_wlz_pct': 9.65,
+        'box3_heffingsvrij_vermogen': 57684, 'box3_rendement_bank_pct': 1.28,
+        'box3_rendement_overig_pct': 6.04, 'box3_rendement_schuld_pct': 2.47,
+        'box3_tarief_pct': 36,
     },
     2026: {
         'jaar': 2026,
@@ -113,6 +170,11 @@ FISCALE_PARAMS: dict[int, dict] = {
         'wet_hillen_pct': 71.867,
         'urencriterium': 1225,
         'pvv_premiegrondslag': 38883,
+        'arbeidskorting_brackets': json.dumps(AK_BRACKETS[2026]),
+        'pvv_aow_pct': 17.90, 'pvv_anw_pct': 0.10, 'pvv_wlz_pct': 9.65,
+        'box3_heffingsvrij_vermogen': 57684, 'box3_rendement_bank_pct': 1.28,
+        'box3_rendement_overig_pct': 6.00, 'box3_rendement_schuld_pct': 2.70,
+        'box3_tarief_pct': 36,
     },
 }
 

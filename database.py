@@ -227,6 +227,24 @@ async def init_db(db_path: Path = DB_PATH) -> None:
                    WHERE jaar = ? AND wet_hillen_pct = 0""",
                 (vals['ew_forfait_pct'], vals['villataks_grens'],
                  vals['wet_hillen_pct'], vals['urencriterium'], jaar))
+        # Data migration: populate AK brackets and Box 3 defaults for existing years
+        from import_.seed_data import AK_BRACKETS, BOX3_DEFAULTS
+        import json as _json
+        for jaar in [2023, 2024, 2025, 2026]:
+            await conn.execute(
+                "UPDATE fiscale_params SET arbeidskorting_brackets = ? "
+                "WHERE jaar = ? AND (arbeidskorting_brackets IS NULL OR arbeidskorting_brackets = '')",
+                (_json.dumps(AK_BRACKETS.get(jaar, [])), jaar))
+            b3 = BOX3_DEFAULTS.get(jaar)
+            if b3:
+                await conn.execute(
+                    "UPDATE fiscale_params SET "
+                    "box3_heffingsvrij_vermogen = ?, box3_rendement_bank_pct = ?, "
+                    "box3_rendement_overig_pct = ?, box3_rendement_schuld_pct = ?, "
+                    "box3_tarief_pct = ? "
+                    "WHERE jaar = ? AND box3_rendement_bank_pct = 1.03 "
+                    "AND box3_heffingsvrij_vermogen = 57000",
+                    (b3['heffingsvrij'], b3['bank'], b3['overig'], b3['schuld'], b3['tarief'], jaar))
         await conn.commit()
 
 
