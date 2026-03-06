@@ -969,6 +969,119 @@ class TestIBPVVSplit:
         assert abs(result.resultaat_ib - (result.netto_ib - 28544)) < 1
 
 
+class TestBoekhouder2024Complete:
+    """Complete validation against Boekhouder Aangifte IB 2024.
+
+    Every intermediate value from the Boekhouder rapportage (10 pages).
+    Inputs: omzet 95145, repr 550, invest 2919, uren 1400,
+    aov 2998, woz 655000, hyp 6951, VA_IB 30303, VA_ZVW 2667,
+    ew_naar_partner=True.
+    """
+
+    @pytest.fixture()
+    def boekhouder(self):
+        params = FISCALE_PARAMS[2024]
+        return bereken_volledig(
+            omzet=95145, kosten=0, afschrijvingen=0,
+            representatie=550, investeringen_totaal=2919,
+            uren=1400, params=params,
+            aov=2998,
+            woz=655000, hypotheekrente=6951,
+            voorlopige_aanslag=30303,
+            voorlopige_aanslag_zvw=2667,
+            ew_naar_partner=True,
+        )
+
+    def test_winst_en_verlies(self, boekhouder):
+        """Page 6-7: W&V totals."""
+        assert boekhouder.winst == 95145
+
+    def test_fiscale_correcties(self, boekhouder):
+        """Page 6-7: repr bijtelling 110, KIA 818."""
+        assert abs(boekhouder.repr_bijtelling - 110) < 1
+        assert abs(boekhouder.kia - 817.32) < 1
+
+    def test_fiscale_winst(self, boekhouder):
+        """Page 7: fiscale winst 94437."""
+        assert abs(boekhouder.fiscale_winst - 94438) < 5
+
+    def test_ondernemersaftrek(self, boekhouder):
+        """Page 7: ZA 3750, SA 2123."""
+        assert boekhouder.zelfstandigenaftrek == 3750
+        assert boekhouder.startersaftrek == 2123
+
+    def test_mkb_vrijstelling(self, boekhouder):
+        """Page 7: MKB ~11788."""
+        assert abs(boekhouder.mkb_vrijstelling - 11788) < 50
+
+    def test_belastbare_winst(self, boekhouder):
+        """Page 2: belastbare winst Box 1 = 76776."""
+        assert abs(boekhouder.belastbare_winst - 76777) < 10
+
+    def test_eigen_woning(self, boekhouder):
+        """Page 8: EW forfait 2293, hyp 6951, saldo -4659 (to partner)."""
+        assert abs(boekhouder.ew_forfait - 2292.50) < 1
+        assert abs(boekhouder.ew_saldo - (-4658.50)) < 1
+
+    def test_verzamelinkomen(self, boekhouder):
+        """Page 2: belastbaar Box1 = 76776 - 2998 = 73778 (EW to partner)."""
+        assert abs(boekhouder.verzamelinkomen - 73778) < 10
+
+    def test_tariefsaanpassing(self, boekhouder):
+        """Page 2: tariefsaanpassing = 1994."""
+        assert abs(boekhouder.tariefsaanpassing - 1994) < 10
+
+    def test_bruto_ib_pvv(self, boekhouder):
+        """Page 2: IB + PVV = 29268."""
+        assert abs(boekhouder.bruto_ib - 29268) < 10
+
+    def test_ib_alleen(self, boekhouder):
+        """Page 2: IB (incl tariefsaanpassing) = 18734."""
+        assert abs(boekhouder.ib_alleen - 18734) < 10
+
+    def test_pvv_total(self, boekhouder):
+        """Page 2: PVV = 27.65% × 38098 = 10534."""
+        assert abs(boekhouder.pvv - 10534) < 5
+
+    def test_pvv_components(self, boekhouder):
+        """Page 2: AOW 17.90%, Anw 0.10%, Wlz 9.65%."""
+        assert abs(boekhouder.pvv_aow - 6820) < 5   # 17.90% × 38098
+        assert abs(boekhouder.pvv_anw - 38) < 2      # 0.10% × 38098
+        assert abs(boekhouder.pvv_wlz - 3676) < 5    # 9.65% × 38098
+
+    def test_ahk(self, boekhouder):
+        """Page 4: AHK = 116."""
+        assert abs(boekhouder.ahk - 116) < 2
+
+    def test_arbeidskorting(self, boekhouder):
+        """Page 4: AK = 1986 (based on fiscale_winst 94437)."""
+        assert abs(boekhouder.arbeidskorting - 1986) < 5
+
+    def test_netto_ib(self, boekhouder):
+        """Page 4: verschuldigd = 29268 - 116 - 1986 = 27166."""
+        assert abs(boekhouder.netto_ib - 27166) < 10
+
+    def test_zvw(self, boekhouder):
+        """Page 5: ZVW = 5.32% × min(76776, 71628) = 3810."""
+        assert abs(boekhouder.zvw - 3810) < 5
+
+    def test_resultaat_ib(self, boekhouder):
+        """Page 1: IB terug = 27166 - 30303 = -3137."""
+        assert abs(boekhouder.resultaat_ib - (-3137)) < 10
+
+    def test_resultaat_zvw(self, boekhouder):
+        """Page 5: ZVW bij = 3810 - 2667 = 1143."""
+        assert abs(boekhouder.resultaat_zvw - 1143) < 5
+
+    def test_resultaat_total(self, boekhouder):
+        """Page 1: total = IB terug + ZVW bij = -3137 + 1143 = -1994."""
+        assert abs(boekhouder.resultaat - (-1994)) < 15
+
+    def test_urencriterium(self, boekhouder):
+        """1400 > 1225: urencriterium gehaald."""
+        assert boekhouder.uren_criterium_gehaald is True
+
+
 class TestKIABoundary:
     """Bug #1: KIA should apply at exactly the ondergrens (>=, not >)."""
 
