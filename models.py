@@ -142,6 +142,22 @@ class FiscaleParams:
     # Partner inkomen (voor verzamelinkomen aangifte)
     partner_bruto_loon: float = 0.0
     partner_loonheffing: float = 0.0
+    # Arbeidskorting brackets as JSON (DB-driven, fallback to code constants)
+    arbeidskorting_brackets: str = ''
+    # PVV component rates (DB-driven, fallback to hardcoded constants)
+    pvv_aow_pct: float = 17.90
+    pvv_anw_pct: float = 0.10
+    pvv_wlz_pct: float = 9.65
+    # Box 3 per-year inputs (peildatum 1 jan)
+    box3_bank_saldo: float = 0.0
+    box3_overige_bezittingen: float = 0.0
+    box3_schulden: float = 0.0
+    # Box 3 per-year fiscal parameters
+    box3_heffingsvrij_vermogen: float = 57000.0
+    box3_rendement_bank_pct: float = 1.03
+    box3_rendement_overig_pct: float = 6.17
+    box3_rendement_schuld_pct: float = 2.46
+    box3_tarief_pct: float = 36.0
 
 
 @dataclass

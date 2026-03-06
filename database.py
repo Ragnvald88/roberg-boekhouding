@@ -181,6 +181,12 @@ async def init_db(db_path: Path = DB_PATH) -> None:
             ('partner_bruto_loon', 0), ('partner_loonheffing', 0),
             ('pvv_premiegrondslag', 0),
             ('ew_naar_partner', 1), ('voorlopige_aanslag_zvw', 0),
+            # Phase: fiscal overhaul v2 — PVV rates + Box 3
+            ('pvv_aow_pct', 17.90), ('pvv_anw_pct', 0.10), ('pvv_wlz_pct', 9.65),
+            ('box3_bank_saldo', 0), ('box3_overige_bezittingen', 0), ('box3_schulden', 0),
+            ('box3_heffingsvrij_vermogen', 57000),
+            ('box3_rendement_bank_pct', 1.03), ('box3_rendement_overig_pct', 6.17),
+            ('box3_rendement_schuld_pct', 2.46), ('box3_tarief_pct', 36),
         ]:
             try:
                 await conn.execute(
@@ -188,6 +194,14 @@ async def init_db(db_path: Path = DB_PATH) -> None:
                 )
             except Exception:
                 pass  # Column already exists
+
+        # TEXT column migration (separate because type differs)
+        try:
+            await conn.execute(
+                "ALTER TABLE fiscale_params ADD COLUMN arbeidskorting_brackets TEXT DEFAULT ''"
+            )
+        except Exception:
+            pass  # Column already exists
 
         # Migration: add locatie_id to werkdagen
         try:
@@ -849,6 +863,18 @@ def _row_to_fiscale_params(r) -> FiscaleParams:
         voorlopige_aanslag_zvw=_safe_get(r, 'voorlopige_aanslag_zvw', 0, keys),
         partner_bruto_loon=_safe_get(r, 'partner_bruto_loon', 0, keys),
         partner_loonheffing=_safe_get(r, 'partner_loonheffing', 0, keys),
+        arbeidskorting_brackets=_safe_get(r, 'arbeidskorting_brackets', '', keys) or '',
+        pvv_aow_pct=_safe_get(r, 'pvv_aow_pct', 17.90, keys),
+        pvv_anw_pct=_safe_get(r, 'pvv_anw_pct', 0.10, keys),
+        pvv_wlz_pct=_safe_get(r, 'pvv_wlz_pct', 9.65, keys),
+        box3_bank_saldo=_safe_get(r, 'box3_bank_saldo', 0, keys),
+        box3_overige_bezittingen=_safe_get(r, 'box3_overige_bezittingen', 0, keys),
+        box3_schulden=_safe_get(r, 'box3_schulden', 0, keys),
+        box3_heffingsvrij_vermogen=_safe_get(r, 'box3_heffingsvrij_vermogen', 57000, keys),
+        box3_rendement_bank_pct=_safe_get(r, 'box3_rendement_bank_pct', 1.03, keys),
+        box3_rendement_overig_pct=_safe_get(r, 'box3_rendement_overig_pct', 6.17, keys),
+        box3_rendement_schuld_pct=_safe_get(r, 'box3_rendement_schuld_pct', 2.46, keys),
+        box3_tarief_pct=_safe_get(r, 'box3_tarief_pct', 36, keys),
     )
 
 
@@ -877,11 +903,12 @@ async def get_all_fiscale_params(db_path: Path = DB_PATH) -> list[FiscaleParams]
 async def upsert_fiscale_params(db_path: Path = DB_PATH, **kwargs) -> None:
     conn = await get_db(db_path)
     try:
-        # Preserve IB-input + partner values when overwriting from Instellingen
+        # Preserve IB-input, partner, and box3 input values when overwriting from Instellingen
         cur = await conn.execute(
             "SELECT aov_premie, woz_waarde, hypotheekrente, "
             "voorlopige_aanslag_betaald, voorlopige_aanslag_zvw, "
-            "partner_bruto_loon, partner_loonheffing "
+            "partner_bruto_loon, partner_loonheffing, "
+            "box3_bank_saldo, box3_overige_bezittingen, box3_schulden "
             "FROM fiscale_params WHERE jaar = ?",
             (kwargs['jaar'],))
         existing = await cur.fetchone()
@@ -894,10 +921,15 @@ async def upsert_fiscale_params(db_path: Path = DB_PATH, **kwargs) -> None:
                 zvw_pct, zvw_max_grondslag, repr_aftrek_pct,
                 ew_forfait_pct, villataks_grens, wet_hillen_pct, urencriterium,
                 pvv_premiegrondslag,
+                arbeidskorting_brackets, pvv_aow_pct, pvv_anw_pct, pvv_wlz_pct,
+                box3_heffingsvrij_vermogen, box3_rendement_bank_pct,
+                box3_rendement_overig_pct, box3_rendement_schuld_pct, box3_tarief_pct,
                 aov_premie, woz_waarde, hypotheekrente, voorlopige_aanslag_betaald,
-                voorlopige_aanslag_zvw, partner_bruto_loon, partner_loonheffing)
+                voorlopige_aanslag_zvw, partner_bruto_loon, partner_loonheffing,
+                box3_bank_saldo, box3_overige_bezittingen, box3_schulden)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                       ?, ?, ?, ?)""",
             (kwargs['jaar'], kwargs['zelfstandigenaftrek'], kwargs.get('startersaftrek'),
              kwargs['mkb_vrijstelling_pct'], kwargs['kia_ondergrens'],
              kwargs['kia_bovengrens'], kwargs['kia_pct'], kwargs['km_tarief'],
@@ -911,13 +943,25 @@ async def upsert_fiscale_params(db_path: Path = DB_PATH, **kwargs) -> None:
              kwargs.get('wet_hillen_pct', 0),
              kwargs.get('urencriterium', 1225),
              kwargs.get('pvv_premiegrondslag', 0),
+             kwargs.get('arbeidskorting_brackets', ''),
+             kwargs.get('pvv_aow_pct', 17.90),
+             kwargs.get('pvv_anw_pct', 0.10),
+             kwargs.get('pvv_wlz_pct', 9.65),
+             kwargs.get('box3_heffingsvrij_vermogen', 57000),
+             kwargs.get('box3_rendement_bank_pct', 1.03),
+             kwargs.get('box3_rendement_overig_pct', 6.17),
+             kwargs.get('box3_rendement_schuld_pct', 2.46),
+             kwargs.get('box3_tarief_pct', 36),
              existing['aov_premie'] if existing else 0,
              existing['woz_waarde'] if existing else 0,
              existing['hypotheekrente'] if existing else 0,
              existing['voorlopige_aanslag_betaald'] if existing else 0,
              existing['voorlopige_aanslag_zvw'] if existing else 0,
              existing['partner_bruto_loon'] if existing else 0,
-             existing['partner_loonheffing'] if existing else 0)
+             existing['partner_loonheffing'] if existing else 0,
+             existing['box3_bank_saldo'] if existing else 0,
+             existing['box3_overige_bezittingen'] if existing else 0,
+             existing['box3_schulden'] if existing else 0)
         )
         await conn.commit()
     finally:
