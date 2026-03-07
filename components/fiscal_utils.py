@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from database import (
+    get_data_counts,
     get_fiscale_params,
     get_investeringen,
     get_investeringen_voor_afschrijving,
@@ -58,6 +59,8 @@ def fiscale_params_to_dict(params) -> dict:
         'box3_rendement_schuld_pct': params.box3_rendement_schuld_pct,
         'box3_tarief_pct': params.box3_tarief_pct,
         'box3_drempel_schulden': params.box3_drempel_schulden,
+        'za_actief': params.za_actief,
+        'sa_actief': params.sa_actief,
     }
 
 
@@ -80,6 +83,7 @@ async def fetch_fiscal_data(db_path: Path, jaar: int) -> dict | None:
     omzet = await get_omzet_totaal(db_path, jaar)
     kosten_per_cat = await get_uitgaven_per_categorie(db_path, jaar)
     representatie = await get_representatie_totaal(db_path, jaar)
+    counts = await get_data_counts(db_path, jaar)
     investeringen = await get_investeringen_voor_afschrijving(
         db_path, tot_jaar=jaar)
     inv_dit_jaar = await get_investeringen(db_path, jaar=jaar)
@@ -143,6 +147,10 @@ async def fetch_fiscal_data(db_path: Path, jaar: int) -> dict | None:
         'voorlopige_aanslag': params.voorlopige_aanslag_betaald or 0,
         'voorlopige_aanslag_zvw': params.voorlopige_aanslag_zvw or 0,
         'ew_naar_partner': params.ew_naar_partner,
+        'lijfrente': params.lijfrente_premie or 0,
+        'n_facturen': counts['n_facturen'],
+        'n_uitgaven': counts['n_uitgaven'],
+        'n_werkdagen': counts['n_werkdagen'],
     }
 
 

@@ -194,6 +194,8 @@ async def init_db(db_path: Path = DB_PATH) -> None:
             ('box3_drempel_schulden', 3700),
             ('balans_bank_saldo', 0), ('balans_crediteuren', 0),
             ('balans_overige_vorderingen', 0), ('balans_overige_schulden', 0),
+            # Phase: jaarafsluiting redesign — ZA/SA toggles + lijfrente
+            ('za_actief', 1), ('sa_actief', 0), ('lijfrente_premie', 0),
         ]:
             try:
                 await conn.execute(
@@ -258,6 +260,13 @@ async def init_db(db_path: Path = DB_PATH) -> None:
                         "UPDATE fiscale_params SET box3_drempel_schulden = ? "
                         "WHERE jaar = ? AND box3_drempel_schulden = 3700",
                         (b3['drempel_schulden'], jaar))
+
+        # Data migration: set sa_actief=1 for first 3 years (2023-2025) on existing DBs
+        for jaar in [2023, 2024, 2025]:
+            await conn.execute(
+                "UPDATE fiscale_params SET sa_actief = 1 "
+                "WHERE jaar = ? AND sa_actief = 0",
+                (jaar,))
 
         # Data migration: fix DD-MM-YYYY dates → YYYY-MM-DD in uitgaven and werkdagen
         for table in ('uitgaven', 'werkdagen'):
@@ -938,6 +947,9 @@ def _row_to_fiscale_params(r) -> FiscaleParams:
         box3_rendement_schuld_pct=_safe_get(r, 'box3_rendement_schuld_pct', 2.46, keys),
         box3_tarief_pct=_safe_get(r, 'box3_tarief_pct', 36, keys),
         box3_drempel_schulden=_safe_get(r, 'box3_drempel_schulden', 3700, keys),
+        za_actief=bool(_safe_get(r, 'za_actief', 1, keys)),
+        sa_actief=bool(_safe_get(r, 'sa_actief', 0, keys)),
+        lijfrente_premie=_safe_get(r, 'lijfrente_premie', 0, keys),
         balans_bank_saldo=_safe_get(r, 'balans_bank_saldo', 0, keys),
         balans_crediteuren=_safe_get(r, 'balans_crediteuren', 0, keys),
         balans_overige_vorderingen=_safe_get(r, 'balans_overige_vorderingen', 0, keys),
@@ -978,7 +990,8 @@ async def upsert_fiscale_params(db_path: Path = DB_PATH, **kwargs) -> None:
             "box3_bank_saldo, box3_overige_bezittingen, box3_schulden, "
             "ew_naar_partner, "
             "balans_bank_saldo, balans_crediteuren, "
-            "balans_overige_vorderingen, balans_overige_schulden "
+            "balans_overige_vorderingen, balans_overige_schulden, "
+            "lijfrente_premie "
             "FROM fiscale_params WHERE jaar = ?",
             (kwargs['jaar'],))
         existing = await cur.fetchone()
@@ -995,15 +1008,16 @@ async def upsert_fiscale_params(db_path: Path = DB_PATH, **kwargs) -> None:
                 box3_heffingsvrij_vermogen, box3_rendement_bank_pct,
                 box3_rendement_overig_pct, box3_rendement_schuld_pct, box3_tarief_pct,
                 box3_drempel_schulden,
+                za_actief, sa_actief,
                 aov_premie, woz_waarde, hypotheekrente, voorlopige_aanslag_betaald,
                 voorlopige_aanslag_zvw, partner_bruto_loon, partner_loonheffing,
                 box3_bank_saldo, box3_overige_bezittingen, box3_schulden,
-                ew_naar_partner,
+                ew_naar_partner, lijfrente_premie,
                 balans_bank_saldo, balans_crediteuren,
                 balans_overige_vorderingen, balans_overige_schulden)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (kwargs['jaar'], kwargs['zelfstandigenaftrek'], kwargs.get('startersaftrek'),
              kwargs['mkb_vrijstelling_pct'], kwargs['kia_ondergrens'],
              kwargs['kia_bovengrens'], kwargs['kia_pct'], kwargs['km_tarief'],
@@ -1027,6 +1041,8 @@ async def upsert_fiscale_params(db_path: Path = DB_PATH, **kwargs) -> None:
              kwargs.get('box3_rendement_schuld_pct', 2.46),
              kwargs.get('box3_tarief_pct', 36),
              kwargs.get('box3_drempel_schulden', 3700),
+             kwargs.get('za_actief', 1),
+             kwargs.get('sa_actief', 0),
              existing['aov_premie'] if existing else 0,
              existing['woz_waarde'] if existing else 0,
              existing['hypotheekrente'] if existing else 0,
@@ -1038,6 +1054,7 @@ async def upsert_fiscale_params(db_path: Path = DB_PATH, **kwargs) -> None:
              existing['box3_overige_bezittingen'] if existing else 0,
              existing['box3_schulden'] if existing else 0,
              existing['ew_naar_partner'] if existing else 1,
+             existing['lijfrente_premie'] if existing else 0,
              existing['balans_bank_saldo'] if existing else 0,
              existing['balans_crediteuren'] if existing else 0,
              existing['balans_overige_vorderingen'] if existing else 0,
@@ -1052,7 +1069,8 @@ async def update_ib_inputs(db_path: Path = DB_PATH, jaar: int = 0,
                            aov_premie: float = 0, woz_waarde: float = 0,
                            hypotheekrente: float = 0,
                            voorlopige_aanslag_betaald: float = 0,
-                           voorlopige_aanslag_zvw: float = 0) -> None:
+                           voorlopige_aanslag_zvw: float = 0,
+                           lijfrente_premie: float = 0) -> None:
     """Update only the IB-input columns for a specific year."""
     conn = await get_db(db_path)
     try:
@@ -1060,11 +1078,30 @@ async def update_ib_inputs(db_path: Path = DB_PATH, jaar: int = 0,
             """UPDATE fiscale_params
                SET aov_premie = ?, woz_waarde = ?,
                    hypotheekrente = ?, voorlopige_aanslag_betaald = ?,
-                   voorlopige_aanslag_zvw = ?
+                   voorlopige_aanslag_zvw = ?, lijfrente_premie = ?
                WHERE jaar = ?""",
             (aov_premie, woz_waarde, hypotheekrente,
-             voorlopige_aanslag_betaald, voorlopige_aanslag_zvw, jaar))
+             voorlopige_aanslag_betaald, voorlopige_aanslag_zvw,
+             lijfrente_premie, jaar))
         await conn.commit()
+    finally:
+        await conn.close()
+
+
+async def update_za_sa_toggles(db_path: Path = DB_PATH, jaar: int = 0,
+                                za_actief: bool = True,
+                                sa_actief: bool = False) -> bool:
+    """Update ZA/SA toggle flags for a specific year.
+
+    Returns True if a row was updated, False if no fiscale_params row exists.
+    """
+    conn = await get_db(db_path)
+    try:
+        cursor = await conn.execute(
+            "UPDATE fiscale_params SET za_actief = ?, sa_actief = ? WHERE jaar = ?",
+            (int(za_actief), int(sa_actief), jaar))
+        await conn.commit()
+        return cursor.rowcount > 0
     finally:
         await conn.close()
 
@@ -1287,6 +1324,32 @@ async def get_omzet_totaal(db_path: Path = DB_PATH, jaar: int = 2026) -> float:
         await conn.close()
 
 
+async def get_data_counts(db_path: Path = DB_PATH, jaar: int = 2026) -> dict:
+    """Get counts of facturen, uitgaven, and werkdagen for a year."""
+    conn = await get_db(db_path)
+    try:
+        cur = await conn.execute(
+            "SELECT COUNT(*) FROM facturen "
+            "WHERE substr(datum, 1, 4) = ? AND type = 'factuur'",
+            (str(jaar),))
+        n_facturen = (await cur.fetchone())[0]
+        cur = await conn.execute(
+            "SELECT COUNT(*) FROM uitgaven WHERE substr(datum, 1, 4) = ?",
+            (str(jaar),))
+        n_uitgaven = (await cur.fetchone())[0]
+        cur = await conn.execute(
+            "SELECT COUNT(*) FROM werkdagen WHERE substr(datum, 1, 4) = ?",
+            (str(jaar),))
+        n_werkdagen = (await cur.fetchone())[0]
+        return {
+            'n_facturen': n_facturen,
+            'n_uitgaven': n_uitgaven,
+            'n_werkdagen': n_werkdagen,
+        }
+    finally:
+        await conn.close()
+
+
 async def get_representatie_totaal(db_path: Path = DB_PATH, jaar: int = 2026) -> float:
     conn = await get_db(db_path)
     try:
@@ -1424,12 +1487,12 @@ async def get_openstaande_debiteuren(db_path: Path = DB_PATH, jaar: int = 0) -> 
 
 
 async def get_nog_te_factureren(db_path: Path = DB_PATH, jaar: int = 0) -> float:
-    """Sum of (uren * tarief) for unfactured werkdagen in the given year."""
+    """Sum of (uren * tarief + km * km_tarief) for unfactured werkdagen in the given year."""
     conn = await get_db(db_path)
     try:
         cursor = await conn.execute(
-            "SELECT COALESCE(SUM(uren * tarief), 0) FROM werkdagen "
-            "WHERE status = 'ongefactureerd' AND strftime('%Y', datum) = ?",
+            "SELECT COALESCE(SUM(uren * tarief + km * km_tarief), 0.0) FROM werkdagen "
+            "WHERE status = 'ongefactureerd' AND substr(datum, 1, 4) = ?",
             (str(jaar),))
         row = await cursor.fetchone()
         return float(row[0])

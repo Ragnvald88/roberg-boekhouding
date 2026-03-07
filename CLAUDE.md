@@ -15,7 +15,7 @@ source .venv/bin/activate
 export DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib
 python main.py  # → http://127.0.0.1:8085
 
-# Tests (260 passing)
+# Tests (284 passing)
 DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib .venv/bin/python -m pytest tests/ -v
 ```
 
@@ -38,6 +38,7 @@ DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib .venv/bin/python -m pytest tests/ -
 - **Fiscal utils**: `components/fiscal_utils.py` (shared `fiscale_params_to_dict` + `fetch_fiscal_data`)
 - **Fiscal engine**: `fiscal/berekeningen.py` (bereken_volledig waterfall + bereken_box3)
 - **Heffingskortingen**: `fiscal/heffingskortingen.py` (AK brackets + AHK)
+- **KPI cards**: `components/kpi_card.py` (shared kpi_card + kpi_strip)
 
 ### NiceGUI Patronen
 - `ui.table` (NIET AG Grid), `ui.echart` voor charts
@@ -65,7 +66,9 @@ Geen: user auth, BTW-administratie, loon/voorraad, email, real-time bank-API, au
 - **PVV rates**: `pvv_aow/anw/wlz_pct` columns (default 17.90/0.10/9.65), fallback to constants
 - **Box 3**: Per-jaar rendementen (bank/overig/schuld), heffingsvrij vermogen, tarief, drempel schulden
 - **Alle andere**: ZA, SA, MKB%, KIA, AHK, AK, ZVW, schijf1/2/3, EW forfait, villataks, Wet Hillen, etc.
-- **Input velden** (preserved across param upserts): AOV, WOZ, hypotheekrente, VA IB, VA ZVW, partner, Box 3 saldi, ew_naar_partner, balans inputs
+- **ZA/SA toggles**: `za_actief`/`sa_actief` booleans per year (DB-driven, editable in Instellingen + Jaarafsluiting)
+- **Lijfrentepremie**: `lijfrente_premie` per year (reduces verzamelinkomen)
+- **Input velden** (preserved across param upserts): AOV, WOZ, hypotheekrente, VA IB, VA ZVW, partner, Box 3 saldi, ew_naar_partner, lijfrente_premie, balans inputs
 
 ### Fiscal engine
 - **Arbeidskorting input** = fiscale_winst (vóór ZA/SA/MKB), NOT belastbare_winst
@@ -80,6 +83,14 @@ Geen: user auth, BTW-administratie, loon/voorraad, email, real-time bank-API, au
 ### Boekhouder referentiecijfers (tests valideren hiertegen)
 - **2023**: winst €62.522 → belastbare winst €45.801 → IB terug €415
 - **2024**: winst €95.145 → belastbare winst €76.776 → IB terug €3.137
+
+## Jaarafsluiting pagina (Tab-based)
+7-tab layout: Invoer, W&V, Fiscaal, Belasting, Balans, Controles, Document.
+KPI strip at top (winst, belastbare winst, IB+ZVW, resultaat). Year defaults to vorig jaar.
+Single "Opslaan & herbereken" button saves ZA/SA toggles + IB inputs + balans + ew_naar_partner.
+PDF export: 5-page professional layout with grondslagen, prior year comparison, page numbers.
+Document tab: Inline HTML preview of jaarcijfers (same as PDF, rendered in-browser).
+Controles tab: Includes fiscal advisory panel (ZA trajectory, SA tracking, KIA check, lijfrente hints, belastingdruk).
 
 ## Aangifte pagina (Invulhulp)
 5-tab invulhulp mirroring Belastingdienst IB-aangifte structure. Year defaults to vorig jaar.

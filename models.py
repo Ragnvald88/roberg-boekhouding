@@ -159,6 +159,11 @@ class FiscaleParams:
     box3_rendement_schuld_pct: float = 2.46
     box3_tarief_pct: float = 36.0
     box3_drempel_schulden: float = 3700.0
+    # ZA/SA toggles (per year — ZA phasing out, SA max 3x in first 5 years)
+    za_actief: bool = True
+    sa_actief: bool = False
+    # Lijfrentepremie (jaarruimte, Box 1 aftrekpost)
+    lijfrente_premie: float = 0.0
     # Balance sheet manual inputs (per year)
     balans_bank_saldo: float = 0.0
     balans_crediteuren: float = 0.0

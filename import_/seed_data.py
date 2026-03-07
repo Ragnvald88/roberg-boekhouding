@@ -52,6 +52,7 @@ FISCALE_PARAMS: dict[int, dict] = {
         'jaar': 2023,
         'zelfstandigenaftrek': 5030,
         'startersaftrek': 2123,
+        'za_actief': 1, 'sa_actief': 1,  # First 3 years: SA active
         'mkb_vrijstelling_pct': 14.0,
         'kia_ondergrens': 2601,
         'kia_bovengrens': 69764,
@@ -85,6 +86,7 @@ FISCALE_PARAMS: dict[int, dict] = {
         'jaar': 2024,
         'zelfstandigenaftrek': 3750,
         'startersaftrek': 2123,
+        'za_actief': 1, 'sa_actief': 1,  # First 3 years: SA active
         'mkb_vrijstelling_pct': 13.31,
         'kia_ondergrens': 2801,
         'kia_bovengrens': 69764,
@@ -118,6 +120,7 @@ FISCALE_PARAMS: dict[int, dict] = {
         'jaar': 2025,
         'zelfstandigenaftrek': 2470,
         'startersaftrek': 2123,
+        'za_actief': 1, 'sa_actief': 1,  # First 3 years: SA active
         'mkb_vrijstelling_pct': 12.70,
         'kia_ondergrens': 2901,
         'kia_bovengrens': 70602,
@@ -151,6 +154,7 @@ FISCALE_PARAMS: dict[int, dict] = {
         'jaar': 2026,
         'zelfstandigenaftrek': 1200,
         'startersaftrek': 2123,
+        'za_actief': 1, 'sa_actief': 0,  # Year 4+: SA no longer active
         'mkb_vrijstelling_pct': 12.70,
         'kia_ondergrens': 2901,
         'kia_bovengrens': 70602,

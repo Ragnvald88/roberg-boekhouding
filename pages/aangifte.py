@@ -125,7 +125,8 @@ async def aangifte_page():
             representatie=data['representatie'],
             investeringen_totaal=data['inv_totaal_dit_jaar'],
             uren=data['uren'], params=data['params_dict'],
-            aov=data['aov'], woz=data['woz'],
+            aov=data['aov'], lijfrente=data.get('lijfrente', 0),
+            woz=data['woz'],
             hypotheekrente=data['hypotheekrente'],
             voorlopige_aanslag=data['voorlopige_aanslag'],
             voorlopige_aanslag_zvw=data['voorlopige_aanslag_zvw'],
@@ -463,12 +464,17 @@ async def aangifte_page():
                 va_zvw_val = float(va_zvw_input.value or 0)
                 ew_val = ew_partner_check.value
 
+                # Read current lijfrente from DB to preserve it
+                current_params = await get_fiscale_params(DB_PATH, jaar)
+                current_lijfrente = current_params.lijfrente_premie if current_params else 0
+
                 await update_ib_inputs(
                     DB_PATH, jaar=jaar,
                     aov_premie=aov_val, woz_waarde=woz_val,
                     hypotheekrente=hyp_val,
                     voorlopige_aanslag_betaald=va_ib_val,
                     voorlopige_aanslag_zvw=va_zvw_val,
+                    lijfrente_premie=current_lijfrente,
                 )
                 await update_ew_naar_partner(DB_PATH, jaar=jaar, value=ew_val)
                 ui.notify('Opgeslagen', type='positive')

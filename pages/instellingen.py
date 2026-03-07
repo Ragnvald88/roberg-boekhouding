@@ -387,6 +387,8 @@ async def instellingen_page():
                                         'box3_rendement_schuld_pct': latest.box3_rendement_schuld_pct,
                                         'box3_tarief_pct': latest.box3_tarief_pct,
                                         'box3_drempel_schulden': latest.box3_drempel_schulden,
+                                        'za_actief': int(latest.za_actief),
+                                        'sa_actief': int(latest.sa_actief),
                                     }
                                 else:
                                     kwargs = {'jaar': jaar, 'zelfstandigenaftrek': 0,
@@ -452,6 +454,20 @@ async def instellingen_page():
                                             format='%.2f'
                                         ).classes('w-full')
                                         inputs[key] = inp
+
+                                # --- ZA/SA toggles ---
+                                ui.label('Ondernemersaftrek toggles').classes(
+                                    'text-subtitle2 mt-4')
+                                za_cb = ui.checkbox(
+                                    'ZA actief',
+                                    value=params.za_actief,
+                                )
+                                inputs['za_actief'] = za_cb
+                                sa_cb = ui.checkbox(
+                                    'SA actief (max 3x in eerste 5 jaar)',
+                                    value=params.sa_actief,
+                                )
+                                inputs['sa_actief'] = sa_cb
 
                                 # --- PVV premies ---
                                 ui.label('PVV premies').classes(
@@ -570,6 +586,9 @@ async def instellingen_page():
                                         kwargs[key] = val if val else 0
                                     # Pass through AK brackets unchanged
                                     kwargs['arbeidskorting_brackets'] = ak_json
+                                    # ZA/SA toggles (checkbox .value is bool)
+                                    kwargs['za_actief'] = int(inps['za_actief'].value)
+                                    kwargs['sa_actief'] = int(inps['sa_actief'].value)
                                     await upsert_fiscale_params(
                                         DB_PATH, **kwargs)
                                     ui.notify(

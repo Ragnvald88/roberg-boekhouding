@@ -106,3 +106,18 @@ async def test_seed_idempotent(db):
     await seed_all(db)
     params_2 = await get_all_fiscale_params(db)
     assert len(params_2) == 4
+
+
+@pytest.mark.asyncio
+async def test_seed_za_sa_toggles(db):
+    """Verify za_actief/sa_actief defaults: SA active for 2023-2025, not 2026."""
+    await seed_all(db)
+
+    for jaar in [2023, 2024, 2025]:
+        fp = await get_fiscale_params(db, jaar=jaar)
+        assert fp.za_actief is True, f"za_actief should be True for {jaar}"
+        assert fp.sa_actief is True, f"sa_actief should be True for {jaar}"
+
+    fp26 = await get_fiscale_params(db, jaar=2026)
+    assert fp26.za_actief is True
+    assert fp26.sa_actief is False, "sa_actief should be False for 2026 (year 4+)"

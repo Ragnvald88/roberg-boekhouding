@@ -76,6 +76,7 @@ class FiscaalResultaat:
     ew_saldo: float = 0.0
     hillen_aftrek: float = 0.0
     aov: float = 0.0
+    lijfrente: float = 0.0
     # IB
     verzamelinkomen: float = 0.0
     tariefsaanpassing: float = 0.0  # beperking aftrekbare posten
@@ -178,6 +179,7 @@ def bereken_box3(params: dict, fiscaal_partner: bool = True) -> Box3Resultaat:
 def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
                      representatie: float, investeringen_totaal: float,
                      uren: float, params: dict, aov: float = 0,
+                     lijfrente: float = 0,
                      woz: float = 0, hypotheekrente: float = 0,
                      voorlopige_aanslag: float = 0,
                      voorlopige_aanslag_zvw: float = 0,
@@ -194,6 +196,7 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
         params: Dict with fiscal parameters for the year (from fiscale_params table).
                 Must contain 'jaar' key.
         aov: AOV premium (inkomensvoorziening, reduces verzamelinkomen, NOT winst).
+        lijfrente: Lijfrentepremie (jaarruimte, reduces verzamelinkomen).
         woz: WOZ-waarde eigen woning (for eigenwoningforfait).
         hypotheekrente: Aftrekbare hypotheekrente (positive number).
         voorlopige_aanslag: Voorlopige aanslag reeds betaald.
@@ -211,6 +214,7 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
     d_repr = D(representatie)
     d_invest = D(investeringen_totaal)
     d_aov = D(aov)
+    d_lijfrente = D(lijfrente)
     d_woz = D(woz)
     d_hypotheekrente = D(hypotheekrente)
     d_voorlopige = D(voorlopige_aanslag)
@@ -240,13 +244,17 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
     d_fiscale_winst = d_winst + d_repr_bijtelling - d_kia
     r.fiscale_winst = euro(d_fiscale_winst)
 
-    # === 3. Ondernemersaftrek (alleen bij urencriterium gehaald) ===
+    # === 3. Ondernemersaftrek (alleen bij urencriterium gehaald + toggle actief) ===
     uren_drempel = params.get('urencriterium', 1225)
-    if uren >= uren_drempel:
+    za_actief = params.get('za_actief', True)
+    sa_actief = params.get('sa_actief', False)
+    if uren >= uren_drempel and za_actief:
         d_za = D(params['zelfstandigenaftrek'])
-        d_sa = D(params.get('startersaftrek') or 0)
     else:
         d_za = D('0')
+    if uren >= uren_drempel and sa_actief:
+        d_sa = D(params.get('startersaftrek') or 0)
+    else:
         d_sa = D('0')
     r.zelfstandigenaftrek = euro(d_za)
     r.startersaftrek = euro(d_sa)
@@ -286,11 +294,12 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
     r.ew_saldo = euro(d_ew_saldo)
     r.hillen_aftrek = euro(d_hillen_aftrek)
     r.aov = aov
+    r.lijfrente = lijfrente
 
     if ew_naar_partner:
-        d_verzamelinkomen = d_belastbare_winst - d_aov
+        d_verzamelinkomen = d_belastbare_winst - d_aov - d_lijfrente
     else:
-        d_verzamelinkomen = d_belastbare_winst + d_ew_saldo - d_aov
+        d_verzamelinkomen = d_belastbare_winst + d_ew_saldo - d_aov - d_lijfrente
     d_verzamelinkomen = max(D('0'), d_verzamelinkomen)
     r.verzamelinkomen = euro(d_verzamelinkomen)
 
@@ -315,9 +324,9 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
 
     # Income without deductions = what would be taxed without ZA/SA/MKB
     if ew_naar_partner:
-        d_income_without = d_fiscale_winst - d_aov
+        d_income_without = d_fiscale_winst - d_aov - d_lijfrente
     else:
-        d_income_without = d_fiscale_winst + d_ew_saldo - d_aov
+        d_income_without = d_fiscale_winst + d_ew_saldo - d_aov - d_lijfrente
     # Amount that was in the top bracket before deductions
     d_excess = max(D('0'), d_income_without - d_ta_grens)
     d_subject = min(d_deductions, d_excess)
@@ -419,6 +428,8 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
         w.append(f"Urencriterium niet gehaald: {uren:.0f} / {uren_drempel:.0f} uur")
     if r.kosten_omzet_ratio > 30:
         w.append(f"Kosten/omzet ratio hoog: {r.kosten_omzet_ratio}%")
+    if (d_za + d_sa) > d_fiscale_winst and d_fiscale_winst > 0:
+        w.append("ZA + SA hoger dan fiscale winst: aftrek deels verloren")
 
     r.waarschuwingen = w
     return r
