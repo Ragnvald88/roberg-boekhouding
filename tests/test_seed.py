@@ -54,6 +54,48 @@ async def test_seed_creates_fiscale_params(db):
 
 
 @pytest.mark.asyncio
+async def test_seed_box3_definitieve_rendementen(db):
+    """Verify Box 3 uses definitive (not preliminary) percentages."""
+    await seed_all(db)
+
+    # 2023: definitief
+    fp23 = await get_fiscale_params(db, jaar=2023)
+    assert fp23.box3_rendement_bank_pct == 0.92  # was 0.36 (voorlopig)
+    assert fp23.box3_rendement_schuld_pct == 2.46  # was 2.57
+    assert fp23.box3_tarief_pct == 32
+
+    # 2024: definitief
+    fp24 = await get_fiscale_params(db, jaar=2024)
+    assert fp24.box3_rendement_bank_pct == 1.44  # was 1.03
+    assert fp24.box3_rendement_overig_pct == 6.04  # was 6.17
+    assert fp24.box3_rendement_schuld_pct == 2.61  # was 2.46
+    assert fp24.box3_tarief_pct == 36  # was 32
+
+
+@pytest.mark.asyncio
+async def test_seed_drempel_schulden(db):
+    """Verify box3_drempel_schulden is set per year."""
+    await seed_all(db)
+
+    fp23 = await get_fiscale_params(db, jaar=2023)
+    assert fp23.box3_drempel_schulden == 3400
+
+    fp24 = await get_fiscale_params(db, jaar=2024)
+    assert fp24.box3_drempel_schulden == 3700
+
+    fp25 = await get_fiscale_params(db, jaar=2025)
+    assert fp25.box3_drempel_schulden == 3700
+
+
+@pytest.mark.asyncio
+async def test_seed_zvw_max_2024(db):
+    """Verify ZVW max grondslag 2024 = 71628 (not 71624)."""
+    await seed_all(db)
+    fp = await get_fiscale_params(db, jaar=2024)
+    assert fp.zvw_max_grondslag == 71628
+
+
+@pytest.mark.asyncio
 async def test_seed_idempotent(db):
     # First run: inserts data
     await seed_all(db)

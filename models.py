@@ -158,6 +158,12 @@ class FiscaleParams:
     box3_rendement_overig_pct: float = 6.17
     box3_rendement_schuld_pct: float = 2.46
     box3_tarief_pct: float = 36.0
+    box3_drempel_schulden: float = 3700.0
+    # Balance sheet manual inputs (per year)
+    balans_bank_saldo: float = 0.0
+    balans_crediteuren: float = 0.0
+    balans_overige_vorderingen: float = 0.0
+    balans_overige_schulden: float = 0.0
 
 
 @dataclass

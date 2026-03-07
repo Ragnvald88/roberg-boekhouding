@@ -129,13 +129,18 @@ def bereken_box3(params: dict, fiscaal_partner: bool = True) -> Box3Resultaat:
     """
     bank = float(params.get('box3_bank_saldo', 0))
     overig = float(params.get('box3_overige_bezittingen', 0))
-    schulden = float(params.get('box3_schulden', 0))
+    schulden_bruto = float(params.get('box3_schulden', 0))
 
     rend_bank_pct = float(params.get('box3_rendement_bank_pct', 1.03)) / 100
     rend_overig_pct = float(params.get('box3_rendement_overig_pct', 6.17)) / 100
     rend_schuld_pct = float(params.get('box3_rendement_schuld_pct', 2.46)) / 100
     tarief_pct = float(params.get('box3_tarief_pct', 36)) / 100
     heffingsvrij_pp = float(params.get('box3_heffingsvrij_vermogen', 57000))
+    drempel_schulden_pp = float(params.get('box3_drempel_schulden', 3700))
+
+    # Drempel schulden: schulden below threshold are ignored
+    drempel = drempel_schulden_pp * (2 if fiscaal_partner else 1)
+    schulden = max(0, schulden_bruto - drempel)
 
     totaal_bezittingen = bank + overig
     rendement_bank = bank * rend_bank_pct
@@ -158,7 +163,7 @@ def bereken_box3(params: dict, fiscaal_partner: bool = True) -> Box3Resultaat:
     return Box3Resultaat(
         bank_saldo=bank,
         overige_bezittingen=overig,
-        schulden=schulden,
+        schulden=schulden_bruto,
         totaal_bezittingen=totaal_bezittingen,
         rendement_bank=round(rendement_bank, 2),
         rendement_overig=round(rendement_overig, 2),
@@ -434,18 +439,22 @@ def bereken_wv(omzet: float, kosten: float, afschrijvingen: float) -> dict:
     }
 
 
-def bereken_ib(verzamelinkomen: float, params: dict) -> dict:
+def bereken_ib(verzamelinkomen: float, params: dict,
+               arbeidsinkomen: float = None) -> dict:
     """IB Box 1 calculation with brackets (uses Decimal internally).
 
     Args:
         verzamelinkomen: Taxable income Box 1.
         params: Fiscal parameters dict with schijf1/2/3 and heffingskorting params.
+        arbeidsinkomen: Income for arbeidskorting (fiscale winst). Defaults to verzamelinkomen.
 
     Returns:
         Dict with keys: verzamelinkomen, bruto_ib, ahk, arbeidskorting, netto_ib, zvw.
     """
     d_vi = D(verzamelinkomen)
     jaar = params.get('jaar', 0)
+    if arbeidsinkomen is None:
+        arbeidsinkomen = verzamelinkomen
 
     # Schijf 1
     d_s1_grens = D(params['schijf1_grens'])
@@ -464,7 +473,8 @@ def bereken_ib(verzamelinkomen: float, params: dict) -> dict:
     d_bruto = d_ib1 + d_ib2 + d_ib3
 
     ahk = bereken_algemene_heffingskorting(verzamelinkomen, jaar, params)
-    ak = bereken_arbeidskorting(verzamelinkomen, jaar)
+    ak = bereken_arbeidskorting(arbeidsinkomen, jaar,
+                                brackets_json=params.get('arbeidskorting_brackets', ''))
 
     d_netto = max(D('0'), d_bruto - D(str(ahk)) - D(str(ak)))
     d_zvw = min(d_vi, D(params['zvw_max_grondslag'])) * D(params['zvw_pct']) / D('100')

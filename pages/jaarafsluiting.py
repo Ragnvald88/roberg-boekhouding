@@ -6,22 +6,17 @@ from pathlib import Path
 from jinja2 import Environment, FileSystemLoader
 from nicegui import ui
 
-from components.fiscal_utils import fiscale_params_to_dict
+from components.fiscal_utils import (
+    bereken_balans, fetch_fiscal_data, fiscale_params_to_dict,
+)
 from components.layout import create_layout
 from components.utils import format_euro
 from database import (
-    get_fiscale_params,
-    get_investeringen_voor_afschrijving,
-    get_investeringen,
-    get_omzet_totaal,
-    get_representatie_totaal,
-    get_uitgaven_per_categorie,
-    get_uren_totaal,
+    update_balans_inputs,
     update_ib_inputs,
     DB_PATH,
 )
-from fiscal.afschrijvingen import bereken_afschrijving
-from fiscal.berekeningen import FiscaalResultaat, bereken_volledig
+from fiscal.berekeningen import FiscaalResultaat, bereken_box3, bereken_volledig
 
 
 @ui.page('/jaarafsluiting')
@@ -37,6 +32,8 @@ async def jaarafsluiting_page():
     result_container = {'ref': None}
     ib_inputs = {'aov': None, 'woz': None, 'hypotheek': None, 'voorlopig': None,
                   'voorlopig_zvw': None, 'ew_partner': None}
+    balans_inputs = {'bank': None, 'crediteuren': None,
+                      'overige_vorderingen': None, 'overige_schulden': None}
 
     # State that persists across bereken/herbereken calls
     berekening_state = {
@@ -79,55 +76,55 @@ async def jaarafsluiting_page():
         voorlopige_aanslag: float,
         voorlopige_aanslag_zvw: float = 0,
         ew_naar_partner: bool = True,
+        box3_result=None,
+        balans_data: dict = None,
     ):
         """Render all result sections into the container."""
         container.clear()
 
         with container:
 
-            # === Section 1: Omzet ===
+            # === Section 1: W&V-rekening ===
             with ui.card().classes('w-full'):
-                ui.label(f'1. Omzet {jaar}').classes(
-                    'text-subtitle1 text-bold')
-                ui.label(f'Netto-omzet: {format_euro(fiscaal.omzet)}').classes(
-                    'text-h6')
-
-            # === Section 2: Kosten per categorie ===
-            with ui.card().classes('w-full'):
-                ui.label(f'2. Kosten {jaar}').classes(
+                ui.label(f'1. Winst- en verliesrekening {jaar}').classes(
                     'text-subtitle1 text-bold')
 
-                if kosten_per_cat:
-                    kosten_rows = [
-                        {
-                            'categorie': r['categorie'],
-                            'bedrag': format_euro(r['totaal']),
-                        }
-                        for r in kosten_per_cat
-                    ]
-                    kosten_columns = [
-                        {'name': 'categorie', 'label': 'Categorie',
-                         'field': 'categorie', 'align': 'left'},
-                        {'name': 'bedrag', 'label': 'Bedrag',
-                         'field': 'bedrag', 'align': 'right'},
-                    ]
-                    ui.table(
-                        columns=kosten_columns, rows=kosten_rows,
-                        row_key='categorie',
-                    ).classes('w-full').props('dense flat')
+                _wv_line('Netto-omzet', fiscaal.omzet)
+                _wv_line('Bedrijfslasten (excl. investeringen)',
+                         kosten_excl_inv, prefix='-/-')
+                _wv_line('Afschrijvingen', totaal_afschrijvingen,
+                         prefix='-/-')
+                ui.separator()
+                _wv_line('Winst', fiscaal.winst, bold=True)
 
-                    ui.separator()
-                    with ui.row().classes('w-full justify-between'):
-                        ui.label('Totaal bedrijfslasten (incl. investeringen)') \
-                            .classes('text-bold')
-                        ui.label(format_euro(totaal_kosten_alle)).classes(
-                            'text-bold')
-                else:
-                    ui.label('Geen uitgaven gevonden.').classes('text-grey')
+                # Kosten per categorie (expandable)
+                with ui.expansion('Kosten per categorie').classes(
+                        'w-full text-caption').props('dense'):
+                    if kosten_per_cat:
+                        kosten_rows = [
+                            {'categorie': r['categorie'],
+                             'bedrag': format_euro(r['totaal'])}
+                            for r in kosten_per_cat
+                        ]
+                        kosten_columns = [
+                            {'name': 'categorie', 'label': 'Categorie',
+                             'field': 'categorie', 'align': 'left'},
+                            {'name': 'bedrag', 'label': 'Bedrag',
+                             'field': 'bedrag', 'align': 'right'},
+                        ]
+                        ui.table(
+                            columns=kosten_columns, rows=kosten_rows,
+                            row_key='categorie',
+                        ).classes('w-full').props('dense flat')
+                        with ui.row().classes('w-full justify-between'):
+                            ui.label('Totaal bedrijfslasten').classes('text-bold')
+                            ui.label(format_euro(totaal_kosten_alle)).classes('text-bold')
+                    else:
+                        ui.label('Geen uitgaven gevonden.').classes('text-grey')
 
-            # === Section 3: Afschrijvingen ===
+            # === Section 2: Activastaat ===
             with ui.card().classes('w-full'):
-                ui.label(f'3. Afschrijvingen {jaar}').classes(
+                ui.label(f'2. Activastaat {jaar}').classes(
                     'text-subtitle1 text-bold')
 
                 if activastaat:
@@ -137,8 +134,7 @@ async def jaarafsluiting_page():
                             'aanschaf': str(a['aanschaf_jaar']),
                             'bedrag': format_euro(a['aanschaf_bedrag']),
                             'afschr_jr': format_euro(a['afschrijving_jaar']),
-                            'afschr_dit': format_euro(
-                                a['afschrijving_dit_jaar']),
+                            'afschr_dit': format_euro(a['afschrijving_dit_jaar']),
                             'boekwaarde': format_euro(a['boekwaarde']),
                         }
                         for a in activastaat
@@ -171,22 +167,9 @@ async def jaarafsluiting_page():
                     ui.label('Geen investeringen / afschrijvingen.').classes(
                         'text-grey')
 
-            # === Section 4: W&V-rekening ===
+            # === Section 3: Fiscale winstberekening ===
             with ui.card().classes('w-full'):
-                ui.label(f'4. Winst- en verliesrekening {jaar}').classes(
-                    'text-subtitle1 text-bold')
-
-                _wv_line('Netto-omzet', fiscaal.omzet)
-                _wv_line('Bedrijfslasten (excl. investeringen)',
-                         kosten_excl_inv, prefix='-/-')
-                _wv_line('Afschrijvingen', totaal_afschrijvingen,
-                         prefix='-/-')
-                ui.separator()
-                _wv_line('Winst', fiscaal.winst, bold=True)
-
-            # === Section 5: Fiscale winstberekening ===
-            with ui.card().classes('w-full'):
-                ui.label(f'5. Fiscale winstberekening {jaar}').classes(
+                ui.label(f'3. Fiscale winstberekening {jaar}').classes(
                     'text-subtitle1 text-bold')
 
                 _waterfall_line('Winst jaarrekening', fiscaal.winst)
@@ -214,9 +197,9 @@ async def jaarafsluiting_page():
                 _waterfall_line('= Belastbare winst',
                                 fiscaal.belastbare_winst, bold=True)
 
-            # === Section 6: IB-schatting ===
+            # === Section 4: IB-berekening ===
             with ui.card().classes('w-full'):
-                ui.label(f'6. Inkomstenbelasting schatting {jaar}').classes(
+                ui.label(f'4. Inkomstenbelasting {jaar}').classes(
                     'text-subtitle1 text-bold')
 
                 # Manual input fields for personal deductions
@@ -261,21 +244,19 @@ async def jaarafsluiting_page():
                 # Verzamelinkomen breakdown
                 _waterfall_line('Belastbare winst',
                                 fiscaal.belastbare_winst)
-                if woz > 0:
+                if not ew_naar_partner and woz > 0:
                     ew_pct = berekening_state['params_dict'].get('ew_forfait_pct', 0.35)
                     _waterfall_line(
                         f'Eigenwoningforfait ({ew_pct}% van {format_euro(woz)})',
                         fiscaal.ew_forfait)
-                    _waterfall_line(
-                        '- Hypotheekrente',
-                        hypotheekrente)
+                    _waterfall_line('- Hypotheekrente', hypotheekrente)
                     if fiscaal.hillen_aftrek > 0:
-                        _waterfall_line(
-                            '- Wet Hillen aftrek',
-                            fiscaal.hillen_aftrek)
-                    _waterfall_line(
-                        '= Eigenwoningsaldo',
-                        fiscaal.ew_saldo)
+                        _waterfall_line('- Wet Hillen aftrek',
+                                        fiscaal.hillen_aftrek)
+                    _waterfall_line('= Eigenwoningsaldo', fiscaal.ew_saldo)
+                elif ew_naar_partner and woz > 0:
+                    ui.label('Eigen woning \u2192 partner').classes(
+                        'text-caption text-grey-7')
                 if aov > 0:
                     _waterfall_line('- AOV premie', aov)
                 _waterfall_line('Verzamelinkomen',
@@ -312,6 +293,10 @@ async def jaarafsluiting_page():
                 ui.separator().classes('my-1')
                 _waterfall_line('ZVW-bijdrage', fiscaal.zvw)
 
+                # Box 3 result line
+                if box3_result and box3_result.belasting > 0:
+                    _waterfall_line('Box 3 belasting', box3_result.belasting)
+
                 ui.separator().classes('my-2')
 
                 # Separate IB and ZVW results
@@ -330,74 +315,189 @@ async def jaarafsluiting_page():
                 if fiscaal.voorlopige_aanslag > 0 or fiscaal.voorlopige_aanslag_zvw > 0:
                     ui.label('Resultaat').classes('text-subtitle2 q-mt-sm')
                     _result_line(
-                        f'IB: {format_euro(fiscaal.netto_ib)} − VA '
+                        f'IB: {format_euro(fiscaal.netto_ib)} \u2212 VA '
                         f'{format_euro(fiscaal.voorlopige_aanslag)}',
                         fiscaal.resultaat_ib)
                     _result_line(
-                        f'ZVW: {format_euro(fiscaal.zvw)} − VA '
+                        f'ZVW: {format_euro(fiscaal.zvw)} \u2212 VA '
                         f'{format_euro(fiscaal.voorlopige_aanslag_zvw)}',
                         fiscaal.resultaat_zvw)
                     ui.separator().classes('my-1')
 
-                # Total result with color coding
-                resultaat = fiscaal.resultaat
-                if resultaat < 0:
+                # Total result (IB + ZVW + Box 3)
+                box3_belasting = box3_result.belasting if box3_result else 0
+                totaal_resultaat = fiscaal.resultaat + box3_belasting
+                if totaal_resultaat < 0:
                     with ui.row().classes(
                             'w-full justify-between items-center'):
                         ui.label('Totaal terug te ontvangen').classes(
                             'text-bold text-h6')
-                        ui.label(format_euro(abs(resultaat))).classes(
+                        ui.label(format_euro(abs(totaal_resultaat))).classes(
                             'text-bold text-h6 text-positive')
-                elif resultaat > 0:
+                elif totaal_resultaat > 0:
                     with ui.row().classes(
                             'w-full justify-between items-center'):
                         ui.label('Totaal bij te betalen').classes(
                             'text-bold text-h6')
-                        ui.label(format_euro(resultaat)).classes(
+                        ui.label(format_euro(totaal_resultaat)).classes(
                             'text-bold text-h6 text-negative')
                 else:
                     with ui.row().classes(
                             'w-full justify-between items-center'):
-                        ui.label('Resultaat').classes(
-                            'text-bold text-h6')
-                        ui.label(format_euro(0)).classes(
-                            'text-bold text-h6')
+                        ui.label('Resultaat').classes('text-bold text-h6')
+                        ui.label(format_euro(0)).classes('text-bold text-h6')
 
-            # === Section 7: Controles ===
+            # === Section 5: Box 3 ===
+            if box3_result:
+                with ui.card().classes('w-full'):
+                    ui.label(f'5. Box 3 — Sparen en beleggen {jaar}').classes(
+                        'text-subtitle1 text-bold')
+
+                    if box3_result.totaal_bezittingen > 0 or box3_result.schulden > 0:
+                        _waterfall_line('Banktegoeden', box3_result.bank_saldo)
+                        _waterfall_line('Overige bezittingen',
+                                        box3_result.overige_bezittingen)
+                        _waterfall_line('Totaal bezittingen',
+                                        box3_result.totaal_bezittingen, bold=True)
+                        _waterfall_line('Schulden', box3_result.schulden)
+                        ui.separator().classes('my-1')
+                        _waterfall_line('Forfaitair rendement bank',
+                                        box3_result.rendement_bank)
+                        _waterfall_line('Forfaitair rendement overig',
+                                        box3_result.rendement_overig)
+                        _waterfall_line('Forfaitair rendement schuld',
+                                        box3_result.rendement_schuld)
+                        _waterfall_line('Totaal rendement',
+                                        box3_result.totaal_rendement, bold=True)
+                        ui.separator().classes('my-1')
+                        _waterfall_line('Heffingsvrij vermogen',
+                                        box3_result.heffingsvrij)
+                        _waterfall_line('Grondslag', box3_result.grondslag)
+                        _waterfall_line('Box 3 belasting',
+                                        box3_result.belasting, bold=True)
+                    else:
+                        ui.label('Geen Box 3 vermogen opgegeven.').classes(
+                            'text-grey')
+
+            # === Section 6: Balans ===
+            if balans_data:
+                with ui.card().classes('w-full'):
+                    ui.label(f'6. Balans per 31-12-{jaar}').classes(
+                        'text-subtitle1 text-bold')
+
+                    with ui.row().classes('w-full gap-8'):
+                        # Activa column
+                        with ui.column().classes('flex-1'):
+                            ui.label('Activa').classes('text-subtitle2 text-bold')
+                            ui.label('Vaste activa').classes(
+                                'text-caption text-grey-7 q-mt-sm')
+                            _waterfall_line('Materiële vaste activa',
+                                            balans_data['mva'])
+                            ui.label('Vlottende activa').classes(
+                                'text-caption text-grey-7 q-mt-sm')
+                            _waterfall_line('Debiteuren',
+                                            balans_data['debiteuren'])
+                            _waterfall_line('Nog te factureren',
+                                            balans_data['nog_te_factureren'])
+                            _waterfall_line('Overige vorderingen',
+                                            balans_data['overige_vorderingen'])
+                            ui.label('Liquide middelen').classes(
+                                'text-caption text-grey-7 q-mt-sm')
+                            _waterfall_line('Bank',
+                                            balans_data['bank_saldo'])
+                            ui.separator().classes('my-1')
+                            _waterfall_line('Totaal activa',
+                                            balans_data['totaal_activa'],
+                                            bold=True)
+
+                        # Passiva column
+                        with ui.column().classes('flex-1'):
+                            ui.label('Passiva').classes('text-subtitle2 text-bold')
+                            ui.label('Eigen vermogen').classes(
+                                'text-caption text-grey-7 q-mt-sm')
+                            _waterfall_line('Ondernemingsvermogen',
+                                            balans_data['eigen_vermogen'])
+                            ui.label('Kortlopende schulden').classes(
+                                'text-caption text-grey-7 q-mt-sm')
+                            _waterfall_line('Crediteuren',
+                                            balans_data['crediteuren'])
+                            _waterfall_line('Overige schulden',
+                                            balans_data['overige_schulden'])
+                            ui.separator().classes('my-1')
+                            _waterfall_line(
+                                'Totaal passiva',
+                                round(balans_data['eigen_vermogen']
+                                      + balans_data['totaal_schulden'], 2),
+                                bold=True)
+
+                    # Manual balance sheet inputs
+                    ui.separator().classes('my-2')
+                    ui.label('Handmatige invoer (einde boekjaar)').classes(
+                        'text-caption text-grey')
+                    with ui.row().classes('w-full items-end gap-4 flex-wrap'):
+                        balans_inputs['bank'] = ui.number(
+                            'Bank saldo (\u20ac)',
+                            value=balans_data['bank_saldo'],
+                            format='%.2f', step=100,
+                        ).classes('w-44')
+                        balans_inputs['crediteuren'] = ui.number(
+                            'Crediteuren (\u20ac)',
+                            value=balans_data['crediteuren'],
+                            format='%.2f', min=0, step=100,
+                        ).classes('w-44')
+                        balans_inputs['overige_vorderingen'] = ui.number(
+                            'Overige vorderingen (\u20ac)',
+                            value=balans_data['overige_vorderingen'],
+                            format='%.2f', min=0, step=100,
+                        ).classes('w-44')
+                        balans_inputs['overige_schulden'] = ui.number(
+                            'Overige schulden (\u20ac)',
+                            value=balans_data['overige_schulden'],
+                            format='%.2f', min=0, step=100,
+                        ).classes('w-44')
+                        ui.button(
+                            'Opslaan balans', icon='save',
+                            on_click=save_balans,
+                        ).props('color=primary')
+
+            # === Section 7: Kapitaalsvergelijking ===
+            if balans_data:
+                with ui.card().classes('w-full'):
+                    ui.label(f'7. Kapitaalsvergelijking {jaar}').classes(
+                        'text-subtitle1 text-bold')
+                    _waterfall_line('Begin vermogen',
+                                    balans_data['begin_vermogen'])
+                    _waterfall_line('+ Winst', balans_data['winst'])
+                    _waterfall_line('- Privé onttrekkingen',
+                                    balans_data['prive_onttrekkingen'])
+                    ui.separator().classes('my-1')
+                    _waterfall_line('= Eind vermogen',
+                                    balans_data['eigen_vermogen'], bold=True)
+
+            # === Section 8: Controles ===
             with ui.card().classes('w-full'):
-                ui.label('7. Controles').classes(
+                section_nr = '8' if balans_data else '5'
+                ui.label(f'{section_nr}. Controles').classes(
                     'text-subtitle1 text-bold')
 
-                # Kosten/omzet ratio (low = good)
+                # Kosten/omzet ratio
                 ratio = fiscaal.kosten_omzet_ratio
-                if ratio <= 25:
-                    ratio_color = 'positive'
-                elif ratio <= 35:
-                    ratio_color = 'warning'
-                else:
-                    ratio_color = 'negative'
-
+                ratio_color = ('positive' if ratio <= 25
+                               else 'warning' if ratio <= 35
+                               else 'negative')
                 with ui.row().classes('items-center gap-2'):
                     ui.label('Kosten/omzet ratio:')
-                    ui.badge(
-                        f'{ratio:.1f}%', color=ratio_color,
-                    ).classes('text-sm')
+                    ui.badge(f'{ratio:.1f}%', color=ratio_color).classes('text-sm')
 
                 # Urencriterium
                 uren_val = fiscaal.uren_criterium
                 gehaald = fiscaal.uren_criterium_gehaald
                 uren_color = 'positive' if gehaald else 'negative'
                 uren_text = f'{uren_val:.0f} uur'
-                if gehaald:
-                    uren_text += ' (gehaald)'
-                else:
-                    uren_text += ' (NIET gehaald)'
-
+                uren_text += ' (gehaald)' if gehaald else ' (NIET gehaald)'
                 with ui.row().classes('items-center gap-2'):
                     ui.label('Urencriterium (>= 1.225 uur):')
-                    ui.badge(
-                        uren_text, color=uren_color,
-                    ).classes('text-sm')
+                    ui.badge(uren_text, color=uren_color).classes('text-sm')
 
                 # Waarschuwingen
                 if fiscaal.waarschuwingen:
@@ -410,24 +510,38 @@ async def jaarafsluiting_page():
                                 'text-sm')
                             ui.label(w).classes('text-negative')
 
+    # --- Save balans handler ---
+
+    async def save_balans():
+        """Save balance sheet manual inputs to DB and re-render."""
+        jaar = gekozen_jaar['value']
+        await update_balans_inputs(
+            DB_PATH, jaar=jaar,
+            balans_bank_saldo=float(balans_inputs['bank'].value or 0),
+            balans_crediteuren=float(balans_inputs['crediteuren'].value or 0),
+            balans_overige_vorderingen=float(
+                balans_inputs['overige_vorderingen'].value or 0),
+            balans_overige_schulden=float(
+                balans_inputs['overige_schulden'].value or 0),
+        )
+        ui.notify('Balans opgeslagen', type='positive')
+        await bereken()
+
     # --- Bereken handler ---
 
     async def bereken(aov: float = None, woz: float = None,
                       hypotheekrente: float = None,
                       voorlopige_aanslag: float = None,
                       voorlopige_aanslag_zvw: float = None):
-        """Fetch data, run fiscal engine, and render all sections.
-
-        If IB-input values are None, they are loaded from DB (fiscale_params).
-        """
+        """Fetch data, run fiscal engine, and render all sections."""
         jaar = gekozen_jaar['value']
         container = result_container['ref']
         if container is None:
             return
 
-        # Fetch fiscal parameters (includes IB-inputs)
-        params = await get_fiscale_params(DB_PATH, jaar)
-        if params is None:
+        # Fetch all fiscal data via shared utility
+        data = await fetch_fiscal_data(DB_PATH, jaar)
+        if data is None:
             container.clear()
             with container:
                 ui.label(
@@ -438,95 +552,42 @@ async def jaarafsluiting_page():
 
         # Use DB values if not explicitly provided
         if aov is None:
-            aov = params.aov_premie or 0
+            aov = data['aov']
         if woz is None:
-            woz = params.woz_waarde or 0
+            woz = data['woz']
         if hypotheekrente is None:
-            hypotheekrente = params.hypotheekrente or 0
+            hypotheekrente = data['hypotheekrente']
         if voorlopige_aanslag is None:
-            voorlopige_aanslag = params.voorlopige_aanslag_betaald or 0
+            voorlopige_aanslag = data['voorlopige_aanslag']
         if voorlopige_aanslag_zvw is None:
-            voorlopige_aanslag_zvw = params.voorlopige_aanslag_zvw or 0
+            voorlopige_aanslag_zvw = data['voorlopige_aanslag_zvw']
 
-        ew_naar_partner = getattr(params, 'ew_naar_partner', True)
-
-        params_dict = fiscale_params_to_dict(params)
-
-        # Fetch data from database
-        omzet = await get_omzet_totaal(DB_PATH, jaar)
-        kosten_per_cat = await get_uitgaven_per_categorie(DB_PATH, jaar)
-        representatie = await get_representatie_totaal(DB_PATH, jaar)
-        investeringen = await get_investeringen_voor_afschrijving(
-            DB_PATH, tot_jaar=jaar)
-        inv_dit_jaar = await get_investeringen(DB_PATH, jaar=jaar)
-        uren = await get_uren_totaal(DB_PATH, jaar, urennorm_only=True)
-
-        # Total kosten from all categories (incl. investments)
-        totaal_kosten_alle = sum(r['totaal'] for r in kosten_per_cat)
-
-        # Investment amounts this year (they go via depreciation, not costs)
-        inv_dit_jaar_bedrag = sum(
-            (u.aanschaf_bedrag or u.bedrag) for u in inv_dit_jaar
-        )
-        kosten_excl_inv = totaal_kosten_alle - inv_dit_jaar_bedrag
-
-        # Calculate depreciation per investment (activastaat)
-        activastaat = []
-        totaal_afschrijvingen = 0.0
-        for u in investeringen:
-            aanschaf_bedrag_bruto = u.aanschaf_bedrag or u.bedrag
-            zakelijk_factor = (u.zakelijk_pct or 100) / 100
-            aanschaf_bedrag = aanschaf_bedrag_bruto * zakelijk_factor
-            levensduur = u.levensduur_jaren or 5
-            aanschaf_maand = int(u.datum[5:7])
-            aanschaf_jaar = int(u.datum[0:4])
-            result = bereken_afschrijving(
-                aanschaf_bedrag=aanschaf_bedrag,
-                restwaarde_pct=u.restwaarde_pct,
-                levensduur=levensduur,
-                aanschaf_maand=aanschaf_maand,
-                aanschaf_jaar=aanschaf_jaar,
-                bereken_jaar=jaar,
-            )
-            activastaat.append({
-                'omschrijving': u.omschrijving,
-                'aanschaf_jaar': aanschaf_jaar,
-                'aanschaf_bedrag': aanschaf_bedrag,
-                'afschrijving_jaar': result['per_jaar'],
-                'afschrijving_dit_jaar': result['afschrijving'],
-                'boekwaarde': result['boekwaarde'],
-            })
-            totaal_afschrijvingen += result['afschrijving']
-
-        # KIA: total investments this year (zakelijk deel)
-        inv_totaal_dit_jaar = sum(
-            (u.aanschaf_bedrag or u.bedrag) * ((u.zakelijk_pct or 100) / 100)
-            for u in inv_dit_jaar
-        )
+        ew_naar_partner = data['ew_naar_partner']
+        params_dict = data['params_dict']
 
         # Save state for herbereken
         berekening_state.update({
-            'omzet': omzet,
-            'kosten': kosten_excl_inv,
-            'afschrijvingen_totaal': totaal_afschrijvingen,
-            'representatie': representatie,
-            'investeringen_dit_jaar': inv_totaal_dit_jaar,
-            'uren': uren,
+            'omzet': data['omzet'],
+            'kosten': data['kosten_excl_inv'],
+            'afschrijvingen_totaal': data['totaal_afschrijvingen'],
+            'representatie': data['representatie'],
+            'investeringen_dit_jaar': data['inv_totaal_dit_jaar'],
+            'uren': data['uren'],
             'params_dict': params_dict,
-            'kosten_per_cat': kosten_per_cat,
-            'activastaat': activastaat,
-            'totaal_kosten_alle': totaal_kosten_alle,
+            'kosten_per_cat': data['kosten_per_cat'],
+            'activastaat': data['activastaat'],
+            'totaal_kosten_alle': data['totaal_kosten_alle'],
             'ew_naar_partner': ew_naar_partner,
         })
 
         # Run fiscal engine
         fiscaal = bereken_volledig(
-            omzet=omzet,
-            kosten=kosten_excl_inv,
-            afschrijvingen=totaal_afschrijvingen,
-            representatie=representatie,
-            investeringen_totaal=inv_totaal_dit_jaar,
-            uren=uren,
+            omzet=data['omzet'],
+            kosten=data['kosten_excl_inv'],
+            afschrijvingen=data['totaal_afschrijvingen'],
+            representatie=data['representatie'],
+            investeringen_totaal=data['inv_totaal_dit_jaar'],
+            uren=data['uren'],
             params=params_dict,
             aov=aov,
             woz=woz,
@@ -536,13 +597,33 @@ async def jaarafsluiting_page():
             ew_naar_partner=ew_naar_partner,
         )
 
+        # Box 3
+        box3_result = bereken_box3(params_dict)
+
+        # Balance sheet
+        # Get previous year's vermogen for kapitaalsvergelijking
+        prev_data = await fetch_fiscal_data(DB_PATH, jaar - 1)
+        begin_vermogen = 0.0
+        if prev_data:
+            prev_balans = await bereken_balans(
+                DB_PATH, jaar - 1, prev_data['activastaat'],
+                winst=0, begin_vermogen=0)
+            begin_vermogen = prev_balans['eigen_vermogen']
+
+        balans_data = await bereken_balans(
+            DB_PATH, jaar, data['activastaat'],
+            winst=fiscaal.winst, begin_vermogen=begin_vermogen)
+
         # Render result
         _render_resultaat(
-            container, jaar, fiscaal, kosten_per_cat, activastaat,
-            totaal_kosten_alle, kosten_excl_inv, totaal_afschrijvingen,
+            container, jaar, fiscaal, data['kosten_per_cat'],
+            data['activastaat'], data['totaal_kosten_alle'],
+            data['kosten_excl_inv'], data['totaal_afschrijvingen'],
             aov, woz, hypotheekrente, voorlopige_aanslag,
             voorlopige_aanslag_zvw=voorlopige_aanslag_zvw,
             ew_naar_partner=ew_naar_partner,
+            box3_result=box3_result,
+            balans_data=balans_data,
         )
 
     async def herbereken():
@@ -560,7 +641,6 @@ async def jaarafsluiting_page():
         ew_partner_val = ib_inputs['ew_partner'].value if ib_inputs['ew_partner'] else True
 
         jaar = gekozen_jaar['value']
-        container = result_container['ref']
 
         # Save IB-inputs to DB
         await update_ib_inputs(
@@ -575,29 +655,10 @@ async def jaarafsluiting_page():
         await update_ew_naar_partner(DB_PATH, jaar=jaar, value=ew_partner_val)
         s['ew_naar_partner'] = ew_partner_val
 
-        fiscaal = bereken_volledig(
-            omzet=s['omzet'],
-            kosten=s['kosten'],
-            afschrijvingen=s['afschrijvingen_totaal'],
-            representatie=s['representatie'],
-            investeringen_totaal=s['investeringen_dit_jaar'],
-            uren=s['uren'],
-            params=s['params_dict'],
-            aov=aov_val,
-            woz=woz_val,
-            hypotheekrente=hyp_val,
-            voorlopige_aanslag=va_val,
-            voorlopige_aanslag_zvw=va_zvw_val,
-            ew_naar_partner=ew_partner_val,
-        )
-
-        _render_resultaat(
-            container, jaar, fiscaal, s['kosten_per_cat'],
-            s['activastaat'], s['totaal_kosten_alle'],
-            s['kosten'], s['afschrijvingen_totaal'],
-            aov_val, woz_val, hyp_val, va_val,
-            voorlopige_aanslag_zvw=va_zvw_val,
-            ew_naar_partner=ew_partner_val,
+        # Re-run full calculation (includes balans + box3)
+        await bereken(
+            aov=aov_val, woz=woz_val, hypotheekrente=hyp_val,
+            voorlopige_aanslag=va_val, voorlopige_aanslag_zvw=va_zvw_val,
         )
 
     async def export_pdf():
@@ -627,6 +688,21 @@ async def jaarafsluiting_page():
             ew_naar_partner=ew_partner_val,
         )
 
+        box3_result = bereken_box3(s['params_dict'])
+
+        # Balance sheet for PDF
+        prev_data = await fetch_fiscal_data(DB_PATH, jaar - 1)
+        begin_vermogen = 0.0
+        if prev_data:
+            prev_balans = await bereken_balans(
+                DB_PATH, jaar - 1, prev_data['activastaat'],
+                winst=0, begin_vermogen=0)
+            begin_vermogen = prev_balans['eigen_vermogen']
+
+        balans_data = await bereken_balans(
+            DB_PATH, jaar, s['activastaat'],
+            winst=fiscaal.winst, begin_vermogen=begin_vermogen)
+
         # Render HTML from Jinja2 template
         templates_dir = Path(__file__).resolve().parent.parent / 'templates'
         env = Environment(loader=FileSystemLoader(str(templates_dir)))
@@ -640,6 +716,7 @@ async def jaarafsluiting_page():
             jaar=jaar,
             datum=date.today().strftime('%d-%m-%Y'),
             bedrijfsnaam=bedrijf.bedrijfsnaam if bedrijf else '',
+            kvk=bedrijf.kvk if bedrijf else '',
             f=fiscaal,
             kosten_per_cat=s['kosten_per_cat'],
             totaal_kosten=s['totaal_kosten_alle'],
@@ -649,6 +726,9 @@ async def jaarafsluiting_page():
             aov=aov_val,
             woz=woz_val,
             hypotheekrente=hyp_val,
+            ew_naar_partner=ew_partner_val,
+            box3=box3_result,
+            balans=balans_data,
         )
 
         # Generate PDF with WeasyPrint
@@ -690,9 +770,7 @@ async def jaarafsluiting_page():
                             ib_inputs['voorlopig_zvw'].value or 0),
                     )
                 gekozen_jaar['value'] = jaar_select.value
-                # Clear stale state so herbereken can't mix years
                 berekening_state['params_dict'] = {}
-                # Load new year's values from DB (None = load from DB)
                 await bereken()
 
             jaar_select.on_value_change(lambda _: on_jaar_change())

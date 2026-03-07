@@ -63,9 +63,9 @@ Geen: user auth, BTW-administratie, loon/voorraad, email, real-time bank-API, au
 ### DB-driven parameters (alle configureerbaar in Instellingen)
 - **Arbeidskorting**: JSON brackets in `arbeidskorting_brackets` column, fallback to Python constants in `heffingskortingen.py`
 - **PVV rates**: `pvv_aow/anw/wlz_pct` columns (default 17.90/0.10/9.65), fallback to constants
-- **Box 3**: Per-jaar rendementen (bank/overig/schuld), heffingsvrij vermogen, tarief
+- **Box 3**: Per-jaar rendementen (bank/overig/schuld), heffingsvrij vermogen, tarief, drempel schulden
 - **Alle andere**: ZA, SA, MKB%, KIA, AHK, AK, ZVW, schijf1/2/3, EW forfait, villataks, Wet Hillen, etc.
-- **Input velden** (preserved across param upserts): AOV, WOZ, hypotheekrente, VA IB, VA ZVW, partner, Box 3 saldi, ew_naar_partner
+- **Input velden** (preserved across param upserts): AOV, WOZ, hypotheekrente, VA IB, VA ZVW, partner, Box 3 saldi, ew_naar_partner, balans inputs
 
 ### Fiscal engine
 - **Arbeidskorting input** = fiscale_winst (vóór ZA/SA/MKB), NOT belastbare_winst
@@ -74,6 +74,8 @@ Geen: user auth, BTW-administratie, loon/voorraad, email, real-time bank-API, au
 - **ZVW grondslag** = belastbare_winst, NOT verzamelinkomen
 - **PVV** = 27.65% over min(verzamelinkomen, premiegrondslag)
 - **PVV premiegrondslag**: 2024=38098, 2025+ = schijf1_grens
+- **Box 3 drempel schulden**: Per-persoon (2023: 3400, 2024+: 3700). Doubled if partner. Schulden below drempel ignored.
+- **Box 3 rendementen**: Must use DEFINITIEVE percentages (not voorlopig/preliminary)
 
 ### Boekhouder referentiecijfers (tests valideren hiertegen)
 - **2023**: winst €62.522 → belastbare winst €45.801 → IB terug €415

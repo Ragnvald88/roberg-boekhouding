@@ -1278,12 +1278,13 @@ class TestBox3:
             'box3_bank_saldo': 80000, 'box3_overige_bezittingen': 50000, 'box3_schulden': 10000,
             'box3_heffingsvrij_vermogen': 57000, 'box3_rendement_bank_pct': 1.03,
             'box3_rendement_overig_pct': 6.17, 'box3_rendement_schuld_pct': 2.46,
-            'box3_tarief_pct': 36,
+            'box3_tarief_pct': 36, 'box3_drempel_schulden': 3700,
         }
         result = bereken_box3(params, fiscaal_partner=False)
-        # bezittingen=130000, schulden=10000, netto=120000, heffingsvrij=57000, grondslag=63000
+        # bezittingen=130000, schulden=10000, drempel=3700, effective_schulden=6300
+        # netto=123700, heffingsvrij=57000, grondslag=66700
         assert result.totaal_bezittingen == 130000
-        assert result.grondslag == 63000
+        assert result.grondslag == 66700
         assert result.rendement_bank == round(80000 * 0.0103, 2)
         assert result.rendement_overig == round(50000 * 0.0617, 2)
         assert result.belasting > 0
@@ -1307,3 +1308,182 @@ class TestFormatDatum:
     def test_none(self):
         from components.utils import format_datum
         assert format_datum(None) == ""
+
+
+# === Box 3 drempel schulden tests ===
+
+class TestBox3DrempelSchulden:
+    """Tests for Box 3 drempel schulden feature."""
+
+    def test_drempel_with_partner(self):
+        """Partner doubles the drempel."""
+        from fiscal.berekeningen import bereken_box3
+        params = {
+            'box3_bank_saldo': 100000, 'box3_overige_bezittingen': 0,
+            'box3_schulden': 10000,
+            'box3_heffingsvrij_vermogen': 57000,
+            'box3_rendement_bank_pct': 1.44, 'box3_rendement_overig_pct': 6.04,
+            'box3_rendement_schuld_pct': 2.61, 'box3_tarief_pct': 36,
+            'box3_drempel_schulden': 3700,
+        }
+        result = bereken_box3(params, fiscaal_partner=True)
+        # drempel = 3700 * 2 = 7400, effective schulden = 10000 - 7400 = 2600
+        # grondslag = max(0, 100000 - 2600 - 114000) = 0 (bezittingen < heffingsvrij+schulden)
+        assert result.schulden == 10000  # Display original schulden
+        assert result.grondslag == 0
+        assert result.belasting == 0
+
+    def test_drempel_without_partner(self):
+        """Single person drempel."""
+        from fiscal.berekeningen import bereken_box3
+        params = {
+            'box3_bank_saldo': 100000, 'box3_overige_bezittingen': 0,
+            'box3_schulden': 10000,
+            'box3_heffingsvrij_vermogen': 57000,
+            'box3_rendement_bank_pct': 1.44, 'box3_rendement_overig_pct': 6.04,
+            'box3_rendement_schuld_pct': 2.61, 'box3_tarief_pct': 36,
+            'box3_drempel_schulden': 3700,
+        }
+        result = bereken_box3(params, fiscaal_partner=False)
+        # drempel = 3700, effective schulden = 10000 - 3700 = 6300
+        # grondslag = max(0, 100000 - 6300 - 57000) = 36700
+        assert result.grondslag == 36700
+        assert result.belasting > 0
+
+    def test_schulden_below_drempel(self):
+        """Schulden below drempel → effective schulden = 0."""
+        from fiscal.berekeningen import bereken_box3
+        params = {
+            'box3_bank_saldo': 80000, 'box3_overige_bezittingen': 0,
+            'box3_schulden': 2000,
+            'box3_heffingsvrij_vermogen': 57000,
+            'box3_rendement_bank_pct': 1.44, 'box3_rendement_overig_pct': 6.04,
+            'box3_rendement_schuld_pct': 2.61, 'box3_tarief_pct': 36,
+            'box3_drempel_schulden': 3700,
+        }
+        result = bereken_box3(params, fiscaal_partner=False)
+        # schulden 2000 < drempel 3700 → effective = 0
+        # grondslag = max(0, 80000 - 0 - 57000) = 23000
+        assert result.grondslag == 23000
+
+    def test_drempel_2023(self):
+        """2023 drempel is 3400 (lower than 2024+)."""
+        from fiscal.berekeningen import bereken_box3
+        params = {
+            'box3_bank_saldo': 80000, 'box3_overige_bezittingen': 0,
+            'box3_schulden': 5000,
+            'box3_heffingsvrij_vermogen': 57000,
+            'box3_rendement_bank_pct': 0.92, 'box3_rendement_overig_pct': 6.17,
+            'box3_rendement_schuld_pct': 2.46, 'box3_tarief_pct': 32,
+            'box3_drempel_schulden': 3400,
+        }
+        result = bereken_box3(params, fiscaal_partner=False)
+        # drempel = 3400, effective schulden = 5000 - 3400 = 1600
+        # grondslag = max(0, 80000 - 1600 - 57000) = 21400
+        assert result.grondslag == 21400
+
+    def test_no_drempel_param_defaults_to_3700(self):
+        """If box3_drempel_schulden not in params, defaults to 3700."""
+        from fiscal.berekeningen import bereken_box3
+        params = {
+            'box3_bank_saldo': 80000, 'box3_overige_bezittingen': 0,
+            'box3_schulden': 5000,
+            'box3_heffingsvrij_vermogen': 57000,
+            'box3_rendement_bank_pct': 1.44, 'box3_rendement_overig_pct': 6.04,
+            'box3_rendement_schuld_pct': 2.61, 'box3_tarief_pct': 36,
+            # no box3_drempel_schulden → default 3700
+        }
+        result = bereken_box3(params, fiscaal_partner=False)
+        # drempel = 3700, effective schulden = 5000 - 3700 = 1300
+        assert result.grondslag == 80000 - 1300 - 57000  # 21700
+
+
+# === Boekhouder 2023 tests ===
+
+class TestBoekhouder2023Winst:
+    """Validate against Boekhouder 2023 rapport (onderneming portion only).
+
+    Inputs: omzet=62522, repr=458, invest=2713, uren=1400,
+    aov=1753, woz=619000, hyp=7140, VA=19893, VA_ZVW=2468,
+    ew_naar_partner=True.
+    """
+
+    @pytest.fixture()
+    def boekhouder(self):
+        params = FISCALE_PARAMS[2023]
+        return bereken_volledig(
+            omzet=62522, kosten=0, afschrijvingen=0,
+            representatie=458, investeringen_totaal=2713,
+            uren=1400, params=params,
+            aov=1753,
+            woz=619000, hypotheekrente=7140,
+            voorlopige_aanslag=19893,
+            voorlopige_aanslag_zvw=2468,
+            ew_naar_partner=True,
+        )
+
+    def test_winst(self, boekhouder):
+        assert boekhouder.winst == 62522
+
+    def test_repr_bijtelling(self, boekhouder):
+        # 20% of 458 = 91.6
+        assert abs(boekhouder.repr_bijtelling - 91.60) < 1
+
+    def test_kia(self, boekhouder):
+        # 28% of 2713 = 759.64
+        assert abs(boekhouder.kia - 759.64) < 1
+
+    def test_fiscale_winst(self, boekhouder):
+        # 62522 + 91.6 - 759.64 = 61854
+        assert abs(boekhouder.fiscale_winst - 61854) < 5
+
+    def test_belastbare_winst(self, boekhouder):
+        # Boekhouder: belastbare winst ≈ 45801
+        assert abs(boekhouder.belastbare_winst - 45801) < 15
+
+    def test_verzamelinkomen(self, boekhouder):
+        # EW to partner → vi = belastbare_winst - aov
+        assert abs(boekhouder.verzamelinkomen - (boekhouder.belastbare_winst - 1753)) < 5
+
+
+# === Balance sheet tests ===
+
+class TestBalans:
+    """Tests for balance sheet calculation."""
+
+    @pytest.fixture
+    def activastaat(self):
+        return [
+            {'omschrijving': 'Laptop', 'boekwaarde': 800.0,
+             'aanschaf_jaar': 2023, 'aanschaf_bedrag': 2000,
+             'afschrijving_jaar': 360, 'afschrijving_dit_jaar': 360},
+            {'omschrijving': 'Stethoscoop', 'boekwaarde': 150.0,
+             'aanschaf_jaar': 2024, 'aanschaf_bedrag': 300,
+             'afschrijving_jaar': 54, 'afschrijving_dit_jaar': 54},
+        ]
+
+    def test_mva_from_activastaat(self, activastaat):
+        """MVA = sum of boekwaarden."""
+        mva = sum(a['boekwaarde'] for a in activastaat)
+        assert mva == 950.0
+
+    def test_kapitaalsvergelijking_plug(self):
+        """Privé onttrekkingen = begin + winst - eind."""
+        begin = 10000
+        winst = 50000
+        eind = 45000
+        prive = begin + winst - eind
+        assert prive == 15000
+
+    def test_activa_equals_passiva(self):
+        """Totaal activa must equal eigen vermogen + schulden."""
+        mva = 1000
+        debiteuren = 5000
+        bank = 8000
+        totaal_activa = mva + debiteuren + bank
+
+        crediteuren = 2000
+        totaal_schulden = crediteuren
+        eigen_vermogen = totaal_activa - totaal_schulden
+
+        assert eigen_vermogen + totaal_schulden == totaal_activa

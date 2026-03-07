@@ -7,6 +7,8 @@ from database import (
     get_investeringen,
     get_investeringen_voor_afschrijving,
     get_omzet_totaal,
+    get_openstaande_debiteuren,
+    get_nog_te_factureren,
     get_representatie_totaal,
     get_uitgaven_per_categorie,
     get_uren_totaal,
@@ -55,6 +57,7 @@ def fiscale_params_to_dict(params) -> dict:
         'box3_rendement_overig_pct': params.box3_rendement_overig_pct,
         'box3_rendement_schuld_pct': params.box3_rendement_schuld_pct,
         'box3_tarief_pct': params.box3_tarief_pct,
+        'box3_drempel_schulden': params.box3_drempel_schulden,
     }
 
 
@@ -140,4 +143,63 @@ async def fetch_fiscal_data(db_path: Path, jaar: int) -> dict | None:
         'voorlopige_aanslag': params.voorlopige_aanslag_betaald or 0,
         'voorlopige_aanslag_zvw': params.voorlopige_aanslag_zvw or 0,
         'ew_naar_partner': params.ew_naar_partner,
+    }
+
+
+async def bereken_balans(db_path: Path, jaar: int, activastaat: list[dict],
+                          winst: float = 0.0,
+                          begin_vermogen: float = 0.0) -> dict:
+    """Calculate balance sheet values.
+
+    Combines auto-calculated values (MVA, debiteuren, nog te factureren)
+    with manual inputs (bank saldo, crediteuren, overige).
+
+    Args:
+        db_path: Database path.
+        jaar: Fiscal year.
+        activastaat: List of asset dicts (from fetch_fiscal_data).
+        winst: W&V result for kapitaalsvergelijking.
+        begin_vermogen: Previous year's eigen vermogen.
+
+    Returns dict with all balance sheet values.
+    """
+    params = await get_fiscale_params(db_path, jaar)
+
+    # Auto-calculated from data
+    mva = round(sum(a['boekwaarde'] for a in activastaat), 2)
+    debiteuren = await get_openstaande_debiteuren(db_path, jaar)
+    nog_te_factureren = await get_nog_te_factureren(db_path, jaar)
+
+    # Manual inputs from fiscale_params
+    bank_saldo = params.balans_bank_saldo if params else 0
+    crediteuren = params.balans_crediteuren if params else 0
+    overige_vorderingen = params.balans_overige_vorderingen if params else 0
+    overige_schulden = params.balans_overige_schulden if params else 0
+
+    # Totals
+    totaal_activa = round(mva + debiteuren + nog_te_factureren
+                          + overige_vorderingen + bank_saldo, 2)
+    totaal_schulden = round(crediteuren + overige_schulden, 2)
+    eigen_vermogen = round(totaal_activa - totaal_schulden, 2)
+
+    # Kapitaalsvergelijking
+    prive_onttrekkingen = round(begin_vermogen + winst - eigen_vermogen, 2)
+
+    return {
+        # Activa
+        'mva': mva,
+        'debiteuren': round(debiteuren, 2),
+        'nog_te_factureren': round(nog_te_factureren, 2),
+        'overige_vorderingen': overige_vorderingen,
+        'bank_saldo': bank_saldo,
+        'totaal_activa': totaal_activa,
+        # Passiva
+        'crediteuren': crediteuren,
+        'overige_schulden': overige_schulden,
+        'totaal_schulden': totaal_schulden,
+        'eigen_vermogen': eigen_vermogen,
+        # Kapitaalsvergelijking
+        'begin_vermogen': begin_vermogen,
+        'winst': winst,
+        'prive_onttrekkingen': prive_onttrekkingen,
     }

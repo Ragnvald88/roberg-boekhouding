@@ -386,6 +386,7 @@ async def instellingen_page():
                                         'box3_rendement_overig_pct': latest.box3_rendement_overig_pct,
                                         'box3_rendement_schuld_pct': latest.box3_rendement_schuld_pct,
                                         'box3_tarief_pct': latest.box3_tarief_pct,
+                                        'box3_drempel_schulden': latest.box3_drempel_schulden,
                                     }
                                 else:
                                     kwargs = {'jaar': jaar, 'zelfstandigenaftrek': 0,
@@ -484,6 +485,8 @@ async def instellingen_page():
                                      'box3_rendement_schuld_pct', '%.2f', 0.01),
                                     ('Box 3 tarief %',
                                      'box3_tarief_pct', '%.0f', 1),
+                                    ('Box 3 drempel schulden p.p. \u20ac',
+                                     'box3_drempel_schulden', '%.0f', 100),
                                 ]
                                 with ui.row().classes('gap-4 flex-wrap'):
                                     for label, key, fmt, step in box3_fields:

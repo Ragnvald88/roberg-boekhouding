@@ -108,6 +108,36 @@ async def aangifte_page():
     jaren = list(range(huidig_jaar, 2022, -1))
     state = {'jaar': vorig_jaar}
 
+    # --- Cached fiscal computation (avoid triple fetch+calc) ---
+    _cache = {'jaar': None, 'data': None, 'fiscaal': None}
+
+    async def _get_fiscal(jaar: int):
+        """Return (data, fiscaal) from cache or compute fresh."""
+        if _cache['jaar'] == jaar and _cache['data'] is not None:
+            return _cache['data'], _cache['fiscaal']
+        data = await fetch_fiscal_data(DB_PATH, jaar)
+        if data is None:
+            _cache.update(jaar=jaar, data=None, fiscaal=None)
+            return None, None
+        f = bereken_volledig(
+            omzet=data['omzet'], kosten=data['kosten_excl_inv'],
+            afschrijvingen=data['totaal_afschrijvingen'],
+            representatie=data['representatie'],
+            investeringen_totaal=data['inv_totaal_dit_jaar'],
+            uren=data['uren'], params=data['params_dict'],
+            aov=data['aov'], woz=data['woz'],
+            hypotheekrente=data['hypotheekrente'],
+            voorlopige_aanslag=data['voorlopige_aanslag'],
+            voorlopige_aanslag_zvw=data['voorlopige_aanslag_zvw'],
+            ew_naar_partner=data['ew_naar_partner'],
+        )
+        _cache.update(jaar=jaar, data=data, fiscaal=f)
+        return data, f
+
+    def _invalidate_cache():
+        """Clear cache so next _get_fiscal() recalculates."""
+        _cache.update(jaar=None, data=None, fiscaal=None)
+
     # --- Copy helper ---
     def _copy_value(amount: float, label: str = ''):
         """Copy raw integer value to clipboard (what you type in BD portal)."""
@@ -196,6 +226,7 @@ async def aangifte_page():
 
     async def on_jaar_change(jaar):
         state['jaar'] = jaar
+        _invalidate_cache()
         await refresh_all()
 
     async def refresh_all():
@@ -215,7 +246,7 @@ async def aangifte_page():
         winst_container.clear()
         jaar = state['jaar']
 
-        data = await fetch_fiscal_data(DB_PATH, jaar)
+        data, f = await _get_fiscal(jaar)
         if data is None:
             with winst_container:
                 ui.label(
@@ -223,21 +254,6 @@ async def aangifte_page():
                     'Maak deze aan via Instellingen.'
                 ).classes('text-negative text-subtitle1')
             return
-
-        f = bereken_volledig(
-            omzet=data['omzet'],
-            kosten=data['kosten_excl_inv'],
-            afschrijvingen=data['totaal_afschrijvingen'],
-            representatie=data['representatie'],
-            investeringen_totaal=data['inv_totaal_dit_jaar'],
-            uren=data['uren'],
-            params=data['params_dict'],
-            aov=data['aov'], woz=data['woz'],
-            hypotheekrente=data['hypotheekrente'],
-            voorlopige_aanslag=data['voorlopige_aanslag'],
-            voorlopige_aanslag_zvw=data['voorlopige_aanslag_zvw'],
-            ew_naar_partner=data['ew_naar_partner'],
-        )
 
         with winst_container:
             # Card 1: Opbrengsten
@@ -366,8 +382,8 @@ async def aangifte_page():
         prive_container.clear()
         jaar = state['jaar']
 
-        params = await get_fiscale_params(DB_PATH, jaar)
-        if params is None:
+        data, f = await _get_fiscal(jaar)
+        if data is None:
             with prive_container:
                 ui.label(
                     f'Geen fiscale parameters voor {jaar}. '
@@ -375,22 +391,8 @@ async def aangifte_page():
                 ).classes('text-negative text-subtitle1')
             return
 
-        data = await fetch_fiscal_data(DB_PATH, jaar)
+        params = data['params']
         params_dict = data['params_dict']
-
-        # Compute for read-only displays
-        f = bereken_volledig(
-            omzet=data['omzet'], kosten=data['kosten_excl_inv'],
-            afschrijvingen=data['totaal_afschrijvingen'],
-            representatie=data['representatie'],
-            investeringen_totaal=data['inv_totaal_dit_jaar'],
-            uren=data['uren'], params=params_dict,
-            aov=data['aov'], woz=data['woz'],
-            hypotheekrente=data['hypotheekrente'],
-            voorlopige_aanslag=data['voorlopige_aanslag'],
-            voorlopige_aanslag_zvw=data['voorlopige_aanslag_zvw'],
-            ew_naar_partner=data['ew_naar_partner'],
-        )
 
         # Containers for auto-updated read-only values
         ew_results_ref = {'container': None}
@@ -471,19 +473,9 @@ async def aangifte_page():
                 await update_ew_naar_partner(DB_PATH, jaar=jaar, value=ew_val)
                 ui.notify('Opgeslagen', type='positive')
 
-                # Refresh computed values
-                new_data = await fetch_fiscal_data(DB_PATH, jaar)
-                new_f = bereken_volledig(
-                    omzet=new_data['omzet'], kosten=new_data['kosten_excl_inv'],
-                    afschrijvingen=new_data['totaal_afschrijvingen'],
-                    representatie=new_data['representatie'],
-                    investeringen_totaal=new_data['inv_totaal_dit_jaar'],
-                    uren=new_data['uren'], params=new_data['params_dict'],
-                    aov=aov_val, woz=woz_val, hypotheekrente=hyp_val,
-                    voorlopige_aanslag=va_ib_val,
-                    voorlopige_aanslag_zvw=va_zvw_val,
-                    ew_naar_partner=ew_val,
-                )
+                # Invalidate cache and refresh computed values
+                _invalidate_cache()
+                new_data, new_f = await _get_fiscal(jaar)
                 _render_ew_results(ew_results_ref['container'], new_f, woz_val, hyp_val,
                                     ew_val, new_data['params_dict'])
 
@@ -628,7 +620,7 @@ async def aangifte_page():
         overzicht_container.clear()
         jaar = state['jaar']
 
-        data = await fetch_fiscal_data(DB_PATH, jaar)
+        data, f = await _get_fiscal(jaar)
         if data is None:
             with overzicht_container:
                 ui.label(
@@ -638,18 +630,6 @@ async def aangifte_page():
             return
 
         params_dict = data['params_dict']
-        f = bereken_volledig(
-            omzet=data['omzet'], kosten=data['kosten_excl_inv'],
-            afschrijvingen=data['totaal_afschrijvingen'],
-            representatie=data['representatie'],
-            investeringen_totaal=data['inv_totaal_dit_jaar'],
-            uren=data['uren'], params=params_dict,
-            aov=data['aov'], woz=data['woz'],
-            hypotheekrente=data['hypotheekrente'],
-            voorlopige_aanslag=data['voorlopige_aanslag'],
-            voorlopige_aanslag_zvw=data['voorlopige_aanslag_zvw'],
-            ew_naar_partner=data['ew_naar_partner'],
-        )
         box3 = bereken_box3(params_dict)
 
         with overzicht_container:
