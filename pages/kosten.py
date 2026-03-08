@@ -1,5 +1,6 @@
 """Kosten pagina — uitgaven registratie + categorisatie."""
 
+import shutil
 from datetime import date
 from pathlib import Path
 
@@ -209,16 +210,25 @@ async def kosten_page():
 
     # --- Add dialog ---
 
-    async def open_add_uitgave_dialog(and_new_state: dict | None = None):
-        """Open dialog to add a new expense."""
+    async def open_add_uitgave_dialog(prefill: dict | None = None,
+                                     on_saved: callable | None = None):
+        """Open dialog to add a new expense.
+
+        Args:
+            prefill: Optional dict with pre-fill values (datum, categorie,
+                     omschrijving, pdf_path).
+            on_saved: Optional callback invoked after successful save
+                      (e.g. for archive import "next item" workflow).
+        """
         upload_file = {}
 
         with ui.dialog() as dialog, ui.card().classes('w-full max-w-lg q-pa-md'):
             ui.label('Uitgave toevoegen').classes('text-h6 q-mb-md')
 
             input_datum = ui.input(
-                'Datum', value=and_new_state.get('datum', date.today().isoformat())
-                if and_new_state else date.today().isoformat(),
+                'Datum',
+                value=prefill.get('datum', date.today().isoformat())
+                if prefill else date.today().isoformat(),
             ).classes('w-40')
             with input_datum:
                 with ui.menu().props('no-parent-event') as datum_menu:
@@ -232,10 +242,13 @@ async def kosten_page():
 
             input_categorie = ui.select(
                 CATEGORIEEN, label='Categorie',
-                value=and_new_state.get('categorie') if and_new_state else None,
+                value=prefill.get('categorie') if prefill else None,
             ).classes('w-full')
 
-            input_omschrijving = ui.input('Omschrijving').classes('w-full')
+            input_omschrijving = ui.input(
+                'Omschrijving',
+                value=prefill.get('omschrijving', '') if prefill else '',
+            ).classes('w-full')
 
             input_bedrag = ui.number(
                 'Bedrag incl. BTW (\u20ac)', format='%.2f',
@@ -291,15 +304,22 @@ async def kosten_page():
 
             input_categorie.on('update:model-value', lambda: on_categorie_change())
 
-            # Document upload
+            # Document upload / pre-filled PDF
             ui.separator().classes('q-my-sm')
             ui.label('Bon/factuur (optioneel)').classes(
                 'text-caption').style('color: #64748B')
-            add_upload = ui.upload(
-                label='Sleep bestand of klik', auto_upload=True,
-                on_upload=lambda e: upload_file.update({'event': e}),
-                max_file_size=10_000_000,
-            ).classes('w-full').props('flat bordered accept=".pdf,.jpg,.jpeg,.png"')
+            add_upload = None
+            if prefill and prefill.get('pdf_path'):
+                pdf_source = Path(prefill['pdf_path'])
+                ui.label(f'Bon: {pdf_source.name}').classes(
+                    'text-caption text-primary')
+            else:
+                add_upload = ui.upload(
+                    label='Sleep bestand of klik', auto_upload=True,
+                    on_upload=lambda e: upload_file.update({'event': e}),
+                    max_file_size=10_000_000,
+                ).classes('w-full').props(
+                    'flat bordered accept=".pdf,.jpg,.jpeg,.png"')
 
             async def opslaan(and_new: bool = False):
                 if not input_datum.value:
@@ -314,6 +334,29 @@ async def kosten_page():
                 if not input_bedrag.value or input_bedrag.value <= 0:
                     ui.notify('Vul een positief bedrag in', type='warning')
                     return
+
+                # Duplicate check
+                try:
+                    existing = await get_uitgaven(
+                        DB_PATH, jaar=int(input_datum.value[:4]))
+                    dupes = [
+                        u for u in existing
+                        if u.datum == input_datum.value
+                        and u.categorie == input_categorie.value
+                        and abs(u.bedrag - float(input_bedrag.value)) < 0.01
+                    ]
+                    if dupes and not getattr(opslaan, '_confirmed_dupe', False):
+                        ui.notify(
+                            'Let op: vergelijkbare uitgave bestaat al voor '
+                            'deze datum/categorie/bedrag. Klik nogmaals op '
+                            'Opslaan om toch door te gaan.',
+                            type='warning', timeout=5000,
+                        )
+                        opslaan._confirmed_dupe = True
+                        return
+                except Exception:
+                    pass  # Don't block save if dupe check fails
+                opslaan._confirmed_dupe = False
 
                 kwargs = {
                     'datum': input_datum.value,
@@ -330,28 +373,41 @@ async def kosten_page():
                     kwargs['zakelijk_pct'] = float(input_zakelijk.value or 100)
                     kwargs['aanschaf_bedrag'] = bedrag
 
-                uitgave_id = await add_uitgave(DB_PATH, **kwargs)
+                try:
+                    uitgave_id = await add_uitgave(DB_PATH, **kwargs)
 
-                if upload_file.get('event'):
-                    await save_upload_for_uitgave(uitgave_id, upload_file['event'])
+                    # Handle PDF: from prefill path or from upload widget
+                    if prefill and prefill.get('pdf_path'):
+                        await _copy_and_link_pdf(
+                            uitgave_id, Path(prefill['pdf_path']))
+                    elif upload_file.get('event'):
+                        await save_upload_for_uitgave(
+                            uitgave_id, upload_file['event'])
 
-                ui.notify('Uitgave opgeslagen', type='positive')
-                await ververs()
+                    ui.notify('Uitgave opgeslagen', type='positive')
+                    await ververs()
 
-                if and_new:
-                    # Reset form — keep categorie
-                    saved_cat = input_categorie.value
-                    input_datum.value = date.today().isoformat()
-                    input_omschrijving.value = ''
-                    input_bedrag.value = None
-                    input_investering.value = False
-                    input_investering.set_visibility(False)
-                    investering_velden.set_visibility(False)
-                    representatie_note.set_visibility(saved_cat == 'Representatie')
-                    upload_file.clear()
-                    add_upload.reset()
-                else:
-                    dialog.close()
+                    if and_new:
+                        # Reset form — keep categorie
+                        saved_cat = input_categorie.value
+                        input_datum.value = date.today().isoformat()
+                        input_omschrijving.value = ''
+                        input_bedrag.value = None
+                        input_investering.value = False
+                        input_investering.set_visibility(False)
+                        investering_velden.set_visibility(False)
+                        representatie_note.set_visibility(
+                            saved_cat == 'Representatie')
+                        upload_file.clear()
+                        if add_upload is not None:
+                            add_upload.reset()
+                    elif on_saved:
+                        dialog.close()
+                        on_saved()
+                    else:
+                        dialog.close()
+                except Exception as e:
+                    ui.notify(f'Fout bij opslaan: {e}', type='negative')
 
             with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
                 ui.button('Annuleren', on_click=dialog.close).props('flat')
@@ -525,6 +581,15 @@ async def kosten_page():
         await update_uitgave(DB_PATH, uitgave_id=uitgave_id,
                              pdf_pad=str(filepath))
         return filepath
+
+    async def _copy_and_link_pdf(uitgave_id: int, source_path: Path):
+        """Copy a PDF from archive to data/uitgaven/ and link to uitgave."""
+        UITGAVEN_DIR.mkdir(parents=True, exist_ok=True)
+        safe_name = source_path.name.replace(' ', '_')
+        filename = f'uitgave_{uitgave_id}_{safe_name}'
+        dest = UITGAVEN_DIR / filename
+        shutil.copy2(source_path, dest)
+        await update_uitgave(DB_PATH, uitgave_id=uitgave_id, pdf_pad=str(dest))
 
     # === PAGE LAYOUT ===
 
