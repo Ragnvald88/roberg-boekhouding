@@ -27,6 +27,8 @@ async def startup():
     await seed_all(DB_PATH)
 
 
+app.on_exception(lambda e: print(f'Unhandled exception: {e}'))
+
 ui.run(
     title='Boekhouding',
     storage_secret='boekhouding-app-secret',
