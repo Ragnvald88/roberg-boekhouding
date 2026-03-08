@@ -27,6 +27,18 @@ async def startup():
     await seed_all(DB_PATH)
 
 
+def _handle_exception(e: Exception) -> None:
+    """Log to console + try to notify user (may fail without client context)."""
+    import traceback
+    traceback.print_exc()
+    try:
+        ui.notify(f'Er is een fout opgetreden: {e}', type='negative', timeout=10000)
+    except Exception:
+        pass  # No client context available
+
+
+app.on_exception(_handle_exception)
+
 ui.run(
     title='Boekhouding',
     storage_secret='boekhouding-app-secret',

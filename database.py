@@ -161,10 +161,13 @@ CREATE INDEX IF NOT EXISTS idx_aangifte_docs_jaar ON aangifte_documenten(jaar);
 
 
 async def get_db(db_path: Path = DB_PATH) -> aiosqlite.Connection:
-    """Get a database connection with WAL mode and FK enforcement."""
+    """Get a database connection with WAL mode, FK enforcement, and performance pragmas."""
     conn = await aiosqlite.connect(db_path)
     await conn.execute("PRAGMA journal_mode = WAL")
     await conn.execute("PRAGMA foreign_keys = ON")
+    await conn.execute("PRAGMA synchronous = NORMAL")
+    await conn.execute("PRAGMA cache_size = 10000")
+    await conn.execute("PRAGMA temp_store = MEMORY")
     conn.row_factory = aiosqlite.Row
     return conn
 
@@ -280,6 +283,13 @@ async def init_db(db_path: Path = DB_PATH) -> None:
                 "UPDATE fiscale_params SET sa_actief = 1 "
                 "WHERE jaar = ? AND sa_actief = 0",
                 (jaar,))
+
+        # Data migration: fix 2026 Box 3 heffingsvrij + drempel (was copied from 2025, now corrected per BD)
+        await conn.execute("""
+            UPDATE fiscale_params
+            SET box3_heffingsvrij_vermogen = 59357, box3_drempel_schulden = 3800
+            WHERE jaar = 2026 AND box3_heffingsvrij_vermogen = 57684
+        """)
 
         # Data migration: fix DD-MM-YYYY dates → YYYY-MM-DD in uitgaven and werkdagen
         for table in ('uitgaven', 'werkdagen'):
@@ -841,11 +851,20 @@ async def get_banktransacties(db_path: Path = DB_PATH,
 async def add_banktransacties(db_path: Path = DB_PATH,
                                transacties: list[dict] = None,
                                csv_bestand: str = '') -> int:
-    """Insert batch of bank transactions. Returns count inserted."""
+    """Insert batch of bank transactions. Dedup by datum+bedrag+tegenpartij+omschrijving."""
     conn = await get_db(db_path)
     try:
         count = 0
         for t in (transacties or []):
+            # Check for duplicate
+            cur = await conn.execute(
+                """SELECT COUNT(*) FROM banktransacties
+                   WHERE datum = ? AND bedrag = ? AND tegenpartij = ? AND omschrijving = ?""",
+                (t['datum'], t['bedrag'], t.get('tegenpartij', ''),
+                 t.get('omschrijving', ''))
+            )
+            if (await cur.fetchone())[0] > 0:
+                continue  # Skip duplicate
             await conn.execute(
                 """INSERT INTO banktransacties
                    (datum, bedrag, tegenrekening, tegenpartij, omschrijving, csv_bestand)

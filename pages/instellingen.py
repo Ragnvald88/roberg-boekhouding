@@ -308,10 +308,13 @@ async def instellingen_page():
                                         ui.button('Annuleren', on_click=dialog.close).props('flat')
 
                                         async def confirm_del(kid=row['id'], dlg=dialog):
-                                            await delete_klant(DB_PATH, klant_id=kid)
-                                            dlg.close()
-                                            ui.notify(f"Klant verwijderd", type='positive')
-                                            await refresh_klanten()
+                                            try:
+                                                await delete_klant(DB_PATH, klant_id=kid)
+                                                dlg.close()
+                                                ui.notify('Klant verwijderd', type='positive')
+                                                await refresh_klanten()
+                                            except ValueError as e:
+                                                ui.notify(str(e), type='negative')
 
                                         ui.button('Verwijderen', on_click=confirm_del) \
                                             .props('color=negative')
