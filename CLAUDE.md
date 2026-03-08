@@ -15,7 +15,7 @@ source .venv/bin/activate
 export DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib
 python main.py  # → http://127.0.0.1:8085
 
-# Tests (284 passing)
+# Tests (286 passing)
 DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib .venv/bin/python -m pytest tests/ -v
 ```
 
@@ -77,7 +77,7 @@ Geen: user auth, BTW-administratie, loon/voorraad, email, real-time bank-API, au
 - **ZVW grondslag** = belastbare_winst, NOT verzamelinkomen
 - **PVV** = 27.65% over min(verzamelinkomen, premiegrondslag)
 - **PVV premiegrondslag**: 2024=38098, 2025+ = schijf1_grens
-- **Box 3 drempel schulden**: Per-persoon (2023: 3400, 2024+: 3700). Doubled if partner. Schulden below drempel ignored.
+- **Box 3 drempel schulden**: Per-persoon (2023: 3400, 2024: 3700, 2025: 3700, 2026: 3800). Doubled if partner. Schulden below drempel ignored.
 - **Box 3 rendementen**: Must use DEFINITIEVE percentages (not voorlopig/preliminary)
 
 ### Boekhouder referentiecijfers (tests valideren hiertegen)
@@ -116,5 +116,11 @@ Tabs: Winst uit onderneming, Prive & aftrek (inputs save to DB), Box 3 (inputs+c
 
 ## Bekende Bugs
 
-- **Bank CSV geen dedup**: Alleen bestandsnaam-check, geen per-transactie dedup. Dezelfde CSV met andere naam → duplicaten.
-- **delete_klant UI**: DB vangt FK violation, maar `instellingen.py` vangt de ValueError niet → geen nette foutmelding.
+- ~~**Bank CSV geen dedup**~~: Opgelost — per-transactie dedup op datum+bedrag+tegenpartij+omschrijving.
+- ~~**delete_klant UI**~~: Opgelost — try/except ValueError met ui.notify foutmelding.
+
+## Recente verbeteringen (Phase 1 — 2026-03-08)
+- **2026 Box 3 fix**: heffingsvrij_vermogen 57684→59357, drempel_schulden 3700→3800 (per Belastingdienst officieel)
+- **SQLite performance**: synchronous=NORMAL, cache_size=10000, temp_store=MEMORY
+- **Error boundary**: app.on_exception met ui.notify + traceback
+- **Cleanup**: run_full_import.py verwijderd, httpx dependency verwijderd
