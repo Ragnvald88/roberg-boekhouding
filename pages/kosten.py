@@ -1,7 +1,9 @@
 """Kosten pagina — uitgaven registratie + categorisatie."""
 
+import asyncio
 import shutil
 from datetime import date
+from itertools import groupby
 from pathlib import Path
 
 from nicegui import ui
@@ -403,7 +405,10 @@ async def kosten_page():
                             add_upload.reset()
                     elif on_saved:
                         dialog.close()
-                        on_saved()
+                        if asyncio.iscoroutinefunction(on_saved):
+                            await on_saved()
+                        else:
+                            on_saved()
                     else:
                         dialog.close()
                 except Exception as e:
@@ -591,6 +596,155 @@ async def kosten_page():
         shutil.copy2(source_path, dest)
         await update_uitgave(DB_PATH, uitgave_id=uitgave_id, pdf_pad=str(dest))
 
+    # --- Import dialog ---
+
+    async def open_import_dialog():
+        """Open dialog to browse and import expense PDFs from archive."""
+        from import_.expense_utils import scan_archive
+
+        with ui.dialog().props('maximized') as import_dialog, \
+                ui.card().classes('w-full max-w-4xl mx-auto q-pa-lg'):
+            ui.label('Uitgaven importeren').classes('text-h5 q-mb-md')
+
+            import_jaar = {'value': filter_jaar['value']}
+            list_container = {'ref': None}
+
+            async def load_archive():
+                """Scan archive and render file list."""
+                container = list_container['ref']
+                if not container:
+                    return
+                container.clear()
+
+                jaar = import_jaar['value']
+
+                # Get existing pdf_pad values for dedup detection
+                existing_uitgaven = await get_uitgaven(DB_PATH, jaar=jaar)
+                existing_filenames = set()
+                for u in existing_uitgaven:
+                    if u.pdf_pad:
+                        existing_filenames.add(Path(u.pdf_pad).name)
+
+                items = scan_archive(jaar, existing_filenames)
+                if not items:
+                    with container:
+                        ui.label(
+                            f'Geen uitgaven gevonden in archief voor {jaar}'
+                        ).classes('text-grey q-pa-md')
+                    return
+
+                imported_count = sum(1 for i in items if i['already_imported'])
+
+                with container:
+                    ui.label(
+                        f'{len(items)} bestanden gevonden, '
+                        f'{imported_count} al geïmporteerd'
+                    ).classes('text-caption text-grey q-mb-sm')
+
+                    # Group by category
+                    items_sorted = sorted(items, key=lambda x: x['categorie'])
+                    for cat, group_iter in groupby(
+                        items_sorted, key=lambda x: x['categorie']
+                    ):
+                        group_list = list(group_iter)
+                        cat_imported = sum(
+                            1 for g in group_list if g['already_imported']
+                        )
+
+                        with ui.expansion(
+                            f'{cat} ({len(group_list)})',
+                            caption=(f'{cat_imported} geïmporteerd'
+                                     if cat_imported else None),
+                        ).classes('w-full'):
+                            for item in group_list:
+                                with ui.row().classes(
+                                    'w-full items-center gap-2 q-py-xs'
+                                ):
+                                    if item['already_imported']:
+                                        ui.icon(
+                                            'check_circle', color='positive'
+                                        ).classes('text-lg')
+                                        ui.label(
+                                            item['filename']
+                                        ).classes('text-grey')
+                                        if item['datum']:
+                                            ui.label(
+                                                item['datum']
+                                            ).classes(
+                                                'text-caption text-grey')
+                                    else:
+                                        async def do_import(it=item):
+                                            await open_add_uitgave_dialog(
+                                                prefill={
+                                                    'datum': (
+                                                        it['datum']
+                                                        or date.today()
+                                                        .isoformat()
+                                                    ),
+                                                    'categorie':
+                                                        it['categorie'],
+                                                    'pdf_path':
+                                                        str(it['path']),
+                                                },
+                                                on_saved=load_archive,
+                                            )
+
+                                        ui.icon(
+                                            'upload_file', color='primary'
+                                        ).classes('text-lg')
+                                        ui.link(
+                                            item['filename'],
+                                            on_click=do_import,
+                                        ).classes(
+                                            'text-primary cursor-pointer')
+                                        if item['datum']:
+                                            ui.label(
+                                                item['datum']
+                                            ).classes(
+                                                'text-caption text-grey')
+                                        else:
+                                            ui.label(
+                                                'datum onbekend'
+                                            ).classes(
+                                                'text-caption text-orange')
+
+            # Year selector
+            import_jaar_select = ui.select(
+                {j: str(j) for j in jaren},
+                label='Jaar',
+                value=import_jaar['value'],
+            ).classes('w-32')
+
+            async def on_import_jaar_change():
+                import_jaar['value'] = import_jaar_select.value
+                await load_archive()
+
+            import_jaar_select.on(
+                'update:model-value',
+                lambda: on_import_jaar_change(),
+            )
+
+            # File list container
+            with ui.scroll_area().classes('w-full').style(
+                'max-height: 60vh'
+            ):
+                list_container['ref'] = ui.column().classes('w-full')
+
+            # Footer
+            with ui.row().classes('w-full justify-end q-mt-md'):
+                ui.button(
+                    'Sluiten', on_click=import_dialog.close
+                ).props('flat')
+
+            # Initial load
+            await load_archive()
+
+        async def on_import_close():
+            await ververs()
+
+        import_dialog.on('hide', lambda: on_import_close())
+        import_dialog.open()
+
     # === PAGE LAYOUT ===
 
     with ui.column().classes('w-full p-6 max-w-7xl mx-auto gap-6'):
@@ -627,6 +781,11 @@ async def kosten_page():
             cat_select = ui.select(
                 cat_opties, label='Categorie', value='',
             ).classes('w-48')
+
+            ui.button(
+                'Importeer uitgaven', icon='folder_open',
+                on_click=lambda: open_import_dialog(),
+            ).props('outline color=primary')
 
             ui.button(
                 'Nieuwe uitgave', icon='add',
