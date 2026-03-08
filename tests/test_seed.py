@@ -94,6 +94,19 @@ async def test_seed_drempel_schulden(db):
 
 
 @pytest.mark.asyncio
+async def test_seed_2026_box3_values(db):
+    """Verify 2026 Box 3 values match Belastingdienst official (not copied from 2025)."""
+    await seed_fiscale_params(db)
+    fp = await get_fiscale_params(db, jaar=2026)
+    assert fp.box3_heffingsvrij_vermogen == 59357
+    assert fp.box3_drempel_schulden == 3800
+    assert fp.box3_rendement_bank_pct == pytest.approx(1.28)
+    assert fp.box3_rendement_overig_pct == pytest.approx(6.00)
+    assert fp.box3_rendement_schuld_pct == pytest.approx(2.70)
+    assert fp.box3_tarief_pct == 36
+
+
+@pytest.mark.asyncio
 async def test_seed_zvw_max_2024(db):
     """Verify ZVW max grondslag 2024 = 71628 (not 71624)."""
     await seed_all(db)

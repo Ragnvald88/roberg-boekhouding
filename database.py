@@ -281,6 +281,13 @@ async def init_db(db_path: Path = DB_PATH) -> None:
                 "WHERE jaar = ? AND sa_actief = 0",
                 (jaar,))
 
+        # Data migration: fix 2026 Box 3 heffingsvrij + drempel (was copied from 2025, now corrected per BD)
+        await conn.execute("""
+            UPDATE fiscale_params
+            SET box3_heffingsvrij_vermogen = 59357, box3_drempel_schulden = 3800
+            WHERE jaar = 2026 AND box3_heffingsvrij_vermogen = 57684
+        """)
+
         # Data migration: fix DD-MM-YYYY dates → YYYY-MM-DD in uitgaven and werkdagen
         for table in ('uitgaven', 'werkdagen'):
             await conn.execute(
