@@ -161,10 +161,13 @@ CREATE INDEX IF NOT EXISTS idx_aangifte_docs_jaar ON aangifte_documenten(jaar);
 
 
 async def get_db(db_path: Path = DB_PATH) -> aiosqlite.Connection:
-    """Get a database connection with WAL mode and FK enforcement."""
+    """Get a database connection with WAL mode, FK enforcement, and performance pragmas."""
     conn = await aiosqlite.connect(db_path)
     await conn.execute("PRAGMA journal_mode = WAL")
     await conn.execute("PRAGMA foreign_keys = ON")
+    await conn.execute("PRAGMA synchronous = NORMAL")
+    await conn.execute("PRAGMA cache_size = 10000")
+    await conn.execute("PRAGMA temp_store = MEMORY")
     conn.row_factory = aiosqlite.Row
     return conn
 
