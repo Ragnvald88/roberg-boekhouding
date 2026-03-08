@@ -15,7 +15,7 @@ source .venv/bin/activate
 export DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib
 python main.py  # → http://127.0.0.1:8085
 
-# Tests (286 passing)
+# Tests (362 passing)
 DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib .venv/bin/python -m pytest tests/ -v
 ```
 
@@ -103,6 +103,15 @@ Nav order: Jaarafsluiting before Aangifte (close books first, then file taxes).
 - **Klant2 3-amount validation**: Only treats 3-euro-amount lines as combined format when `uren*tarief + reiskosten ≈ total`
 - **Import robustness**: per-item error handling, double-click protection, single DB connection per factuur werkdagen
 - **Revenue queries**: Both dagpraktijk (`type='factuur'`) and ANW (`type='anw'`) included in all omzet/KPI calculations
+
+## Kosten pagina — Expense Import
+- "Importeer uitgaven" button: opens dialog scanning `02_Financieel/Boekhouding_Waarneming/{year}/Uitgaven/`
+- PDFs grouped by category (expansion panels), green checkmark for already-imported
+- Click unimported PDF → opens pre-filled add dialog (date from filename, category from folder, PDF auto-attached)
+- `import_/expense_utils.py`: `scan_archive()`, `extract_date_from_filename()`, `FOLDER_TO_CATEGORIE` mapping
+- Date extraction supports: MMYY, YYMM, MM_YY, MM-YY, YYYY-MM-DD, MMDDYY patterns
+- **AOV folder excluded** — AOV is not a business expense (tracked separately in fiscale_params)
+- Duplicate warning: same datum+categorie+bedrag triggers confirmation prompt
 
 ## Aangifte pagina (Invulhulp)
 5-tab invulhulp mirroring Belastingdienst IB-aangifte structure. Year defaults to vorig jaar.
