@@ -263,3 +263,22 @@ async def test_empty_csv_no_insert(db):
 
     transacties = await get_banktransacties(db, jaar=2026)
     assert len(transacties) == 0
+
+
+@pytest.mark.asyncio
+async def test_duplicate_transactions_rejected(db):
+    """Same transaction (datum+bedrag+tegenpartij+omschrijving) should not be inserted twice."""
+    transactions = [
+        {'datum': '2024-01-15', 'bedrag': -50.00,
+         'tegenrekening': 'NL91ABNA0417164300', 'tegenpartij': 'KPN',
+         'omschrijving': 'Factuur januari'},
+    ]
+    count1 = await add_banktransacties(db, transacties=transactions, csv_bestand='file1.csv')
+    assert count1 == 1
+
+    # Same transaction from different CSV file → should be skipped
+    count2 = await add_banktransacties(db, transacties=transactions, csv_bestand='file2.csv')
+    assert count2 == 0
+
+    all_trans = await get_banktransacties(db, jaar=2024)
+    assert len(all_trans) == 1

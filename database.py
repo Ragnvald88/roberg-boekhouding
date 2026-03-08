@@ -851,11 +851,20 @@ async def get_banktransacties(db_path: Path = DB_PATH,
 async def add_banktransacties(db_path: Path = DB_PATH,
                                transacties: list[dict] = None,
                                csv_bestand: str = '') -> int:
-    """Insert batch of bank transactions. Returns count inserted."""
+    """Insert batch of bank transactions. Dedup by datum+bedrag+tegenpartij+omschrijving."""
     conn = await get_db(db_path)
     try:
         count = 0
         for t in (transacties or []):
+            # Check for duplicate
+            cur = await conn.execute(
+                """SELECT COUNT(*) FROM banktransacties
+                   WHERE datum = ? AND bedrag = ? AND tegenpartij = ? AND omschrijving = ?""",
+                (t['datum'], t['bedrag'], t.get('tegenpartij', ''),
+                 t.get('omschrijving', ''))
+            )
+            if (await cur.fetchone())[0] > 0:
+                continue  # Skip duplicate
             await conn.execute(
                 """INSERT INTO banktransacties
                    (datum, bedrag, tegenrekening, tegenpartij, omschrijving, csv_bestand)
