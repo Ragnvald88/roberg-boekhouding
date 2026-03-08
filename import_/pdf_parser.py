@@ -1,12 +1,14 @@
 """PDF text extraction and parsing for dagpraktijk and ANW invoices.
 
-Handles all invoice format variations found across 2023-2025:
+Handles all invoice format variations found across 2023-2026:
 - 2023 early: 5-digit numbers, "RH Waarneming" header, klant on line 2
 - 2023 late: 3-digit numbers, "Factuuradres:" section
-- 2024 early-mid: "Factuuradres:" or left-side klant
+- 2024 early-mid: "Factuuradres:" or left-side klant, Eenheid column
 - 2024 middle: Footer table with "Factuurbedrag" instead of "Totaal"
 - 2024-2025 late: "TestBV Huisartswaarnemer" header, "Totaalbedrag"
-- 2025 app-generated: "Nummer:", "Factuur aan:", "BETAALINFORMATIE"
+- 2025 Klant2: combined uren+reiskosten on single line (3 euro amounts)
+- 2025-2026 app-generated: "Nummer:", "Factuur aan:", "BETAALINFORMATIE"
+- 2026 Klant15: multi-line description wrapping, date on different line
 - ANW self-billing: "FACTUURNUMMER :", dienst table, consistent across years
 """
 
@@ -17,10 +19,18 @@ from pathlib import Path
 
 def extract_pdf_text(pdf_path: Path) -> str:
     """Extract text from PDF using pdftotext with layout preservation."""
-    result = subprocess.run(
-        ['pdftotext', '-layout', str(pdf_path), '-'],
-        capture_output=True, text=True,
-    )
+    try:
+        result = subprocess.run(
+            ['pdftotext', '-layout', str(pdf_path), '-'],
+            capture_output=True, text=True,
+        )
+    except FileNotFoundError:
+        raise RuntimeError(
+            'pdftotext niet gevonden — installeer poppler '
+            '(brew install poppler)')
+    if result.returncode != 0:
+        stderr = result.stderr.strip()
+        raise RuntimeError(f'pdftotext fout: {stderr or "onbekend"}')
     return result.stdout
 
 
@@ -38,12 +48,10 @@ def parse_dutch_amount(s: str) -> float:
         # Has a comma = decimal separator. Dots are thousands separators.
         s = s.replace('.', '').replace(',', '.')
     else:
-        # No comma — the amount is a whole number or uses dots as decimal
-        # In Dutch format, whole numbers don't have a dot
-        # But '9.24' could be a decimal... In our context:
-        # Amounts like '9.24' are from line items (not totals)
-        # This is ambiguous. We treat dot-only as potential decimal if < 3 digits after dot.
-        pass
+        # No comma. Check if dot is a thousands separator (exactly 3 digits after)
+        # e.g., '1.234' = 1234, but '9.24' = 9.24 (decimal)
+        if re.match(r'^\d{1,3}(\.\d{3})+$', s):
+            s = s.replace('.', '')
     return float(s)
 
 
@@ -262,6 +270,230 @@ def _extract_work_dates(text: str) -> list[str]:
     return dates
 
 
+def detect_invoice_type(text: str) -> str:
+    """Detect whether PDF text is from a dagpraktijk or ANW invoice.
+
+    Returns 'dagpraktijk', 'anw', or 'unknown'.
+    """
+    if 'FACTUURNUMMER' in text:
+        return 'anw'
+    if 'Factuur uitgereikt door afnemer' in text:
+        return 'anw'
+    if 'Declaratienummer' in text and 'Dienst ID' in text:
+        return 'anw'
+    if re.search(r'(?:Factuurnummer|Nummer)\s*:', text):
+        return 'dagpraktijk'
+    if 'Waarneming' in text:
+        return 'dagpraktijk'
+    return 'unknown'
+
+
+def _derive_km_from_reiskosten(reiskosten: float) -> tuple[float, float]:
+    """Derive km count and km_tarief from a reiskosten amount.
+
+    Tries common km rates (0.23, 0.21) to find one that yields a round km count.
+    """
+    for rate in [0.23, 0.21]:
+        km = reiskosten / rate
+        if abs(km - round(km)) < 0.01:
+            return round(km), rate
+    return round(reiskosten / 0.23), 0.23
+
+
+def extract_dagpraktijk_line_items(text: str) -> list[dict]:
+    """Extract structured work day line items from dagpraktijk invoice.
+
+    Handles all format variations:
+    - 2024 old: DD-MM-YY dates, "Uren"/"Afstand (km)" columns, separate rows
+    - 2025 Klant7: DD/MM/YYYY, "Kilometertarief", separate rows
+    - 2025 Klant2: DD/MM/YYYY, 3 euro amounts (tarief+reiskosten+totaal) per line
+    - 2026 standard: DD-MM-YYYY, "Reiskosten (retour ...)", separate rows
+    - Klant15: multi-line description, date may be on different line than amounts
+
+    Returns list of dicts with keys: datum, uren, tarief, km, km_tarief.
+    """
+    items = []
+    current_date = None
+    current_item = None
+
+    km_keywords = ('kilometer', 'reiskosten', 'reisvergoeding', 'afstand')
+
+    for line in text.split('\n'):
+        stripped = line.strip()
+        if not stripped:
+            continue
+
+        lower = stripped.lower()
+
+        # Skip header / summary / footer lines
+        if lower.startswith('totaal') or lower.startswith('vrijgesteld'):
+            continue
+        if lower.startswith('datum') and 'omschrijving' in lower:
+            continue
+        if any(kw in lower for kw in (
+            'betaalinformatie', 'gelieve', 'iban:', 'ten name van',
+            'betaaltermijn', 'rekeningnummer',
+        )):
+            continue
+
+        # Check for a date anywhere in the line
+        date_match = re.search(r'(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})', stripped)
+
+        # Find all euro amounts in the line
+        euro_amounts = re.findall(r'€\s*([\d.,]+)', stripped)
+
+        # Find the "antal" (last number before the first € sign)
+        antal_match = None
+        if euro_amounts:
+            first_euro_pos = stripped.index('€')
+            before_euro = stripped[:first_euro_pos].rstrip()
+            antal_match = re.search(r'(\d+(?:[.,]\d+)?)\s*$', before_euro)
+
+        if not antal_match or not euro_amounts:
+            # No parseable amount pattern — track date if present
+            if date_match:
+                new_date = parse_dutch_date(date_match.group(1))
+                if new_date and new_date > '2000':
+                    current_date = new_date
+            continue
+
+        antal = float(antal_match.group(1).replace(',', '.'))
+
+        # Update current_date if this line has a date
+        if date_match:
+            new_date = parse_dutch_date(date_match.group(1))
+            if new_date and new_date > '2000':
+                current_date = new_date
+
+        is_km = any(kw in lower for kw in km_keywords)
+
+        if is_km:
+            # km line — update the current item
+            if current_item:
+                current_item['km'] = antal
+                current_item['km_tarief'] = parse_dutch_amount(euro_amounts[0])
+        elif current_date:
+            # uren line — start a new item
+            if current_item:
+                items.append(current_item)
+
+            tarief = parse_dutch_amount(euro_amounts[0])
+            current_item = {
+                'datum': current_date,
+                'uren': antal,
+                'tarief': tarief,
+                'km': 0.0,
+                'km_tarief': 0.0,
+            }
+
+            # Klant2 2025 combined format: 3 euro amounts = tarief, reiskosten, totaal
+            # Validate: antal * tarief + reiskosten ≈ total (within €1) to distinguish
+            # from Klant4-style lines where 3 amounts have different semantics
+            if len(euro_amounts) >= 3:
+                reiskosten = parse_dutch_amount(euro_amounts[1])
+                total_on_line = parse_dutch_amount(euro_amounts[2])
+                expected_total = antal * tarief + reiskosten
+                if reiskosten > 0 and abs(expected_total - total_on_line) < 1.0:
+                    km, km_tarief = _derive_km_from_reiskosten(reiskosten)
+                    current_item['km'] = km
+                    current_item['km_tarief'] = km_tarief
+
+    if current_item:
+        items.append(current_item)
+
+    return items
+
+
+def extract_anw_diensten(text: str) -> list[dict]:
+    """Extract dienst records grouped by date from ANW self-billing invoice.
+
+    Parses the UREN SPECIFICATIE table. Groups multiple time segments
+    (Overleg/Avond/Nacht) per date into a single record.
+
+    Returns list of dicts with keys: datum, dienst_code, uren, bedrag.
+    """
+    diensten_by_date: dict[str, dict] = {}
+    current_code = None
+    current_date = None
+
+    for line in text.split('\n'):
+        stripped = line.strip()
+        if not stripped:
+            continue
+
+        # Skip header, summary, and non-data lines
+        if 'Dienst ID' in stripped and 'Datum' in stripped:
+            continue
+        if stripped.startswith('Totaal') or 'TOTAAL' in stripped:
+            continue
+        # Only skip standalone BTW summary lines, not data rows with "Vrijgesteld"
+        if re.match(r'\s*BTW\s+VRIJGESTELD', stripped, re.IGNORECASE):
+            continue
+        if stripped in ('Naam', 'FACTUUR', 'UREN SPECIFICATIE', 'CONCEPT'):
+            continue
+
+        # Pattern 1: Full dienst line with dienst_id and code
+        m = re.match(
+            r'(\d{5,7})\s+'           # dienst_id
+            r'(\S+)\s+'               # dienst code
+            r'(\d{2}-\d{2}-\d{4})\s+' # datum
+            r'(\d{2}:\d{2})\s+'       # starttijd
+            r'(\d{2}:\d{2})\s+'       # eindtijd
+            r'([\d.]+)\s+'            # uren
+            r'(\w+)\s+'               # tarief naam
+            r'€\s*([\d.,]+)\s+'       # tarief
+            r'\w+\s+'                 # btw status
+            r'€\s*([\d.,]+)',         # subtotaal
+            stripped,
+        )
+        if m:
+            current_code = m.group(2)
+            datum = parse_dutch_date(m.group(3))
+            if datum:
+                current_date = datum
+            uren = float(m.group(6))
+            bedrag = parse_dutch_amount(m.group(9))
+
+            if current_date:
+                if current_date not in diensten_by_date:
+                    diensten_by_date[current_date] = {
+                        'datum': current_date,
+                        'dienst_code': current_code,
+                        'uren': 0.0,
+                        'bedrag': 0.0,
+                    }
+                diensten_by_date[current_date]['uren'] += uren
+                diensten_by_date[current_date]['bedrag'] += bedrag
+            continue
+
+        # Pattern 2: Continuation line (no dienst_id / code / date)
+        m = re.match(
+            r'(\d{2}:\d{2})\s+'       # starttijd
+            r'(\d{2}:\d{2})\s+'       # eindtijd
+            r'([\d.]+)\s+'            # uren
+            r'(\w+)\s+'               # tarief naam
+            r'€\s*([\d.,]+)\s+'       # tarief
+            r'\w+\s+'                 # btw status
+            r'€\s*([\d.,]+)',         # subtotaal
+            stripped,
+        )
+        if m and current_date:
+            uren = float(m.group(3))
+            bedrag = parse_dutch_amount(m.group(6))
+
+            if current_date not in diensten_by_date:
+                diensten_by_date[current_date] = {
+                    'datum': current_date,
+                    'dienst_code': current_code or '',
+                    'uren': 0.0,
+                    'bedrag': 0.0,
+                }
+            diensten_by_date[current_date]['uren'] += uren
+            diensten_by_date[current_date]['bedrag'] += bedrag
+
+    return sorted(diensten_by_date.values(), key=lambda d: d['datum'])
+
+
 def parse_dagpraktijk_pdf(pdf_path: Path) -> dict:
     """Parse a dagpraktijk (self-created) invoice PDF.
 
@@ -285,6 +517,7 @@ def parse_dagpraktijk_text(text: str, filename: str = '') -> dict:
         'totaal_bedrag': _extract_totaal_bedrag(text),
         'klant_name': _extract_klant_name(text),
         'work_dates': _extract_work_dates(text),
+        'line_items': extract_dagpraktijk_line_items(text),
         'filename': filename,
     }
 
@@ -373,5 +606,6 @@ def parse_anw_text(text: str, filename: str = '') -> dict:
         'klant_name': klant_name,
         'periode': periode,
         'dienst_dates': dienst_dates,
+        'line_items': extract_anw_diensten(text),
         'filename': filename,
     }

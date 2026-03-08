@@ -84,18 +84,35 @@ Geen: user auth, BTW-administratie, loon/voorraad, email, real-time bank-API, au
 - **2023**: winst €62.522 → belastbare winst €45.801 → IB terug €415
 - **2024**: winst €95.145 → belastbare winst €76.776 → IB terug €3.137
 
-## Jaarafsluiting pagina (Tab-based)
-7-tab layout: Invoer, W&V, Fiscaal, Belasting, Balans, Controles, Document.
-KPI strip at top (winst, belastbare winst, IB+ZVW, resultaat). Year defaults to vorig jaar.
-Single "Opslaan & herbereken" button saves ZA/SA toggles + IB inputs + balans + ew_naar_partner.
-PDF export: 5-page professional layout with grondslagen, prior year comparison, page numbers.
-Document tab: Inline HTML preview of jaarcijfers (same as PDF, rendered in-browser).
-Controles tab: Includes fiscal advisory panel (ZA trajectory, SA tracking, KIA check, lijfrente hints, belastingdruk).
+## Jaarafsluiting pagina (Pure Business Report)
+5-tab layout: Balans, W&V, Toelichting, Controles, Document. Year defaults to vorig jaar.
+KPI strip: Omzet, Winst, Eigen vermogen, Balanstotaal (business-only).
+Balans tab: activa/passiva with edit toggle for manual inputs (bank, crediteuren, overige).
+Status workflow: concept (orange) → definitief (green), with lock/reopen. DB: `jaarafsluiting_status`.
+PDF export: 4-page Yuki-style (cover+grondslagen, balans, W&V+kosten, toelichting). No IB/tax content.
+Controles tab: business checks only (kosten/omzet ratio, urencriterium, balans check, missing data).
+Nav order: Jaarafsluiting before Aangifte (close books first, then file taxes).
+
+## Facturen pagina
+- "Importeer PDF" button: upload dialog with multi-file PDF import
+- Auto-detects dagpraktijk vs ANW format, parses line items (uren/km/tarief per werkdag)
+- Klant auto-resolution via `import_/klant_mapping.py`, dedup by factuurnummer
+- Creates factuur record + werkdagen from parsed line items (or links existing werkdagen)
+- **PDF parser** (`import_/pdf_parser.py`): `detect_invoice_type()`, `extract_dagpraktijk_line_items()`, `extract_anw_diensten()`
+- Handles 7+ invoice format variations (2024 old, 2025 Klant7/Klant2-combined, 2026 standard/Klant15, ANW HAP NoordOost/Drenthe)
+- **Klant2 3-amount validation**: Only treats 3-euro-amount lines as combined format when `uren*tarief + reiskosten ≈ total`
+- **Import robustness**: per-item error handling, double-click protection, single DB connection per factuur werkdagen
+- **Revenue queries**: Both dagpraktijk (`type='factuur'`) and ANW (`type='anw'`) included in all omzet/KPI calculations
 
 ## Aangifte pagina (Invulhulp)
 5-tab invulhulp mirroring Belastingdienst IB-aangifte structure. Year defaults to vorig jaar.
 Each value shows BD field label + copy-to-clipboard (raw integer for portal input).
 Tabs: Winst uit onderneming, Prive & aftrek (inputs save to DB), Box 3 (inputs+calc), Overzicht (final summary), Documenten (upload checklist)
+- **Winst tab**: ZA/SA toggles (auto-save + recalculate), fiscal waterfall, urencriterium badge
+- **Prive tab**: AOV + lijfrente inputs, eigen woning (WOZ/hypotheek/partner toggle), voorlopige aanslagen
+- **Missing data warnings**: Banner at top for missing uitgaven, no AOV, jaarafsluiting not definitief
+- **Auto-doc detection**: Checks `data/pdf/{year}/Jaarcijfers_*.pdf` for auto-completion
+- **Known gap**: Fiscal advisory panel (ZA trajectory, SA tracking, KIA check, belastingdruk) not yet implemented
 
 ## Bekende Bugs
 

@@ -1,10 +1,11 @@
 """Facturen pagina — factuur aanmaken, overzicht en betaalstatus."""
 
+import os
+import tempfile
 from datetime import date, datetime
-
-from nicegui import app, ui
-
 from pathlib import Path
+
+from nicegui import app, events, ui
 
 from components.layout import create_layout
 from components.invoice_generator import generate_invoice
@@ -12,8 +13,14 @@ from components.utils import format_euro, format_datum, generate_csv
 from database import (
     get_facturen, add_factuur, get_next_factuurnummer,
     mark_betaald, delete_factuur, get_klanten, get_werkdagen_ongefactureerd,
-    link_werkdagen_to_factuur, get_bedrijfsgegevens, DB_PATH,
+    link_werkdagen_to_factuur, get_bedrijfsgegevens, get_db, add_werkdag,
+    DB_PATH,
 )
+from import_.pdf_parser import (
+    extract_pdf_text, detect_invoice_type,
+    parse_dagpraktijk_text, parse_anw_text,
+)
+from import_.klant_mapping import resolve_klant, resolve_anw_klant
 
 PDF_DIR = DB_PATH.parent / "facturen"
 
@@ -52,6 +59,9 @@ async def facturen_page():
 
             ui.button('CSV', icon='download',
                       on_click=export_csv).props('outline color=primary')
+            ui.button('Importeer PDF', icon='upload_file',
+                      on_click=lambda: open_import_dialog()) \
+                .props('outline color=primary')
             ui.button('Nieuwe factuur', icon='add',
                       on_click=lambda: open_new_factuur_dialog()) \
                 .props('color=primary')
@@ -268,6 +278,420 @@ async def facturen_page():
         table.on('markonbetaald', on_mark_onbetaald)
         table.on('deletefactuur', on_delete_factuur)
         table.on('download', on_download)
+
+        async def open_import_dialog():
+            """Open dialog to import facturen from PDF files."""
+            parsed_items = []
+
+            klanten = await get_klanten(DB_PATH, alleen_actief=False)
+            klant_lookup = {k.naam: k.id for k in klanten}
+            klant_options = {k.id: k.naam for k in klanten}
+
+            # Load existing factuurnummers for dedup
+            conn = await get_db(DB_PATH)
+            try:
+                cursor = await conn.execute("SELECT nummer FROM facturen")
+                existing_nummers = {row[0] for row in await cursor.fetchall()}
+            finally:
+                await conn.close()
+
+            with ui.dialog() as dlg, ui.card().classes('w-full max-w-5xl'):
+                ui.label('Facturen importeren uit PDF').classes('text-h6 q-mb-sm')
+
+                preview_container = ui.column().classes('w-full gap-2')
+                bottom_container = ui.column().classes('w-full')
+
+                opt_werkdagen = {'value': True}
+                opt_betaald = {'value': True}
+
+                async def handle_upload(e: events.UploadEventArguments):
+                    content = await e.file.read()
+                    filename = e.file.name
+
+                    with tempfile.NamedTemporaryFile(
+                        suffix='.pdf', delete=False,
+                    ) as tmp:
+                        tmp.write(content)
+                        tmp_path = tmp.name
+
+                    try:
+                        text = extract_pdf_text(tmp_path)
+                        inv_type = detect_invoice_type(text)
+
+                        if inv_type == 'dagpraktijk':
+                            parsed = parse_dagpraktijk_text(text, filename)
+                        elif inv_type == 'anw':
+                            parsed = parse_anw_text(text, filename)
+                        else:
+                            parsed_items.append({
+                                '_type': 'unknown', '_filename': filename,
+                                '_status': 'fout',
+                                '_error': 'Niet herkend PDF-formaat',
+                            })
+                            render_preview()
+                            return
+
+                        parsed['_type'] = inv_type
+                        parsed['_filename'] = filename
+                        parsed['_content'] = content
+
+                        # Dedup check
+                        nummer = parsed.get('factuurnummer')
+                        if nummer and nummer in existing_nummers:
+                            parsed['_status'] = 'duplicaat'
+                        else:
+                            parsed['_status'] = 'nieuw'
+
+                        # Klant resolution
+                        if inv_type == 'dagpraktijk':
+                            suffix = (filename.split('_', 1)[1].replace('.pdf', '')
+                                      if '_' in filename else None)
+                            db_naam, klant_id = resolve_klant(
+                                parsed.get('klant_name'), suffix, klant_lookup)
+                        else:
+                            db_naam, klant_id = resolve_anw_klant(
+                                filename, klant_lookup)
+
+                        parsed['_klant_naam'] = db_naam
+                        parsed['_klant_id'] = klant_id
+
+                        parsed_items.append(parsed)
+                        render_preview()
+                    except Exception as ex:
+                        parsed_items.append({
+                            '_type': 'error', '_filename': filename,
+                            '_status': 'fout', '_error': str(ex),
+                        })
+                        render_preview()
+                    finally:
+                        os.unlink(tmp_path)
+
+                ui.upload(
+                    multiple=True, on_upload=handle_upload, auto_upload=True,
+                ).props(
+                    'accept=".pdf" label="Sleep PDF-bestanden hierheen of '
+                    'klik om te kiezen" flat bordered'
+                ).classes('w-full')
+
+                def render_preview():
+                    preview_container.clear()
+                    bottom_container.clear()
+
+                    if not parsed_items:
+                        return
+
+                    with preview_container:
+                        for i, item in enumerate(parsed_items):
+                            status = item.get('_status', 'fout')
+
+                            if status == 'nieuw':
+                                bg_class = 'bg-green-1'
+                            elif status == 'duplicaat':
+                                bg_class = 'bg-grey-2'
+                            else:
+                                bg_class = 'bg-red-1'
+
+                            with ui.row().classes(
+                                f'w-full items-center gap-3 q-pa-sm '
+                                f'rounded-borders {bg_class}'
+                            ):
+                                # Status badge
+                                if status == 'nieuw':
+                                    ui.badge('Nieuw', color='positive')
+                                elif status == 'duplicaat':
+                                    ui.badge('Duplicaat', color='grey')
+                                else:
+                                    ui.badge('Fout', color='negative')
+
+                                # Type
+                                inv_type = item.get('_type', '?')
+                                type_label = ('Dagpraktijk' if inv_type == 'dagpraktijk'
+                                              else 'ANW' if inv_type == 'anw'
+                                              else '?')
+                                ui.label(type_label).classes(
+                                    'text-caption text-grey-8')
+
+                                # Nummer
+                                nummer = item.get('factuurnummer', '-')
+                                ui.label(nummer).classes('text-weight-bold')
+
+                                # Datum
+                                datum = item.get('factuurdatum', '')
+                                if datum:
+                                    ui.label(format_datum(datum))
+
+                                # Klant
+                                klant_naam = item.get('_klant_naam')
+                                if klant_naam:
+                                    ui.label(klant_naam).classes(
+                                        'text-grey-8')
+                                elif status == 'nieuw':
+                                    # Unresolved: show select
+                                    sel = ui.select(
+                                        klant_options, label='Klant',
+                                        with_input=True,
+                                    ).classes('w-64')
+
+                                    def _make_klant_handler(idx, select):
+                                        def handler(_):
+                                            items = parsed_items
+                                            items[idx]['_klant_id'] = select.value
+                                            items[idx]['_klant_naam'] = (
+                                                klant_options.get(select.value))
+                                            render_bottom()
+                                        return handler
+                                    sel.on_value_change(
+                                        _make_klant_handler(i, sel))
+
+                                ui.space()
+
+                                # Bedrag
+                                bedrag = item.get('totaal_bedrag')
+                                if bedrag:
+                                    ui.label(format_euro(bedrag)).classes(
+                                        'text-weight-bold')
+
+                                # Werkdagen count
+                                n_items = len(item.get('line_items', []))
+                                if n_items:
+                                    ui.badge(
+                                        f'{n_items} dag{"en" if n_items != 1 else ""}',
+                                        color='info')
+
+                                # Error message
+                                if status == 'fout':
+                                    ui.label(
+                                        item.get('_error', 'Fout')
+                                    ).classes('text-negative text-caption')
+
+                    render_bottom()
+
+                def render_bottom():
+                    bottom_container.clear()
+                    new_count = sum(
+                        1 for it in parsed_items
+                        if it.get('_status') == 'nieuw' and it.get('_klant_id'))
+                    dup_count = sum(
+                        1 for it in parsed_items
+                        if it.get('_status') == 'duplicaat')
+                    unresolved = sum(
+                        1 for it in parsed_items
+                        if it.get('_status') == 'nieuw' and not it.get('_klant_id'))
+
+                    with bottom_container:
+                        if not parsed_items:
+                            return
+
+                        ui.separator().classes('q-my-sm')
+
+                        # Options
+                        with ui.row().classes('w-full items-center gap-4'):
+                            cb_wd = ui.checkbox(
+                                'Werkdagen aanmaken',
+                                value=opt_werkdagen['value'],
+                            )
+                            cb_wd.on_value_change(
+                                lambda e: opt_werkdagen.update(value=e.value))
+                            cb_bt = ui.checkbox(
+                                'Markeer als betaald',
+                                value=opt_betaald['value'],
+                            )
+                            cb_bt.on_value_change(
+                                lambda e: opt_betaald.update(value=e.value))
+
+                        # Summary + import button
+                        with ui.row().classes(
+                            'w-full items-center gap-4 q-mt-sm'
+                        ):
+                            if dup_count:
+                                ui.label(
+                                    f'{dup_count} '
+                                    f'{"duplicaten" if dup_count > 1 else "duplicaat"}'
+                                    f' overgeslagen'
+                                ).classes('text-caption text-grey')
+                            if unresolved:
+                                ui.label(
+                                    f'{unresolved} zonder klant'
+                                ).classes('text-caption text-warning')
+                            ui.space()
+                            ui.button(
+                                'Annuleren', on_click=dlg.close,
+                            ).props('flat')
+                            if new_count > 0:
+                                btn = ui.button(
+                                    f'Importeer {new_count} '
+                                    f'factu{"ren" if new_count != 1 else "ur"}',
+                                    icon='file_download',
+                                    on_click=do_import,
+                                ).props('color=primary')
+                                import_btn_ref['ref'] = btn
+
+                import_btn_ref = {'ref': None}
+
+                async def do_import():
+                    """Import all new, resolved items."""
+                    # Disable button to prevent double-click
+                    if import_btn_ref['ref']:
+                        import_btn_ref['ref'].disable()
+
+                    imported = 0
+                    errors = 0
+                    werkdagen_created = 0
+                    werkdagen_linked = 0
+
+                    # Ensure PDF storage dirs exist
+                    import_dir = PDF_DIR / 'imports'
+                    import_dir.mkdir(parents=True, exist_ok=True)
+
+                    for item in parsed_items:
+                        if item.get('_status') != 'nieuw':
+                            continue
+                        klant_id = item.get('_klant_id')
+                        if not klant_id:
+                            continue
+
+                        nummer = item.get('factuurnummer', '')
+
+                        # Guard: skip if already imported (double-click / dup)
+                        if nummer in existing_nummers:
+                            continue
+
+                        try:
+                            datum = item.get('factuurdatum', '')
+                            bedrag = item.get('totaal_bedrag', 0)
+                            inv_type = item.get('_type', 'factuur')
+                            line_items = item.get('line_items', [])
+
+                            # Calculate totals from line items
+                            totaal_uren = sum(
+                                li.get('uren', 0) for li in line_items)
+                            totaal_km = sum(
+                                li.get('km', 0) for li in line_items)
+
+                            # Save PDF file
+                            safe_name = (nummer.replace('/', '-')
+                                         if nummer else 'unknown')
+                            pdf_dest = import_dir / f'{safe_name}.pdf'
+                            content = item.get('_content', b'')
+                            if content and not pdf_dest.exists():
+                                pdf_dest.write_bytes(content)
+                            pdf_pad = str(pdf_dest) if content else ''
+
+                            # Create factuur record
+                            ftype = 'anw' if inv_type == 'anw' else 'factuur'
+                            await add_factuur(
+                                DB_PATH,
+                                nummer=nummer,
+                                klant_id=klant_id,
+                                datum=datum,
+                                totaal_uren=totaal_uren,
+                                totaal_km=totaal_km,
+                                totaal_bedrag=bedrag,
+                                pdf_pad=pdf_pad,
+                                betaald=1 if opt_betaald['value'] else 0,
+                                betaald_datum=(datum if opt_betaald['value']
+                                              else ''),
+                                type=ftype,
+                            )
+
+                            # Track for dedup
+                            existing_nummers.add(nummer)
+                            imported += 1
+
+                            # Create or link werkdagen
+                            if opt_werkdagen['value'] and line_items:
+                                conn = await get_db(DB_PATH)
+                                try:
+                                    for li in line_items:
+                                        li_datum = li.get('datum', '')
+                                        if not li_datum:
+                                            continue
+
+                                        cur = await conn.execute(
+                                            "SELECT id FROM werkdagen "
+                                            "WHERE datum = ? AND klant_id = ?",
+                                            (li_datum, klant_id),
+                                        )
+                                        existing_wd = await cur.fetchone()
+
+                                        if existing_wd:
+                                            await link_werkdagen_to_factuur(
+                                                DB_PATH,
+                                                werkdag_ids=[existing_wd[0]],
+                                                factuurnummer=nummer,
+                                            )
+                                            werkdagen_linked += 1
+                                        else:
+                                            if inv_type == 'anw':
+                                                code = li.get(
+                                                    'dienst_code', '')
+                                                activiteit = 'Achterwacht'
+                                                uren = li.get('uren', 0)
+                                                bedrag_li = li.get(
+                                                    'bedrag', 0)
+                                                tarief = (
+                                                    round(bedrag_li / uren, 2)
+                                                    if uren else 0)
+                                                km = 0.0
+                                                km_tarief = 0.23
+                                                urennorm = 0
+                                            else:
+                                                uren_val = li.get('uren', 0)
+                                                tarief_val = li.get(
+                                                    'tarief', 0)
+                                                code = (
+                                                    f'WDAGPRAKTIJK_'
+                                                    f'{tarief_val:.2f}'
+                                                    .replace('.', ','))
+                                                activiteit = (
+                                                    'Waarneming dagpraktijk')
+                                                uren = uren_val
+                                                tarief = tarief_val
+                                                km = li.get('km', 0)
+                                                km_tarief = li.get(
+                                                    'km_tarief', 0.23)
+                                                urennorm = 1
+
+                                            await add_werkdag(
+                                                DB_PATH,
+                                                datum=li_datum,
+                                                klant_id=klant_id,
+                                                code=code,
+                                                activiteit=activiteit,
+                                                uren=uren,
+                                                km=km,
+                                                tarief=tarief,
+                                                km_tarief=km_tarief,
+                                                status='gefactureerd',
+                                                factuurnummer=nummer,
+                                                urennorm=urennorm,
+                                            )
+                                            werkdagen_created += 1
+                                finally:
+                                    await conn.close()
+
+                        except Exception as ex:
+                            errors += 1
+                            ui.notify(
+                                f'Fout bij {nummer}: {ex}',
+                                type='negative')
+
+                    dlg.close()
+
+                    parts = [f'{imported} facturen geïmporteerd']
+                    if werkdagen_created:
+                        parts.append(
+                            f'{werkdagen_created} werkdagen aangemaakt')
+                    if werkdagen_linked:
+                        parts.append(
+                            f'{werkdagen_linked} werkdagen gekoppeld')
+                    if errors:
+                        parts.append(f'{errors} fouten')
+                    ui.notify(', '.join(parts),
+                              type='positive' if not errors else 'warning')
+                    await refresh_table()
+
+            dlg.open()
 
         async def open_new_factuur_dialog():
             klanten = await get_klanten(DB_PATH, alleen_actief=True)

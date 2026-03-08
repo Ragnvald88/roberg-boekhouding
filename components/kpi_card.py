@@ -36,14 +36,15 @@ def kpi_card(label: str, value: str, icon: str, color: str = '#0F766E',
             extra()
 
 
-def kpi_strip(winst: float, belastbare_winst: float,
-              netto_ib_zvw: float, resultaat: float):
-    """4 compact KPI cards for jaarafsluiting. Result card has colored left border."""
+def kpi_strip(omzet: float, winst: float,
+              eigen_vermogen: float, balanstotaal: float):
+    """4 compact KPI cards for jaarafsluiting — business-only metrics."""
     with ui.row().classes('w-full gap-3 flex-wrap'):
         for label, value, icon in [
-            ('Winst', format_euro(winst), 'trending_up'),
-            ('Belastbare winst', format_euro(belastbare_winst), 'calculate'),
-            ('IB + ZVW', format_euro(netto_ib_zvw), 'receipt_long'),
+            ('Omzet', format_euro(omzet), 'trending_up'),
+            ('Winst', format_euro(winst), 'savings'),
+            ('Eigen vermogen', format_euro(eigen_vermogen), 'account_balance'),
+            ('Balanstotaal', format_euro(balanstotaal), 'balance'),
         ]:
             with ui.card().classes('flex-1 min-w-48 q-pa-md'):
                 with ui.row().classes('items-center gap-2'):
@@ -51,19 +52,3 @@ def kpi_strip(winst: float, belastbare_winst: float,
                     ui.label(label).classes('text-caption').style('color: #64748B')
                 ui.label(value).classes('text-h6 q-mt-xs') \
                     .style('color: #0F172A; font-weight: 700')
-        # Result card — colored left border
-        border_color = '#059669' if resultaat <= 0 else '#DC2626'
-        text_class = 'text-positive' if resultaat < 0 else 'text-negative' if resultaat > 0 else ''
-        if resultaat < 0:
-            res_label = f'{format_euro(abs(resultaat))} terug'
-        elif resultaat > 0:
-            res_label = f'{format_euro(resultaat)} bij'
-        else:
-            res_label = format_euro(0)
-        with ui.card().classes('flex-1 min-w-48 q-pa-md') \
-                .style(f'border-left: 4px solid {border_color}'):
-            with ui.row().classes('items-center gap-2'):
-                ui.icon('account_balance_wallet', size='1.2rem').classes(text_class)
-                ui.label('Resultaat').classes('text-caption').style('color: #64748B')
-            ui.label(res_label).classes(f'text-h6 q-mt-xs {text_class}') \
-                .style('font-weight: 700')

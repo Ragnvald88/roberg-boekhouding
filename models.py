@@ -169,6 +169,8 @@ class FiscaleParams:
     balans_crediteuren: float = 0.0
     balans_overige_vorderingen: float = 0.0
     balans_overige_schulden: float = 0.0
+    # Jaarafsluiting workflow status
+    jaarafsluiting_status: str = 'concept'
 
 
 @dataclass

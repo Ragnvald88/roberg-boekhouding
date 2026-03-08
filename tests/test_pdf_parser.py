@@ -715,7 +715,8 @@ class TestResolveANWKlant:
         assert name == 'HAP NoordOost'
         assert kid == 5
 
-    def test_gr_factuur(self):
+    def test_gr_too_short_no_match(self):
+        """'Gr' pattern removed — too broad (matched 'background.pdf' etc.)."""
         name, kid = resolve_anw_klant('2512_Gr_Factuur.pdf', MOCK_KLANTEN)
-        assert name == 'HAP NoordOost'
-        assert kid == 5
+        assert name is None
+        assert kid is None

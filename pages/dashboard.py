@@ -199,7 +199,7 @@ async def dashboard_page():
                         ib_color = '#0F766E'
                     kpi_card('Geschatte IB', ib_label,
                              'calculate', ib_color,
-                             on_click=lambda: ui.navigate.to('/jaarafsluiting'))
+                             on_click=lambda: ui.navigate.to('/aangifte'))
 
                 if km_data['km'] > 0:
                     km_label = f"{km_data['km']:.0f} km ({format_euro(km_data['vergoeding'])})"

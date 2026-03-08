@@ -76,15 +76,16 @@ PDF_KLANT_TO_DB = {
     'HAP MiddenLand': 'HAP MiddenLand',
     'HAP NoordOost': 'HAP NoordOost',
     'HAP NoordOost': 'HAP NoordOost',
+    'HAP NoordOost': 'HAP NoordOost',
 }
 
 # ANW filename patterns → DB klant naam
 ANW_FILENAME_TO_KLANT = {
     'DokterDrenthe': 'HAP MiddenLand',
     'Drenthe': 'HAP MiddenLand',
+    'HAP NoordOost': 'HAP NoordOost',
     'DDG': 'HAP NoordOost',
     'Groningen': 'HAP NoordOost',
-    'Gr': 'HAP NoordOost',
 }
 
 # New klanten that need to be created during import

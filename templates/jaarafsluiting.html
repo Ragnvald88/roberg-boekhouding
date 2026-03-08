@@ -33,8 +33,6 @@
   table .total td { border-top: 1.5pt solid #0F766E; font-weight: 700;
                     padding-top: 2mm; }
   table .indent td:first-child { padding-left: 8mm; }
-  table .indent2 td:first-child { padding-left: 12mm; font-size: 0.85em; }
-  table .nvt td { color: #94A3B8; font-style: italic; }
 
   .data-table { margin-bottom: 4mm; }
   .data-table th { background: #0F766E; color: #fff; padding: 1.5mm 3mm;
@@ -42,20 +40,6 @@
   .data-table td { padding: 1.5mm 3mm; border-bottom: 0.3pt solid #e2e8f0;
                    font-variant-numeric: tabular-nums; }
   .data-table .r { text-align: right; }
-
-  .result-box { padding: 3mm 4mm; margin: 3mm 0;
-                border-radius: 2mm; font-weight: 700; font-size: 11pt; }
-  .result-positive { background: #f0fdf4; color: #166534;
-                     border-left: 4px solid #059669; }
-  .result-negative { background: #fef2f2; color: #991b1b;
-                     border-left: 4px solid #DC2626; }
-  .result-neutral { background: #f1f5f9; color: #0F172A; }
-
-  .badge { display: inline-block; padding: 0.5mm 2mm; border-radius: 1mm;
-           font-size: 8pt; font-weight: 600; }
-  .badge-ok { background: #dcfce7; color: #059669; }
-  .badge-warn { background: #fef3cd; color: #856404; }
-  .badge-bad { background: #fef2f2; color: #DC2626; }
 
   .balans-grid { display: flex; gap: 6mm; }
   .balans-col { flex: 1; }
@@ -103,9 +87,6 @@
   <li>Balans per 31-12-{{ jaar }}</li>
   <li>Winst- en verliesrekening</li>
   <li>Toelichting op de balans (activastaat)</li>
-  <li>Fiscale winstberekening</li>
-  <li>Inkomstenbelasting</li>
-  <li>Controles en kengetallen</li>
 </ul>
 
 <h2>Grondslagen van waardering</h2>
@@ -119,12 +100,12 @@
 </div>
 
 <div class="disclaimer">
-  Deze jaarstukken zijn samengesteld ten behoeve van de aangifte inkomstenbelasting.
-  De jaarrekening is niet gecontroleerd door een accountant. Bedragen in hele euro's,
-  afwijkingen door afronding mogelijk.
+  Deze jaarstukken zijn samengesteld ten behoeve van de jaarlijkse financiële
+  verantwoording. De jaarrekening is niet gecontroleerd door een accountant.
+  Bedragen in hele euro's, afwijkingen door afronding mogelijk.
 </div>
 
-<!-- PAGE 2: Balans + W&V -->
+<!-- PAGE 2: Balans -->
 <div class="page-break"></div>
 
 <h2>Balans per 31-12-{{ jaar }}</h2>
@@ -184,7 +165,7 @@
   </div>
 </div>
 
-<!-- Kapitaalsvergelijking inline -->
+<!-- Kapitaalsvergelijking -->
 <h3>Kapitaalsvergelijking</h3>
 <table>
 <tr><td>Begin vermogen</td><td class="value">{{ balans.begin_vermogen|euro }}</td></tr>
@@ -195,15 +176,17 @@
 </table>
 {% endif %}
 
-<!-- W&V -->
+<!-- PAGE 3: W&V -->
+<div class="page-break"></div>
+
 <h2>Winst- en verliesrekening</h2>
 <table>
-<tr><td>Netto-omzet</td><td class="value">{{ f.omzet|euro }}</td></tr>
+<tr><td>Netto-omzet</td><td class="value">{{ omzet|euro }}</td></tr>
 <tr><td>-/- Bedrijfslasten (excl. investeringen)</td>
     <td class="value">{{ kosten_excl_inv|euro }}</td></tr>
 <tr><td>-/- Afschrijvingen</td>
     <td class="value">{{ totaal_afschrijvingen|euro }}</td></tr>
-<tr class="total"><td>Winst</td><td class="value">{{ f.winst|euro }}</td></tr>
+<tr class="total"><td>Winst</td><td class="value">{{ winst|euro }}</td></tr>
 </table>
 
 {% if kosten_per_cat %}
@@ -219,7 +202,7 @@
 </table>
 {% endif %}
 
-<!-- PAGE 3: Toelichting (Activastaat) -->
+<!-- PAGE 4: Toelichting (Activastaat) -->
 <div class="page-break"></div>
 
 <h2>Toelichting op de balans</h2>
@@ -246,168 +229,6 @@
 </tr></table>
 {% else %}
 <p style="color:#94A3B8">Geen investeringen / afschrijvingen.</p>
-{% endif %}
-
-<!-- PAGE 4: Fiscale positie -->
-<div class="page-break"></div>
-
-<h2>Fiscale winstberekening</h2>
-<table>
-<tr><td>Winst jaarrekening</td><td class="value">{{ f.winst|euro }}</td></tr>
-<tr><td>+ Bijtelling representatie (20%)</td>
-    <td class="value">{{ f.repr_bijtelling|euro }}</td></tr>
-<tr><td>- KIA</td><td class="value">{{ f.kia|euro }}</td></tr>
-<tr class="sep"><td class="bold">= Fiscale winst</td>
-    <td class="value bold">{{ f.fiscale_winst|euro }}</td></tr>
-{% if za_actief %}
-<tr><td>- Zelfstandigenaftrek</td>
-    <td class="value">{{ f.zelfstandigenaftrek|euro }}</td></tr>
-{% else %}
-<tr class="nvt"><td>- Zelfstandigenaftrek: niet van toepassing</td><td class="value">—</td></tr>
-{% endif %}
-{% if sa_actief and f.startersaftrek > 0 %}
-<tr><td>- Startersaftrek</td>
-    <td class="value">{{ f.startersaftrek|euro }}</td></tr>
-{% elif not sa_actief %}
-{# SA not active — omit line entirely #}
-{% endif %}
-<tr class="sep"><td class="bold">= Na ondernemersaftrek</td>
-    <td class="value bold">{{ f.na_ondernemersaftrek|euro }}</td></tr>
-<tr><td>- MKB-winstvrijstelling</td>
-    <td class="value">{{ f.mkb_vrijstelling|euro }}</td></tr>
-<tr class="total"><td>Belastbare winst</td>
-    <td class="value">{{ f.belastbare_winst|euro }}</td></tr>
-</table>
-
-<h2>Inkomstenbelasting</h2>
-<table>
-<tr><td>Belastbare winst</td>
-    <td class="value">{{ f.belastbare_winst|euro }}</td></tr>
-{% if ew_naar_partner and woz > 0 %}
-<tr class="nvt"><td>Eigen woning → partner</td><td></td></tr>
-{% elif woz > 0 %}
-<tr class="indent"><td>Eigenwoningforfait</td>
-    <td class="value">{{ f.ew_forfait|euro }}</td></tr>
-<tr class="indent"><td>- Hypotheekrente</td>
-    <td class="value">{{ hypotheekrente|euro }}</td></tr>
-{% if f.hillen_aftrek > 0 %}
-<tr class="indent"><td>- Wet Hillen aftrek</td>
-    <td class="value">{{ f.hillen_aftrek|euro }}</td></tr>
-{% endif %}
-<tr class="indent"><td>= Eigenwoningsaldo</td>
-    <td class="value">{{ f.ew_saldo|euro }}</td></tr>
-{% endif %}
-{% if aov > 0 %}
-<tr><td>- AOV premie</td><td class="value">{{ aov|euro }}</td></tr>
-{% endif %}
-{% if lijfrente > 0 %}
-<tr><td>- Lijfrentepremie</td><td class="value">{{ lijfrente|euro }}</td></tr>
-{% endif %}
-<tr class="sep"><td class="bold">Verzamelinkomen</td>
-    <td class="value bold">{{ f.verzamelinkomen|euro }}</td></tr>
-<tr><td>Bruto IB</td><td class="value">{{ f.bruto_ib|euro }}</td></tr>
-{% if f.tariefsaanpassing > 0 %}
-<tr><td>+ Tariefsaanpassing (beperking aftrek)</td>
-    <td class="value">{{ f.tariefsaanpassing|euro }}</td></tr>
-{% endif %}
-<tr class="indent"><td>IB (excl. premies)</td>
-    <td class="value">{{ f.ib_alleen|euro }}</td></tr>
-<tr class="indent"><td>PVV premies volksverzekeringen</td>
-    <td class="value">{{ f.pvv|euro }}</td></tr>
-<tr class="indent2"><td>AOW</td>
-    <td class="value">{{ f.pvv_aow|euro }}</td></tr>
-<tr class="indent2"><td>Anw</td>
-    <td class="value">{{ f.pvv_anw|euro }}</td></tr>
-<tr class="indent2"><td>Wlz</td>
-    <td class="value">{{ f.pvv_wlz|euro }}</td></tr>
-<tr><td>- Algemene heffingskorting</td>
-    <td class="value">{{ f.ahk|euro }}</td></tr>
-<tr><td>- Arbeidskorting</td>
-    <td class="value">{{ f.arbeidskorting|euro }}</td></tr>
-<tr class="sep"><td class="bold">Netto IB</td>
-    <td class="value bold">{{ f.netto_ib|euro }}</td></tr>
-<tr><td>ZVW-bijdrage</td><td class="value">{{ f.zvw|euro }}</td></tr>
-{% if box3 and box3.belasting > 0 %}
-<tr><td>Box 3 belasting</td><td class="value">{{ box3.belasting|euro }}</td></tr>
-{% endif %}
-</table>
-
-{% if f.voorlopige_aanslag > 0 or f.voorlopige_aanslag_zvw > 0 %}
-<table style="width:100%; margin-top:3mm">
-<tr><td class="bold">Resultaat IB</td>
-    <td class="value">{{ f.netto_ib|euro }} − VA {{ f.voorlopige_aanslag|euro }} =
-    {% if f.resultaat_ib < 0 %}<span style="color:#16A34A">{{ f.resultaat_ib|abs|euro }} terug</span>
-    {% elif f.resultaat_ib > 0 %}<span style="color:#DC2626">{{ f.resultaat_ib|euro }} bij</span>
-    {% else %}{{ 0|euro }}{% endif %}</td></tr>
-<tr><td class="bold">Resultaat ZVW</td>
-    <td class="value">{{ f.zvw|euro }} − VA {{ f.voorlopige_aanslag_zvw|euro }} =
-    {% if f.resultaat_zvw < 0 %}<span style="color:#16A34A">{{ f.resultaat_zvw|abs|euro }} terug</span>
-    {% elif f.resultaat_zvw > 0 %}<span style="color:#DC2626">{{ f.resultaat_zvw|euro }} bij</span>
-    {% else %}{{ 0|euro }}{% endif %}</td></tr>
-</table>
-{% endif %}
-
-{% set box3_belasting = box3.belasting if box3 else 0 %}
-{% set totaal_resultaat = f.resultaat + box3_belasting %}
-{% if totaal_resultaat < 0 %}
-<div class="result-box result-positive">
-  Totaal terug te ontvangen: {{ totaal_resultaat|abs|euro }}
-</div>
-{% elif totaal_resultaat > 0 %}
-<div class="result-box result-negative">
-  Totaal bij te betalen: {{ totaal_resultaat|euro }}
-</div>
-{% else %}
-<div class="result-box result-neutral">Resultaat: {{ 0|euro }}</div>
-{% endif %}
-
-<!-- Box 3 -->
-{% if box3 and (box3.totaal_bezittingen > 0 or box3.schulden > 0) %}
-<h2>Box 3 — Sparen en beleggen</h2>
-<table>
-<tr><td>Banktegoeden</td><td class="value">{{ box3.bank_saldo|euro }}</td></tr>
-<tr><td>Overige bezittingen</td><td class="value">{{ box3.overige_bezittingen|euro }}</td></tr>
-<tr class="sep"><td class="bold">Totaal bezittingen</td>
-    <td class="value bold">{{ box3.totaal_bezittingen|euro }}</td></tr>
-<tr><td>Schulden</td><td class="value">{{ box3.schulden|euro }}</td></tr>
-<tr><td>Forfaitair rendement bank</td><td class="value">{{ box3.rendement_bank|euro }}</td></tr>
-<tr><td>Forfaitair rendement overig</td><td class="value">{{ box3.rendement_overig|euro }}</td></tr>
-<tr><td>Forfaitair rendement schuld</td><td class="value">{{ box3.rendement_schuld|euro }}</td></tr>
-<tr class="sep"><td class="bold">Totaal rendement</td>
-    <td class="value bold">{{ box3.totaal_rendement|euro }}</td></tr>
-<tr><td>Heffingsvrij vermogen</td><td class="value">{{ box3.heffingsvrij|euro }}</td></tr>
-<tr><td>Grondslag</td><td class="value">{{ box3.grondslag|euro }}</td></tr>
-<tr class="total"><td>Box 3 belasting</td>
-    <td class="value">{{ box3.belasting|euro }}</td></tr>
-</table>
-{% endif %}
-
-<!-- PAGE 5: Controles -->
-<div class="page-break"></div>
-
-<h2>Controles en kengetallen</h2>
-<p>Kosten/omzet ratio:
-  {% if f.kosten_omzet_ratio <= 25 %}
-  <span class="badge badge-ok">{{ f.kosten_omzet_ratio }}%</span>
-  {% elif f.kosten_omzet_ratio <= 30 %}
-  <span class="badge badge-warn">{{ f.kosten_omzet_ratio }}%</span>
-  {% else %}
-  <span class="badge badge-bad">{{ f.kosten_omzet_ratio }}%</span>
-  {% endif %}
-</p>
-<p>Urencriterium:
-  {% if f.uren_criterium_gehaald %}
-  <span class="badge badge-ok">{{ f.uren_criterium|int }} uur (gehaald)</span>
-  {% else %}
-  <span class="badge badge-bad">{{ f.uren_criterium|int }} uur (NIET gehaald)</span>
-  {% endif %}
-</p>
-
-{% if f.waarschuwingen %}
-<p style="margin-top: 3mm; color: #DC2626; font-weight: 600;">Waarschuwingen:</p>
-{% for w in f.waarschuwingen %}
-<p style="color: #DC2626;">⚠ {{ w }}</p>
-{% endfor %}
 {% endif %}
 
 </body>

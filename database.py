@@ -205,12 +205,16 @@ async def init_db(db_path: Path = DB_PATH) -> None:
                 pass  # Column already exists
 
         # TEXT column migration (separate because type differs)
-        try:
-            await conn.execute(
-                "ALTER TABLE fiscale_params ADD COLUMN arbeidskorting_brackets TEXT DEFAULT ''"
-            )
-        except Exception:
-            pass  # Column already exists
+        for col, default in [
+            ('arbeidskorting_brackets', "''"),
+            ('jaarafsluiting_status', "'concept'"),
+        ]:
+            try:
+                await conn.execute(
+                    f"ALTER TABLE fiscale_params ADD COLUMN {col} TEXT DEFAULT {default}"
+                )
+            except Exception:
+                pass  # Column already exists
 
         # Migration: add locatie_id to werkdagen
         try:
@@ -1155,7 +1159,7 @@ async def get_omzet_per_maand(db_path: Path = DB_PATH, jaar: int = 2026) -> list
         cursor = await conn.execute(
             """SELECT substr(datum, 6, 2) as maand, SUM(totaal_bedrag) as totaal
                FROM facturen
-               WHERE substr(datum, 1, 4) = ? AND type = 'factuur'
+               WHERE substr(datum, 1, 4) = ?
                GROUP BY maand ORDER BY maand""",
             (str(jaar),)
         )
@@ -1173,7 +1177,7 @@ async def get_kpis(db_path: Path = DB_PATH, jaar: int = 2026) -> dict:
         # Omzet
         cur = await conn.execute(
             "SELECT COALESCE(SUM(totaal_bedrag), 0) FROM facturen "
-            "WHERE substr(datum, 1, 4) = ? AND type = 'factuur'",
+            "WHERE substr(datum, 1, 4) = ?",
             (jaar_str,)
         )
         omzet = (await cur.fetchone())[0]
@@ -1196,7 +1200,7 @@ async def get_kpis(db_path: Path = DB_PATH, jaar: int = 2026) -> dict:
         # Openstaand
         cur = await conn.execute(
             "SELECT COALESCE(SUM(totaal_bedrag), 0) FROM facturen "
-            "WHERE substr(datum, 1, 4) = ? AND betaald = 0 AND type = 'factuur'",
+            "WHERE substr(datum, 1, 4) = ? AND betaald = 0",
             (jaar_str,)
         )
         openstaand = (await cur.fetchone())[0]
@@ -1220,7 +1224,7 @@ async def get_omzet_per_klant(db_path: Path = DB_PATH, jaar: int = 2026) -> list
             """SELECT k.naam, SUM(f.totaal_uren) as uren,
                       SUM(f.totaal_km) as km, SUM(f.totaal_bedrag) as bedrag
                FROM facturen f JOIN klanten k ON f.klant_id = k.id
-               WHERE substr(f.datum, 1, 4) = ? AND f.type = 'factuur'
+               WHERE substr(f.datum, 1, 4) = ?
                GROUP BY k.naam ORDER BY bedrag DESC""",
             (str(jaar),)
         )
@@ -1239,7 +1243,6 @@ async def get_recente_facturen(db_path: Path = DB_PATH,
         cursor = await conn.execute(
             """SELECT f.*, k.naam as klant_naam
                FROM facturen f JOIN klanten k ON f.klant_id = k.id
-               WHERE f.type = 'factuur'
                ORDER BY f.datum DESC LIMIT ?""",
             (limit,)
         )
@@ -1316,7 +1319,7 @@ async def get_omzet_totaal(db_path: Path = DB_PATH, jaar: int = 2026) -> float:
     try:
         cur = await conn.execute(
             "SELECT COALESCE(SUM(totaal_bedrag), 0) FROM facturen "
-            "WHERE substr(datum, 1, 4) = ? AND type = 'factuur'",
+            "WHERE substr(datum, 1, 4) = ?",
             (str(jaar),)
         )
         return (await cur.fetchone())[0]
@@ -1330,7 +1333,7 @@ async def get_data_counts(db_path: Path = DB_PATH, jaar: int = 2026) -> dict:
     try:
         cur = await conn.execute(
             "SELECT COUNT(*) FROM facturen "
-            "WHERE substr(datum, 1, 4) = ? AND type = 'factuur'",
+            "WHERE substr(datum, 1, 4) = ?",
             (str(jaar),))
         n_facturen = (await cur.fetchone())[0]
         cur = await conn.execute(
@@ -1515,6 +1518,20 @@ async def update_balans_inputs(db_path: Path = DB_PATH, jaar: int = 0,
                WHERE jaar = ?""",
             (balans_bank_saldo, balans_crediteuren,
              balans_overige_vorderingen, balans_overige_schulden, jaar))
+        await conn.commit()
+        return cursor.rowcount > 0
+    finally:
+        await conn.close()
+
+
+async def update_jaarafsluiting_status(db_path: Path = DB_PATH, jaar: int = 0,
+                                        status: str = 'concept') -> bool:
+    """Update jaarafsluiting status for a specific year ('concept' or 'definitief')."""
+    conn = await get_db(db_path)
+    try:
+        cursor = await conn.execute(
+            "UPDATE fiscale_params SET jaarafsluiting_status = ? WHERE jaar = ?",
+            (status, jaar))
         await conn.commit()
         return cursor.rowcount > 0
     finally:

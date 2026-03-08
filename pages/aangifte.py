@@ -24,6 +24,7 @@ from database import (
     get_fiscale_params, get_aangifte_documenten,
     add_aangifte_document, delete_aangifte_document,
     update_ib_inputs, update_box3_inputs, update_ew_naar_partner,
+    update_za_sa_toggles,
     DB_PATH,
 )
 from fiscal.berekeningen import bereken_volledig, bereken_box3
@@ -49,6 +50,7 @@ BD = {
     'hypotheekrente': 'Eigen woning > Betaalde rente en kosten',
     'ew_saldo': 'Eigen woning > Saldo eigen woning',
     'aov': 'Inkomensvoorzieningen > Premie AOV',
+    'lijfrente': 'Inkomensvoorzieningen > Lijfrentepremie',
     'va_ib': 'Voorlopige aanslag > Bedrag IB',
     'va_zvw': 'Voorlopige aanslag > Bedrag ZVW',
     'box3_bank': 'Box 3 > Banktegoeden',
@@ -201,6 +203,9 @@ async def aangifte_page():
                 on_change=lambda e: on_jaar_change(e.value),
             ).classes('w-36')
 
+        # Warnings container (missing data, jaarafsluiting status)
+        warnings_container = ui.column().classes('w-full gap-2')
+
         with ui.tabs().classes('w-full') as tabs:
             tab_winst = ui.tab('Winst', icon='business_center')
             tab_prive = ui.tab('Prive & aftrek', icon='home')
@@ -230,7 +235,52 @@ async def aangifte_page():
         _invalidate_cache()
         await refresh_all()
 
+    async def render_warnings():
+        """Show alerts for missing data and jaarafsluiting status."""
+        warnings_container.clear()
+        jaar = state['jaar']
+        data, _ = await _get_fiscal(jaar)
+        if data is None:
+            return
+
+        warnings = []
+        params = data['params']
+
+        # Jaarafsluiting status
+        ja_status = getattr(params, 'jaarafsluiting_status', 'concept')
+        if ja_status != 'definitief':
+            warnings.append(('warning', 'fact_check',
+                              f'Jaarafsluiting {jaar}: {ja_status.capitalize()}. '
+                              'Sluit eerst de jaarafsluiting af.',
+                              '/jaarafsluiting'))
+
+        # Missing data checks
+        if data['n_uitgaven'] == 0:
+            warnings.append(('warning', 'receipt_long',
+                              f'Geen uitgaven geregistreerd voor {jaar}.', None))
+        if data['aov'] == 0:
+            warnings.append(('info', 'health_and_safety',
+                              'Geen AOV premie ingevuld. Vul deze in bij Privé & aftrek.',
+                              None))
+
+        if not warnings:
+            return
+
+        with warnings_container:
+            for color, icon, text, link in warnings:
+                with ui.card().classes('w-full q-pa-sm').style(
+                    f'border-left: 4px solid {"#F59E0B" if color == "warning" else "#3B82F6"}'
+                ):
+                    with ui.row().classes('items-center gap-2 w-full'):
+                        ui.icon(icon, color=color).classes('text-lg')
+                        ui.label(text).classes('text-body2 flex-grow')
+                        if link:
+                            ui.button('Bekijken', icon='open_in_new',
+                                      on_click=lambda l=link: ui.navigate.to(l)) \
+                                .props('flat dense color=primary size=sm')
+
     async def refresh_all():
+        await render_warnings()
         await render_winst()
         await render_prive()
         await render_box3()
@@ -345,6 +395,29 @@ async def aangifte_page():
 
                 ui.separator().classes('my-1')
 
+                # ZA/SA toggles
+                za_actief = data['params_dict'].get('za_actief', True)
+                sa_actief = data['params_dict'].get('sa_actief', False)
+
+                async def _on_za_sa_change():
+                    await update_za_sa_toggles(
+                        DB_PATH, jaar=jaar,
+                        za_actief=za_check.value,
+                        sa_actief=sa_check.value,
+                    )
+                    _invalidate_cache()
+                    await render_winst()
+
+                with ui.row().classes('items-center gap-4'):
+                    za_check = ui.checkbox(
+                        'Zelfstandigenaftrek (ZA)', value=za_actief,
+                        on_change=lambda: _on_za_sa_change(),
+                    )
+                    sa_check = ui.checkbox(
+                        'Startersaftrek (SA)', value=sa_actief,
+                        on_change=lambda: _on_za_sa_change(),
+                    )
+
                 # Urencriterium badge
                 gehaald = f.uren_criterium_gehaald
                 with ui.row().classes('items-center gap-2'):
@@ -429,15 +502,22 @@ async def aangifte_page():
                 ui.label('Inkomensvoorzieningen').classes('text-subtitle1 text-weight-bold')
                 ui.separator().classes('my-1')
 
-                aov_input = ui.number(
-                    'AOV premie', value=data['aov'],
-                    format='%.2f', prefix='€',
-                ).classes('w-48')
+                with ui.row().classes('gap-4 flex-wrap'):
+                    aov_input = ui.number(
+                        'AOV premie', value=data['aov'],
+                        format='%.2f', prefix='€',
+                    ).classes('w-48')
+                    lijfrente_input = ui.number(
+                        'Lijfrentepremie', value=data.get('lijfrente', 0),
+                        format='%.2f', prefix='€',
+                    ).classes('w-48')
                 with ui.row().classes('items-center gap-2 q-mt-xs'):
                     ui.icon('info_outline', color='warning').classes('text-lg')
-                    ui.label('AOV is geen bedrijfskosten maar persoonlijke aftrekpost '
-                             'onder Inkomensvoorzieningen').classes('text-caption text-grey-7')
-                ui.label(BD['aov']).classes('text-caption text-grey-6')
+                    ui.label('AOV en lijfrente zijn geen bedrijfskosten maar '
+                             'persoonlijke aftrekposten (Box 1 inkomensvoorzieningen)'
+                             ).classes('text-caption text-grey-7')
+                ui.label(f'{BD["aov"]} / Inkomensvoorzieningen > Lijfrentepremie').classes(
+                    'text-caption text-grey-6')
 
             # Card 3: Voorlopige aanslagen
             with ui.card().classes('w-full'):
@@ -463,10 +543,7 @@ async def aangifte_page():
                 va_ib_val = float(va_ib_input.value or 0)
                 va_zvw_val = float(va_zvw_input.value or 0)
                 ew_val = ew_partner_check.value
-
-                # Read current lijfrente from DB to preserve it
-                current_params = await get_fiscale_params(DB_PATH, jaar)
-                current_lijfrente = current_params.lijfrente_premie if current_params else 0
+                lijfrente_val = float(lijfrente_input.value or 0)
 
                 await update_ib_inputs(
                     DB_PATH, jaar=jaar,
@@ -474,7 +551,7 @@ async def aangifte_page():
                     hypotheekrente=hyp_val,
                     voorlopige_aanslag_betaald=va_ib_val,
                     voorlopige_aanslag_zvw=va_zvw_val,
-                    lijfrente_premie=current_lijfrente,
+                    lijfrente_premie=lijfrente_val,
                 )
                 await update_ew_naar_partner(DB_PATH, jaar=jaar, value=ew_val)
                 ui.notify('Opgeslagen', type='positive')
@@ -653,6 +730,9 @@ async def aangifte_page():
                     _invulhulp_line(BD['ew_saldo'], 'Eigenwoningsaldo', f.ew_saldo)
                 if data['aov'] > 0:
                     _invulhulp_line(BD['aov'], '- AOV premie', data['aov'])
+                if data.get('lijfrente', 0) > 0:
+                    _invulhulp_line(BD['lijfrente'], '- Lijfrentepremie',
+                                    data['lijfrente'])
                 ui.separator().classes('my-1')
                 _invulhulp_line(BD['verzamelinkomen'], 'Verzamelinkomen',
                                 f.verzamelinkomen, bold=True)
@@ -750,11 +830,11 @@ async def aangifte_page():
         progress_container.clear()
         uploaded_types = {d.documenttype for d in docs}
 
-        jaarafsluiting_dir = DB_PATH.parent / 'jaarafsluiting'
+        pdf_dir = DB_PATH.parent / 'pdf' / str(state['jaar'])
         auto_done = any(
-            f.stem.endswith(str(state['jaar']))
-            for f in jaarafsluiting_dir.glob('*.pdf')
-        ) if jaarafsluiting_dir.exists() else False
+            f.name.startswith('Jaarcijfers')
+            for f in pdf_dir.glob('*.pdf')
+        ) if pdf_dir.exists() else False
 
         verplichte = [d for d in AANGIFTE_DOCS if d.verplicht]
         done = sum(1 for d in verplichte
@@ -780,11 +860,11 @@ async def aangifte_page():
         for d in docs:
             docs_by_type.setdefault(d.documenttype, []).append(d)
 
-        jaarafsluiting_dir = DB_PATH.parent / 'jaarafsluiting'
+        pdf_dir = DB_PATH.parent / 'pdf' / str(state['jaar'])
         auto_done = any(
-            f.stem.endswith(str(state['jaar']))
-            for f in jaarafsluiting_dir.glob('*.pdf')
-        ) if jaarafsluiting_dir.exists() else False
+            f.name.startswith('Jaarcijfers')
+            for f in pdf_dir.glob('*.pdf')
+        ) if pdf_dir.exists() else False
 
         categories: dict[str, list[DocSpec]] = {}
         for item in AANGIFTE_DOCS:
