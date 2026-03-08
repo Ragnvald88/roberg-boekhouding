@@ -451,13 +451,15 @@ def bereken_wv(omzet: float, kosten: float, afschrijvingen: float) -> dict:
 
 
 def bereken_ib(verzamelinkomen: float, params: dict,
-               arbeidsinkomen: float = None) -> dict:
+               arbeidsinkomen: float = None,
+               zvw_grondslag: float = None) -> dict:
     """IB Box 1 calculation with brackets (uses Decimal internally).
 
     Args:
         verzamelinkomen: Taxable income Box 1.
         params: Fiscal parameters dict with schijf1/2/3 and heffingskorting params.
         arbeidsinkomen: Income for arbeidskorting (fiscale winst). Defaults to verzamelinkomen.
+        zvw_grondslag: ZVW base (belastbare_winst for ZZP). Defaults to verzamelinkomen.
 
     Returns:
         Dict with keys: verzamelinkomen, bruto_ib, ahk, arbeidskorting, netto_ib, zvw.
@@ -466,6 +468,8 @@ def bereken_ib(verzamelinkomen: float, params: dict,
     jaar = params.get('jaar', 0)
     if arbeidsinkomen is None:
         arbeidsinkomen = verzamelinkomen
+    if zvw_grondslag is None:
+        zvw_grondslag = verzamelinkomen
 
     # Schijf 1
     d_s1_grens = D(params['schijf1_grens'])
@@ -488,7 +492,8 @@ def bereken_ib(verzamelinkomen: float, params: dict,
                                 brackets_json=params.get('arbeidskorting_brackets', ''))
 
     d_netto = max(D('0'), d_bruto - D(str(ahk)) - D(str(ak)))
-    d_zvw = min(d_vi, D(params['zvw_max_grondslag'])) * D(params['zvw_pct']) / D('100')
+    d_zvw_grondslag = D(zvw_grondslag)
+    d_zvw = min(d_zvw_grondslag, D(params['zvw_max_grondslag'])) * D(params['zvw_pct']) / D('100')
 
     return {
         'verzamelinkomen': euro(d_vi),

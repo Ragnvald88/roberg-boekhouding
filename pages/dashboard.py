@@ -12,12 +12,10 @@ from database import (
     get_kpis, get_omzet_per_maand, get_uitgaven_per_categorie,
     get_recente_facturen, get_openstaande_facturen, get_factuur_count,
     get_werkdagen_ongefactureerd_summary, get_km_totaal,
-    get_fiscale_params, get_uren_totaal, get_omzet_totaal,
-    get_representatie_totaal, get_investeringen,
-    get_investeringen_voor_afschrijving,
+    get_fiscale_params,
     DB_PATH,
 )
-from fiscal.afschrijvingen import bereken_afschrijving
+from components.fiscal_utils import fetch_fiscal_data
 from fiscal.berekeningen import bereken_volledig
 
 URENCRITERIUM_DEFAULT = 1225
@@ -68,49 +66,24 @@ async def dashboard_page():
         return None
 
     async def _compute_ib_estimate(jaar: int) -> float | None:
-        """Compute estimated IB resultaat from DB data. Returns None if no params."""
-        params = await get_fiscale_params(DB_PATH, jaar)
-        if not params:
+        """Compute estimated IB resultaat using shared fiscal data fetcher."""
+        data = await fetch_fiscal_data(DB_PATH, jaar)
+        if data is None:
             return None
-        from components.fiscal_utils import fiscale_params_to_dict
-        params_dict = fiscale_params_to_dict(params)
-        omzet = await get_omzet_totaal(DB_PATH, jaar)
-        repr_totaal = await get_representatie_totaal(DB_PATH, jaar)
-        kosten_per_cat = await get_uitgaven_per_categorie(DB_PATH, jaar)
-        totaal_kosten = sum(r['totaal'] for r in kosten_per_cat)
-        inv_dit_jaar = await get_investeringen(DB_PATH, jaar=jaar)
-        inv_bedrag = sum((u.aanschaf_bedrag or u.bedrag) for u in inv_dit_jaar)
-        kosten_excl_inv = totaal_kosten - inv_bedrag
-        investeringen = await get_investeringen_voor_afschrijving(
-            DB_PATH, tot_jaar=jaar)
-        totaal_afschr = 0.0
-        for u in investeringen:
-            aanschaf = (u.aanschaf_bedrag or u.bedrag) * (
-                (u.zakelijk_pct or 100) / 100)
-            result = bereken_afschrijving(
-                aanschaf_bedrag=aanschaf,
-                restwaarde_pct=u.restwaarde_pct or 10,
-                levensduur=u.levensduur_jaren or 5,
-                aanschaf_maand=int(u.datum[5:7]),
-                aanschaf_jaar=int(u.datum[0:4]),
-                bereken_jaar=jaar,
-            )
-            totaal_afschr += result['afschrijving']
-        inv_totaal = sum(
-            (u.aanschaf_bedrag or u.bedrag) * ((u.zakelijk_pct or 100) / 100)
-            for u in inv_dit_jaar
+        f = bereken_volledig(
+            omzet=data['omzet'], kosten=data['kosten_excl_inv'],
+            afschrijvingen=data['totaal_afschrijvingen'],
+            representatie=data['representatie'],
+            investeringen_totaal=data['inv_totaal_dit_jaar'],
+            uren=data['uren'], params=data['params_dict'],
+            aov=data['aov'], lijfrente=data.get('lijfrente', 0),
+            woz=data['woz'],
+            hypotheekrente=data['hypotheekrente'],
+            voorlopige_aanslag=data['voorlopige_aanslag'],
+            voorlopige_aanslag_zvw=data['voorlopige_aanslag_zvw'],
+            ew_naar_partner=data['ew_naar_partner'],
         )
-        uren = await get_uren_totaal(DB_PATH, jaar, urennorm_only=True)
-        fiscaal = bereken_volledig(
-            omzet=omzet, kosten=kosten_excl_inv,
-            afschrijvingen=totaal_afschr, representatie=repr_totaal,
-            investeringen_totaal=inv_totaal, uren=uren,
-            params=params_dict,
-            aov=params.aov_premie or 0, woz=params.woz_waarde or 0,
-            hypotheekrente=params.hypotheekrente or 0,
-            voorlopige_aanslag=params.voorlopige_aanslag_betaald or 0,
-        )
-        return fiscaal.resultaat
+        return f.resultaat
 
     async def refresh_dashboard():
         jaar = jaar_select.value

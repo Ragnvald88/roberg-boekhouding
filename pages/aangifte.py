@@ -556,11 +556,13 @@ async def aangifte_page():
                 await update_ew_naar_partner(DB_PATH, jaar=jaar, value=ew_val)
                 ui.notify('Opgeslagen', type='positive')
 
-                # Invalidate cache and refresh computed values
+                # Invalidate cache and refresh dependent views
                 _invalidate_cache()
                 new_data, new_f = await _get_fiscal(jaar)
                 _render_ew_results(ew_results_ref['container'], new_f, woz_val, hyp_val,
                                     ew_val, new_data['params_dict'])
+                await render_overzicht()
+                await render_warnings()
 
             ui.button('Opslaan', icon='save', on_click=save_prive) \
                 .props('color=primary').classes('q-mt-sm')
@@ -660,9 +662,9 @@ async def aangifte_page():
                           on_click=save_and_calc_box3,
                           ).props('color=primary').classes('q-mt-sm')
 
-            # Results card
+            # Results card (use same default as checkbox)
             box3_results_container = ui.column().classes('w-full')
-            box3 = bereken_box3(params_dict)
+            box3 = bereken_box3(params_dict, fiscaal_partner=partner_check.value)
             _render_box3_results(box3_results_container, box3, params_dict)
 
     def _render_box3_results(container, box3, params_dict):

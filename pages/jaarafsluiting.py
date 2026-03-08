@@ -13,6 +13,7 @@ from components.utils import format_euro
 from database import (
     update_balans_inputs,
     update_jaarafsluiting_status,
+    get_bedrijfsgegevens,
     get_fiscale_params,
     DB_PATH,
 )
@@ -463,6 +464,11 @@ async def jaarafsluiting_page():
         jaar = state['jaar']
         params = data['params']
 
+        # Fetch bedrijfsgegevens for PDF
+        bg = await get_bedrijfsgegevens(DB_PATH)
+        bg_naam = bg.bedrijfsnaam if bg else 'Onderneming'
+        bg_kvk = bg.kvk if bg else ''
+
         # Check status
         status = getattr(params, 'jaarafsluiting_status', 'concept') or 'concept'
 
@@ -478,7 +484,8 @@ async def jaarafsluiting_page():
 
             # PDF export button
             async def export_pdf():
-                html = _render_pdf_html(jaar, data, balans, winst, vorig_jaar_balans)
+                html = _render_pdf_html(jaar, data, balans, winst, vorig_jaar_balans,
+                                        bedrijfsnaam=bg_naam, kvk=bg_kvk)
                 pdf_dir = DB_PATH.parent / 'pdf' / str(jaar)
                 pdf_dir.mkdir(parents=True, exist_ok=True)
                 pdf_path = pdf_dir / f'Jaarcijfers_{jaar}.pdf'
@@ -495,7 +502,8 @@ async def jaarafsluiting_page():
             # Inline HTML preview
             ui.separator().classes('q-my-md')
             ui.label('Preview').classes('text-subtitle1 text-grey-6')
-            html = _render_pdf_html(jaar, data, balans, winst, vorig_jaar_balans)
+            html = _render_pdf_html(jaar, data, balans, winst, vorig_jaar_balans,
+                                    bedrijfsnaam=bg_naam, kvk=bg_kvk)
             ui.html(html).classes('w-full').style(
                 'border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; '
                 'background: white; max-height: 80vh; overflow-y: auto;'
@@ -563,41 +571,9 @@ async def jaarafsluiting_page():
 
 # === PDF Template Rendering ===
 
-def _render_pdf_html(jaar, data, balans, winst, vorig_jaar_balans):
+def _render_pdf_html(jaar, data, balans, winst, vorig_jaar_balans,
+                     bedrijfsnaam='', kvk=''):
     """Render the jaarcijfers PDF HTML — pure business report."""
-    from database import DB_PATH as _db_path
-    import asyncio
-
-    # Get bedrijfsgegevens synchronously via new event loop if needed
-    bedrijfsnaam = ''
-    kvk = ''
-    try:
-        from database import get_bedrijfsgegevens
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-            # We're in an async context, use the data we have
-            pass
-        else:
-            bg = loop.run_until_complete(get_bedrijfsgegevens(_db_path))
-            if bg:
-                bedrijfsnaam = bg.bedrijfsnaam
-                kvk = bg.kvk
-    except Exception:
-        pass
-
-    # Try to get from existing data
-    if not bedrijfsnaam:
-        try:
-            import sqlite3
-            conn = sqlite3.connect(str(_db_path))
-            row = conn.execute("SELECT bedrijfsnaam, kvk FROM bedrijfsgegevens WHERE id = 1").fetchone()
-            if row:
-                bedrijfsnaam = row[0]
-                kvk = row[1]
-            conn.close()
-        except Exception:
-            bedrijfsnaam = 'Onderneming'
-
     env = Environment(
         loader=FileSystemLoader(str(Path(__file__).parent.parent / 'templates')),
         autoescape=False

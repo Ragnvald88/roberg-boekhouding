@@ -71,6 +71,12 @@ async def test_seed_box3_definitieve_rendementen(db):
     assert fp24.box3_rendement_schuld_pct == 2.61  # was 2.46
     assert fp24.box3_tarief_pct == 36  # was 32
 
+    # 2025: definitief (source: belastingdienst.nl)
+    fp25 = await get_fiscale_params(db, jaar=2025)
+    assert fp25.box3_rendement_bank_pct == 1.37  # was 1.28 (voorlopig)
+    assert fp25.box3_rendement_overig_pct == 5.88  # was 6.04 (voorlopig)
+    assert fp25.box3_rendement_schuld_pct == 2.70  # was 2.47 (voorlopig)
+
 
 @pytest.mark.asyncio
 async def test_seed_drempel_schulden(db):

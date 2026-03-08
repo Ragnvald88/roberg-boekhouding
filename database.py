@@ -265,6 +265,15 @@ async def init_db(db_path: Path = DB_PATH) -> None:
                         "WHERE jaar = ? AND box3_drempel_schulden = 3700",
                         (b3['drempel_schulden'], jaar))
 
+        # Data migration: fix Box 3 2025 voorlopig → definitief rendementen
+        await conn.execute(
+            "UPDATE fiscale_params SET "
+            "box3_rendement_bank_pct = 1.37, "
+            "box3_rendement_overig_pct = 5.88, "
+            "box3_rendement_schuld_pct = 2.70 "
+            "WHERE jaar = 2025 AND box3_rendement_bank_pct = 1.28"
+        )
+
         # Data migration: set sa_actief=1 for first 3 years (2023-2025) on existing DBs
         for jaar in [2023, 2024, 2025]:
             await conn.execute(
@@ -958,6 +967,7 @@ def _row_to_fiscale_params(r) -> FiscaleParams:
         balans_crediteuren=_safe_get(r, 'balans_crediteuren', 0, keys),
         balans_overige_vorderingen=_safe_get(r, 'balans_overige_vorderingen', 0, keys),
         balans_overige_schulden=_safe_get(r, 'balans_overige_schulden', 0, keys),
+        jaarafsluiting_status=_safe_get(r, 'jaarafsluiting_status', 'concept', keys) or 'concept',
     )
 
 
@@ -995,7 +1005,7 @@ async def upsert_fiscale_params(db_path: Path = DB_PATH, **kwargs) -> None:
             "ew_naar_partner, "
             "balans_bank_saldo, balans_crediteuren, "
             "balans_overige_vorderingen, balans_overige_schulden, "
-            "lijfrente_premie "
+            "lijfrente_premie, jaarafsluiting_status "
             "FROM fiscale_params WHERE jaar = ?",
             (kwargs['jaar'],))
         existing = await cur.fetchone()
@@ -1018,10 +1028,11 @@ async def upsert_fiscale_params(db_path: Path = DB_PATH, **kwargs) -> None:
                 box3_bank_saldo, box3_overige_bezittingen, box3_schulden,
                 ew_naar_partner, lijfrente_premie,
                 balans_bank_saldo, balans_crediteuren,
-                balans_overige_vorderingen, balans_overige_schulden)
+                balans_overige_vorderingen, balans_overige_schulden,
+                jaarafsluiting_status)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (kwargs['jaar'], kwargs['zelfstandigenaftrek'], kwargs.get('startersaftrek'),
              kwargs['mkb_vrijstelling_pct'], kwargs['kia_ondergrens'],
              kwargs['kia_bovengrens'], kwargs['kia_pct'], kwargs['km_tarief'],
@@ -1062,7 +1073,8 @@ async def upsert_fiscale_params(db_path: Path = DB_PATH, **kwargs) -> None:
              existing['balans_bank_saldo'] if existing else 0,
              existing['balans_crediteuren'] if existing else 0,
              existing['balans_overige_vorderingen'] if existing else 0,
-             existing['balans_overige_schulden'] if existing else 0)
+             existing['balans_overige_schulden'] if existing else 0,
+             existing['jaarafsluiting_status'] if existing else 'concept')
         )
         await conn.commit()
     finally:
