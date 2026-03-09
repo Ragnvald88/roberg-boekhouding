@@ -19,6 +19,7 @@ SUFFIX_TO_KLANT = {
     'Marum': "HAP K6",        # Same klant, location Marum
     'Vlagtwedde': 'Klant2',             # Same klant, location Vlagtwedde
     'Klant8': 'K. Klant8',
+    'Klant15': 'K. Klant15',
 }
 
 # PDF-extracted klant name → DB klant naam
@@ -86,6 +87,7 @@ ANW_FILENAME_TO_KLANT = {
     'HAP NoordOost': 'HAP NoordOost',
     'DDG': 'HAP NoordOost',
     'Groningen': 'HAP NoordOost',
+    'Gr_Factuur': 'HAP NoordOost',
 }
 
 # New klanten that need to be created during import

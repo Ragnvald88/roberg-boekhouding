@@ -98,6 +98,7 @@ Nav order: Jaarafsluiting before Aangifte (close books first, then file taxes).
 - Auto-detects dagpraktijk vs ANW format, parses line items (uren/km/tarief per werkdag)
 - Klant auto-resolution via `import_/klant_mapping.py`, dedup by factuurnummer
 - Creates factuur record + werkdagen from parsed line items (or links existing werkdagen)
+- **Factuur datum = last werkdag date** (work-date based, NOT invoice issue date). Revenue is attributed to the month work was performed.
 - **PDF parser** (`import_/pdf_parser.py`): `detect_invoice_type()`, `extract_dagpraktijk_line_items()`, `extract_anw_diensten()`
 - Handles 7+ invoice format variations (2024 old, 2025 Klant7/Klant2-combined, 2026 standard/Klant15, ANW HAP NoordOost/Drenthe)
 - **Klant2 3-amount validation**: Only treats 3-euro-amount lines as combined format when `uren*tarief + reiskosten ≈ total`
@@ -123,13 +124,8 @@ Tabs: Winst uit onderneming, Prive & aftrek (inputs save to DB), Box 3 (inputs+c
 - **Auto-doc detection**: Checks `data/pdf/{year}/Jaarcijfers_*.pdf` for auto-completion
 - **Known gap**: Fiscal advisory panel (ZA trajectory, SA tracking, KIA check, belastingdruk) not yet implemented
 
-## Bekende Bugs
-
-- ~~**Bank CSV geen dedup**~~: Opgelost — per-transactie dedup op datum+bedrag+tegenpartij+omschrijving.
-- ~~**delete_klant UI**~~: Opgelost — try/except ValueError met ui.notify foutmelding.
-
-## Recente verbeteringen (Phase 1 — 2026-03-08)
-- **2026 Box 3 fix**: heffingsvrij_vermogen 57684→59357, drempel_schulden 3700→3800 (per Belastingdienst officieel)
-- **SQLite performance**: synchronous=NORMAL, cache_size=10000, temp_store=MEMORY
-- **Error boundary**: app.on_exception met ui.notify + traceback
-- **Cleanup**: run_full_import.py verwijderd, httpx dependency verwijderd
+## Data State (163 facturen, 602 werkdagen — verified 2026-03-09)
+- **Revenue (work-date based)**: 2023=€80,217 | 2024=€121,130 | 2025=€126,251 | 2026=€25,698 | Total=€353,295
+- **Yuki reconciliation**: 2023 gap €540, 2024 gap €3,208 — fully explained by accrual accounting differences (betaald werkdagen without formal invoices, "nog te factureren" timing)
+- **Uitgaven: ZERO in DB** — import dialog available on /kosten page (458 PDFs in archive ready to import)
+- **All 163 factuur amounts verified** cent-for-cent against PDF invoices
