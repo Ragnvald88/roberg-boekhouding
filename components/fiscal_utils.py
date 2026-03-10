@@ -7,6 +7,7 @@ from database import (
     get_fiscale_params,
     get_investeringen,
     get_investeringen_voor_afschrijving,
+    get_km_totaal,
     get_omzet_totaal,
     get_openstaande_debiteuren,
     get_nog_te_factureren,
@@ -27,6 +28,7 @@ def fiscale_params_to_dict(params) -> dict:
         'kia_ondergrens': params.kia_ondergrens,
         'kia_bovengrens': params.kia_bovengrens,
         'kia_pct': params.kia_pct,
+        'kia_drempel_per_item': params.kia_drempel_per_item,
         'km_tarief': params.km_tarief,
         'schijf1_grens': params.schijf1_grens,
         'schijf1_pct': params.schijf1_pct,
@@ -88,12 +90,14 @@ async def fetch_fiscal_data(db_path: Path, jaar: int) -> dict | None:
         db_path, tot_jaar=jaar)
     inv_dit_jaar = await get_investeringen(db_path, jaar=jaar)
     uren = await get_uren_totaal(db_path, jaar, urennorm_only=True)
+    km_data = await get_km_totaal(db_path, jaar)
+    km_vergoeding = round(km_data['vergoeding'], 2)
 
     totaal_kosten_alle = sum(r['totaal'] for r in kosten_per_cat)
     inv_dit_jaar_bedrag = sum(
         (u.aanschaf_bedrag or u.bedrag) for u in inv_dit_jaar
     )
-    kosten_excl_inv = totaal_kosten_alle - inv_dit_jaar_bedrag
+    kosten_excl_inv = totaal_kosten_alle - inv_dit_jaar_bedrag + km_vergoeding
 
     # Afschrijvingen + activastaat
     activastaat = []
@@ -123,10 +127,12 @@ async def fetch_fiscal_data(db_path: Path, jaar: int) -> dict | None:
         })
         totaal_afschrijvingen += result['afschrijving']
 
-    # KIA basis
+    # KIA basis — only items above per-item threshold qualify
+    kia_drempel = params.kia_drempel_per_item or 450
     inv_totaal_dit_jaar = sum(
-        (u.aanschaf_bedrag or u.bedrag) * ((u.zakelijk_pct or 100) / 100)
-        for u in inv_dit_jaar
+        z for u in inv_dit_jaar
+        if (z := (u.aanschaf_bedrag or u.bedrag) * ((u.zakelijk_pct or 100) / 100))
+        >= kia_drempel
     )
 
     return {
@@ -141,6 +147,7 @@ async def fetch_fiscal_data(db_path: Path, jaar: int) -> dict | None:
         'uren': uren,
         'activastaat': activastaat,
         'totaal_kosten_alle': totaal_kosten_alle,
+        'km_vergoeding': km_vergoeding,
         'aov': params.aov_premie or 0,
         'woz': params.woz_waarde or 0,
         'hypotheekrente': params.hypotheekrente or 0,

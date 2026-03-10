@@ -110,6 +110,7 @@ class FiscaleParams:
     kia_ondergrens: float = 0.0
     kia_bovengrens: float = 0.0
     kia_pct: float = 0.0
+    kia_drempel_per_item: float = 450.0
     km_tarief: float = 0.0
     schijf1_grens: float = 0.0
     schijf1_pct: float = 0.0

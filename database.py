@@ -111,6 +111,7 @@ CREATE TABLE IF NOT EXISTS fiscale_params (
     kia_ondergrens REAL,
     kia_bovengrens REAL,
     kia_pct REAL,
+    kia_drempel_per_item REAL DEFAULT 450,
     km_tarief REAL,
     schijf1_grens REAL,
     schijf1_pct REAL,
@@ -708,7 +709,7 @@ async def get_uitgaven(db_path: Path = DB_PATH, jaar: int = None,
             id=r['id'], datum=r['datum'], categorie=r['categorie'],
             omschrijving=r['omschrijving'], bedrag=r['bedrag'],
             pdf_pad=r['pdf_pad'] or '', is_investering=bool(r['is_investering']),
-            restwaarde_pct=r['restwaarde_pct'] or 10,
+            restwaarde_pct=r['restwaarde_pct'] if r['restwaarde_pct'] is not None else 10,
             levensduur_jaren=r['levensduur_jaren'],
             aanschaf_bedrag=r['aanschaf_bedrag'],
             zakelijk_pct=r['zakelijk_pct'] or 100
@@ -811,7 +812,7 @@ async def get_investeringen(db_path: Path = DB_PATH, jaar: int = None) -> list[U
             id=r['id'], datum=r['datum'], categorie=r['categorie'],
             omschrijving=r['omschrijving'], bedrag=r['bedrag'],
             pdf_pad=r['pdf_pad'] or '', is_investering=True,
-            restwaarde_pct=r['restwaarde_pct'] or 10,
+            restwaarde_pct=r['restwaarde_pct'] if r['restwaarde_pct'] is not None else 10,
             levensduur_jaren=r['levensduur_jaren'],
             aanschaf_bedrag=r['aanschaf_bedrag'],
             zakelijk_pct=r['zakelijk_pct'] or 100
@@ -851,28 +852,50 @@ async def get_banktransacties(db_path: Path = DB_PATH,
 async def add_banktransacties(db_path: Path = DB_PATH,
                                transacties: list[dict] = None,
                                csv_bestand: str = '') -> int:
-    """Insert batch of bank transactions. Dedup by datum+bedrag+tegenpartij+omschrijving."""
+    """Insert batch of bank transactions with count-based dedup.
+
+    If the CSV has N rows with key (datum, bedrag, tegenpartij, omschrijving)
+    and the DB already has M, inserts max(0, N-M) more. This correctly handles
+    genuine repeated transactions (e.g. two identical salary transfers on the
+    same date) while still preventing re-import of the same CSV.
+    """
+    from collections import Counter
+    items = transacties or []
+    if not items:
+        return 0
+
+    # Count how many times each key appears in this batch
+    def make_key(t):
+        return (t['datum'], t['bedrag'], t.get('tegenpartij', ''),
+                t.get('omschrijving', ''))
+
+    batch_counts = Counter(make_key(t) for t in items)
+
     conn = await get_db(db_path)
     try:
         count = 0
-        for t in (transacties or []):
-            # Check for duplicate
+        # For each unique key, check how many already in DB
+        for key, needed in batch_counts.items():
             cur = await conn.execute(
                 """SELECT COUNT(*) FROM banktransacties
                    WHERE datum = ? AND bedrag = ? AND tegenpartij = ? AND omschrijving = ?""",
-                (t['datum'], t['bedrag'], t.get('tegenpartij', ''),
-                 t.get('omschrijving', ''))
+                key
             )
-            if (await cur.fetchone())[0] > 0:
-                continue  # Skip duplicate
-            await conn.execute(
-                """INSERT INTO banktransacties
-                   (datum, bedrag, tegenrekening, tegenpartij, omschrijving, csv_bestand)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                (t['datum'], t['bedrag'], t.get('tegenrekening', ''),
-                 t.get('tegenpartij', ''), t.get('omschrijving', ''), csv_bestand)
-            )
-            count += 1
+            existing = (await cur.fetchone())[0]
+            to_insert = max(0, needed - existing)
+
+            # Find the transactions with this key (in batch order)
+            matching = [t for t in items if make_key(t) == key]
+            for t in matching[:to_insert]:
+                await conn.execute(
+                    """INSERT INTO banktransacties
+                       (datum, bedrag, tegenrekening, tegenpartij, omschrijving, csv_bestand)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (t['datum'], t['bedrag'], t.get('tegenrekening', ''),
+                     t.get('tegenpartij', ''), t.get('omschrijving', ''),
+                     csv_bestand)
+                )
+                count += 1
         await conn.commit()
         return count
     finally:
@@ -938,6 +961,7 @@ def _row_to_fiscale_params(r) -> FiscaleParams:
         kia_ondergrens=r['kia_ondergrens'],
         kia_bovengrens=r['kia_bovengrens'],
         kia_pct=r['kia_pct'],
+        kia_drempel_per_item=r['kia_drempel_per_item'] if 'kia_drempel_per_item' in keys else 450,
         km_tarief=r['km_tarief'],
         schijf1_grens=r['schijf1_grens'],
         schijf1_pct=r['schijf1_pct'],
@@ -1031,7 +1055,7 @@ async def upsert_fiscale_params(db_path: Path = DB_PATH, **kwargs) -> None:
         await conn.execute(
             """INSERT OR REPLACE INTO fiscale_params
                (jaar, zelfstandigenaftrek, startersaftrek, mkb_vrijstelling_pct,
-                kia_ondergrens, kia_bovengrens, kia_pct, km_tarief,
+                kia_ondergrens, kia_bovengrens, kia_pct, kia_drempel_per_item, km_tarief,
                 schijf1_grens, schijf1_pct, schijf2_grens, schijf2_pct, schijf3_pct,
                 ahk_max, ahk_afbouw_pct, ahk_drempel, ak_max,
                 zvw_pct, zvw_max_grondslag, repr_aftrek_pct,
@@ -1051,10 +1075,11 @@ async def upsert_fiscale_params(db_path: Path = DB_PATH, **kwargs) -> None:
                 jaarafsluiting_status)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (kwargs['jaar'], kwargs['zelfstandigenaftrek'], kwargs.get('startersaftrek'),
              kwargs['mkb_vrijstelling_pct'], kwargs['kia_ondergrens'],
-             kwargs['kia_bovengrens'], kwargs['kia_pct'], kwargs['km_tarief'],
+             kwargs['kia_bovengrens'], kwargs['kia_pct'],
+             kwargs.get('kia_drempel_per_item', 450), kwargs['km_tarief'],
              kwargs['schijf1_grens'], kwargs['schijf1_pct'],
              kwargs['schijf2_grens'], kwargs['schijf2_pct'], kwargs['schijf3_pct'],
              kwargs['ahk_max'], kwargs['ahk_afbouw_pct'], kwargs['ahk_drempel'],
@@ -1444,7 +1469,7 @@ async def get_investeringen_voor_afschrijving(db_path: Path = DB_PATH,
         return [Uitgave(
             id=r['id'], datum=r['datum'], categorie=r['categorie'],
             omschrijving=r['omschrijving'], bedrag=r['bedrag'],
-            is_investering=True, restwaarde_pct=r['restwaarde_pct'] or 10,
+            is_investering=True, restwaarde_pct=r['restwaarde_pct'] if r['restwaarde_pct'] is not None else 10,
             levensduur_jaren=r['levensduur_jaren'],
             aanschaf_bedrag=r['aanschaf_bedrag'],
             zakelijk_pct=r['zakelijk_pct'] or 100

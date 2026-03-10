@@ -55,10 +55,11 @@ Geen: user auth, BTW-administratie, loon/voorraad, email, real-time bank-API, au
 ### Basisregels
 - **BTW-vrijgesteld** (art. 11 Wet OB) → kosten INCL BTW, geen BTW-aangifte
 - **Urencriterium**: 1.225 uur/jaar. Achterwacht (urennorm=0) telt NIET mee
-- **AOV**: GEEN bedrijfskosten → Box 1 inkomensvoorziening
+- **Pensioenpremie SPH**: WEL bedrijfskosten (Yuki account 40150 "Personeelskosten")
+- **AOV (Allianz Summum)**: GEEN bedrijfskosten → Box 1 inkomensvoorziening (tracked in fiscale_params.aov_premie)
 - **KIA**: 28% bij totaal investeringen >= €2.901 (inclusive)
 - **Afschrijvingen**: lineair, restwaarde 10%, eerste jaar pro-rata per maand
-- **Representatie**: 80%-regeling (configureerbaar in `fiscale_params`)
+- **Representatie**: 80%-regeling, 20% bijtelling op fiscale winst (configureerbaar in `fiscale_params`)
 - **Factuur vereisten**: naam+adres+KvK, factuurnummer YYYY-NNN, vervaldatum 14d, BTW-vrijstellingstekst
 
 ### DB-driven parameters (alle configureerbaar in Instellingen)
@@ -81,8 +82,10 @@ Geen: user auth, BTW-administratie, loon/voorraad, email, real-time bank-API, au
 - **Box 3 rendementen**: Must use DEFINITIEVE percentages (not voorlopig/preliminary)
 
 ### Boekhouder referentiecijfers (tests valideren hiertegen)
-- **2023**: winst €62.522 → belastbare winst €45.801 → IB terug €415
-- **2024**: winst €95.145 → belastbare winst €76.776 → IB terug €3.137
+- **2023**: winst €62.522 → fiscale winst €60.411 → belastbare winst €45.801 → IB terug €415
+  - NB: 2023 had extra SBOH (€17.613) + UWV (€11.888) inkomen — app kan alleen het ondernemersdeel
+- **2024**: winst €95.145 → fiscale winst €94.437 → belastbare winst €76.776 → IB terug €3.137
+  - Volledig gevalideerd: alle 20 tussenwaarden matchen Boekhouder (test_fiscal.py TestBoekhouder2024Complete)
 
 ## Jaarafsluiting pagina (Pure Business Report)
 5-tab layout: Balans, W&V, Toelichting, Controles, Document. Year defaults to vorig jaar.
@@ -124,8 +127,14 @@ Tabs: Winst uit onderneming, Prive & aftrek (inputs save to DB), Box 3 (inputs+c
 - **Auto-doc detection**: Checks `data/pdf/{year}/Jaarcijfers_*.pdf` for auto-completion
 - **Known gap**: Fiscal advisory panel (ZA trajectory, SA tracking, KIA check, belastingdruk) not yet implemented
 
-## Data State (163 facturen, 602 werkdagen — verified 2026-03-09)
-- **Revenue (work-date based)**: 2023=€80,217 | 2024=€121,130 | 2025=€126,251 | 2026=€25,698 | Total=€353,295
-- **Yuki reconciliation**: 2023 gap €540, 2024 gap €3,208 — fully explained by accrual accounting differences (betaald werkdagen without formal invoices, "nog te factureren" timing)
-- **Uitgaven: ZERO in DB** — import dialog available on /kosten page (458 PDFs in archive ready to import)
-- **All 163 factuur amounts verified** cent-for-cent against PDF invoices
+## Data State (170 facturen, 603 werkdagen — corrected 2026-03-09)
+- **Revenue (work-date based)**: 2023=€80,612 | 2024=€123,176 | 2025=€126,251 | 2026=€25,698 | Total=€355,737
+- **Yuki reconciliation**: 2023 gap €144, 2024 gap €1,161 — cross-year factuur timing
+- **Uitgaven**: 107 records (2024 bulk-imported from bank CSV, investments for 2023-2025)
+- **Investments**: Camera 2023, MacBook 2024, iPhone+NAS+Ubiquiti+Dermatoscoop 2025 (6 assets total)
+- **Km-vergoeding**: Integrated into fiscal calc via `get_km_totaal()` in `fiscal_utils.py`
+- **2025 expenses**: Only investments imported — regular expenses need 2025 bank CSV for bulk import
+- **Personal financial data**: Seeded in fiscale_params for 2023-2025 (AOV, WOZ, hypotheek, VA, Box 3, partner)
+- **Corrections applied**: Split-practice vacation facturen (024-027), missing Drenthe factuur, 6 DG honoraria added
+- **Reconciliation doc**: `docs/plans/2026-03-09-accountant-replacement-reconciliation.md`
+- **Seed script**: `import_/seed_2024_expenses.py` — bank CSV matcher for bulk expense import

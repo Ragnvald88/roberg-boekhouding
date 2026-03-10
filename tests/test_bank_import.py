@@ -154,10 +154,10 @@ def test_parse_comma_separated_fallback():
         '"Machtigingskenmerk","Incassant ID","Betalingskenmerk","Omschrijving-1",'
         '"Omschrijving-2","Omschrijving-3","Reden retour","Oorspr bedrag","Oorspr munt","Koers"'
     )
-    # With comma separator, amounts use dot decimal
+    # Rabobank always uses Dutch decimal format (comma), even in comma-separated CSV
     row = (
         '"NL00TEST0000000001","EUR","RABONL2U","000000000000001234",'
-        '"2026-01-15","2026-01-15","-77.50","+1234.56",'
+        '"2026-01-15","2026-01-15","-77,50","+1.234,56",'
         '"NL12RABO0123456789","Test Partner","","","RABONL2U","ba","","","","","","'
         'Test betaling","","","","","",""'
     )
@@ -167,6 +167,37 @@ def test_parse_comma_separated_fallback():
 
     assert len(result) == 1
     assert result[0]['bedrag'] == pytest.approx(-77.50)
+
+
+def test_parse_real_rabobank_format():
+    """Real Rabobank export format with spaced column names and thousands seps."""
+    # This matches the actual Rabobank "Transacties downloaden" CSV format
+    header = (
+        '"IBAN/BBAN","Valuta","BIC","Volg nr","Datum","Valuta datum","Bedrag",'
+        '"saldo na boeking","IBAN/BBAN tegenpartij","Naam tegenpartij",'
+        '"Naam uiteind begunst","Naam initiërende partij","BIC tegenpartij",'
+        '"Transactie soort","Batch nr","Transactiereferentie","Machtigingskenmerk",'
+        '"Incassant ID","Betalingskenmerk","Omschrijving - 1","Omschrijving - 2",'
+        '"Omschrijving - 3","Oorzaakscode","Oorspr bedrag","Oorspr valuta","Koers",'
+        '"Naam rekeninghouder"'
+    )
+    row = (
+        '"NL00TEST0000000000","EUR","RABONL2UXXX","","03-01-2025","03-01-2025",'
+        '"-2.919,00","3.386,17","NL00TEST0000000001","T. Gebruiker","","","RABONL2UXXX",'
+        '"bg","","","","","","Factuurbetaling MacBook Pro","extra info","","","","","",'
+        '"TestBV huisartswaarnemer"'
+    )
+    csv_bytes = (header + '\n' + row).encode('utf-8')
+
+    result = parse_rabobank_csv(csv_bytes)
+
+    assert len(result) == 1
+    assert result[0]['datum'] == '2025-01-03'
+    assert result[0]['bedrag'] == pytest.approx(-2919.00)
+    assert result[0]['tegenpartij'] == 'T. Gebruiker'
+    assert result[0]['tegenrekening'] == 'NL00TEST0000000001'
+    assert 'Factuurbetaling MacBook Pro' in result[0]['omschrijving']
+    assert 'extra info' in result[0]['omschrijving']
 
 
 def test_parse_merged_description_fields():
@@ -212,6 +243,28 @@ def test_parse_large_amounts():
 
     assert len(result) == 1
     assert result[0]['bedrag'] == pytest.approx(12345.67)
+
+
+def test_parse_thousands_separator():
+    """Amounts with Dutch thousands separator dots must parse correctly."""
+    csv_bytes = build_csv([
+        make_csv_row(datum="2026-01-15", bedrag="-2.919,00",
+                     tegenpartij="Apple",
+                     omschrijving1="MacBook Pro"),
+        make_csv_row(datum="2026-01-20", bedrag="+18.386,81",
+                     tegenpartij="SPH",
+                     omschrijving1="Pensioenpremie"),
+        make_csv_row(datum="2026-02-01", bedrag="-1.000,00",
+                     tegenpartij="Prive",
+                     omschrijving1="Salaris"),
+    ])
+
+    result = parse_rabobank_csv(csv_bytes)
+
+    assert len(result) == 3
+    assert result[0]['bedrag'] == pytest.approx(-2919.00)
+    assert result[1]['bedrag'] == pytest.approx(18386.81)
+    assert result[2]['bedrag'] == pytest.approx(-1000.00)
 
 
 # --- Database integration tests ---

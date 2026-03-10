@@ -51,26 +51,36 @@ def parse_rabobank_csv(file_content: bytes) -> list[dict]:
         if datum is None:
             continue
 
-        # Amount: strip quotes, remove leading +, comma→dot for Dutch decimal
+        # Amount: Dutch formatting uses dot for thousands, comma for decimal
+        # e.g. "-2.919,00" → remove dots → "-2919,00" → comma→dot → -2919.00
         bedrag_str = row.get('Bedrag', '0').strip().strip('"')
-        bedrag_str = bedrag_str.replace(',', '.')
+        bedrag_str = bedrag_str.replace('.', '').replace(',', '.')
         try:
             bedrag = float(bedrag_str)
         except ValueError:
             continue
 
         # Merge description fields (Rabobank splits over 3 columns)
+        # Column names vary between export formats:
+        #   Semicolon export: "Omschrijving-1" (no spaces)
+        #   Comma export:     "Omschrijving - 1" (with spaces)
         omschrijving_parts = []
-        for key in ('Omschrijving-1', 'Omschrijving-2', 'Omschrijving-3'):
-            val = row.get(key, '').strip().strip('"')
+        for suffix in ('1', '2', '3'):
+            val = (row.get(f'Omschrijving-{suffix}', '')
+                   or row.get(f'Omschrijving - {suffix}', ''))
+            val = val.strip().strip('"')
             if val:
                 omschrijving_parts.append(val)
         omschrijving = ' '.join(omschrijving_parts)
 
+        # Tegenrekening column name varies between formats
+        tegenrekening = (row.get('Tegenrekening IBAN/BBAN', '')
+                         or row.get('IBAN/BBAN tegenpartij', ''))
+
         transactions.append({
             'datum': datum,
             'bedrag': bedrag,
-            'tegenrekening': row.get('Tegenrekening IBAN/BBAN', '').strip().strip('"'),
+            'tegenrekening': tegenrekening.strip().strip('"'),
             'tegenpartij': row.get('Naam tegenpartij', '').strip().strip('"'),
             'omschrijving': omschrijving,
         })
