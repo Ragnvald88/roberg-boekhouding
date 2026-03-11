@@ -74,7 +74,7 @@ async def kosten_page():
             }
             if u.is_investering and u.levensduur_jaren:
                 row['levensduur_fmt'] = f'{u.levensduur_jaren} jaar'
-                aanschaf = (u.aanschaf_bedrag or u.bedrag) * ((u.zakelijk_pct or 100) / 100)
+                aanschaf = (u.aanschaf_bedrag or u.bedrag) * ((u.zakelijk_pct if u.zakelijk_pct is not None else 100) / 100)
                 result = bereken_afschrijving(
                     aanschaf_bedrag=aanschaf,
                     restwaarde_pct=u.restwaarde_pct or 10,
@@ -174,7 +174,7 @@ async def kosten_page():
             ui.label(f'Activastaat per 31-12-{jaar}').classes('text-subtitle1 text-bold')
             activa_rows = []
             for u in investeringen:
-                aanschaf = (u.aanschaf_bedrag or u.bedrag) * ((u.zakelijk_pct or 100) / 100)
+                aanschaf = (u.aanschaf_bedrag or u.bedrag) * ((u.zakelijk_pct if u.zakelijk_pct is not None else 100) / 100)
                 result = bereken_afschrijving(
                     aanschaf_bedrag=aanschaf,
                     restwaarde_pct=u.restwaarde_pct or 10,

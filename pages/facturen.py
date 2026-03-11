@@ -1,8 +1,8 @@
 """Facturen pagina — factuur aanmaken, overzicht en betaalstatus."""
 
-import os
+import subprocess
 import tempfile
-from datetime import date, datetime
+from datetime import date
 from pathlib import Path
 
 from nicegui import app, events, ui
@@ -12,7 +12,8 @@ from components.invoice_generator import generate_invoice
 from components.utils import format_euro, format_datum, generate_csv
 from database import (
     get_facturen, add_factuur, get_next_factuurnummer,
-    mark_betaald, delete_factuur, get_klanten, get_werkdagen_ongefactureerd,
+    mark_betaald, delete_factuur, update_factuur,
+    get_klanten, get_werkdagen_ongefactureerd,
     link_werkdagen_to_factuur, get_bedrijfsgegevens, get_db, add_werkdag,
     DB_PATH,
 )
@@ -115,21 +116,71 @@ async def facturen_page():
 
         table.add_slot('body-cell-actions', '''
             <q-td :props="props">
-                <q-btn v-if="!props.row.betaald" icon="check_circle" flat dense
-                       round size="sm" color="positive"
-                       @click="() => $parent.$emit('markbetaald', props.row)"
-                       title="Markeer als betaald" />
-                <q-btn v-if="props.row.betaald" icon="undo" flat dense
-                       round size="sm" color="grey"
-                       @click="() => $parent.$emit('markonbetaald', props.row)"
-                       title="Markeer als onbetaald" />
-                <q-btn v-if="props.row.pdf_pad" icon="download" flat dense
-                       round size="sm"
-                       @click="() => $parent.$emit('download', props.row)"
-                       title="Download PDF" />
-                <q-btn icon="delete" flat dense round size="sm" color="negative"
-                       @click="() => $parent.$emit('deletefactuur', props.row)"
-                       title="Verwijderen" />
+                <q-btn icon="more_vert" flat dense round size="sm"
+                       color="grey-7">
+                    <q-menu auto-close>
+                        <q-list dense style="min-width: 200px">
+                            <q-item clickable
+                                @click="() => $parent.$emit('edit', props.row)">
+                                <q-item-section side>
+                                    <q-icon name="edit" size="xs"
+                                            color="primary" />
+                                </q-item-section>
+                                <q-item-section>Bewerken</q-item-section>
+                            </q-item>
+                            <q-item v-if="props.row.pdf_pad" clickable
+                                @click="() => $parent.$emit('download',
+                                    props.row)">
+                                <q-item-section side>
+                                    <q-icon name="download" size="xs" />
+                                </q-item-section>
+                                <q-item-section>Download PDF</q-item-section>
+                            </q-item>
+                            <q-item v-if="props.row.pdf_pad" clickable
+                                @click="() => $parent.$emit('openfinder',
+                                    props.row)">
+                                <q-item-section side>
+                                    <q-icon name="folder_open" size="xs" />
+                                </q-item-section>
+                                <q-item-section>Toon in Finder</q-item-section>
+                            </q-item>
+                            <q-separator />
+                            <q-item v-if="!props.row.betaald" clickable
+                                @click="() => $parent.$emit('markbetaald',
+                                    props.row)">
+                                <q-item-section side>
+                                    <q-icon name="check_circle" size="xs"
+                                            color="positive" />
+                                </q-item-section>
+                                <q-item-section>
+                                    Markeer betaald
+                                </q-item-section>
+                            </q-item>
+                            <q-item v-if="props.row.betaald" clickable
+                                @click="() => $parent.$emit('markonbetaald',
+                                    props.row)">
+                                <q-item-section side>
+                                    <q-icon name="undo" size="xs" />
+                                </q-item-section>
+                                <q-item-section>
+                                    Markeer onbetaald
+                                </q-item-section>
+                            </q-item>
+                            <q-separator />
+                            <q-item clickable
+                                @click="() => $parent.$emit('deletefactuur',
+                                    props.row)">
+                                <q-item-section side>
+                                    <q-icon name="delete" size="xs"
+                                            color="negative" />
+                                </q-item-section>
+                                <q-item-section class="text-negative">
+                                    Verwijderen
+                                </q-item-section>
+                            </q-item>
+                        </q-list>
+                    </q-menu>
+                </q-btn>
             </q-td>
         ''')
 
@@ -159,8 +210,10 @@ async def facturen_page():
                     'nummer': f.nummer,
                     'datum': f.datum,
                     'datum_fmt': format_datum(f.datum),
+                    'klant_id': f.klant_id,
                     'klant_naam': f.klant_naam,
                     'totaal_uren': f.totaal_uren,
+                    'totaal_km': f.totaal_km,
                     'bedrag_fmt': format_euro(f.totaal_bedrag),
                     'totaal_bedrag': f.totaal_bedrag,
                     'betaald': f.betaald,
@@ -274,10 +327,192 @@ async def facturen_page():
             else:
                 ui.notify('PDF niet gevonden', type='warning')
 
+        async def on_open_finder(e):
+            row = e.args
+            pdf_path = row.get('pdf_pad', '')
+            if pdf_path and Path(pdf_path).exists():
+                subprocess.run(['open', '-R', pdf_path])
+            else:
+                ui.notify('PDF niet gevonden', type='warning')
+
+        async def on_edit(e):
+            row = e.args
+            await open_edit_dialog(row)
+
+        async def open_edit_dialog(row):
+            """Open dialog to edit factuur details."""
+            klanten = await get_klanten(DB_PATH, alleen_actief=False)
+            klant_options = {k.id: k.naam for k in klanten}
+            upload_file = {}
+
+            with ui.dialog() as dialog, \
+                    ui.card().classes('w-full max-w-lg q-pa-md'):
+                ui.label('Factuur bewerken').classes('text-h6 q-mb-md')
+
+                # Nummer (read-only)
+                with ui.row().classes('w-full items-center gap-2'):
+                    ui.label('Factuurnummer:').classes(
+                        'text-subtitle2 text-grey-8')
+                    ui.label(row['nummer']).classes('text-subtitle2')
+                    type_label = ('ANW' if row.get('type') == 'anw'
+                                  else 'Dagpraktijk')
+                    ui.badge(type_label, color='info').classes('q-ml-sm')
+
+                ui.separator().classes('q-my-sm')
+
+                # Datum
+                edit_datum = ui.input(
+                    'Datum (YYYY-MM-DD)', value=row['datum'],
+                ).classes('w-full')
+
+                # Klant
+                edit_klant = ui.select(
+                    klant_options, label='Klant',
+                    value=row.get('klant_id'),
+                    with_input=True,
+                ).classes('w-full')
+
+                # Bedrag
+                edit_bedrag = ui.number(
+                    'Totaalbedrag (€)', value=row['totaal_bedrag'],
+                    format='%.2f',
+                ).classes('w-full')
+
+                # Type
+                edit_type = ui.select(
+                    {'factuur': 'Dagpraktijk', 'anw': 'ANW'},
+                    label='Type', value=row.get('type', 'factuur'),
+                ).classes('w-full')
+
+                # Betaald
+                ui.separator().classes('q-my-sm')
+                with ui.row().classes('w-full items-center gap-4'):
+                    edit_betaald = ui.checkbox(
+                        'Betaald', value=row['betaald'])
+                    edit_betaald_datum = ui.input(
+                        'Betaaldatum',
+                        value=row.get('betaald_datum', ''),
+                    ).classes('w-40')
+                    edit_betaald_datum.bind_visibility_from(
+                        edit_betaald, 'value')
+
+                # PDF section
+                ui.separator().classes('q-my-sm')
+                ui.label('Document').classes(
+                    'text-caption').style('color: #64748B')
+                existing_pdf = row.get('pdf_pad', '')
+                pdf_removed = {'value': False}
+
+                if existing_pdf and Path(existing_pdf).exists():
+                    pdf_row = ui.row().classes('items-center gap-2')
+                    with pdf_row:
+                        ui.icon('attach_file', color='primary')
+                        ui.label(
+                            Path(existing_pdf).name
+                        ).classes('text-body2')
+                        ui.button(
+                            'Download', icon='download',
+                            on_click=lambda: ui.download(existing_pdf),
+                        ).props('flat dense size=sm')
+
+                        def remove_pdf():
+                            pdf_removed['value'] = True
+                            pdf_row.set_visibility(False)
+                            ui.notify(
+                                'PDF wordt verwijderd bij opslaan',
+                                type='info')
+
+                        ui.button(
+                            'Verwijder', icon='delete',
+                            on_click=remove_pdf,
+                        ).props('flat dense size=sm color=negative')
+
+                ui.upload(
+                    label='Nieuwe PDF uploaden', auto_upload=True,
+                    on_upload=lambda e: upload_file.update({'event': e}),
+                    max_file_size=10_000_000,
+                ).classes('w-full').props(
+                    'flat bordered accept=".pdf,.jpg,.jpeg,.png"')
+
+                # Action buttons
+                with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
+                    ui.button(
+                        'Annuleren', on_click=dialog.close,
+                    ).props('flat')
+
+                    async def opslaan():
+                        if not edit_klant.value:
+                            ui.notify('Selecteer een klant', type='warning')
+                            return
+
+                        # Update main fields
+                        kwargs = {
+                            'datum': edit_datum.value,
+                            'klant_id': edit_klant.value,
+                            'totaal_bedrag': float(
+                                edit_bedrag.value or 0),
+                            'type': edit_type.value,
+                        }
+                        await update_factuur(
+                            DB_PATH, factuur_id=row['id'], **kwargs)
+
+                        # Handle betaald change (cascades to werkdagen)
+                        new_betaald = edit_betaald.value
+                        if new_betaald != row['betaald']:
+                            await mark_betaald(
+                                DB_PATH, factuur_id=row['id'],
+                                datum=(edit_betaald_datum.value
+                                       or date.today().isoformat())
+                                if new_betaald else '',
+                                betaald=bool(new_betaald))
+                        elif (new_betaald
+                              and edit_betaald_datum.value
+                              != row.get('betaald_datum', '')):
+                            await mark_betaald(
+                                DB_PATH, factuur_id=row['id'],
+                                datum=edit_betaald_datum.value)
+
+                        # Handle PDF removal
+                        if pdf_removed['value'] and existing_pdf:
+                            await update_factuur(
+                                DB_PATH, factuur_id=row['id'],
+                                pdf_pad='')
+                            p = Path(existing_pdf)
+                            if p.exists():
+                                p.unlink()
+
+                        # Handle PDF upload
+                        if upload_file.get('event'):
+                            evt = upload_file['event']
+                            import_dir = PDF_DIR / 'imports'
+                            import_dir.mkdir(parents=True, exist_ok=True)
+                            safe_name = Path(
+                                evt.file.name).name.replace(' ', '_')
+                            filename = (
+                                f'factuur_{row["id"]}_{safe_name}')
+                            filepath = import_dir / filename
+                            await evt.file.save(filepath)
+                            await update_factuur(
+                                DB_PATH, factuur_id=row['id'],
+                                pdf_pad=str(filepath))
+
+                        ui.notify(
+                            f'Factuur {row["nummer"]} bijgewerkt',
+                            type='positive')
+                        dialog.close()
+                        await refresh_table()
+
+                    ui.button(
+                        'Opslaan', on_click=opslaan,
+                    ).props('color=primary')
+            dialog.open()
+
         table.on('markbetaald', on_mark_betaald)
         table.on('markonbetaald', on_mark_onbetaald)
         table.on('deletefactuur', on_delete_factuur)
         table.on('download', on_download)
+        table.on('edit', on_edit)
+        table.on('openfinder', on_open_finder)
 
         async def open_import_dialog():
             """Open dialog to import facturen from PDF files."""
@@ -364,7 +599,7 @@ async def facturen_page():
                         })
                         render_preview()
                     finally:
-                        os.unlink(tmp_path)
+                        Path(tmp_path).unlink()
 
                 ui.upload(
                     multiple=True, on_upload=handle_upload, auto_upload=True,
@@ -748,9 +983,6 @@ async def facturen_page():
                                 .classes('text-subtitle2')
                             for w in werkdagen:
                                 bedrag = w.uren * w.tarief + w.km * w.km_tarief
-                                # Pre-check if this werkdag was pre-selected
-                                is_pre = (pre_selected_ids and
-                                          w.id in pre_selected_ids)
                                 cb = ui.checkbox(
                                     f'{w.datum} — {w.uren}u × {format_euro(w.tarief)} '
                                     f'+ {w.km} km = {format_euro(bedrag)}',

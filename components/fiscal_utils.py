@@ -1,5 +1,7 @@
 """Shared fiscal utility functions used by jaarafsluiting and aangifte pages."""
 
+import asyncio
+from dataclasses import asdict
 from pathlib import Path
 
 from database import (
@@ -20,50 +22,7 @@ from fiscal.afschrijvingen import bereken_afschrijving
 
 def fiscale_params_to_dict(params) -> dict:
     """Convert FiscaleParams dataclass to dict for bereken_volledig."""
-    return {
-        'jaar': params.jaar,
-        'zelfstandigenaftrek': params.zelfstandigenaftrek,
-        'startersaftrek': params.startersaftrek,
-        'mkb_vrijstelling_pct': params.mkb_vrijstelling_pct,
-        'kia_ondergrens': params.kia_ondergrens,
-        'kia_bovengrens': params.kia_bovengrens,
-        'kia_pct': params.kia_pct,
-        'kia_drempel_per_item': params.kia_drempel_per_item,
-        'km_tarief': params.km_tarief,
-        'schijf1_grens': params.schijf1_grens,
-        'schijf1_pct': params.schijf1_pct,
-        'schijf2_grens': params.schijf2_grens,
-        'schijf2_pct': params.schijf2_pct,
-        'schijf3_pct': params.schijf3_pct,
-        'ahk_max': params.ahk_max,
-        'ahk_afbouw_pct': params.ahk_afbouw_pct,
-        'ahk_drempel': params.ahk_drempel,
-        'ak_max': params.ak_max,
-        'zvw_pct': params.zvw_pct,
-        'zvw_max_grondslag': params.zvw_max_grondslag,
-        'repr_aftrek_pct': params.repr_aftrek_pct,
-        'ew_forfait_pct': params.ew_forfait_pct,
-        'villataks_grens': params.villataks_grens,
-        'wet_hillen_pct': params.wet_hillen_pct,
-        'urencriterium': params.urencriterium,
-        'pvv_premiegrondslag': params.pvv_premiegrondslag,
-        'pvv_aow_pct': params.pvv_aow_pct,
-        'pvv_anw_pct': params.pvv_anw_pct,
-        'pvv_wlz_pct': params.pvv_wlz_pct,
-        'arbeidskorting_brackets': params.arbeidskorting_brackets,
-        # Box 3 params (for bereken_box3)
-        'box3_bank_saldo': params.box3_bank_saldo,
-        'box3_overige_bezittingen': params.box3_overige_bezittingen,
-        'box3_schulden': params.box3_schulden,
-        'box3_heffingsvrij_vermogen': params.box3_heffingsvrij_vermogen,
-        'box3_rendement_bank_pct': params.box3_rendement_bank_pct,
-        'box3_rendement_overig_pct': params.box3_rendement_overig_pct,
-        'box3_rendement_schuld_pct': params.box3_rendement_schuld_pct,
-        'box3_tarief_pct': params.box3_tarief_pct,
-        'box3_drempel_schulden': params.box3_drempel_schulden,
-        'za_actief': params.za_actief,
-        'sa_actief': params.sa_actief,
-    }
+    return asdict(params)
 
 
 async def fetch_fiscal_data(db_path: Path, jaar: int) -> dict | None:
@@ -82,15 +41,18 @@ async def fetch_fiscal_data(db_path: Path, jaar: int) -> dict | None:
 
     params_dict = fiscale_params_to_dict(params)
 
-    omzet = await get_omzet_totaal(db_path, jaar)
-    kosten_per_cat = await get_uitgaven_per_categorie(db_path, jaar)
-    representatie = await get_representatie_totaal(db_path, jaar)
-    counts = await get_data_counts(db_path, jaar)
-    investeringen = await get_investeringen_voor_afschrijving(
-        db_path, tot_jaar=jaar)
-    inv_dit_jaar = await get_investeringen(db_path, jaar=jaar)
-    uren = await get_uren_totaal(db_path, jaar, urennorm_only=True)
-    km_data = await get_km_totaal(db_path, jaar)
+    # Run independent DB calls concurrently
+    (omzet, kosten_per_cat, representatie, counts, investeringen,
+     inv_dit_jaar, uren, km_data) = await asyncio.gather(
+        get_omzet_totaal(db_path, jaar),
+        get_uitgaven_per_categorie(db_path, jaar),
+        get_representatie_totaal(db_path, jaar),
+        get_data_counts(db_path, jaar),
+        get_investeringen_voor_afschrijving(db_path, tot_jaar=jaar),
+        get_investeringen(db_path, jaar=jaar),
+        get_uren_totaal(db_path, jaar, urennorm_only=True),
+        get_km_totaal(db_path, jaar),
+    )
     km_vergoeding = round(km_data['vergoeding'], 2)
 
     totaal_kosten_alle = sum(r['totaal'] for r in kosten_per_cat)
@@ -104,7 +66,7 @@ async def fetch_fiscal_data(db_path: Path, jaar: int) -> dict | None:
     totaal_afschrijvingen = 0.0
     for u in investeringen:
         aanschaf_bedrag_bruto = u.aanschaf_bedrag or u.bedrag
-        zakelijk_factor = (u.zakelijk_pct or 100) / 100
+        zakelijk_factor = (u.zakelijk_pct if u.zakelijk_pct is not None else 100) / 100
         aanschaf_bedrag = aanschaf_bedrag_bruto * zakelijk_factor
         levensduur = u.levensduur_jaren or 5
         aanschaf_maand = int(u.datum[5:7])
@@ -131,7 +93,7 @@ async def fetch_fiscal_data(db_path: Path, jaar: int) -> dict | None:
     kia_drempel = params.kia_drempel_per_item or 450
     inv_totaal_dit_jaar = sum(
         z for u in inv_dit_jaar
-        if (z := (u.aanschaf_bedrag or u.bedrag) * ((u.zakelijk_pct or 100) / 100))
+        if (z := (u.aanschaf_bedrag or u.bedrag) * ((u.zakelijk_pct if u.zakelijk_pct is not None else 100) / 100))
         >= kia_drempel
     )
 

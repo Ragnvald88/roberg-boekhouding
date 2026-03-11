@@ -1,5 +1,6 @@
 """Dashboard pagina — KPIs, omzetgrafiek en kostenverdeling."""
 
+import asyncio
 from datetime import date, datetime
 
 from nicegui import ui
@@ -87,20 +88,25 @@ async def dashboard_page():
 
     async def refresh_dashboard():
         jaar = jaar_select.value
-        kpis = await get_kpis(DB_PATH, jaar=jaar)
-        kpis_vorig = await get_kpis(DB_PATH, jaar=jaar - 1)
-        omzet_huidig = await get_omzet_per_maand(DB_PATH, jaar=jaar)
-        omzet_vorig = await get_omzet_per_maand(DB_PATH, jaar=jaar - 1)
-        kosten_per_cat = await get_uitgaven_per_categorie(DB_PATH, jaar=jaar)
-        recente = await get_recente_facturen(DB_PATH, limit=5)
-        openstaande = await get_openstaande_facturen(DB_PATH, jaar=jaar)
-        factuur_count = await get_factuur_count(DB_PATH, jaar=jaar)
-        ongefact = await get_werkdagen_ongefactureerd_summary(DB_PATH, jaar=jaar)
-        km_data = await get_km_totaal(DB_PATH, jaar=jaar)
-        ib_resultaat = await _compute_ib_estimate(jaar)
 
-        # Read urencriterium from DB (fall back to default)
-        fp = await get_fiscale_params(DB_PATH, jaar)
+        # Run all independent DB calls concurrently
+        (kpis, kpis_vorig, omzet_huidig, omzet_vorig, kosten_per_cat,
+         recente, openstaande, factuur_count, ongefact, km_data,
+         ib_resultaat, fp) = await asyncio.gather(
+            get_kpis(DB_PATH, jaar=jaar),
+            get_kpis(DB_PATH, jaar=jaar - 1),
+            get_omzet_per_maand(DB_PATH, jaar=jaar),
+            get_omzet_per_maand(DB_PATH, jaar=jaar - 1),
+            get_uitgaven_per_categorie(DB_PATH, jaar=jaar),
+            get_recente_facturen(DB_PATH, limit=5),
+            get_openstaande_facturen(DB_PATH, jaar=jaar),
+            get_factuur_count(DB_PATH, jaar=jaar),
+            get_werkdagen_ongefactureerd_summary(DB_PATH, jaar=jaar),
+            get_km_totaal(DB_PATH, jaar=jaar),
+            _compute_ib_estimate(jaar),
+            get_fiscale_params(DB_PATH, jaar),
+        )
+
         uren_criterium = int(fp.urencriterium) if fp else URENCRITERIUM_DEFAULT
 
         # KPI cards

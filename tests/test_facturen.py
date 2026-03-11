@@ -3,7 +3,7 @@
 import pytest
 from pathlib import Path
 from database import (
-    init_db, add_klant, add_werkdag, add_factuur,
+    init_db, add_klant, add_werkdag, add_factuur, update_factuur,
     get_facturen, get_next_factuurnummer, mark_betaald,
     link_werkdagen_to_factuur, get_werkdagen,
 )
@@ -87,6 +87,58 @@ async def test_mark_betaald(seeded_db):
     facturen = await get_facturen(seeded_db, jaar=2026)
     assert facturen[0].betaald
     assert facturen[0].betaald_datum == "2026-03-01"
+
+
+@pytest.mark.asyncio
+async def test_update_factuur(seeded_db):
+    """Factuur kan bijgewerkt worden via update_factuur."""
+    from database import get_klanten
+    klanten = await get_klanten(seeded_db)
+    kid = klanten[0].id
+
+    await add_factuur(seeded_db, nummer="2026-001", klant_id=kid,
+                      datum="2026-02-15", totaal_bedrag=700,
+                      type='factuur')
+    facturen = await get_facturen(seeded_db, jaar=2026)
+    fid = facturen[0].id
+
+    # Update bedrag and datum
+    await update_factuur(seeded_db, factuur_id=fid,
+                         totaal_bedrag=850.50, datum="2026-02-20")
+    facturen = await get_facturen(seeded_db, jaar=2026)
+    assert facturen[0].totaal_bedrag == 850.50
+    assert facturen[0].datum == "2026-02-20"
+
+    # Update type
+    await update_factuur(seeded_db, factuur_id=fid, type='anw')
+    facturen = await get_facturen(seeded_db, jaar=2026)
+    assert facturen[0].type == 'anw'
+
+    # Betaald is NOT updated via update_factuur (uses mark_betaald)
+    assert not facturen[0].betaald
+
+
+@pytest.mark.asyncio
+async def test_update_factuur_pdf_pad(seeded_db):
+    """PDF pad kan bijgewerkt worden."""
+    from database import get_klanten
+    klanten = await get_klanten(seeded_db)
+    kid = klanten[0].id
+
+    await add_factuur(seeded_db, nummer="2026-001", klant_id=kid,
+                      datum="2026-02-15", totaal_bedrag=700)
+    facturen = await get_facturen(seeded_db, jaar=2026)
+    fid = facturen[0].id
+
+    await update_factuur(seeded_db, factuur_id=fid,
+                         pdf_pad='/tmp/test.pdf')
+    facturen = await get_facturen(seeded_db, jaar=2026)
+    assert facturen[0].pdf_pad == '/tmp/test.pdf'
+
+    # Clear PDF
+    await update_factuur(seeded_db, factuur_id=fid, pdf_pad='')
+    facturen = await get_facturen(seeded_db, jaar=2026)
+    assert facturen[0].pdf_pad == ''
 
 
 def test_format_euro():

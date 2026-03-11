@@ -15,7 +15,7 @@ source .venv/bin/activate
 export DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib
 python main.py  # → http://127.0.0.1:8085
 
-# Tests (362 passing)
+# Tests (364 passing)
 DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib .venv/bin/python -m pytest tests/ -v
 ```
 
@@ -57,7 +57,7 @@ Geen: user auth, BTW-administratie, loon/voorraad, email, real-time bank-API, au
 - **Urencriterium**: 1.225 uur/jaar. Achterwacht (urennorm=0) telt NIET mee
 - **Pensioenpremie SPH**: WEL bedrijfskosten (Yuki account 40150 "Personeelskosten")
 - **AOV (Allianz Summum)**: GEEN bedrijfskosten → Box 1 inkomensvoorziening (tracked in fiscale_params.aov_premie)
-- **KIA**: 28% bij totaal investeringen >= €2.901 (inclusive)
+- **KIA**: 28% bij totaal investeringen >= ondergrens (configureerbaar per jaar in `fiscale_params.kia_ondergrens`). Per-item drempel in `kia_drempel_per_item` (default €450).
 - **Afschrijvingen**: lineair, restwaarde 10%, eerste jaar pro-rata per maand
 - **Representatie**: 80%-regeling, 20% bijtelling op fiscale winst (configureerbaar in `fiscale_params`)
 - **Factuur vereisten**: naam+adres+KvK, factuurnummer YYYY-NNN, vervaldatum 14d, BTW-vrijstellingstekst
@@ -77,7 +77,7 @@ Geen: user auth, BTW-administratie, loon/voorraad, email, real-time bank-API, au
 - **Eigen woning**: Configurable `ew_naar_partner`. Default True (Boekhouder practice).
 - **ZVW grondslag** = belastbare_winst, NOT verzamelinkomen
 - **PVV** = 27.65% over min(verzamelinkomen, premiegrondslag)
-- **PVV premiegrondslag**: 2024=38098, 2025+ = schijf1_grens
+- **PVV premiegrondslag**: Must be set explicitly per year in DB (`pvv_premiegrondslag`). Code falls back to `schijf1_grens` if 0, which is only correct for 2025+ (where they're equal). 2023=37149, 2024=38098.
 - **Box 3 drempel schulden**: Per-persoon (2023: 3400, 2024: 3700, 2025: 3700, 2026: 3800). Doubled if partner. Schulden below drempel ignored.
 - **Box 3 rendementen**: Must use DEFINITIEVE percentages (not voorlopig/preliminary)
 
@@ -127,14 +127,16 @@ Tabs: Winst uit onderneming, Prive & aftrek (inputs save to DB), Box 3 (inputs+c
 - **Auto-doc detection**: Checks `data/pdf/{year}/Jaarcijfers_*.pdf` for auto-completion
 - **Known gap**: Fiscal advisory panel (ZA trajectory, SA tracking, KIA check, belastingdruk) not yet implemented
 
-## Data State (170 facturen, 603 werkdagen — corrected 2026-03-09)
+## Data State (170 facturen, 603 werkdagen, 212 uitgaven — verified 2026-03-10)
 - **Revenue (work-date based)**: 2023=€80,612 | 2024=€123,176 | 2025=€126,251 | 2026=€25,698 | Total=€355,737
-- **Yuki reconciliation**: 2023 gap €144, 2024 gap €1,161 — cross-year factuur timing
-- **Uitgaven**: 107 records (2024 bulk-imported from bank CSV, investments for 2023-2025)
-- **Investments**: Camera 2023, MacBook 2024, iPhone+NAS+Ubiquiti+Dermatoscoop 2025 (6 assets total)
+- **Yuki reconciliation**: 2023 gap €145, 2024 gap €1,161 — cross-year factuur timing (structural, not errors)
+- **Uitgaven**: 212 records — 2023: 1 inv | 2024: 102 (1 inv + 101 regular) | 2025: 109 (5 inv + 104 regular)
+- **Investments**: 7 assets — Camera 2023, MacBook 2024, iPhone+Switch+WiFi+NAS+Dermatoscoop 2025
 - **Km-vergoeding**: Integrated into fiscal calc via `get_km_totaal()` in `fiscal_utils.py`
-- **2025 expenses**: Only investments imported — regular expenses need 2025 bank CSV for bulk import
-- **Personal financial data**: Seeded in fiscale_params for 2023-2025 (AOV, WOZ, hypotheek, VA, Box 3, partner)
-- **Corrections applied**: Split-practice vacation facturen (024-027), missing Drenthe factuur, 6 DG honoraria added
+- **Banktransacties**: 928 total (2023=145, 2024=363, 2025=340, 2026=80)
+- **Personal financial data**: Seeded in fiscale_params for 2023-2025 (AOV, WOZ, hypotheek, VA IB/ZVW, Box 3, partner, PVV premiegrondslag)
+- **Import complete**: All facturen, 2024+2025 expenses, all investments verified against bank statements and Boekhouder reports
 - **Reconciliation doc**: `docs/plans/2026-03-09-accountant-replacement-reconciliation.md`
 - **Seed script**: `import_/seed_2024_expenses.py` — bank CSV matcher for bulk expense import
+- **2023 limitation**: No regular expenses imported; SBOH+UWV income not in app. 2023 year report unusable.
+- **JURA S8 excluded**: Accountant excluded from fiscal depreciation + KIA. Not in DB investments.

@@ -426,6 +426,51 @@ async def delete_klant(db_path: Path = DB_PATH, klant_id: int = 0) -> None:
         await conn.close()
 
 
+# === Row-to-model helpers (DRY) ===
+
+def _row_to_werkdag(r) -> Werkdag:
+    """Convert a joined werkdagen+klanten row to a Werkdag dataclass."""
+    return Werkdag(
+        id=r['id'], datum=r['datum'], klant_id=r['klant_id'],
+        klant_naam=r['klant_naam'], code=r['code'] or '',
+        activiteit=r['activiteit'] or 'Waarneming dagpraktijk',
+        locatie=r['locatie'] or '', uren=r['uren'], km=r['km'] or 0,
+        tarief=r['tarief'], km_tarief=r['km_tarief'] or 0.23,
+        status=r['status'] or 'ongefactureerd',
+        factuurnummer=r['factuurnummer'] or '',
+        opmerking=r['opmerking'] or '',
+        urennorm=bool(r['urennorm']),
+        locatie_id=r['locatie_id'],
+    )
+
+
+def _row_to_factuur(r) -> Factuur:
+    """Convert a joined facturen+klanten row to a Factuur dataclass."""
+    return Factuur(
+        id=r['id'], nummer=r['nummer'], klant_id=r['klant_id'],
+        klant_naam=r['klant_naam'], datum=r['datum'],
+        totaal_uren=r['totaal_uren'] or 0,
+        totaal_km=r['totaal_km'] or 0,
+        totaal_bedrag=r['totaal_bedrag'],
+        pdf_pad=r['pdf_pad'] or '', betaald=bool(r['betaald']),
+        betaald_datum=r['betaald_datum'] or '',
+        type=r['type'] or 'factuur',
+    )
+
+
+def _row_to_uitgave(r) -> Uitgave:
+    """Convert an uitgaven row to an Uitgave dataclass."""
+    return Uitgave(
+        id=r['id'], datum=r['datum'], categorie=r['categorie'],
+        omschrijving=r['omschrijving'], bedrag=r['bedrag'],
+        pdf_pad=r['pdf_pad'] or '', is_investering=bool(r['is_investering']),
+        restwaarde_pct=r['restwaarde_pct'] if r['restwaarde_pct'] is not None else 10,
+        levensduur_jaren=r['levensduur_jaren'],
+        aanschaf_bedrag=r['aanschaf_bedrag'],
+        zakelijk_pct=r['zakelijk_pct'] if r['zakelijk_pct'] is not None else 100,
+    )
+
+
 # === Werkdagen ===
 
 async def get_werkdagen(db_path: Path = DB_PATH, jaar: int = None,
@@ -448,18 +493,7 @@ async def get_werkdagen(db_path: Path = DB_PATH, jaar: int = None,
         sql += " ORDER BY w.datum DESC"
         cursor = await conn.execute(sql, params)
         rows = await cursor.fetchall()
-        return [Werkdag(
-            id=r['id'], datum=r['datum'], klant_id=r['klant_id'],
-            klant_naam=r['klant_naam'], code=r['code'] or '',
-            activiteit=r['activiteit'] or 'Waarneming dagpraktijk',
-            locatie=r['locatie'] or '', uren=r['uren'], km=r['km'] or 0,
-            tarief=r['tarief'], km_tarief=r['km_tarief'] or 0.23,
-            status=r['status'] or 'ongefactureerd',
-            factuurnummer=r['factuurnummer'] or '',
-            opmerking=r['opmerking'] or '',
-            urennorm=bool(r['urennorm']),
-            locatie_id=r['locatie_id'],
-        ) for r in rows]
+        return [_row_to_werkdag(r) for r in rows]
     finally:
         await conn.close()
 
@@ -535,16 +569,7 @@ async def get_werkdagen_ongefactureerd(db_path: Path = DB_PATH,
         sql += " ORDER BY w.datum"
         cursor = await conn.execute(sql, params)
         rows = await cursor.fetchall()
-        return [Werkdag(
-            id=r['id'], datum=r['datum'], klant_id=r['klant_id'],
-            klant_naam=r['klant_naam'], code=r['code'] or '',
-            activiteit=r['activiteit'] or 'Waarneming dagpraktijk',
-            locatie=r['locatie'] or '', uren=r['uren'], km=r['km'] or 0,
-            tarief=r['tarief'], km_tarief=r['km_tarief'] or 0.23,
-            status=r['status'], factuurnummer=r['factuurnummer'] or '',
-            opmerking=r['opmerking'] or '', urennorm=bool(r['urennorm']),
-            locatie_id=r['locatie_id'],
-        ) for r in rows]
+        return [_row_to_werkdag(r) for r in rows]
     finally:
         await conn.close()
 
@@ -564,16 +589,7 @@ async def get_facturen(db_path: Path = DB_PATH, jaar: int = None) -> list[Factuu
         sql += " ORDER BY f.nummer DESC"
         cursor = await conn.execute(sql, params)
         rows = await cursor.fetchall()
-        return [Factuur(
-            id=r['id'], nummer=r['nummer'], klant_id=r['klant_id'],
-            klant_naam=r['klant_naam'], datum=r['datum'],
-            totaal_uren=r['totaal_uren'] or 0,
-            totaal_km=r['totaal_km'] or 0,
-            totaal_bedrag=r['totaal_bedrag'],
-            pdf_pad=r['pdf_pad'] or '', betaald=bool(r['betaald']),
-            betaald_datum=r['betaald_datum'] or '',
-            type=r['type'] or 'factuur'
-        ) for r in rows]
+        return [_row_to_factuur(r) for r in rows]
     finally:
         await conn.close()
 
@@ -632,6 +648,31 @@ async def mark_betaald(db_path: Path = DB_PATH, factuur_id: int = 0,
                 "UPDATE werkdagen SET status = ? WHERE factuurnummer = ?",
                 (new_status, row['nummer'])
             )
+        await conn.commit()
+    finally:
+        await conn.close()
+
+
+async def update_factuur(db_path: Path = DB_PATH, factuur_id: int = 0,
+                         **kwargs) -> None:
+    """Update factuur fields (datum, klant_id, totaal_bedrag, type, pdf_pad)."""
+    conn = await get_db(db_path)
+    try:
+        fields = []
+        values = []
+        allowed = ('datum', 'klant_id', 'totaal_uren', 'totaal_km',
+                    'totaal_bedrag', 'pdf_pad', 'type')
+        for key in allowed:
+            if key in kwargs:
+                fields.append(f'{key} = ?')
+                values.append(kwargs[key])
+        if not fields:
+            return
+        values.append(factuur_id)
+        await conn.execute(
+            f"UPDATE facturen SET {', '.join(fields)} WHERE id = ?",
+            values
+        )
         await conn.commit()
     finally:
         await conn.close()
@@ -705,15 +746,7 @@ async def get_uitgaven(db_path: Path = DB_PATH, jaar: int = None,
         sql += " ORDER BY datum DESC"
         cursor = await conn.execute(sql, params)
         rows = await cursor.fetchall()
-        return [Uitgave(
-            id=r['id'], datum=r['datum'], categorie=r['categorie'],
-            omschrijving=r['omschrijving'], bedrag=r['bedrag'],
-            pdf_pad=r['pdf_pad'] or '', is_investering=bool(r['is_investering']),
-            restwaarde_pct=r['restwaarde_pct'] if r['restwaarde_pct'] is not None else 10,
-            levensduur_jaren=r['levensduur_jaren'],
-            aanschaf_bedrag=r['aanschaf_bedrag'],
-            zakelijk_pct=r['zakelijk_pct'] or 100
-        ) for r in rows]
+        return [_row_to_uitgave(r) for r in rows]
     finally:
         await conn.close()
 
@@ -808,15 +841,7 @@ async def get_investeringen(db_path: Path = DB_PATH, jaar: int = None) -> list[U
         sql += " ORDER BY datum"
         cursor = await conn.execute(sql, params)
         rows = await cursor.fetchall()
-        return [Uitgave(
-            id=r['id'], datum=r['datum'], categorie=r['categorie'],
-            omschrijving=r['omschrijving'], bedrag=r['bedrag'],
-            pdf_pad=r['pdf_pad'] or '', is_investering=True,
-            restwaarde_pct=r['restwaarde_pct'] if r['restwaarde_pct'] is not None else 10,
-            levensduur_jaren=r['levensduur_jaren'],
-            aanschaf_bedrag=r['aanschaf_bedrag'],
-            zakelijk_pct=r['zakelijk_pct'] or 100
-        ) for r in rows]
+        return [_row_to_uitgave(r) for r in rows]
     finally:
         await conn.close()
 
@@ -1303,15 +1328,7 @@ async def get_recente_facturen(db_path: Path = DB_PATH,
             (limit,)
         )
         rows = await cursor.fetchall()
-        return [Factuur(
-            id=r['id'], nummer=r['nummer'], klant_id=r['klant_id'],
-            klant_naam=r['klant_naam'], datum=r['datum'],
-            totaal_uren=r['totaal_uren'] or 0, totaal_km=r['totaal_km'] or 0,
-            totaal_bedrag=r['totaal_bedrag'],
-            pdf_pad=r['pdf_pad'] or '', betaald=bool(r['betaald']),
-            betaald_datum=r['betaald_datum'] or '',
-            type=r['type'] or 'factuur'
-        ) for r in rows]
+        return [_row_to_factuur(r) for r in rows]
     finally:
         await conn.close()
 
@@ -1331,14 +1348,7 @@ async def get_openstaande_facturen(db_path: Path = DB_PATH,
         sql += " ORDER BY f.datum"
         cursor = await conn.execute(sql, params)
         rows = await cursor.fetchall()
-        return [Factuur(
-            id=r['id'], nummer=r['nummer'], klant_id=r['klant_id'],
-            klant_naam=r['klant_naam'], datum=r['datum'],
-            totaal_uren=r['totaal_uren'] or 0, totaal_km=r['totaal_km'] or 0,
-            totaal_bedrag=r['totaal_bedrag'],
-            pdf_pad=r['pdf_pad'] or '', betaald=False,
-            betaald_datum='', type=r['type'] or 'factuur'
-        ) for r in rows]
+        return [_row_to_factuur(r) for r in rows]
     finally:
         await conn.close()
 
@@ -1466,14 +1476,7 @@ async def get_investeringen_voor_afschrijving(db_path: Path = DB_PATH,
             (tot_jaar,)
         )
         rows = await cursor.fetchall()
-        return [Uitgave(
-            id=r['id'], datum=r['datum'], categorie=r['categorie'],
-            omschrijving=r['omschrijving'], bedrag=r['bedrag'],
-            is_investering=True, restwaarde_pct=r['restwaarde_pct'] if r['restwaarde_pct'] is not None else 10,
-            levensduur_jaren=r['levensduur_jaren'],
-            aanschaf_bedrag=r['aanschaf_bedrag'],
-            zakelijk_pct=r['zakelijk_pct'] or 100
-        ) for r in rows]
+        return [_row_to_uitgave(r) for r in rows]
     finally:
         await conn.close()
 
@@ -1537,7 +1540,7 @@ async def get_openstaande_debiteuren(db_path: Path = DB_PATH, jaar: int = 0) -> 
     try:
         cursor = await conn.execute(
             "SELECT COALESCE(SUM(totaal_bedrag), 0) FROM facturen "
-            "WHERE betaald = 0 AND strftime('%Y', datum) = ?",
+            "WHERE betaald = 0 AND substr(datum, 1, 4) = ?",
             (str(jaar),))
         row = await cursor.fetchone()
         return float(row[0])
