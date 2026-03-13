@@ -1,5 +1,6 @@
 """Jaarafsluiting pagina — pure business annual report (Balans + W&V + Toelichting)."""
 
+import asyncio
 from datetime import date
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from components.kpi_card import kpi_strip
 from components.layout import create_layout
 from components.utils import format_euro
 from database import (
+    auto_match_betaald_datum,
     update_balans_inputs,
     update_jaarafsluiting_status,
     get_bedrijfsgegevens,
@@ -45,6 +47,8 @@ def _balans_line(label: str, value: float, bold: bool = False, indent: bool = Fa
 
 async def _load_year_data(jaar: int):
     """Load all business data for a year. Returns (data, balans, winst, vorig_jaar_balans) or None."""
+    # Auto-match betaald_datum from bank transactions for accurate year-end receivables
+    await auto_match_betaald_datum(DB_PATH)
     data = await fetch_fiscal_data(DB_PATH, jaar)
     if data is None:
         return None
@@ -290,8 +294,15 @@ async def jaarafsluiting_page():
                     await render_all()
                     ui.notify('Balans opgeslagen', type='positive')
 
-                ui.button('Opslaan', icon='save',
-                          on_click=save_balans).props('color=positive').classes('q-mt-md')
+                async def cancel_edit():
+                    state['editing'] = False
+                    await render_all()
+
+                with ui.row().classes('q-mt-md gap-2'):
+                    ui.button('Opslaan', icon='save',
+                              on_click=save_balans).props('color=positive')
+                    ui.button('Annuleren', icon='close',
+                              on_click=cancel_edit).props('flat')
 
     def render_wv(data, winst):
         """Render W&V tab."""
@@ -491,7 +502,8 @@ async def jaarafsluiting_page():
                 pdf_path = pdf_dir / f'Jaarcijfers_{jaar}.pdf'
                 try:
                     from weasyprint import HTML
-                    HTML(string=html).write_pdf(str(pdf_path))
+                    await asyncio.to_thread(
+                        lambda: HTML(string=html).write_pdf(str(pdf_path)))
                     ui.notify(f'PDF opgeslagen: {pdf_path.name}', type='positive')
                 except Exception as e:
                     ui.notify(f'PDF fout: {e}', type='negative')

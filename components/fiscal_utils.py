@@ -11,7 +11,7 @@ from database import (
     get_investeringen_voor_afschrijving,
     get_km_totaal,
     get_omzet_totaal,
-    get_openstaande_debiteuren,
+    get_debiteuren_op_peildatum,
     get_nog_te_factureren,
     get_representatie_totaal,
     get_uitgaven_per_categorie,
@@ -144,7 +144,9 @@ async def bereken_balans(db_path: Path, jaar: int, activastaat: list[dict],
 
     # Auto-calculated from data
     mva = round(sum(a['boekwaarde'] for a in activastaat), 2)
-    debiteuren = await get_openstaande_debiteuren(db_path, jaar)
+    # Year-end debiteuren: invoices outstanding as of 31-12-{jaar}
+    peildatum = f'{jaar}-12-31'
+    debiteuren = await get_debiteuren_op_peildatum(db_path, peildatum)
     nog_te_factureren = await get_nog_te_factureren(db_path, jaar)
 
     # Manual inputs from fiscale_params

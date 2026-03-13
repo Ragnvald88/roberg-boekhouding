@@ -32,23 +32,42 @@ async def kosten_page():
     filter_jaar = {'value': huidig_jaar}
     filter_categorie = {'value': None}  # None = alle
 
-    # Read representatie percentage from DB
+    # Read fiscal params from DB
     fp = await get_fiscale_params(DB_PATH, jaar=huidig_jaar)
     repr_aftrek_pct = int(fp.repr_aftrek_pct) if fp else 80
+    inv_drempel = fp.kia_drempel_per_item if fp else 450
 
     # References to dynamic UI elements
-    tabel_container = {'ref': None}
+    kosten_table = {'ref': None}
     summary_container = {'ref': None}
     activastaat_container = {'ref': None}
+
+    kosten_columns = [
+        {'name': 'bon', 'label': '', 'field': 'has_bon', 'align': 'center'},
+        {'name': 'datum', 'label': 'Datum', 'field': 'datum', 'sortable': True,
+         'align': 'left'},
+        {'name': 'categorie', 'label': 'Categorie', 'field': 'categorie',
+         'sortable': True, 'align': 'left'},
+        {'name': 'omschrijving', 'label': 'Omschrijving', 'field': 'omschrijving',
+         'align': 'left'},
+        {'name': 'bedrag', 'label': 'Bedrag', 'field': 'bedrag_fmt',
+         'sortable': True, 'align': 'right'},
+        {'name': 'investering', 'label': 'Inv.', 'field': 'investering',
+         'align': 'center'},
+        {'name': 'levensduur', 'label': 'Levensduur', 'field': 'levensduur_fmt',
+         'align': 'center'},
+        {'name': 'boekwaarde', 'label': 'Boekwaarde', 'field': 'boekwaarde_fmt',
+         'align': 'right'},
+        {'name': 'acties', 'label': 'Acties', 'field': 'acties', 'align': 'center'},
+    ]
 
     # --- Helpers ---
 
     async def laad_tabel():
-        """Reload the expenses table based on current filters."""
-        container = tabel_container['ref']
-        if container is None:
+        """Reload the expenses table rows (preserves pagination/sort state)."""
+        table = kosten_table['ref']
+        if table is None:
             return
-        container.clear()
         jaar = filter_jaar['value']
         cat = filter_categorie['value']
         uitgaven = await get_uitgaven(DB_PATH, jaar=jaar, categorie=cat)
@@ -86,54 +105,8 @@ async def kosten_page():
                 row['boekwaarde_fmt'] = format_euro(result['boekwaarde'])
             rows.append(row)
 
-        columns = [
-            {'name': 'bon', 'label': '', 'field': 'has_bon', 'align': 'center'},
-            {'name': 'datum', 'label': 'Datum', 'field': 'datum', 'sortable': True,
-             'align': 'left'},
-            {'name': 'categorie', 'label': 'Categorie', 'field': 'categorie',
-             'sortable': True, 'align': 'left'},
-            {'name': 'omschrijving', 'label': 'Omschrijving', 'field': 'omschrijving',
-             'align': 'left'},
-            {'name': 'bedrag', 'label': 'Bedrag', 'field': 'bedrag_fmt',
-             'sortable': True, 'align': 'right'},
-            {'name': 'investering', 'label': 'Inv.', 'field': 'investering',
-             'align': 'center'},
-            {'name': 'levensduur', 'label': 'Levensduur', 'field': 'levensduur_fmt',
-             'align': 'center'},
-            {'name': 'boekwaarde', 'label': 'Boekwaarde', 'field': 'boekwaarde_fmt',
-             'align': 'right'},
-            {'name': 'acties', 'label': 'Acties', 'field': 'acties', 'align': 'center'},
-        ]
-
-        with container:
-            table = ui.table(
-                columns=columns, rows=rows, row_key='id',
-                pagination={'rowsPerPage': 20},
-            ).classes('w-full')
-            table.add_slot('body-cell-bon', '''
-                <q-td :props="props">
-                    <q-btn v-if="props.row.has_bon" icon="attach_file" flat dense
-                           round size="sm" color="primary"
-                           @click="$parent.$emit('viewdoc', props.row)"
-                           title="Bekijk bon" />
-                </q-td>
-            ''')
-            table.add_slot('body-cell-acties', '''
-                <q-td :props="props">
-                    <q-btn flat dense icon="edit" color="primary" size="sm"
-                           @click="$parent.$emit('edit', props.row)" />
-                    <q-btn flat dense icon="delete" color="negative" size="sm"
-                           @click="$parent.$emit('delete', props.row)" />
-                </q-td>
-            ''')
-            table.add_slot('no-data', '''
-                <q-tr><q-td colspan="100%" class="text-center q-pa-lg text-grey">
-                    Geen uitgaven gevonden.
-                </q-td></q-tr>
-            ''')
-            table.on('edit', lambda e: open_edit_dialog(e.args))
-            table.on('delete', lambda e: confirm_delete(e.args))
-            table.on('viewdoc', lambda e: view_document(e.args))
+        table.rows = rows
+        table.update()
 
     async def laad_summary():
         """Reload the summary card."""
@@ -285,7 +258,7 @@ async def kosten_page():
             # Dynamic visibility
             def on_bedrag_change():
                 val = input_bedrag.value or 0
-                if val >= 450:
+                if val >= inv_drempel:
                     input_investering.set_visibility(True)
                 else:
                     input_investering.set_visibility(False)
@@ -368,7 +341,7 @@ async def kosten_page():
                 }
 
                 bedrag = float(input_bedrag.value)
-                if bedrag >= 450 and input_investering.value:
+                if bedrag >= inv_drempel and input_investering.value:
                     kwargs['is_investering'] = 1
                     kwargs['levensduur_jaren'] = input_levensduur.value
                     kwargs['restwaarde_pct'] = float(input_restwaarde.value or 10)
@@ -471,17 +444,17 @@ async def kosten_page():
                     min=0, max=100
                 ).classes('w-full')
 
-            # Show investering checkbox only if bedrag >= 450
+            # Show investering checkbox only if bedrag >= threshold
             def check_edit_bedrag():
                 val = edit_bedrag.value or 0
-                if val >= 450:
+                if val >= inv_drempel:
                     edit_investering.set_visibility(True)
                 else:
                     edit_investering.set_visibility(False)
                     edit_investering.value = False
 
             edit_bedrag.on('update:model-value', lambda: check_edit_bedrag())
-            if (row.get('bedrag', 0) or 0) < 450:
+            if (row.get('bedrag', 0) or 0) < inv_drempel:
                 edit_investering.set_visibility(False)
 
             # Document section
@@ -593,7 +566,7 @@ async def kosten_page():
         safe_name = source_path.name.replace(' ', '_')
         filename = f'uitgave_{uitgave_id}_{safe_name}'
         dest = UITGAVEN_DIR / filename
-        shutil.copy2(source_path, dest)
+        await asyncio.to_thread(shutil.copy2, source_path, dest)
         await update_uitgave(DB_PATH, uitgave_id=uitgave_id, pdf_pad=str(dest))
 
     # --- Import dialog ---
@@ -800,10 +773,40 @@ async def kosten_page():
             jaar_select.on('update:model-value', lambda: on_filter_change())
             cat_select.on('update:model-value', lambda: on_filter_change())
 
-        # --- Table ---
+        # --- Table (created once, rows updated via laad_tabel) ---
         with ui.card().classes('w-full'):
             ui.label('Uitgaven').classes('text-subtitle1 text-bold')
-            tabel_container['ref'] = ui.column().classes('w-full')
+            kosten_table['ref'] = ui.table(
+                columns=kosten_columns, rows=[], row_key='id',
+                pagination={'rowsPerPage': 20},
+            ).classes('w-full')
+            _tbl = kosten_table['ref']
+            _tbl.add_slot('body-cell-bon', '''
+                <q-td :props="props">
+                    <q-btn v-if="props.row.has_bon" icon="attach_file" flat dense
+                           round size="sm" color="primary"
+                           @click="$parent.$emit('viewdoc', props.row)"
+                           title="Bekijk bon" />
+                </q-td>
+            ''')
+            _tbl.add_slot('body-cell-acties', '''
+                <q-td :props="props">
+                    <q-btn flat dense icon="edit" color="primary" size="sm"
+                           @click="$parent.$emit('edit', props.row)"
+                           title="Bewerken" />
+                    <q-btn flat dense icon="delete" color="negative" size="sm"
+                           @click="$parent.$emit('delete', props.row)"
+                           title="Verwijderen" />
+                </q-td>
+            ''')
+            _tbl.add_slot('no-data', '''
+                <q-tr><q-td colspan="100%" class="text-center q-pa-lg text-grey">
+                    Geen uitgaven gevonden.
+                </q-td></q-tr>
+            ''')
+            _tbl.on('edit', lambda e: open_edit_dialog(e.args))
+            _tbl.on('delete', lambda e: confirm_delete(e.args))
+            _tbl.on('viewdoc', lambda e: view_document(e.args))
 
         # --- Summary ---
         with ui.card().classes('w-full'):

@@ -185,30 +185,11 @@ async def dashboard_page():
                     kpi_card('Km-vergoeding', km_label,
                              'directions_car', '#0F766E')
 
-        # Charts + tables
+        # Charts + alerts
         chart_row = chart_container['ref']
         chart_row.clear()
         with chart_row:
-            with ui.row().classes('w-full gap-4 flex-wrap'):
-                with ui.card().classes('flex-1 min-w-80 q-pa-lg'):
-                    ui.label('Omzet per maand').classes('text-subtitle1') \
-                        .style('color: #0F172A; font-weight: 600')
-                    ui.label(f'{jaar} vs {jaar - 1}').classes('text-body2') \
-                        .style('color: #64748B')
-                    revenue_bar_chart(omzet_huidig, omzet_vorig, jaar)
-
-                with ui.card().classes('flex-1 min-w-80 q-pa-lg'):
-                    ui.label('Kostenverdeling').classes('text-subtitle1') \
-                        .style('color: #0F172A; font-weight: 600')
-                    ui.label(str(jaar)).classes('text-body2') \
-                        .style('color: #64748B')
-                    if kosten_per_cat:
-                        cost_donut_chart(kosten_per_cat)
-                    else:
-                        ui.label('Geen uitgaven gevonden.') \
-                            .classes('q-pa-md').style('color: #94A3B8')
-
-            # Ongefactureerde werkdagen alert
+            # Alerts first (actionable items above charts)
             if ongefact['aantal'] > 0:
                 with ui.card().classes('w-full q-pa-md') \
                         .style('background-color: #FFF7ED; border-color: #FDBA74'):
@@ -262,6 +243,26 @@ async def dashboard_page():
                     ui.table(
                         columns=columns, rows=rows, row_key='nummer',
                     ).classes('w-full').props('dense flat')
+
+            # Charts
+            with ui.row().classes('w-full gap-4 flex-wrap'):
+                with ui.card().classes('flex-1 min-w-80 q-pa-lg'):
+                    ui.label('Omzet per maand').classes('text-subtitle1') \
+                        .style('color: #0F172A; font-weight: 600')
+                    ui.label(f'{jaar} vs {jaar - 1}').classes('text-body2') \
+                        .style('color: #64748B')
+                    revenue_bar_chart(omzet_huidig, omzet_vorig, jaar)
+
+                with ui.card().classes('flex-1 min-w-80 q-pa-lg'):
+                    ui.label('Kostenverdeling').classes('text-subtitle1') \
+                        .style('color: #0F172A; font-weight: 600')
+                    ui.label(str(jaar)).classes('text-body2') \
+                        .style('color: #64748B')
+                    if kosten_per_cat:
+                        cost_donut_chart(kosten_per_cat)
+                    else:
+                        ui.label('Geen uitgaven gevonden.') \
+                            .classes('q-pa-md').style('color: #64748B')
 
             # Recente facturen
             if recente:

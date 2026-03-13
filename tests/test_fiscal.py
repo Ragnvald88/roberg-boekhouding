@@ -50,7 +50,7 @@ FISCALE_PARAMS = {
         "schijf3_pct": 49.50,
         "ahk_max": 3362, "ahk_afbouw_pct": 6.63, "ahk_drempel": 24812,
         "ak_max": 5532,
-        "zvw_pct": 5.32, "zvw_max_grondslag": 71624,
+        "zvw_pct": 5.32, "zvw_max_grondslag": 71628,
         "repr_aftrek_pct": 80,
         "ew_forfait_pct": 0.35, "villataks_grens": 1_310_000,
         "wet_hillen_pct": 80.0, "urencriterium": 1225,
@@ -1590,3 +1590,53 @@ class TestLijfrente:
         )
         assert abs(r_without.verzamelinkomen - r_with.verzamelinkomen - 3000) < 1
         assert r_with.lijfrente == 3000
+
+    def test_lijfrente_reduces_netto_ib(self):
+        """Lijfrente should reduce the net IB amount (tax savings)."""
+        params = FISCALE_PARAMS[2024].copy()
+        r_without = bereken_volledig(
+            omzet=90000, kosten=0, afschrijvingen=0,
+            representatie=0, investeringen_totaal=0,
+            uren=1400, params=params,
+            ew_naar_partner=True,
+        )
+        r_with = bereken_volledig(
+            omzet=90000, kosten=0, afschrijvingen=0,
+            representatie=0, investeringen_totaal=0,
+            uren=1400, params=params,
+            lijfrente=5000,
+            ew_naar_partner=True,
+        )
+        # More lijfrente → lower verzamelinkomen → lower IB
+        assert r_with.netto_ib < r_without.netto_ib
+
+    def test_lijfrente_affects_tariefsaanpassing(self):
+        """Lijfrente reduces d_income_without, affecting tariefsaanpassing."""
+        params = FISCALE_PARAMS[2024].copy()
+        r_without = bereken_volledig(
+            omzet=100000, kosten=0, afschrijvingen=0,
+            representatie=0, investeringen_totaal=0,
+            uren=1400, params=params,
+            ew_naar_partner=True,
+        )
+        r_with = bereken_volledig(
+            omzet=100000, kosten=0, afschrijvingen=0,
+            representatie=0, investeringen_totaal=0,
+            uren=1400, params=params,
+            lijfrente=10000,
+            ew_naar_partner=True,
+        )
+        # Higher lijfrente → lower income → different tariefsaanpassing
+        assert r_with.tariefsaanpassing != r_without.tariefsaanpassing
+
+    def test_lijfrente_exceeds_income_floors_at_zero(self):
+        """If lijfrente exceeds income, verzamelinkomen floors at 0."""
+        params = FISCALE_PARAMS[2024].copy()
+        result = bereken_volledig(
+            omzet=5000, kosten=0, afschrijvingen=0,
+            representatie=0, investeringen_totaal=0,
+            uren=1400, params=params,
+            lijfrente=999999,  # far exceeds income
+            ew_naar_partner=True,
+        )
+        assert result.verzamelinkomen == 0

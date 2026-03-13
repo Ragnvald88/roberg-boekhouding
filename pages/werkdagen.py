@@ -180,9 +180,11 @@ async def werkdagen_page():
         table.add_slot('body-cell-actions', '''
             <q-td :props="props">
                 <q-btn icon="edit" flat dense round size="sm"
-                    @click="() => $parent.$emit('edit', props.row)" />
+                    @click="() => $parent.$emit('edit', props.row)"
+                    title="Bewerken" />
                 <q-btn icon="delete" flat dense round size="sm" color="negative"
-                    @click="() => $parent.$emit('delete', props.row)" />
+                    @click="() => $parent.$emit('delete', props.row)"
+                    title="Verwijderen" />
             </q-td>
         ''')
 

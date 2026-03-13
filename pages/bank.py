@@ -5,7 +5,7 @@ from datetime import datetime
 from nicegui import ui
 
 from components.layout import create_layout
-from components.utils import format_euro, BANK_CATEGORIEEN
+from components.utils import format_euro, generate_csv, BANK_CATEGORIEEN
 from database import (
     get_banktransacties, add_banktransacties, update_banktransactie,
     delete_banktransacties, DB_PATH,
@@ -21,6 +21,7 @@ async def bank_page():
     current_year = datetime.now().year
     selected_jaar = {'value': current_year}
     selected_maand = {'value': 0}  # 0 = alle maanden
+    zoek_tekst = {'value': ''}
 
     table_ref = {'table': None}
     csv_list_container = {'ref': None}
@@ -36,6 +37,11 @@ async def bank_page():
         if selected_maand['value'] > 0:
             maand_str = f"{selected_maand['value']:02d}"
             transacties = [t for t in transacties if t.datum[5:7] == maand_str]
+
+        if zoek_tekst['value']:
+            q = zoek_tekst['value'].lower()
+            transacties = [t for t in transacties
+                           if q in t.tegenpartij.lower() or q in t.omschrijving.lower()]
 
         rows = []
         for t in transacties:
@@ -215,7 +221,32 @@ async def bank_page():
                 on_change=lambda e: handle_maand_change(e.value),
             ).classes('w-40')
 
+            # Search filter
+            async def handle_zoek(new_val):
+                zoek_tekst['value'] = new_val or ''
+                await refresh_table()
+
+            ui.input(label='Zoeken', placeholder='Tegenpartij / omschrijving',
+                     on_change=lambda e: handle_zoek(e.value)
+                     ).props('clearable').classes('w-56')
+
             ui.space()
+
+            # CSV export
+            async def export_csv_bank():
+                rows_data = await load_transacties()
+                headers = ['Datum', 'Bedrag', 'Tegenpartij', 'Omschrijving',
+                           'Categorie', 'Koppeling']
+                rows_out = [[r['datum'], r['bedrag'], r['tegenpartij'],
+                             r['omschrijving_full'], r['categorie'], r['koppeling']]
+                            for r in rows_data]
+                csv_str = generate_csv(headers, rows_out)
+                ui.download.content(
+                    csv_str.encode('utf-8-sig'),
+                    f'bank_{selected_jaar["value"]}.csv')
+
+            ui.button('CSV', icon='download',
+                      on_click=export_csv_bank).props('outline color=primary')
 
             # CSV upload button
             ui.upload(

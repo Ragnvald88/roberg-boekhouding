@@ -13,7 +13,7 @@ from database import (
     get_klanten, add_klant, update_klant, delete_klant,
     get_klant_locaties, add_klant_locatie, delete_klant_locatie,
     get_all_fiscale_params, upsert_fiscale_params,
-    get_bedrijfsgegevens, upsert_bedrijfsgegevens, DB_PATH,
+    get_bedrijfsgegevens, upsert_bedrijfsgegevens, get_db_ctx, DB_PATH,
 )
 
 
@@ -203,13 +203,41 @@ async def instellingen_page():
 
                                                     async def del_loc(
                                                         lid=loc.id,
+                                                        lnaam=loc.naam,
                                                     ):
-                                                        await delete_klant_locatie(
-                                                            DB_PATH, lid)
-                                                        ui.notify(
-                                                            'Locatie verwijderd',
-                                                            type='info')
-                                                        await refresh_locaties()
+                                                        with ui.dialog() as cdlg, \
+                                                                ui.card():
+                                                            ui.label(
+                                                                f'Locatie "{lnaam}" '
+                                                                'verwijderen?'
+                                                            ).classes('text-h6')
+                                                            with ui.row().classes(
+                                                                'w-full justify-end '
+                                                                'gap-2 mt-2'
+                                                            ):
+                                                                ui.button(
+                                                                    'Annuleren',
+                                                                    on_click=cdlg.close,
+                                                                ).props('flat')
+
+                                                                async def do_del(
+                                                                    _lid=lid,
+                                                                ):
+                                                                    await delete_klant_locatie(
+                                                                        DB_PATH, _lid)
+                                                                    cdlg.close()
+                                                                    ui.notify(
+                                                                        'Locatie verwijderd',
+                                                                        type='info')
+                                                                    await refresh_locaties()
+
+                                                                ui.button(
+                                                                    'Verwijderen',
+                                                                    on_click=do_del,
+                                                                ).props(
+                                                                    'color=negative'
+                                                                )
+                                                        cdlg.open()
 
                                                     ui.button(
                                                         icon='close',
@@ -624,6 +652,10 @@ async def instellingen_page():
 
                     backup_name = f"boekhouding_backup_{date.today().isoformat()}.zip"
                     backup_path = DB_PATH.parent / backup_name
+
+                    # Flush WAL to ensure consistent backup
+                    async with get_db_ctx(DB_PATH) as conn:
+                        await conn.execute("PRAGMA wal_checkpoint(FULL)")
 
                     with zipfile.ZipFile(backup_path, 'w', zipfile.ZIP_DEFLATED) as zf:
                         # Database

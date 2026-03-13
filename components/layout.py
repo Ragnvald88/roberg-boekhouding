@@ -54,11 +54,14 @@ def create_layout(title: str, active_page: str = ''):
     """Shared layout: teal header, dark sidebar, off-white content."""
 
     PAGES = [
+        ('DAGELIJKS', None, None),  # section header
         ('Dashboard', 'dashboard', '/'),
         ('Werkdagen', 'schedule', '/werkdagen'),
         ('Facturen', 'receipt', '/facturen'),
+        ('FINANCIEEL', None, None),  # section header
         ('Kosten', 'payments', '/kosten'),
         ('Bank', 'account_balance', '/bank'),
+        ('JAAREINDE', None, None),  # section header
         ('Jaarafsluiting', 'bar_chart', '/jaarafsluiting'),
         ('Aangifte', 'fact_check', '/aangifte'),
     ]
@@ -84,7 +87,7 @@ def create_layout(title: str, active_page: str = ''):
             .props('flat color=white round dense')
         ui.label('Boekhouding').classes('text-h6 text-white q-ml-sm')
         ui.space()
-        ui.label(title).classes('text-subtitle1').style('color: #94A3B8')
+        ui.label(title).classes('text-subtitle1').style('color: #CBD5E1')
 
     # === Dark sidebar ===
     drawer = ui.left_drawer(value=True, bordered=False) \
@@ -92,12 +95,14 @@ def create_layout(title: str, active_page: str = ''):
         .props('width=240')
 
     with drawer:
-        # Section label
-        ui.label('NAVIGATIE') \
-            .classes('text-xs q-mt-lg q-mb-sm q-ml-md') \
-            .style('color: #64748B; letter-spacing: 0.1em')
-
         for label, icon, target in PAGES:
+            if target is None:
+                # Section header
+                ui.label(label) \
+                    .classes('text-xs q-mt-lg q-mb-sm q-ml-md') \
+                    .style('color: #64748B; letter-spacing: 0.1em')
+                continue
+
             is_active = (target == active_page)
             btn = ui.button(
                 label, icon=icon,

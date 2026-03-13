@@ -15,7 +15,7 @@ source .venv/bin/activate
 export DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib
 python main.py  # → http://127.0.0.1:8085
 
-# Tests (364 passing)
+# Tests (405 passing)
 DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib .venv/bin/python -m pytest tests/ -v
 ```
 
@@ -25,7 +25,9 @@ DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib .venv/bin/python -m pytest tests/ -
 - Raw SQL, `?` placeholders — GEEN f-strings in SQL
 - Bedragen REAL, datums TEXT (YYYY-MM-DD)
 - `aiosqlite` async, WAL mode, foreign keys ON
+- **Connection pattern**: `async with get_db_ctx(db_path) as conn:` — all DB functions use this context manager (guarantees connection cleanup)
 - `bedrijfsgegevens` = single-row (CHECK id=1)
+- `werkdagen.status` CHECK constraint: `('ongefactureerd', 'gefactureerd', 'betaald')`
 - SQLite op lokaal filesystem, NIET via SMB (WAL faalt)
 
 ## Ontwikkelregels
@@ -46,6 +48,8 @@ DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib .venv/bin/python -m pytest tests/ -
 - Bij full `body` slot met selectie: `<q-checkbox v-model="props.selected" dense />` (Quasar-managed), NIET `v-model="props.row.selected"`.
 - **Add/edit formulieren**: via `ui.dialog()` popup, NIET inline op de pagina. Referentie: werkdag_form.py, kosten.py, facturen.py.
 - Quasar semantic kleuren (`positive`, `negative`, `warning`, `primary`) — geen hardcoded hex in pagina's
+- **Persistent tables**: Create `ui.table` once with slots/events, update via `table.rows = rows; table.update()` (preserves pagination/sort state). Referentie: kosten.py, bank.py.
+- **Blocking I/O**: Wrap WeasyPrint, PDF extraction, file copies in `asyncio.to_thread()` to prevent event loop stalling
 
 ### YAGNI
 Geen: user auth, BTW-administratie, loon/voorraad, email, real-time bank-API, auto-matching, CI/CD, multi-language
@@ -95,6 +99,7 @@ Status workflow: concept (orange) → definitief (green), with lock/reopen. DB: 
 PDF export: 4-page Yuki-style (cover+grondslagen, balans, W&V+kosten, toelichting). No IB/tax content.
 Controles tab: business checks only (kosten/omzet ratio, urencriterium, balans check, missing data).
 Nav order: Jaarafsluiting before Aangifte (close books first, then file taxes).
+**Vorderingen auto-detect**: `auto_match_betaald_datum()` matches facturen to bank transactions (€1 tolerance, chronological dedup) → `get_debiteuren_op_peildatum()` calculates year-end receivables. Validated: 2024 = €7,391 (vs Boekhouder €7,695 — gap = cross-year timing).
 
 ## Facturen pagina
 - "Importeer PDF" button: upload dialog with multi-file PDF import

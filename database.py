@@ -1,6 +1,7 @@
 """SQLite database: schema, connectie, en alle queries."""
 
 import re
+from contextlib import asynccontextmanager
 from datetime import date as _date
 
 import aiosqlite
@@ -46,7 +47,7 @@ CREATE TABLE IF NOT EXISTS werkdagen (
     km REAL DEFAULT 0 CHECK (km >= 0),
     tarief REAL NOT NULL CHECK (tarief >= 0),
     km_tarief REAL DEFAULT 0.23,
-    status TEXT DEFAULT 'ongefactureerd',
+    status TEXT DEFAULT 'ongefactureerd' CHECK (status IN ('ongefactureerd', 'gefactureerd', 'betaald')),
     factuurnummer TEXT DEFAULT '',
     opmerking TEXT DEFAULT '',
     urennorm INTEGER DEFAULT 1 CHECK (urennorm IN (0, 1))
@@ -171,6 +172,16 @@ async def get_db(db_path: Path = DB_PATH) -> aiosqlite.Connection:
     await conn.execute("PRAGMA temp_store = MEMORY")
     conn.row_factory = aiosqlite.Row
     return conn
+
+
+@asynccontextmanager
+async def get_db_ctx(db_path: Path = DB_PATH):
+    """Async context manager for database connections."""
+    conn = await get_db(db_path)
+    try:
+        yield conn
+    finally:
+        await conn.close()
 
 
 async def init_db(db_path: Path = DB_PATH) -> None:
@@ -322,8 +333,7 @@ def _validate_datum(datum: str) -> str:
 # === Bedrijfsgegevens ===
 
 async def get_bedrijfsgegevens(db_path: Path = DB_PATH) -> Bedrijfsgegevens | None:
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute("SELECT * FROM bedrijfsgegevens WHERE id = 1")
         r = await cursor.fetchone()
         if not r:
@@ -334,13 +344,10 @@ async def get_bedrijfsgegevens(db_path: Path = DB_PATH) -> Bedrijfsgegevens | No
             postcode_plaats=r['postcode_plaats'], kvk=r['kvk'],
             iban=r['iban'], thuisplaats=r['thuisplaats'],
         )
-    finally:
-        await conn.close()
 
 
 async def upsert_bedrijfsgegevens(db_path: Path = DB_PATH, **kwargs) -> None:
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         await conn.execute(
             """INSERT OR REPLACE INTO bedrijfsgegevens
                (id, bedrijfsnaam, naam, functie, adres, postcode_plaats, kvk, iban, thuisplaats)
@@ -351,15 +358,12 @@ async def upsert_bedrijfsgegevens(db_path: Path = DB_PATH, **kwargs) -> None:
              kwargs.get('iban', ''), kwargs.get('thuisplaats', ''))
         )
         await conn.commit()
-    finally:
-        await conn.close()
 
 
 # === Klanten ===
 
 async def get_klanten(db_path: Path = DB_PATH, alleen_actief: bool = False) -> list[Klant]:
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         sql = "SELECT * FROM klanten"
         if alleen_actief:
             sql += " WHERE actief = 1"
@@ -371,13 +375,10 @@ async def get_klanten(db_path: Path = DB_PATH, alleen_actief: bool = False) -> l
             retour_km=r['retour_km'], adres=r['adres'] or '',
             kvk=r['kvk'] or '', actief=bool(r['actief'])
         ) for r in rows]
-    finally:
-        await conn.close()
 
 
 async def add_klant(db_path: Path = DB_PATH, **kwargs) -> int:
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
             "INSERT INTO klanten (naam, tarief_uur, retour_km, adres, kvk, actief) "
             "VALUES (?, ?, ?, ?, ?, ?)",
@@ -386,13 +387,10 @@ async def add_klant(db_path: Path = DB_PATH, **kwargs) -> int:
         )
         await conn.commit()
         return cursor.lastrowid
-    finally:
-        await conn.close()
 
 
 async def update_klant(db_path: Path = DB_PATH, klant_id: int = 0, **kwargs) -> None:
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         fields = []
         values = []
         for key in ('naam', 'tarief_uur', 'retour_km', 'adres', 'kvk', 'actief'):
@@ -405,13 +403,10 @@ async def update_klant(db_path: Path = DB_PATH, klant_id: int = 0, **kwargs) -> 
                 f"UPDATE klanten SET {', '.join(fields)} WHERE id = ?", values
             )
             await conn.commit()
-    finally:
-        await conn.close()
 
 
 async def delete_klant(db_path: Path = DB_PATH, klant_id: int = 0) -> None:
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         try:
             await conn.execute("DELETE FROM klanten WHERE id = ?", (klant_id,))
             await conn.commit()
@@ -422,8 +417,6 @@ async def delete_klant(db_path: Path = DB_PATH, klant_id: int = 0) -> None:
                     'gekoppeld aan deze klant.'
                 ) from exc
             raise
-    finally:
-        await conn.close()
 
 
 # === Row-to-model helpers (DRY) ===
@@ -475,8 +468,7 @@ def _row_to_uitgave(r) -> Uitgave:
 
 async def get_werkdagen(db_path: Path = DB_PATH, jaar: int = None,
                         maand: int = None, klant_id: int = None) -> list[Werkdag]:
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         sql = """SELECT w.*, k.naam as klant_naam
                  FROM werkdagen w JOIN klanten k ON w.klant_id = k.id
                  WHERE 1=1"""
@@ -494,14 +486,11 @@ async def get_werkdagen(db_path: Path = DB_PATH, jaar: int = None,
         cursor = await conn.execute(sql, params)
         rows = await cursor.fetchall()
         return [_row_to_werkdag(r) for r in rows]
-    finally:
-        await conn.close()
 
 
 async def add_werkdag(db_path: Path = DB_PATH, **kwargs) -> int:
     _validate_datum(kwargs['datum'])
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
             """INSERT INTO werkdagen
                (datum, klant_id, code, activiteit, locatie, uren, km,
@@ -518,15 +507,12 @@ async def add_werkdag(db_path: Path = DB_PATH, **kwargs) -> int:
         )
         await conn.commit()
         return cursor.lastrowid
-    finally:
-        await conn.close()
 
 
 async def update_werkdag(db_path: Path = DB_PATH, werkdag_id: int = 0, **kwargs) -> None:
     if 'datum' in kwargs:
         _validate_datum(kwargs['datum'])
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         fields = []
         values = []
         allowed = ('datum', 'klant_id', 'code', 'activiteit', 'locatie', 'uren',
@@ -542,23 +528,17 @@ async def update_werkdag(db_path: Path = DB_PATH, werkdag_id: int = 0, **kwargs)
                 f"UPDATE werkdagen SET {', '.join(fields)} WHERE id = ?", values
             )
             await conn.commit()
-    finally:
-        await conn.close()
 
 
 async def delete_werkdag(db_path: Path = DB_PATH, werkdag_id: int = 0) -> None:
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         await conn.execute("DELETE FROM werkdagen WHERE id = ?", (werkdag_id,))
         await conn.commit()
-    finally:
-        await conn.close()
 
 
 async def get_werkdagen_ongefactureerd(db_path: Path = DB_PATH,
                                         klant_id: int = None) -> list[Werkdag]:
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         sql = """SELECT w.*, k.naam as klant_naam
                  FROM werkdagen w JOIN klanten k ON w.klant_id = k.id
                  WHERE w.status = 'ongefactureerd'"""
@@ -570,15 +550,12 @@ async def get_werkdagen_ongefactureerd(db_path: Path = DB_PATH,
         cursor = await conn.execute(sql, params)
         rows = await cursor.fetchall()
         return [_row_to_werkdag(r) for r in rows]
-    finally:
-        await conn.close()
 
 
 # === Facturen ===
 
 async def get_facturen(db_path: Path = DB_PATH, jaar: int = None) -> list[Factuur]:
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         sql = """SELECT f.*, k.naam as klant_naam
                  FROM facturen f JOIN klanten k ON f.klant_id = k.id
                  WHERE 1=1"""
@@ -590,13 +567,10 @@ async def get_facturen(db_path: Path = DB_PATH, jaar: int = None) -> list[Factuu
         cursor = await conn.execute(sql, params)
         rows = await cursor.fetchall()
         return [_row_to_factuur(r) for r in rows]
-    finally:
-        await conn.close()
 
 
 async def add_factuur(db_path: Path = DB_PATH, **kwargs) -> int:
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
             """INSERT INTO facturen
                (nummer, klant_id, datum, totaal_uren, totaal_km,
@@ -610,14 +584,11 @@ async def add_factuur(db_path: Path = DB_PATH, **kwargs) -> int:
         )
         await conn.commit()
         return cursor.lastrowid
-    finally:
-        await conn.close()
 
 
 async def get_next_factuurnummer(db_path: Path = DB_PATH, jaar: int = 2026) -> str:
     """Get next sequential invoice number: YYYY-NNN format, no gaps."""
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
             "SELECT MAX(CAST(substr(nummer, 6) AS INTEGER)) FROM facturen WHERE nummer LIKE ?",
             (f"{jaar}-%",)
@@ -625,14 +596,11 @@ async def get_next_factuurnummer(db_path: Path = DB_PATH, jaar: int = 2026) -> s
         row = await cursor.fetchone()
         next_num = (row[0] or 0) + 1
         return f"{jaar}-{next_num:03d}"
-    finally:
-        await conn.close()
 
 
 async def mark_betaald(db_path: Path = DB_PATH, factuur_id: int = 0,
                        datum: str = '', betaald: bool = True) -> None:
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         await conn.execute(
             "UPDATE facturen SET betaald = ?, betaald_datum = ? WHERE id = ?",
             (1 if betaald else 0, datum, factuur_id)
@@ -649,15 +617,12 @@ async def mark_betaald(db_path: Path = DB_PATH, factuur_id: int = 0,
                 (new_status, row['nummer'])
             )
         await conn.commit()
-    finally:
-        await conn.close()
 
 
 async def update_factuur(db_path: Path = DB_PATH, factuur_id: int = 0,
                          **kwargs) -> None:
     """Update factuur fields (datum, klant_id, totaal_bedrag, type, pdf_pad)."""
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         fields = []
         values = []
         allowed = ('datum', 'klant_id', 'totaal_uren', 'totaal_km',
@@ -674,14 +639,11 @@ async def update_factuur(db_path: Path = DB_PATH, factuur_id: int = 0,
             values
         )
         await conn.commit()
-    finally:
-        await conn.close()
 
 
 async def delete_factuur(db_path: Path = DB_PATH, factuur_id: int = 0) -> None:
     """Delete a factuur: unlink werkdagen, remove PDF, delete record."""
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         # Get factuur nummer and pdf_pad
         cursor = await conn.execute(
             "SELECT nummer, pdf_pad FROM facturen WHERE id = ?", (factuur_id,)
@@ -707,15 +669,12 @@ async def delete_factuur(db_path: Path = DB_PATH, factuur_id: int = 0) -> None:
             pdf_file = Path(pdf_pad)
             if pdf_file.exists():
                 pdf_file.unlink()
-    finally:
-        await conn.close()
 
 
 async def link_werkdagen_to_factuur(db_path: Path = DB_PATH,
                                      werkdag_ids: list[int] = None,
                                      factuurnummer: str = '') -> None:
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         if werkdag_ids:
             placeholders = ','.join('?' for _ in werkdag_ids)
             await conn.execute(
@@ -725,16 +684,13 @@ async def link_werkdagen_to_factuur(db_path: Path = DB_PATH,
                 [factuurnummer] + werkdag_ids
             )
             await conn.commit()
-    finally:
-        await conn.close()
 
 
 # === Uitgaven ===
 
 async def get_uitgaven(db_path: Path = DB_PATH, jaar: int = None,
                        categorie: str = None) -> list[Uitgave]:
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         sql = "SELECT * FROM uitgaven WHERE 1=1"
         params = []
         if jaar:
@@ -747,14 +703,11 @@ async def get_uitgaven(db_path: Path = DB_PATH, jaar: int = None,
         cursor = await conn.execute(sql, params)
         rows = await cursor.fetchall()
         return [_row_to_uitgave(r) for r in rows]
-    finally:
-        await conn.close()
 
 
 async def add_uitgave(db_path: Path = DB_PATH, **kwargs) -> int:
     _validate_datum(kwargs['datum'])
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
             """INSERT INTO uitgaven
                (datum, categorie, omschrijving, bedrag, pdf_pad,
@@ -769,15 +722,12 @@ async def add_uitgave(db_path: Path = DB_PATH, **kwargs) -> int:
         )
         await conn.commit()
         return cursor.lastrowid
-    finally:
-        await conn.close()
 
 
 async def update_uitgave(db_path: Path = DB_PATH, uitgave_id: int = 0, **kwargs) -> None:
     if 'datum' in kwargs:
         _validate_datum(kwargs['datum'])
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         fields = []
         values = []
         allowed = ('datum', 'categorie', 'omschrijving', 'bedrag', 'pdf_pad',
@@ -793,13 +743,10 @@ async def update_uitgave(db_path: Path = DB_PATH, uitgave_id: int = 0, **kwargs)
                 f"UPDATE uitgaven SET {', '.join(fields)} WHERE id = ?", values
             )
             await conn.commit()
-    finally:
-        await conn.close()
 
 
 async def delete_uitgave(db_path: Path = DB_PATH, uitgave_id: int = 0) -> None:
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
             "SELECT pdf_pad FROM uitgaven WHERE id = ?", (uitgave_id,))
         row = await cursor.fetchone()
@@ -809,14 +756,11 @@ async def delete_uitgave(db_path: Path = DB_PATH, uitgave_id: int = 0) -> None:
             pdf_file = Path(row['pdf_pad'])
             if pdf_file.exists():
                 pdf_file.unlink()
-    finally:
-        await conn.close()
 
 
 async def get_uitgaven_per_categorie(db_path: Path = DB_PATH,
                                       jaar: int = None) -> list[dict]:
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         sql = "SELECT categorie, SUM(bedrag) as totaal FROM uitgaven"
         params = []
         if jaar:
@@ -826,13 +770,10 @@ async def get_uitgaven_per_categorie(db_path: Path = DB_PATH,
         cursor = await conn.execute(sql, params)
         rows = await cursor.fetchall()
         return [{'categorie': r['categorie'], 'totaal': r['totaal']} for r in rows]
-    finally:
-        await conn.close()
 
 
 async def get_investeringen(db_path: Path = DB_PATH, jaar: int = None) -> list[Uitgave]:
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         sql = "SELECT * FROM uitgaven WHERE is_investering = 1"
         params = []
         if jaar:
@@ -842,16 +783,13 @@ async def get_investeringen(db_path: Path = DB_PATH, jaar: int = None) -> list[U
         cursor = await conn.execute(sql, params)
         rows = await cursor.fetchall()
         return [_row_to_uitgave(r) for r in rows]
-    finally:
-        await conn.close()
 
 
 # === Banktransacties ===
 
 async def get_banktransacties(db_path: Path = DB_PATH,
                                jaar: int = None) -> list[Banktransactie]:
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         sql = "SELECT * FROM banktransacties WHERE 1=1"
         params = []
         if jaar:
@@ -870,8 +808,6 @@ async def get_banktransacties(db_path: Path = DB_PATH,
             koppeling_id=r['koppeling_id'],
             csv_bestand=r['csv_bestand'] or ''
         ) for r in rows]
-    finally:
-        await conn.close()
 
 
 async def add_banktransacties(db_path: Path = DB_PATH,
@@ -896,8 +832,7 @@ async def add_banktransacties(db_path: Path = DB_PATH,
 
     batch_counts = Counter(make_key(t) for t in items)
 
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         count = 0
         # For each unique key, check how many already in DB
         for key, needed in batch_counts.items():
@@ -923,14 +858,11 @@ async def add_banktransacties(db_path: Path = DB_PATH,
                 count += 1
         await conn.commit()
         return count
-    finally:
-        await conn.close()
 
 
 async def update_banktransactie(db_path: Path = DB_PATH, transactie_id: int = 0,
                                  **kwargs) -> None:
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         fields = []
         values = []
         for key in ('categorie', 'koppeling_type', 'koppeling_id'):
@@ -943,8 +875,6 @@ async def update_banktransactie(db_path: Path = DB_PATH, transactie_id: int = 0,
                 f"UPDATE banktransacties SET {', '.join(fields)} WHERE id = ?", values
             )
             await conn.commit()
-    finally:
-        await conn.close()
 
 
 async def delete_banktransacties(db_path: Path = DB_PATH,
@@ -952,8 +882,7 @@ async def delete_banktransacties(db_path: Path = DB_PATH,
     """Delete bank transactions by IDs. Returns count deleted."""
     if not transactie_ids:
         return 0
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         placeholders = ','.join('?' for _ in transactie_ids)
         cursor = await conn.execute(
             f"DELETE FROM banktransacties WHERE id IN ({placeholders})",
@@ -961,8 +890,6 @@ async def delete_banktransacties(db_path: Path = DB_PATH,
         )
         await conn.commit()
         return cursor.rowcount
-    finally:
-        await conn.close()
 
 
 # === Fiscale Parameters ===
@@ -1040,30 +967,23 @@ def _row_to_fiscale_params(r) -> FiscaleParams:
 
 
 async def get_fiscale_params(db_path: Path = DB_PATH, jaar: int = 0) -> FiscaleParams:
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute("SELECT * FROM fiscale_params WHERE jaar = ?", (jaar,))
         r = await cursor.fetchone()
         if not r:
             return None
         return _row_to_fiscale_params(r)
-    finally:
-        await conn.close()
 
 
 async def get_all_fiscale_params(db_path: Path = DB_PATH) -> list[FiscaleParams]:
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute("SELECT * FROM fiscale_params ORDER BY jaar")
         rows = await cursor.fetchall()
         return [_row_to_fiscale_params(r) for r in rows]
-    finally:
-        await conn.close()
 
 
 async def upsert_fiscale_params(db_path: Path = DB_PATH, **kwargs) -> None:
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         # Preserve IB-input, partner, box3 input, balans, and ew_naar_partner when overwriting from Instellingen
         cur = await conn.execute(
             "SELECT aov_premie, woz_waarde, hypotheekrente, "
@@ -1146,8 +1066,6 @@ async def upsert_fiscale_params(db_path: Path = DB_PATH, **kwargs) -> None:
              existing['jaarafsluiting_status'] if existing else 'concept')
         )
         await conn.commit()
-    finally:
-        await conn.close()
 
 
 async def update_ib_inputs(db_path: Path = DB_PATH, jaar: int = 0,
@@ -1157,8 +1075,7 @@ async def update_ib_inputs(db_path: Path = DB_PATH, jaar: int = 0,
                            voorlopige_aanslag_zvw: float = 0,
                            lijfrente_premie: float = 0) -> None:
     """Update only the IB-input columns for a specific year."""
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         await conn.execute(
             """UPDATE fiscale_params
                SET aov_premie = ?, woz_waarde = ?,
@@ -1169,8 +1086,6 @@ async def update_ib_inputs(db_path: Path = DB_PATH, jaar: int = 0,
              voorlopige_aanslag_betaald, voorlopige_aanslag_zvw,
              lijfrente_premie, jaar))
         await conn.commit()
-    finally:
-        await conn.close()
 
 
 async def update_za_sa_toggles(db_path: Path = DB_PATH, jaar: int = 0,
@@ -1180,15 +1095,12 @@ async def update_za_sa_toggles(db_path: Path = DB_PATH, jaar: int = 0,
 
     Returns True if a row was updated, False if no fiscale_params row exists.
     """
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
             "UPDATE fiscale_params SET za_actief = ?, sa_actief = ? WHERE jaar = ?",
             (int(za_actief), int(sa_actief), jaar))
         await conn.commit()
         return cursor.rowcount > 0
-    finally:
-        await conn.close()
 
 
 async def update_ew_naar_partner(db_path: Path = DB_PATH, jaar: int = 0,
@@ -1197,15 +1109,12 @@ async def update_ew_naar_partner(db_path: Path = DB_PATH, jaar: int = 0,
 
     Returns True if a row was updated, False if no fiscale_params row exists.
     """
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
             "UPDATE fiscale_params SET ew_naar_partner = ? WHERE jaar = ?",
             (1 if value else 0, jaar))
         await conn.commit()
         return cursor.rowcount > 0
-    finally:
-        await conn.close()
 
 
 async def update_box3_inputs(db_path: Path = DB_PATH, jaar: int = 0,
@@ -1216,8 +1125,7 @@ async def update_box3_inputs(db_path: Path = DB_PATH, jaar: int = 0,
 
     Returns True if a row was updated, False if no fiscale_params row exists.
     """
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
             """UPDATE fiscale_params
                SET box3_bank_saldo = ?,
@@ -1227,16 +1135,13 @@ async def update_box3_inputs(db_path: Path = DB_PATH, jaar: int = 0,
             (bank_saldo, overige_bezittingen, schulden, jaar))
         await conn.commit()
         return cursor.rowcount > 0
-    finally:
-        await conn.close()
 
 
 # === Aggregation queries (voor dashboard + jaarafsluiting) ===
 
 async def get_omzet_per_maand(db_path: Path = DB_PATH, jaar: int = 2026) -> list[float]:
     """Returns list of 12 monthly revenue totals."""
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
             """SELECT substr(datum, 6, 2) as maand, SUM(totaal_bedrag) as totaal
                FROM facturen
@@ -1247,13 +1152,10 @@ async def get_omzet_per_maand(db_path: Path = DB_PATH, jaar: int = 2026) -> list
         rows = await cursor.fetchall()
         maand_map = {r['maand']: r['totaal'] for r in rows}
         return [maand_map.get(f"{m:02d}", 0) for m in range(1, 13)]
-    finally:
-        await conn.close()
 
 
 async def get_kpis(db_path: Path = DB_PATH, jaar: int = 2026) -> dict:
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         jaar_str = str(jaar)
         # Omzet
         cur = await conn.execute(
@@ -1293,14 +1195,11 @@ async def get_kpis(db_path: Path = DB_PATH, jaar: int = 2026) -> dict:
             'uren': uren,
             'openstaand': openstaand,
         }
-    finally:
-        await conn.close()
 
 
 async def get_omzet_per_klant(db_path: Path = DB_PATH, jaar: int = 2026) -> list[dict]:
     """Revenue breakdown per customer for a given year."""
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
             """SELECT k.naam, SUM(f.totaal_uren) as uren,
                       SUM(f.totaal_km) as km, SUM(f.totaal_bedrag) as bedrag
@@ -1312,15 +1211,12 @@ async def get_omzet_per_klant(db_path: Path = DB_PATH, jaar: int = 2026) -> list
         rows = await cursor.fetchall()
         return [{'naam': r['naam'], 'uren': r['uren'] or 0,
                  'km': r['km'] or 0, 'bedrag': r['bedrag'] or 0} for r in rows]
-    finally:
-        await conn.close()
 
 
 async def get_recente_facturen(db_path: Path = DB_PATH,
                                 limit: int = 5) -> list[Factuur]:
     """Get most recent invoices across all years."""
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
             """SELECT f.*, k.naam as klant_naam
                FROM facturen f JOIN klanten k ON f.klant_id = k.id
@@ -1329,15 +1225,12 @@ async def get_recente_facturen(db_path: Path = DB_PATH,
         )
         rows = await cursor.fetchall()
         return [_row_to_factuur(r) for r in rows]
-    finally:
-        await conn.close()
 
 
 async def get_openstaande_facturen(db_path: Path = DB_PATH,
                                     jaar: int = None) -> list[Factuur]:
     """Get unpaid invoices."""
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         sql = """SELECT f.*, k.naam as klant_naam
                  FROM facturen f JOIN klanten k ON f.klant_id = k.id
                  WHERE f.betaald = 0 AND f.type = 'factuur'"""
@@ -1349,54 +1242,42 @@ async def get_openstaande_facturen(db_path: Path = DB_PATH,
         cursor = await conn.execute(sql, params)
         rows = await cursor.fetchall()
         return [_row_to_factuur(r) for r in rows]
-    finally:
-        await conn.close()
 
 
 async def get_factuur_count(db_path: Path = DB_PATH, jaar: int = 2026) -> int:
     """Count invoices for a year."""
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cur = await conn.execute(
             "SELECT COUNT(*) FROM facturen WHERE substr(datum, 1, 4) = ? AND type = 'factuur'",
             (str(jaar),)
         )
         return (await cur.fetchone())[0]
-    finally:
-        await conn.close()
 
 
 async def get_uren_totaal(db_path: Path = DB_PATH, jaar: int = 2026,
                            urennorm_only: bool = True) -> float:
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         sql = "SELECT COALESCE(SUM(uren), 0) FROM werkdagen WHERE substr(datum, 1, 4) = ?"
         params = [str(jaar)]
         if urennorm_only:
             sql += " AND urennorm = 1"
         cur = await conn.execute(sql, params)
         return (await cur.fetchone())[0]
-    finally:
-        await conn.close()
 
 
 async def get_omzet_totaal(db_path: Path = DB_PATH, jaar: int = 2026) -> float:
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cur = await conn.execute(
             "SELECT COALESCE(SUM(totaal_bedrag), 0) FROM facturen "
             "WHERE substr(datum, 1, 4) = ?",
             (str(jaar),)
         )
         return (await cur.fetchone())[0]
-    finally:
-        await conn.close()
 
 
 async def get_data_counts(db_path: Path = DB_PATH, jaar: int = 2026) -> dict:
     """Get counts of facturen, uitgaven, and werkdagen for a year."""
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cur = await conn.execute(
             "SELECT COUNT(*) FROM facturen "
             "WHERE substr(datum, 1, 4) = ?",
@@ -1415,28 +1296,22 @@ async def get_data_counts(db_path: Path = DB_PATH, jaar: int = 2026) -> dict:
             'n_uitgaven': n_uitgaven,
             'n_werkdagen': n_werkdagen,
         }
-    finally:
-        await conn.close()
 
 
 async def get_representatie_totaal(db_path: Path = DB_PATH, jaar: int = 2026) -> float:
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cur = await conn.execute(
             "SELECT COALESCE(SUM(bedrag), 0) FROM uitgaven "
             "WHERE substr(datum, 1, 4) = ? AND categorie = 'Representatie'",
             (str(jaar),)
         )
         return (await cur.fetchone())[0]
-    finally:
-        await conn.close()
 
 
 async def get_werkdagen_ongefactureerd_summary(
         db_path: Path = DB_PATH, jaar: int = 2026) -> dict:
     """Get count and estimated amount of unfactured werkdagen for a year."""
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cur = await conn.execute(
             """SELECT COUNT(*) as aantal,
                       COALESCE(SUM(uren * tarief + km * km_tarief), 0) as bedrag
@@ -1446,14 +1321,11 @@ async def get_werkdagen_ongefactureerd_summary(
             (str(jaar),))
         r = await cur.fetchone()
         return {'aantal': r['aantal'], 'bedrag': r['bedrag']}
-    finally:
-        await conn.close()
 
 
 async def get_km_totaal(db_path: Path = DB_PATH, jaar: int = 2026) -> dict:
     """Get total km and km-vergoeding for a year."""
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cur = await conn.execute(
             """SELECT COALESCE(SUM(km), 0) as km,
                       COALESCE(SUM(km * km_tarief), 0) as vergoeding
@@ -1461,15 +1333,12 @@ async def get_km_totaal(db_path: Path = DB_PATH, jaar: int = 2026) -> dict:
             (str(jaar),))
         r = await cur.fetchone()
         return {'km': r['km'], 'vergoeding': r['vergoeding']}
-    finally:
-        await conn.close()
 
 
 async def get_investeringen_voor_afschrijving(db_path: Path = DB_PATH,
                                                tot_jaar: int = 2026) -> list[Uitgave]:
     """Get all investments up to and including given year."""
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
             "SELECT * FROM uitgaven WHERE is_investering = 1 "
             "AND CAST(substr(datum, 1, 4) AS INTEGER) <= ? ORDER BY datum",
@@ -1477,8 +1346,6 @@ async def get_investeringen_voor_afschrijving(db_path: Path = DB_PATH,
         )
         rows = await cursor.fetchall()
         return [_row_to_uitgave(r) for r in rows]
-    finally:
-        await conn.close()
 
 
 # === Aangifte documenten ===
@@ -1486,8 +1353,7 @@ async def get_investeringen_voor_afschrijving(db_path: Path = DB_PATH,
 async def get_aangifte_documenten(db_path: Path = DB_PATH,
                                   jaar: int = 0) -> list[AangifteDocument]:
     """Get all aangifte documents for a year."""
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
             "SELECT * FROM aangifte_documenten WHERE jaar = ? ORDER BY categorie, documenttype",
             (jaar,))
@@ -1498,8 +1364,6 @@ async def get_aangifte_documenten(db_path: Path = DB_PATH,
             bestandspad=r['bestandspad'], upload_datum=r['upload_datum'],
             notitie=r['notitie'] or ''
         ) for r in rows]
-    finally:
-        await conn.close()
 
 
 async def add_aangifte_document(db_path: Path = DB_PATH, jaar: int = 0,
@@ -1508,8 +1372,7 @@ async def add_aangifte_document(db_path: Path = DB_PATH, jaar: int = 0,
                                  upload_datum: str = '',
                                  notitie: str = '') -> int:
     """Add a new aangifte document record. Returns id."""
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
             """INSERT INTO aangifte_documenten
                (jaar, categorie, documenttype, bestandsnaam, bestandspad, upload_datum, notitie)
@@ -1518,48 +1381,154 @@ async def add_aangifte_document(db_path: Path = DB_PATH, jaar: int = 0,
              upload_datum, notitie))
         await conn.commit()
         return cursor.lastrowid
-    finally:
-        await conn.close()
 
 
 async def delete_aangifte_document(db_path: Path = DB_PATH,
                                     doc_id: int = 0) -> None:
     """Delete an aangifte document record."""
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         await conn.execute(
             "DELETE FROM aangifte_documenten WHERE id = ?", (doc_id,))
         await conn.commit()
-    finally:
-        await conn.close()
 
 
 async def get_openstaande_debiteuren(db_path: Path = DB_PATH, jaar: int = 0) -> float:
-    """Sum of unpaid invoices for the given year."""
-    conn = await get_db(db_path)
-    try:
+    """Sum of unpaid invoices for the given year (current snapshot, for dashboard)."""
+    async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
             "SELECT COALESCE(SUM(totaal_bedrag), 0) FROM facturen "
             "WHERE betaald = 0 AND substr(datum, 1, 4) = ?",
             (str(jaar),))
         row = await cursor.fetchone()
         return float(row[0])
-    finally:
-        await conn.close()
+
+
+async def get_debiteuren_op_peildatum(db_path: Path = DB_PATH,
+                                       peildatum: str = '') -> float:
+    """Sum of receivables outstanding as of peildatum (typically 31-12-{year}).
+
+    An invoice is a receivable at peildatum if:
+    - It was issued on or before peildatum, AND
+    - It's still unpaid (betaald=0), OR
+    - It was paid AFTER peildatum (betaald=1 AND betaald_datum > peildatum)
+
+    Invoices with betaald=1 but no betaald_datum are assumed paid within their
+    invoice period (conservative — not counted as receivables).
+    """
+    async with get_db_ctx(db_path) as conn:
+        cursor = await conn.execute(
+            """SELECT COALESCE(SUM(totaal_bedrag), 0) FROM facturen
+               WHERE datum <= ?
+                 AND (
+                     betaald = 0
+                     OR (betaald = 1 AND betaald_datum != '' AND betaald_datum > ?)
+                 )""",
+            (peildatum, peildatum))
+        row = await cursor.fetchone()
+        return float(row[0])
+
+
+async def auto_match_betaald_datum(db_path: Path = DB_PATH) -> int:
+    """Auto-populate betaald_datum for paid facturen by matching bank transactions.
+
+    Two-pass matching:
+    1. Match by invoice number in bank omschrijving + amount within 5%
+    2. Fall back to amount matching (within €1 tolerance, chronological dedup)
+
+    Bank payment may arrive up to 14 days before factuur date (factuur date =
+    last werkdag, not issue date — payment can precede it).
+
+    Returns count of newly matched facturen.
+    """
+    async with get_db_ctx(db_path) as conn:
+        # Get unmatched paid facturen, ordered by date
+        cur = await conn.execute(
+            """SELECT id, nummer, datum, totaal_bedrag FROM facturen
+               WHERE betaald = 1 AND (betaald_datum = '' OR betaald_datum IS NULL)
+               ORDER BY datum""")
+        unmatched = await cur.fetchall()
+        if not unmatched:
+            return 0
+
+        # Get all positive bank transactions
+        cur = await conn.execute(
+            """SELECT id, datum, bedrag, omschrijving FROM banktransacties
+               WHERE bedrag > 0 ORDER BY datum""")
+        bank_txns = await cur.fetchall()
+
+        used_bank_ids = set()
+        matched_factuur_ids = set()
+        count = 0
+
+        def date_ok(bank_datum, factuur_datum):
+            """Bank payment within 14 days before to any time after factuur date."""
+            # Allow bank_datum >= factuur_datum - 14 days
+            # Simple string comparison: factuur_datum minus ~14 days
+            y, m, d = int(factuur_datum[:4]), int(factuur_datum[5:7]), int(factuur_datum[8:10])
+            d -= 14
+            if d < 1:
+                m -= 1
+                d += 30  # approximate, good enough
+            if m < 1:
+                m = 12
+                y -= 1
+            earliest = f'{y:04d}-{m:02d}-{max(1, d):02d}'
+            return bank_datum >= earliest
+
+        # Pass 1: Match by invoice number in bank omschrijving + amount sanity
+        for f in unmatched:
+            nummer = f['nummer'].lower()
+            for b in bank_txns:
+                if b['id'] in used_bank_ids:
+                    continue
+                if not date_ok(b['datum'], f['datum']):
+                    continue
+                omschr = (b['omschrijving'] or '').lower()
+                if nummer in omschr:
+                    # Verify amount is in the right ballpark (within 5%)
+                    if f['totaal_bedrag'] > 0:
+                        pct_diff = abs(b['bedrag'] - f['totaal_bedrag']) / f['totaal_bedrag']
+                        if pct_diff > 0.05:
+                            continue  # Amount too different, skip
+                    used_bank_ids.add(b['id'])
+                    matched_factuur_ids.add(f['id'])
+                    await conn.execute(
+                        "UPDATE facturen SET betaald_datum = ? WHERE id = ?",
+                        (b['datum'], f['id']))
+                    count += 1
+                    break
+
+        # Pass 2: Amount matching for remaining unmatched
+        for f in unmatched:
+            if f['id'] in matched_factuur_ids:
+                continue
+            for b in bank_txns:
+                if b['id'] in used_bank_ids:
+                    continue
+                if not date_ok(b['datum'], f['datum']):
+                    continue
+                if abs(b['bedrag'] - f['totaal_bedrag']) < 1.00:
+                    used_bank_ids.add(b['id'])
+                    await conn.execute(
+                        "UPDATE facturen SET betaald_datum = ? WHERE id = ?",
+                        (b['datum'], f['id']))
+                    count += 1
+                    break
+
+        if count > 0:
+            await conn.commit()
+        return count
 
 
 async def get_nog_te_factureren(db_path: Path = DB_PATH, jaar: int = 0) -> float:
     """Sum of (uren * tarief + km * km_tarief) for unfactured werkdagen in the given year."""
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
             "SELECT COALESCE(SUM(uren * tarief + km * km_tarief), 0.0) FROM werkdagen "
             "WHERE status = 'ongefactureerd' AND substr(datum, 1, 4) = ?",
             (str(jaar),))
         row = await cursor.fetchone()
         return float(row[0])
-    finally:
-        await conn.close()
 
 
 async def update_balans_inputs(db_path: Path = DB_PATH, jaar: int = 0,
@@ -1568,8 +1537,7 @@ async def update_balans_inputs(db_path: Path = DB_PATH, jaar: int = 0,
                                 balans_overige_vorderingen: float = 0,
                                 balans_overige_schulden: float = 0) -> bool:
     """Update balance sheet manual input fields for a specific year."""
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
             """UPDATE fiscale_params
                SET balans_bank_saldo = ?, balans_crediteuren = ?,
@@ -1579,22 +1547,17 @@ async def update_balans_inputs(db_path: Path = DB_PATH, jaar: int = 0,
              balans_overige_vorderingen, balans_overige_schulden, jaar))
         await conn.commit()
         return cursor.rowcount > 0
-    finally:
-        await conn.close()
 
 
 async def update_jaarafsluiting_status(db_path: Path = DB_PATH, jaar: int = 0,
                                         status: str = 'concept') -> bool:
     """Update jaarafsluiting status for a specific year ('concept' or 'definitief')."""
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
             "UPDATE fiscale_params SET jaarafsluiting_status = ? WHERE jaar = ?",
             (status, jaar))
         await conn.commit()
         return cursor.rowcount > 0
-    finally:
-        await conn.close()
 
 
 async def update_partner_inkomen(db_path: Path = DB_PATH, jaar: int = 0,
@@ -1604,8 +1567,7 @@ async def update_partner_inkomen(db_path: Path = DB_PATH, jaar: int = 0,
 
     Returns True if a row was updated, False if no fiscale_params row exists.
     """
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
             """UPDATE fiscale_params
                SET partner_bruto_loon = ?, partner_loonheffing = ?
@@ -1613,8 +1575,6 @@ async def update_partner_inkomen(db_path: Path = DB_PATH, jaar: int = 0,
             (partner_bruto_loon, partner_loonheffing, jaar))
         await conn.commit()
         return cursor.rowcount > 0
-    finally:
-        await conn.close()
 
 
 # --- Klant Locaties ---
@@ -1622,8 +1582,7 @@ async def update_partner_inkomen(db_path: Path = DB_PATH, jaar: int = 0,
 
 async def get_klant_locaties(db_path, klant_id):
     """Get all locations for a klant, ordered by name."""
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cur = await conn.execute(
             "SELECT id, klant_id, naam, retour_km FROM klant_locaties "
             "WHERE klant_id = ? ORDER BY naam",
@@ -1632,42 +1591,31 @@ async def get_klant_locaties(db_path, klant_id):
         return [KlantLocatie(id=r['id'], klant_id=r['klant_id'],
                              naam=r['naam'], retour_km=r['retour_km'])
                 for r in rows]
-    finally:
-        await conn.close()
 
 
 async def add_klant_locatie(db_path, klant_id, naam, retour_km):
     """Add a location to a klant. Returns the new location id."""
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cur = await conn.execute(
             "INSERT INTO klant_locaties (klant_id, naam, retour_km) "
             "VALUES (?, ?, ?)",
             (klant_id, naam, retour_km))
         await conn.commit()
         return cur.lastrowid
-    finally:
-        await conn.close()
 
 
 async def update_klant_locatie(db_path, locatie_id, naam, retour_km):
     """Update a location's name and/or km."""
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         await conn.execute(
             "UPDATE klant_locaties SET naam = ?, retour_km = ? WHERE id = ?",
             (naam, retour_km, locatie_id))
         await conn.commit()
-    finally:
-        await conn.close()
 
 
 async def delete_klant_locatie(db_path, locatie_id):
     """Delete a location by id."""
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         await conn.execute(
             "DELETE FROM klant_locaties WHERE id = ?", (locatie_id,))
         await conn.commit()
-    finally:
-        await conn.close()

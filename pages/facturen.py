@@ -1,5 +1,6 @@
 """Facturen pagina — factuur aanmaken, overzicht en betaalstatus."""
 
+import asyncio
 import subprocess
 import tempfile
 from datetime import date
@@ -33,6 +34,7 @@ async def facturen_page():
     current_year = date.today().year
     table_ref = {'ref': None}
     bulk_bar_ref = {'ref': None}
+    filter_klant = {'value': None}  # None = alle klanten
 
     with ui.column().classes('w-full p-6 max-w-7xl mx-auto gap-6'):
         # Header + filter
@@ -45,8 +47,23 @@ async def facturen_page():
                 value=current_year, label='Jaar',
             ).classes('w-32')
 
+            # Klant filter
+            klanten = await get_klanten(DB_PATH)
+            klant_opties = {None: 'Alle klanten'}
+            klant_opties.update({k.naam: k.naam for k in klanten})
+
+            async def on_klant_filter(e):
+                filter_klant['value'] = e.value
+                await refresh_table()
+
+            ui.select(klant_opties, value=None, label='Klant',
+                      on_change=on_klant_filter).props('clearable').classes('w-48')
+
             async def export_csv():
                 facturen = await get_facturen(DB_PATH, jaar=jaar_select.value)
+                if filter_klant['value']:
+                    facturen = [f for f in facturen
+                                if f.klant_naam == filter_klant['value']]
                 headers = ['Nummer', 'Datum', 'Klant', 'Uren', 'Km',
                            'Bedrag', 'Status']
                 rows = [[f.nummer, f.datum, f.klant_naam, f.totaal_uren,
@@ -201,6 +218,9 @@ async def facturen_page():
         async def refresh_table():
             jaar = jaar_select.value
             facturen = await get_facturen(DB_PATH, jaar=jaar)
+            if filter_klant['value']:
+                facturen = [f for f in facturen
+                            if f.klant_naam == filter_klant['value']]
             rows = []
             totaal = 0
             openstaand = 0
@@ -550,7 +570,7 @@ async def facturen_page():
                         tmp_path = tmp.name
 
                     try:
-                        text = extract_pdf_text(tmp_path)
+                        text = await asyncio.to_thread(extract_pdf_text, tmp_path)
                         inv_type = detect_invoice_type(text)
 
                         if inv_type == 'dagpraktijk':
@@ -1089,7 +1109,8 @@ async def facturen_page():
 
                         # Generate PDF
                         try:
-                            pdf_path = generate_invoice(
+                            pdf_path = await asyncio.to_thread(
+                                generate_invoice,
                                 nummer, klant_dict, wd_dicts, PDF_DIR,
                                 factuur_datum=factuur_datum,
                                 bedrijfsgegevens=bg_dict,

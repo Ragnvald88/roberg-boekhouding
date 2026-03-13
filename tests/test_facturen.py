@@ -5,7 +5,7 @@ from pathlib import Path
 from database import (
     init_db, add_klant, add_werkdag, add_factuur, update_factuur,
     get_facturen, get_next_factuurnummer, mark_betaald,
-    link_werkdagen_to_factuur, get_werkdagen,
+    link_werkdagen_to_factuur, get_werkdagen, delete_factuur,
 )
 from import_.seed_data import seed_all
 from components.invoice_generator import generate_invoice, format_euro, format_datum
@@ -280,3 +280,53 @@ async def test_link_werkdagen_only_ongefactureerd(seeded_db):
     werkdagen = await get_werkdagen(seeded_db, jaar=2026)
     w = next(w for w in werkdagen if w.id == wid)
     assert w.factuurnummer == '2026-020'  # should NOT have changed
+
+
+# ============================================================
+# delete_factuur tests
+# ============================================================
+
+@pytest.mark.asyncio
+async def test_delete_factuur_unlinks_werkdagen(seeded_db):
+    """Deleting a factuur reverts linked werkdagen to ongefactureerd."""
+    from database import get_klanten
+    klanten = await get_klanten(seeded_db)
+    kid = klanten[0].id
+
+    wid1 = await add_werkdag(seeded_db, datum="2026-04-01", klant_id=kid,
+                              uren=8, km=52, tarief=77.50)
+    wid2 = await add_werkdag(seeded_db, datum="2026-04-02", klant_id=kid,
+                              uren=9, km=52, tarief=77.50)
+
+    await add_factuur(seeded_db, nummer="2026-030", klant_id=kid,
+                      datum="2026-04-15", totaal_bedrag=1400)
+    await link_werkdagen_to_factuur(seeded_db, werkdag_ids=[wid1, wid2],
+                                     factuurnummer="2026-030")
+
+    # Verify werkdagen are linked
+    werkdagen = await get_werkdagen(seeded_db, jaar=2026)
+    linked = [w for w in werkdagen if w.factuurnummer == '2026-030']
+    assert len(linked) == 2
+    assert all(w.status == 'gefactureerd' for w in linked)
+
+    # Delete factuur
+    facturen = await get_facturen(seeded_db, jaar=2026)
+    fid = next(f.id for f in facturen if f.nummer == '2026-030')
+    await delete_factuur(seeded_db, factuur_id=fid)
+
+    # Factuur should be gone
+    facturen = await get_facturen(seeded_db, jaar=2026)
+    assert not any(f.nummer == '2026-030' for f in facturen)
+
+    # Werkdagen should be ongefactureerd with empty factuurnummer
+    werkdagen = await get_werkdagen(seeded_db, jaar=2026)
+    for wid in [wid1, wid2]:
+        w = next(w for w in werkdagen if w.id == wid)
+        assert w.status == 'ongefactureerd'
+        assert w.factuurnummer == ''
+
+
+@pytest.mark.asyncio
+async def test_delete_factuur_nonexistent_no_error(db):
+    """Deleting a nonexistent factuur does not raise."""
+    await delete_factuur(db, factuur_id=99999)  # should not raise
