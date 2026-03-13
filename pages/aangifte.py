@@ -550,7 +550,7 @@ async def aangifte_page():
             for _inp in [woz_input, hyp_input, aov_input, lijfrente_input,
                          va_ib_input, va_zvw_input]:
                 _inp.on('blur', save_prive)
-            ew_partner_check.on_change(save_prive)
+            ew_partner_check.on('change', save_prive)
 
     def _render_ew_results(container, f, woz, hypotheekrente, ew_naar_partner, params_dict):
         """Render eigen woning computed results."""
