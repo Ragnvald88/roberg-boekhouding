@@ -7,7 +7,7 @@ from nicegui import ui
 
 from components.charts import cost_donut_chart, revenue_bar_chart
 from components.kpi_card import kpi_card
-from components.layout import create_layout
+from components.layout import create_layout, page_title
 from components.utils import format_euro, format_datum
 from database import (
     get_kpis, get_omzet_per_maand, get_uitgaven_per_categorie,
@@ -36,8 +36,7 @@ async def dashboard_page():
 
         # Year selector
         with ui.row().classes('w-full items-center gap-4'):
-            ui.label('Overzicht').classes('text-h5') \
-                .style('color: #0F172A; font-weight: 700')
+            page_title('Overzicht')
             ui.space()
             jaar_select = ui.select(
                 jaren, value=huidig_jaar, label='Jaar',
@@ -66,11 +65,26 @@ async def dashboard_page():
             return (current - previous) / previous * 100
         return None
 
-    async def _compute_ib_estimate(jaar: int) -> float | None:
-        """Compute estimated IB resultaat using shared fiscal data fetcher."""
+    async def _compute_ib_estimate(jaar: int) -> dict | None:
+        """Compute estimated IB resultaat. Prorates VA for current year by month."""
         data = await fetch_fiscal_data(DB_PATH, jaar)
         if data is None:
             return None
+
+        annual_va_ib = data['voorlopige_aanslag']
+        annual_va_zvw = data['voorlopige_aanslag_zvw']
+
+        # Prorate VA for current year based on current month
+        huidig_jaar = date.today().year
+        if jaar == huidig_jaar:
+            month = date.today().month
+            va_ib = round(annual_va_ib * month / 12, 2)
+            va_zvw = round(annual_va_zvw * month / 12, 2)
+        else:
+            month = 12
+            va_ib = annual_va_ib
+            va_zvw = annual_va_zvw
+
         f = bereken_volledig(
             omzet=data['omzet'], kosten=data['kosten_excl_inv'],
             afschrijvingen=data['totaal_afschrijvingen'],
@@ -80,11 +94,19 @@ async def dashboard_page():
             aov=data['aov'], lijfrente=data.get('lijfrente', 0),
             woz=data['woz'],
             hypotheekrente=data['hypotheekrente'],
-            voorlopige_aanslag=data['voorlopige_aanslag'],
-            voorlopige_aanslag_zvw=data['voorlopige_aanslag_zvw'],
+            voorlopige_aanslag=va_ib,
+            voorlopige_aanslag_zvw=va_zvw,
             ew_naar_partner=data['ew_naar_partner'],
         )
-        return f.resultaat
+        return {
+            'resultaat': f.resultaat,
+            'netto_ib': f.netto_ib,
+            'zvw': f.zvw,
+            'va_ib_betaald': va_ib,
+            'va_zvw_betaald': va_zvw,
+            'prorated': jaar == huidig_jaar,
+            'month': month,
+        }
 
     async def refresh_dashboard():
         jaar = jaar_select.value
@@ -164,24 +186,51 @@ async def dashboard_page():
                          'receipt', '#0F766E',
                          on_click=lambda: ui.navigate.to('/facturen'))
 
-            # Row 3: IB + Km
+            # Row 3: Belasting prognose + Km
             with ui.row().classes('w-full gap-4 flex-wrap'):
                 if ib_resultaat is not None:
-                    if ib_resultaat < 0:
-                        ib_label = f'Terug: {format_euro(abs(ib_resultaat))}'
+                    ib_data = ib_resultaat  # dict from _compute_ib_estimate
+                    res = ib_data['resultaat']
+                    if res < 0:
+                        ib_label = f'Terug: {format_euro(abs(res))}'
                         ib_color = '#059669'
-                    elif ib_resultaat > 0:
-                        ib_label = f'Bij: {format_euro(ib_resultaat)}'
+                    elif res > 0:
+                        ib_label = f'Bij: {format_euro(res)}'
                         ib_color = '#DC2626'
                     else:
                         ib_label = format_euro(0)
                         ib_color = '#0F766E'
-                    kpi_card('Geschatte IB', ib_label,
+
+                    va_totaal = ib_data['va_ib_betaald'] + ib_data['va_zvw_betaald']
+
+                    def ib_extra(d=ib_data, vt=va_totaal):
+                        _MND = {1: 'jan', 2: 'feb', 3: 'mrt', 4: 'apr',
+                                5: 'mei', 6: 'jun', 7: 'jul', 8: 'aug',
+                                9: 'sep', 10: 'okt', 11: 'nov', 12: 'dec'}
+                        with ui.column().classes('gap-0 q-mt-xs'):
+                            belasting = d['netto_ib'] + d['zvw']
+                            ui.label(
+                                f'Berekend: {format_euro(belasting)}'
+                            ).classes('text-caption text-grey-6')
+                            if vt > 0:
+                                if d['prorated']:
+                                    ui.label(
+                                        f'VA t/m {_MND[d["month"]]}: '
+                                        f'{format_euro(-vt)}'
+                                    ).classes('text-caption text-grey-6')
+                                else:
+                                    ui.label(
+                                        f'VA betaald: {format_euro(-vt)}'
+                                    ).classes('text-caption text-grey-6')
+
+                    kpi_card('Belasting prognose', ib_label,
                              'calculate', ib_color,
+                             extra=ib_extra,
                              on_click=lambda: ui.navigate.to('/aangifte'))
 
                 if km_data['km'] > 0:
-                    km_label = f"{km_data['km']:.0f} km ({format_euro(km_data['vergoeding'])})"
+                    km_label = (f"{km_data['km']:.0f} km "
+                                f"({format_euro(km_data['vergoeding'])})")
                     kpi_card('Km-vergoeding', km_label,
                              'directions_car', '#0F766E')
 
@@ -191,8 +240,8 @@ async def dashboard_page():
         with chart_row:
             # Alerts first (actionable items above charts)
             if ongefact['aantal'] > 0:
-                with ui.card().classes('w-full q-pa-md') \
-                        .style('background-color: #FFF7ED; border-color: #FDBA74'):
+                with ui.card().classes('w-full q-pa-md bg-orange-1') \
+                        .style('border-color: var(--q-warning)'):
                     with ui.row().classes('items-center justify-between w-full'):
                         with ui.row().classes('items-center gap-2'):
                             ui.icon('assignment_late', size='1.2rem') \
@@ -207,8 +256,8 @@ async def dashboard_page():
 
             # Openstaande facturen detail list
             if openstaande:
-                with ui.card().classes('w-full q-pa-md') \
-                        .style('background-color: #FFFBEB; border-color: #FCD34D'):
+                with ui.card().classes('w-full q-pa-md bg-yellow-1') \
+                        .style('border-color: var(--q-warning)'):
                     with ui.row().classes('items-center gap-2 q-mb-sm'):
                         ui.icon('warning_amber', size='1.2rem') \
                             .style('color: #D97706')

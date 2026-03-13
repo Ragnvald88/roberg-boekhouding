@@ -1023,6 +1023,51 @@ class TestIBPVVSplit:
         # resultaat_ib = netto_ib - 28544
         assert abs(result.resultaat_ib - (result.netto_ib - 28544)) < 1
 
+    def test_prorated_va_half_year(self):
+        """Prorated VA (6/12) gives higher result than full-year VA."""
+        params = FISCALE_PARAMS[2024]
+        annual_va_ib = 30303
+        annual_va_zvw = 2667
+        month = 6
+        va_ib_prorated = annual_va_ib * month / 12   # 15151.50
+        va_zvw_prorated = annual_va_zvw * month / 12  # 1333.50
+
+        f = bereken_volledig(
+            omzet=95145, kosten=0, afschrijvingen=0,
+            representatie=550, investeringen_totaal=2919,
+            uren=1400, params=params, aov=2998,
+            woz=655000, hypotheekrente=6951,
+            voorlopige_aanslag=va_ib_prorated,
+            voorlopige_aanslag_zvw=va_zvw_prorated,
+            ew_naar_partner=True,
+        )
+        # netto_ib unchanged by VA value (~27166)
+        assert abs(f.netto_ib - 27166) < 10
+        # resultaat_ib = netto_ib - prorated VA (higher than full-year)
+        assert abs(f.resultaat_ib - (f.netto_ib - va_ib_prorated)) < 1
+        assert abs(f.resultaat_zvw - (f.zvw - va_zvw_prorated)) < 1
+        # Less VA subtracted → result higher than full-year (-1994)
+        assert f.resultaat > -1994
+
+    def test_prorated_va_january(self):
+        """In January, only 1/12 of VA is paid — large positive result."""
+        params = FISCALE_PARAMS[2024]
+        va_ib = 30303 * 1 / 12   # 2525.25
+        va_zvw = 2667 * 1 / 12   # 222.25
+
+        f = bereken_volledig(
+            omzet=95145, kosten=0, afschrijvingen=0,
+            representatie=550, investeringen_totaal=2919,
+            uren=1400, params=params, aov=2998,
+            woz=655000, hypotheekrente=6951,
+            voorlopige_aanslag=va_ib,
+            voorlopige_aanslag_zvw=va_zvw,
+            ew_naar_partner=True,
+        )
+        # Almost no VA paid → large positive result
+        assert f.resultaat_ib > 20000
+        assert f.resultaat_zvw > 3000
+
 
 class TestBoekhouder2024Complete:
     """Complete validation against Boekhouder Aangifte IB 2024.
@@ -1217,6 +1262,79 @@ class TestAfschrijvingValidation:
         """restwaarde_pct > 100 should be clamped to 100 (0 depreciation)."""
         result = bereken_afschrijving(1000, 150, 5, 6, 2024, 2024)
         assert result['afschrijving'] == 0
+
+
+class TestAfschrijvingOverrides:
+    """Test manual override of per-year depreciation amounts."""
+
+    def test_override_replaces_auto_value(self):
+        """Override for a specific year should replace the auto-calculated value."""
+        # Camera: 2713.70, 10% rest, 5yr, month 12, year 2023
+        # Auto 2024 = full year = (2713.70 - 271.37) / 5 = 488.47
+        auto = bereken_afschrijving(2713.70, 10, 5, 12, 2023, 2024)
+        assert auto['afschrijving'] == 488.47
+        assert not auto['has_override']
+
+        # Override 2024 to 500
+        result = bereken_afschrijving(2713.70, 10, 5, 12, 2023, 2024,
+                                       overrides={2024: 500.00})
+        assert result['afschrijving'] == 500.00
+        assert result['has_override']
+
+    def test_override_affects_subsequent_boekwaarde(self):
+        """Override in year 1 should cascade to book value in year 2."""
+        # Without override: 2023 = pro-rata 1/12 * 488.466 = 40.71
+        # Book value end 2023 = 2713.70 - 40.71 = 2672.99
+        auto_2024 = bereken_afschrijving(2713.70, 10, 5, 12, 2023, 2024)
+
+        # Override 2023 to 100 (higher than pro-rata 40.71)
+        with_ov = bereken_afschrijving(2713.70, 10, 5, 12, 2023, 2024,
+                                        overrides={2023: 100.00})
+        # More depreciated in 2023, so book value should be lower
+        assert with_ov['boekwaarde'] < auto_2024['boekwaarde']
+        # 2024 itself uses auto value (488.47), so afschrijving same
+        assert with_ov['afschrijving'] == auto_2024['afschrijving']
+
+    def test_override_zero_means_no_depreciation(self):
+        """Setting override to 0 means zero depreciation for that year."""
+        result = bereken_afschrijving(1000, 10, 5, 1, 2024, 2024,
+                                       overrides={2024: 0})
+        assert result['afschrijving'] == 0
+        assert result['boekwaarde'] == 1000  # nothing depreciated
+
+    def test_override_capped_by_restwaarde(self):
+        """Override can't depreciate below residual value."""
+        # 1000, 10% rest = 100 restwaarde, 900 afschrijfbaar
+        # Override year 1 to 900 (entire depreciable amount)
+        r1 = bereken_afschrijving(1000, 10, 5, 1, 2024, 2024,
+                                   overrides={2024: 900})
+        assert r1['afschrijving'] == 900
+        assert r1['boekwaarde'] == 100  # restwaarde
+
+        # Year 2 should have 0 depreciation (fully depreciated)
+        r2 = bereken_afschrijving(1000, 10, 5, 1, 2024, 2025,
+                                   overrides={2024: 900})
+        assert r2['afschrijving'] == 0
+        assert r2['boekwaarde'] == 100
+
+    def test_no_override_flag_when_no_overrides(self):
+        """has_override should be False when no overrides provided."""
+        result = bereken_afschrijving(1000, 10, 5, 1, 2024, 2024)
+        assert not result['has_override']
+
+    def test_no_override_flag_for_non_matching_year(self):
+        """has_override False when override exists but not for the bereken_jaar."""
+        result = bereken_afschrijving(1000, 10, 5, 1, 2024, 2024,
+                                       overrides={2025: 200})
+        assert not result['has_override']
+
+    def test_empty_overrides_dict_same_as_none(self):
+        """Empty dict should behave same as None."""
+        auto = bereken_afschrijving(1000, 10, 5, 6, 2024, 2024)
+        with_empty = bereken_afschrijving(1000, 10, 5, 6, 2024, 2024,
+                                           overrides={})
+        assert auto['afschrijving'] == with_empty['afschrijving']
+        assert auto['boekwaarde'] == with_empty['boekwaarde']
 
 
 class TestDBDrivenPVV:

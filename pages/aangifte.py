@@ -18,7 +18,7 @@ from typing import NamedTuple
 from nicegui import events, ui
 
 from components.fiscal_utils import fetch_fiscal_data, fiscale_params_to_dict
-from components.layout import create_layout
+from components.layout import create_layout, page_title
 from components.utils import format_euro
 from database import (
     get_fiscale_params, get_aangifte_documenten,
@@ -174,28 +174,11 @@ async def aangifte_page():
             ui.label(label).classes(css)
             ui.label(format_euro(amount)).classes(f'{css} text-right')
 
-    def _result_color_line(label: str, bedrag: float):
-        """Result line with color coding (green=terug, red=bij)."""
-        color = ('text-positive' if bedrag < 0
-                 else 'text-negative' if bedrag > 0 else '')
-        prefix = 'terug' if bedrag < 0 else 'bij' if bedrag > 0 else ''
-        tekst = (f'{format_euro(abs(bedrag))} ({prefix})'
-                 if bedrag != 0 else format_euro(0))
-        with ui.row().classes('w-full justify-between items-center'):
-            ui.label(label).classes('text-body2')
-            with ui.row().classes('items-center gap-1'):
-                ui.label(tekst).classes(f'text-body2 {color}')
-                if bedrag != 0:
-                    ui.button(icon='content_copy',
-                              on_click=lambda b=abs(bedrag), l=label: _copy_value(b, l)) \
-                        .props('flat dense round size=xs color=primary')
-
     # --- Main layout ---
     with ui.column().classes('w-full p-6 max-w-7xl mx-auto gap-4'):
         with ui.row().classes('w-full items-center justify-between'):
             with ui.column().classes('gap-0'):
-                ui.label('Aangifte Invulhulp').classes('text-h5') \
-                    .style('color: #0F172A; font-weight: 700')
+                page_title('Aangifte Invulhulp')
                 ui.label('Kopieer waarden naar MijnBelastingdienst.nl').classes(
                     'text-caption text-grey-7')
             jaar_select = ui.select(
@@ -535,7 +518,7 @@ async def aangifte_page():
                     ).classes('w-52')
                 ui.label(f'{BD["va_ib"]}, {BD["va_zvw"]}').classes('text-caption text-grey-6')
 
-            # Save button
+            # Auto-save on blur/change for all inputs
             async def save_prive():
                 aov_val = float(aov_input.value or 0)
                 woz_val = float(woz_input.value or 0)
@@ -554,7 +537,6 @@ async def aangifte_page():
                     lijfrente_premie=lijfrente_val,
                 )
                 await update_ew_naar_partner(DB_PATH, jaar=jaar, value=ew_val)
-                ui.notify('Opgeslagen', type='positive')
 
                 # Invalidate cache and refresh dependent views
                 _invalidate_cache()
@@ -564,8 +546,11 @@ async def aangifte_page():
                 await render_overzicht()
                 await render_warnings()
 
-            ui.button('Opslaan', icon='save', on_click=save_prive) \
-                .props('color=primary').classes('q-mt-sm')
+            # Attach auto-save to all prive inputs
+            for _inp in [woz_input, hyp_input, aov_input, lijfrente_input,
+                         va_ib_input, va_zvw_input]:
+                _inp.on('blur', save_prive)
+            ew_partner_check.on_change(save_prive)
 
     def _render_ew_results(container, f, woz, hypotheekrente, ew_naar_partner, params_dict):
         """Render eigen woning computed results."""
@@ -781,46 +766,74 @@ async def aangifte_page():
                     _invulhulp_line(BD['box3_belasting'], 'Box 3 belasting',
                                     box3.belasting, bold=True)
 
-            # Card 5: Resultaat
+            # Card 5: Resultaat — structured breakdown
             with ui.card().classes('w-full').style(
                     'border: 2px solid #0d9488; background: #f0fdfa'):
                 ui.label('Resultaat').classes('text-subtitle1 text-weight-bold')
                 ui.separator().classes('my-1')
 
-                if f.voorlopige_aanslag > 0 or f.voorlopige_aanslag_zvw > 0:
-                    _result_color_line(
-                        f'IB: {format_euro(f.netto_ib)} - VA {format_euro(f.voorlopige_aanslag)}',
-                        f.resultaat_ib)
-                    _result_color_line(
-                        f'ZVW: {format_euro(f.zvw)} - VA {format_euro(f.voorlopige_aanslag_zvw)}',
-                        f.resultaat_zvw)
-
+                # --- Berekende belasting ---
+                ui.label('Berekende belasting').classes(
+                    'text-subtitle2 text-grey-8 q-mt-sm')
+                _line('Netto IB / PVV', f.netto_ib)
+                _line('ZVW-bijdrage', f.zvw)
                 if box3.belasting > 0:
-                    _result_color_line('Box 3', box3.belasting)
-
+                    _line('Box 3', box3.belasting)
+                totaal_berekend = f.netto_ib + f.zvw + box3.belasting
                 ui.separator().classes('my-1')
+                _line('Totaal berekend', totaal_berekend, bold=True)
+
+                # --- Reeds betaald (voorlopige aanslagen) ---
+                has_va = (f.voorlopige_aanslag > 0
+                          or f.voorlopige_aanslag_zvw > 0)
+                if has_va:
+                    ui.label('Reeds betaald (voorlopige aanslagen)').classes(
+                        'text-subtitle2 text-grey-8 q-mt-md')
+                    if f.voorlopige_aanslag > 0:
+                        _line('VA Inkomstenbelasting',
+                              -f.voorlopige_aanslag)
+                    if f.voorlopige_aanslag_zvw > 0:
+                        _line('VA Zorgverzekeringswet',
+                              -f.voorlopige_aanslag_zvw)
+                    totaal_betaald = (f.voorlopige_aanslag
+                                      + f.voorlopige_aanslag_zvw)
+                    ui.separator().classes('my-1')
+                    _line('Totaal betaald', -totaal_betaald, bold=True)
+
+                # --- Eindresultaat ---
+                ui.separator().classes('my-2').style(
+                    'border-top: 2px solid #0d9488')
 
                 totaal = f.resultaat + box3.belasting
                 if totaal < 0:
-                    with ui.row().classes('w-full justify-between items-center'):
-                        ui.label('Totaal terug te ontvangen').classes('text-bold text-h6')
+                    with ui.row().classes(
+                            'w-full justify-between items-center'):
+                        ui.label('Terug te ontvangen').classes(
+                            'text-bold text-h6')
                         with ui.row().classes('items-center gap-2'):
                             ui.label(format_euro(abs(totaal))).classes(
                                 'text-bold text-h6 text-positive')
-                            ui.button(icon='content_copy',
-                                      on_click=lambda: _copy_value(abs(totaal), 'Totaal terug')) \
-                                .props('round color=positive size=sm')
+                            ui.button(
+                                icon='content_copy',
+                                on_click=lambda: _copy_value(
+                                    abs(totaal), 'Totaal terug'),
+                            ).props('round color=positive size=sm')
                 elif totaal > 0:
-                    with ui.row().classes('w-full justify-between items-center'):
-                        ui.label('Totaal bij te betalen').classes('text-bold text-h6')
+                    with ui.row().classes(
+                            'w-full justify-between items-center'):
+                        ui.label('Bij te betalen').classes(
+                            'text-bold text-h6')
                         with ui.row().classes('items-center gap-2'):
                             ui.label(format_euro(totaal)).classes(
                                 'text-bold text-h6 text-negative')
-                            ui.button(icon='content_copy',
-                                      on_click=lambda: _copy_value(totaal, 'Totaal bij')) \
-                                .props('round color=negative size=sm')
+                            ui.button(
+                                icon='content_copy',
+                                on_click=lambda: _copy_value(
+                                    totaal, 'Totaal bij'),
+                            ).props('round color=negative size=sm')
                 else:
-                    with ui.row().classes('w-full justify-between items-center'):
+                    with ui.row().classes(
+                            'w-full justify-between items-center'):
                         ui.label('Resultaat').classes('text-bold text-h6')
                         ui.label(format_euro(0)).classes('text-bold text-h6')
 

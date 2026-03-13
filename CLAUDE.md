@@ -15,12 +15,12 @@ source .venv/bin/activate
 export DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib
 python main.py  # → http://127.0.0.1:8085
 
-# Tests (405 passing)
+# Tests (412 passing)
 DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib .venv/bin/python -m pytest tests/ -v
 ```
 
 ## Database
-9 tabellen: `klanten`, `klant_locaties`, `werkdagen`, `facturen`, `uitgaven`, `banktransacties`, `fiscale_params`, `bedrijfsgegevens`, `aangifte_documenten`
+10 tabellen: `klanten`, `klant_locaties`, `werkdagen`, `facturen`, `uitgaven`, `banktransacties`, `fiscale_params`, `bedrijfsgegevens`, `aangifte_documenten`, `afschrijving_overrides`
 
 - Raw SQL, `?` placeholders — GEEN f-strings in SQL
 - Bedragen REAL, datums TEXT (YYYY-MM-DD)
@@ -34,7 +34,7 @@ DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib .venv/bin/python -m pytest tests/ -
 
 ### Architectuur
 - Browser mode ALTIJD — NOOIT native/pywebview
-- Shared layout via `components/layout.py`
+- Shared layout via `components/layout.py` (includes `page_title` helper)
 - Elke pagina is `@ui.page('/route')` in eigen bestand
 - `format_euro`/`format_datum` ALLEEN uit `components/utils.py`
 - **Fiscal utils**: `components/fiscal_utils.py` (shared `fiscale_params_to_dict` + `fetch_fiscal_data`)
@@ -46,9 +46,9 @@ DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib .venv/bin/python -m pytest tests/ -
 - `ui.table` (NIET AG Grid), `ui.echart` voor charts
 - **Tabel selectie**: ALTIJD `selection='multiple'`. NOOIT custom checkbox slots met `$parent.$emit`. Gebruik `table.selected` en `table.on('selection', handler)`.
 - Bij full `body` slot met selectie: `<q-checkbox v-model="props.selected" dense />` (Quasar-managed), NIET `v-model="props.row.selected"`.
-- **Add/edit formulieren**: via `ui.dialog()` popup, NIET inline op de pagina. Referentie: werkdag_form.py, kosten.py, facturen.py.
+- **Add/edit formulieren**: via `ui.dialog()` popup, NIET inline op de pagina.
 - Quasar semantic kleuren (`positive`, `negative`, `warning`, `primary`) — geen hardcoded hex in pagina's
-- **Persistent tables**: Create `ui.table` once with slots/events, update via `table.rows = rows; table.update()` (preserves pagination/sort state). Referentie: kosten.py, bank.py.
+- **Persistent tables**: Create `ui.table` once with slots/events, update via `table.rows = rows; table.update()` (preserves pagination/sort state).
 - **Blocking I/O**: Wrap WeasyPrint, PDF extraction, file copies in `asyncio.to_thread()` to prevent event loop stalling
 
 ### YAGNI
@@ -59,89 +59,23 @@ Geen: user auth, BTW-administratie, loon/voorraad, email, real-time bank-API, au
 ### Basisregels
 - **BTW-vrijgesteld** (art. 11 Wet OB) → kosten INCL BTW, geen BTW-aangifte
 - **Urencriterium**: 1.225 uur/jaar. Achterwacht (urennorm=0) telt NIET mee
-- **Pensioenpremie SPH**: WEL bedrijfskosten (Yuki account 40150 "Personeelskosten")
-- **AOV (Allianz Summum)**: GEEN bedrijfskosten → Box 1 inkomensvoorziening (tracked in fiscale_params.aov_premie)
-- **KIA**: 28% bij totaal investeringen >= ondergrens (configureerbaar per jaar in `fiscale_params.kia_ondergrens`). Per-item drempel in `kia_drempel_per_item` (default €450).
-- **Afschrijvingen**: lineair, restwaarde 10%, eerste jaar pro-rata per maand
-- **Representatie**: 80%-regeling, 20% bijtelling op fiscale winst (configureerbaar in `fiscale_params`)
+- **Pensioenpremie SPH**: WEL bedrijfskosten, **AOV**: GEEN bedrijfskosten → Box 1 inkomensvoorziening
+- **KIA**: 28% bij investeringen >= ondergrens, per-item drempel configureerbaar per jaar
+- **Afschrijvingen**: lineair, restwaarde 10%, eerste jaar pro-rata per maand. Per-jaar override via `afschrijving_overrides` tabel. Voorgaande jaren vergrendeld (reeds aangegeven bij BD).
+- **Representatie**: 80%-regeling, 20% bijtelling op fiscale winst
 - **Factuur vereisten**: naam+adres+KvK, factuurnummer YYYY-NNN, vervaldatum 14d, BTW-vrijstellingstekst
+- **Factuur datum = last werkdag date** (work-date based, NOT invoice issue date)
 
 ### DB-driven parameters (alle configureerbaar in Instellingen)
-- **Arbeidskorting**: JSON brackets in `arbeidskorting_brackets` column, fallback to Python constants in `heffingskortingen.py`
-- **PVV rates**: `pvv_aow/anw/wlz_pct` columns (default 17.90/0.10/9.65), fallback to constants
-- **Box 3**: Per-jaar rendementen (bank/overig/schuld), heffingsvrij vermogen, tarief, drempel schulden
-- **Alle andere**: ZA, SA, MKB%, KIA, AHK, AK, ZVW, schijf1/2/3, EW forfait, villataks, Wet Hillen, etc.
-- **ZA/SA toggles**: `za_actief`/`sa_actief` booleans per year (DB-driven, editable in Instellingen + Jaarafsluiting)
-- **Lijfrentepremie**: `lijfrente_premie` per year (reduces verzamelinkomen)
-- **Input velden** (preserved across param upserts): AOV, WOZ, hypotheekrente, VA IB, VA ZVW, partner, Box 3 saldi, ew_naar_partner, lijfrente_premie, balans inputs
+Alle fiscale waarden in `fiscale_params` tabel (55 kolommen): ZA, SA, MKB%, KIA, AHK, AK, ZVW, schijven, EW forfait, villataks, Wet Hillen, arbeidskorting brackets (JSON), PVV rates, Box 3 rendementen. Input velden (AOV, WOZ, hypotheek, VA's, partner, Box 3 saldi) preserved across upserts.
 
-### Fiscal engine
+### Fiscal engine regels
 - **Arbeidskorting input** = fiscale_winst (vóór ZA/SA/MKB), NOT belastbare_winst
-- **Tariefsaanpassing**: Since 2023, deductions at basistarief only. Excess clawed back.
-- **Eigen woning**: Configurable `ew_naar_partner`. Default True (Boekhouder practice).
+- **Tariefsaanpassing**: Since 2023, deductions at basistarief only
+- **Eigen woning**: Configurable `ew_naar_partner`. Default True (Boekhouder practice)
 - **ZVW grondslag** = belastbare_winst, NOT verzamelinkomen
 - **PVV** = 27.65% over min(verzamelinkomen, premiegrondslag)
-- **PVV premiegrondslag**: Must be set explicitly per year in DB (`pvv_premiegrondslag`). Code falls back to `schijf1_grens` if 0, which is only correct for 2025+ (where they're equal). 2023=37149, 2024=38098.
-- **Box 3 drempel schulden**: Per-persoon (2023: 3400, 2024: 3700, 2025: 3700, 2026: 3800). Doubled if partner. Schulden below drempel ignored.
-- **Box 3 rendementen**: Must use DEFINITIEVE percentages (not voorlopig/preliminary)
-
-### Boekhouder referentiecijfers (tests valideren hiertegen)
-- **2023**: winst €62.522 → fiscale winst €60.411 → belastbare winst €45.801 → IB terug €415
-  - NB: 2023 had extra SBOH (€17.613) + UWV (€11.888) inkomen — app kan alleen het ondernemersdeel
-- **2024**: winst €95.145 → fiscale winst €94.437 → belastbare winst €76.776 → IB terug €3.137
-  - Volledig gevalideerd: alle 20 tussenwaarden matchen Boekhouder (test_fiscal.py TestBoekhouder2024Complete)
-
-## Jaarafsluiting pagina (Pure Business Report)
-5-tab layout: Balans, W&V, Toelichting, Controles, Document. Year defaults to vorig jaar.
-KPI strip: Omzet, Winst, Eigen vermogen, Balanstotaal (business-only).
-Balans tab: activa/passiva with edit toggle for manual inputs (bank, crediteuren, overige).
-Status workflow: concept (orange) → definitief (green), with lock/reopen. DB: `jaarafsluiting_status`.
-PDF export: 4-page Yuki-style (cover+grondslagen, balans, W&V+kosten, toelichting). No IB/tax content.
-Controles tab: business checks only (kosten/omzet ratio, urencriterium, balans check, missing data).
-Nav order: Jaarafsluiting before Aangifte (close books first, then file taxes).
-**Vorderingen auto-detect**: `auto_match_betaald_datum()` matches facturen to bank transactions (€1 tolerance, chronological dedup) → `get_debiteuren_op_peildatum()` calculates year-end receivables. Validated: 2024 = €7,391 (vs Boekhouder €7,695 — gap = cross-year timing).
-
-## Facturen pagina
-- "Importeer PDF" button: upload dialog with multi-file PDF import
-- Auto-detects dagpraktijk vs ANW format, parses line items (uren/km/tarief per werkdag)
-- Klant auto-resolution via `import_/klant_mapping.py`, dedup by factuurnummer
-- Creates factuur record + werkdagen from parsed line items (or links existing werkdagen)
-- **Factuur datum = last werkdag date** (work-date based, NOT invoice issue date). Revenue is attributed to the month work was performed.
-- **PDF parser** (`import_/pdf_parser.py`): `detect_invoice_type()`, `extract_dagpraktijk_line_items()`, `extract_anw_diensten()`
-- Handles 7+ invoice format variations (2024 old, 2025 Klant7/Klant2-combined, 2026 standard/Klant15, ANW HAP NoordOost/Drenthe)
-- **Klant2 3-amount validation**: Only treats 3-euro-amount lines as combined format when `uren*tarief + reiskosten ≈ total`
-- **Import robustness**: per-item error handling, double-click protection, single DB connection per factuur werkdagen
-- **Revenue queries**: Both dagpraktijk (`type='factuur'`) and ANW (`type='anw'`) included in all omzet/KPI calculations
-
-## Kosten pagina — Expense Import
-- "Importeer uitgaven" button: opens dialog scanning `02_Financieel/Boekhouding_Waarneming/{year}/Uitgaven/`
-- PDFs grouped by category (expansion panels), green checkmark for already-imported
-- Click unimported PDF → opens pre-filled add dialog (date from filename, category from folder, PDF auto-attached)
-- `import_/expense_utils.py`: `scan_archive()`, `extract_date_from_filename()`, `FOLDER_TO_CATEGORIE` mapping
-- Date extraction supports: MMYY, YYMM, MM_YY, MM-YY, YYYY-MM-DD, MMDDYY patterns
-- **AOV folder excluded** — AOV is not a business expense (tracked separately in fiscale_params)
-- Duplicate warning: same datum+categorie+bedrag triggers confirmation prompt
-
-## Aangifte pagina (Invulhulp)
-5-tab invulhulp mirroring Belastingdienst IB-aangifte structure. Year defaults to vorig jaar.
-Each value shows BD field label + copy-to-clipboard (raw integer for portal input).
-Tabs: Winst uit onderneming, Prive & aftrek (inputs save to DB), Box 3 (inputs+calc), Overzicht (final summary), Documenten (upload checklist)
-- **Winst tab**: ZA/SA toggles (auto-save + recalculate), fiscal waterfall, urencriterium badge
-- **Prive tab**: AOV + lijfrente inputs, eigen woning (WOZ/hypotheek/partner toggle), voorlopige aanslagen
-- **Missing data warnings**: Banner at top for missing uitgaven, no AOV, jaarafsluiting not definitief
-- **Auto-doc detection**: Checks `data/pdf/{year}/Jaarcijfers_*.pdf` for auto-completion
-- **Known gap**: Fiscal advisory panel (ZA trajectory, SA tracking, KIA check, belastingdruk) not yet implemented
-
-## Data State (170 facturen, 603 werkdagen, 212 uitgaven — verified 2026-03-10)
-- **Revenue (work-date based)**: 2023=€80,612 | 2024=€123,176 | 2025=€126,251 | 2026=€25,698 | Total=€355,737
-- **Yuki reconciliation**: 2023 gap €145, 2024 gap €1,161 — cross-year factuur timing (structural, not errors)
-- **Uitgaven**: 212 records — 2023: 1 inv | 2024: 102 (1 inv + 101 regular) | 2025: 109 (5 inv + 104 regular)
-- **Investments**: 7 assets — Camera 2023, MacBook 2024, iPhone+Switch+WiFi+NAS+Dermatoscoop 2025
-- **Km-vergoeding**: Integrated into fiscal calc via `get_km_totaal()` in `fiscal_utils.py`
-- **Banktransacties**: 928 total (2023=145, 2024=363, 2025=340, 2026=80)
-- **Personal financial data**: Seeded in fiscale_params for 2023-2025 (AOV, WOZ, hypotheek, VA IB/ZVW, Box 3, partner, PVV premiegrondslag)
-- **Import complete**: All facturen, 2024+2025 expenses, all investments verified against bank statements and Boekhouder reports
-- **Reconciliation doc**: `docs/plans/2026-03-09-accountant-replacement-reconciliation.md`
-- **Seed script**: `import_/seed_2024_expenses.py` — bank CSV matcher for bulk expense import
-- **2023 limitation**: No regular expenses imported; SBOH+UWV income not in app. 2023 year report unusable.
-- **JURA S8 excluded**: Accountant excluded from fiscal depreciation + KIA. Not in DB investments.
+- **PVV premiegrondslag**: Must be set explicitly per year in DB. Falls back to `schijf1_grens` if 0 (only correct for 2025+)
+- **Box 3 drempel schulden**: Per-persoon, doubled if partner. Schulden below drempel ignored
+- **Box 3 rendementen**: Must use DEFINITIEVE percentages (not voorlopig)
+- **VA proration (dashboard only)**: Dashboard prorates VA by `annual_va * month / 12` for current year. Aangifte always uses full annual VA.
