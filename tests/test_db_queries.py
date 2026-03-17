@@ -4,9 +4,11 @@ import pytest
 from database import (
     init_db, add_klant, add_werkdag, add_factuur, add_uitgave,
     add_banktransacties, mark_betaald,
-    get_omzet_totaal, get_representatie_totaal, get_openstaande_debiteuren,
+    get_omzet_totaal, get_representatie_totaal,
     get_debiteuren_op_peildatum, auto_match_betaald_datum,
     get_nog_te_factureren, get_kpis, get_data_counts,
+    get_afschrijving_overrides, get_afschrijving_overrides_batch,
+    set_afschrijving_override, delete_afschrijving_override,
 )
 
 
@@ -80,38 +82,6 @@ async def test_get_representatie_totaal_filters_by_year(db):
     await add_uitgave(db, datum="2026-01-10", categorie="Representatie",
                       omschrijving="2026 lunch", bedrag=45.00)
     assert await get_representatie_totaal(db, jaar=2026) == 45.00
-
-
-# ============================================================
-# get_openstaande_debiteuren
-# ============================================================
-
-@pytest.mark.asyncio
-async def test_get_openstaande_debiteuren_empty(db):
-    """No facturen → debiteuren is 0."""
-    assert await get_openstaande_debiteuren(db, jaar=2026) == 0.0
-
-
-@pytest.mark.asyncio
-async def test_get_openstaande_debiteuren_excludes_paid(db):
-    """Only unpaid (betaald=0) facturen are counted."""
-    kid = await add_klant(db, naam="Test", tarief_uur=80)
-    await add_factuur(db, nummer="2026-001", klant_id=kid,
-                      datum="2026-01-15", totaal_bedrag=1000, betaald=0)
-    await add_factuur(db, nummer="2026-002", klant_id=kid,
-                      datum="2026-02-15", totaal_bedrag=500, betaald=1)
-    assert await get_openstaande_debiteuren(db, jaar=2026) == 1000.0
-
-
-@pytest.mark.asyncio
-async def test_get_openstaande_debiteuren_filters_by_year(db):
-    """Only unpaid facturen in the given year are counted."""
-    kid = await add_klant(db, naam="Test", tarief_uur=80)
-    await add_factuur(db, nummer="2025-001", klant_id=kid,
-                      datum="2025-12-15", totaal_bedrag=800, betaald=0)
-    await add_factuur(db, nummer="2026-001", klant_id=kid,
-                      datum="2026-01-15", totaal_bedrag=600, betaald=0)
-    assert await get_openstaande_debiteuren(db, jaar=2026) == 600.0
 
 
 # ============================================================
@@ -387,3 +357,87 @@ async def test_auto_match_ignores_negative_bank(db):
 
     count = await auto_match_betaald_datum(db)
     assert count == 0
+
+
+# ============================================================
+# Afschrijving overrides CRUD
+# ============================================================
+
+@pytest.mark.asyncio
+async def test_set_and_get_override(db):
+    """Set an override and retrieve it."""
+    uid = await add_uitgave(db, datum='2024-06-01', categorie='Apparatuur',
+                            omschrijving='Test asset', bedrag=1000,
+                            is_investering=1, levensduur_jaren=5,
+                            aanschaf_bedrag=1000)
+    await set_afschrijving_override(db, uitgave_id=uid, jaar=2024, bedrag=200)
+    overrides = await get_afschrijving_overrides(db, uitgave_id=uid)
+    assert overrides == {2024: 200.0}
+
+
+@pytest.mark.asyncio
+async def test_override_upsert(db):
+    """Setting override twice updates the value."""
+    uid = await add_uitgave(db, datum='2024-06-01', categorie='Apparatuur',
+                            omschrijving='Test', bedrag=1000,
+                            is_investering=1, levensduur_jaren=5,
+                            aanschaf_bedrag=1000)
+    await set_afschrijving_override(db, uitgave_id=uid, jaar=2024, bedrag=200)
+    await set_afschrijving_override(db, uitgave_id=uid, jaar=2024, bedrag=300)
+    overrides = await get_afschrijving_overrides(db, uitgave_id=uid)
+    assert overrides[2024] == 300.0
+
+
+@pytest.mark.asyncio
+async def test_delete_override(db):
+    """Delete removes a specific override."""
+    uid = await add_uitgave(db, datum='2024-06-01', categorie='Apparatuur',
+                            omschrijving='Test', bedrag=1000,
+                            is_investering=1, levensduur_jaren=5,
+                            aanschaf_bedrag=1000)
+    await set_afschrijving_override(db, uitgave_id=uid, jaar=2024, bedrag=200)
+    await set_afschrijving_override(db, uitgave_id=uid, jaar=2025, bedrag=180)
+    await delete_afschrijving_override(db, uitgave_id=uid, jaar=2024)
+    overrides = await get_afschrijving_overrides(db, uitgave_id=uid)
+    assert 2024 not in overrides
+    assert overrides[2025] == 180.0
+
+
+@pytest.mark.asyncio
+async def test_batch_overrides(db):
+    """Batch fetch returns overrides for multiple investments."""
+    uid1 = await add_uitgave(db, datum='2024-01-01', categorie='Apparatuur',
+                             omschrijving='A1', bedrag=1000,
+                             is_investering=1, levensduur_jaren=5,
+                             aanschaf_bedrag=1000)
+    uid2 = await add_uitgave(db, datum='2024-06-01', categorie='Apparatuur',
+                             omschrijving='A2', bedrag=2000,
+                             is_investering=1, levensduur_jaren=5,
+                             aanschaf_bedrag=2000)
+    await set_afschrijving_override(db, uitgave_id=uid1, jaar=2024, bedrag=100)
+    await set_afschrijving_override(db, uitgave_id=uid2, jaar=2024, bedrag=400)
+
+    batch = await get_afschrijving_overrides_batch(db, [uid1, uid2])
+    assert batch[uid1] == {2024: 100.0}
+    assert batch[uid2] == {2024: 400.0}
+
+
+@pytest.mark.asyncio
+async def test_batch_overrides_empty(db):
+    """Batch with empty list returns empty dict."""
+    batch = await get_afschrijving_overrides_batch(db, [])
+    assert batch == {}
+
+
+@pytest.mark.asyncio
+async def test_override_cascade_delete(db):
+    """Deleting the uitgave should cascade-delete its overrides."""
+    from database import delete_uitgave
+    uid = await add_uitgave(db, datum='2024-06-01', categorie='Apparatuur',
+                            omschrijving='Test', bedrag=1000,
+                            is_investering=1, levensduur_jaren=5,
+                            aanschaf_bedrag=1000)
+    await set_afschrijving_override(db, uitgave_id=uid, jaar=2024, bedrag=200)
+    await delete_uitgave(db, uitgave_id=uid)
+    overrides = await get_afschrijving_overrides(db, uitgave_id=uid)
+    assert overrides == {}

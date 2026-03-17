@@ -50,6 +50,12 @@ ui.add_css('''
 ''', shared=True)
 
 
+def page_title(text: str):
+    """Render a consistent page title label."""
+    return ui.label(text).classes('text-h5') \
+        .style('color: #0F172A; font-weight: 700')
+
+
 def create_layout(title: str, active_page: str = ''):
     """Shared layout: teal header, dark sidebar, off-white content."""
 
@@ -58,6 +64,7 @@ def create_layout(title: str, active_page: str = ''):
         ('Dashboard', 'dashboard', '/'),
         ('Werkdagen', 'schedule', '/werkdagen'),
         ('Facturen', 'receipt', '/facturen'),
+        ('Klanten', 'people', '/klanten'),
         ('FINANCIEEL', None, None),  # section header
         ('Kosten', 'payments', '/kosten'),
         ('Bank', 'account_balance', '/bank'),

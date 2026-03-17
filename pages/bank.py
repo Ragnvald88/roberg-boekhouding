@@ -4,7 +4,7 @@ from datetime import datetime
 
 from nicegui import ui
 
-from components.layout import create_layout
+from components.layout import create_layout, page_title
 from components.utils import format_euro, generate_csv, BANK_CATEGORIEEN
 from database import (
     get_banktransacties, add_banktransacties, update_banktransactie,
@@ -194,8 +194,7 @@ async def bank_page():
 
     # --- Page layout ---
     with ui.column().classes('w-full p-6 max-w-7xl mx-auto gap-6'):
-        ui.label('Banktransacties').classes('text-h5') \
-            .style('color: #0F172A; font-weight: 700')
+        page_title('Banktransacties')
 
         # Top bar: filters + upload
         with ui.row().classes('w-full items-center gap-4 q-mb-md'):
@@ -290,7 +289,8 @@ async def bank_page():
             rows=initial_rows,
             row_key='id',
             selection='multiple',
-            pagination={'rowsPerPage': 25, 'sortBy': 'datum', 'descending': True},
+            pagination={'rowsPerPage': 25, 'sortBy': 'datum', 'descending': True,
+                        'rowsPerPageOptions': [10, 20, 50, 0]},
         ).classes('w-full')
         table_ref['table'] = table
 

@@ -1,7 +1,7 @@
 """Werkdagen pagina — uren/km registratie met tabel en dialog."""
 
 from nicegui import app, ui
-from components.layout import create_layout
+from components.layout import create_layout, page_title
 from components.utils import format_euro, generate_csv
 from components.werkdag_form import open_werkdag_dialog
 from database import (
@@ -30,8 +30,7 @@ async def werkdagen_page():
     with ui.column().classes('w-full p-6 max-w-7xl mx-auto gap-6'):
         # Header row
         with ui.row().classes('w-full items-center gap-4'):
-            ui.label('Werkdagen').classes('text-h5') \
-                .style('color: #0F172A; font-weight: 700')
+            page_title('Werkdagen')
 
         # Filter + action row
         with ui.row().classes('w-full items-end gap-4'):
@@ -112,10 +111,10 @@ async def werkdagen_page():
                 with ui.dialog() as dlg, ui.card():
                     ui.label(f'{len(ids)} werkdag(en) verwijderen?')
                     with ui.row():
+                        ui.button('Annuleren', on_click=dlg.close).props('flat')
                         ui.button('Ja, verwijderen',
                                   on_click=confirm_bulk_delete) \
                             .props('color=negative')
-                        ui.button('Annuleren', on_click=dlg.close)
                 dlg.open()
 
             ui.button(
@@ -159,7 +158,8 @@ async def werkdagen_page():
         table = ui.table(
             columns=columns, rows=[], row_key='id',
             selection='multiple',
-            pagination={'rowsPerPage': 25, 'sortBy': 'datum', 'descending': True},
+            pagination={'rowsPerPage': 25, 'sortBy': 'datum', 'descending': True,
+                        'rowsPerPageOptions': [10, 20, 50, 0]},
         ).classes('w-full')
         table_ref['ref'] = table
 
@@ -272,11 +272,14 @@ async def werkdagen_page():
             row = e.args
             with ui.dialog() as dlg, ui.card():
                 ui.label(f"Werkdag {row['datum']} verwijderen?")
+                ui.label(f"{row['datum']} — {row.get('klant_naam', '')} — "
+                         f"{row.get('uren', 0)} uur — "
+                         f"{row.get('totaal_fmt', '')}").classes('text-grey')
                 with ui.row():
+                    ui.button('Annuleren', on_click=dlg.close).props('flat')
                     ui.button('Ja, verwijderen',
                               on_click=lambda: confirm_delete(row['id'], dlg)) \
                         .props('color=negative')
-                    ui.button('Annuleren', on_click=dlg.close)
             dlg.open()
 
         async def confirm_delete(werkdag_id, dlg):

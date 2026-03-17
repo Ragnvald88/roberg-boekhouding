@@ -3,7 +3,7 @@
 import pytest
 from database import (
     init_db, get_db, get_aangifte_documenten, add_aangifte_document,
-    delete_aangifte_document, update_partner_inkomen, update_ew_naar_partner,
+    delete_aangifte_document, update_ew_naar_partner,
     get_fiscale_params, upsert_fiscale_params, update_balans_inputs,
     add_uitgave, add_werkdag, add_klant, add_factuur,
     _validate_datum,
@@ -140,33 +140,6 @@ async def test_partner_fields_in_fiscale_params(db):
     assert params.partner_bruto_loon == 0.0
     assert params.partner_loonheffing == 0.0
 
-    # Update partner income
-    result = await update_partner_inkomen(
-        db, jaar=2024,
-        partner_bruto_loon=45000.00,
-        partner_loonheffing=12500.00,
-    )
-    assert result is True
-
-    # Verify saved values
-    params = await get_fiscale_params(db, jaar=2024)
-    assert params.partner_bruto_loon == 45000.00
-    assert params.partner_loonheffing == 12500.00
-
-
-@pytest.mark.asyncio
-async def test_update_partner_inkomen_no_row(db):
-    """update_partner_inkomen returns False when no fiscale_params row exists."""
-    result = await update_partner_inkomen(
-        db, jaar=2099,
-        partner_bruto_loon=50000.00,
-        partner_loonheffing=15000.00,
-    )
-    assert result is False
-    # Verify no row was created
-    params = await get_fiscale_params(db, jaar=2099)
-    assert params is None
-
 
 @pytest.mark.asyncio
 async def test_upsert_preserves_partner_fields(db):
@@ -175,12 +148,13 @@ async def test_upsert_preserves_partner_fields(db):
     params_2024 = FISCALE_PARAMS[2024]
     await upsert_fiscale_params(db, **params_2024)
 
-    # Set partner income
-    await update_partner_inkomen(
-        db, jaar=2024,
-        partner_bruto_loon=42000.00,
-        partner_loonheffing=11000.00,
-    )
+    # Set partner income via direct SQL (simulating aangifte page save)
+    from database import get_db_ctx
+    async with get_db_ctx(db) as conn:
+        await conn.execute(
+            "UPDATE fiscale_params SET partner_bruto_loon = ?, partner_loonheffing = ? WHERE jaar = ?",
+            (42000.00, 11000.00, 2024))
+        await conn.commit()
 
     # Re-save fiscal params (simulating Instellingen save)
     await upsert_fiscale_params(db, **params_2024)

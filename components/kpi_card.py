@@ -23,7 +23,7 @@ def kpi_card(label: str, value: str, icon: str, color: str = '#0F766E',
                        'border-radius: 8px; padding: 8px')
         with ui.row().classes('items-end gap-2 q-mt-sm'):
             ui.label(value).classes('text-h5') \
-                .style('color: #0F172A; font-weight: 700')
+                .style('color: #0F172A; font-weight: 700; font-variant-numeric: tabular-nums')
             if delta_pct is not None:
                 sign = '+' if delta_pct >= 0 else ''
                 d_color = '#059669' if delta_pct >= 0 else '#DC2626'
@@ -51,4 +51,4 @@ def kpi_strip(omzet: float, winst: float,
                     ui.icon(icon, size='1.2rem').style('color: #0F766E')
                     ui.label(label).classes('text-caption').style('color: #64748B')
                 ui.label(value).classes('text-h6 q-mt-xs') \
-                    .style('color: #0F172A; font-weight: 700')
+                    .style('color: #0F172A; font-weight: 700; font-variant-numeric: tabular-nums')

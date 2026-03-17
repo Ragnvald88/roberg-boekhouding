@@ -8,11 +8,13 @@ from pathlib import Path
 
 from nicegui import ui
 
-from components.layout import create_layout
+from components.layout import create_layout, page_title
 from components.utils import format_euro, generate_csv, KOSTEN_CATEGORIEEN as CATEGORIEEN
 from database import (
     add_uitgave, delete_uitgave, get_uitgaven, get_uitgaven_per_categorie,
     get_investeringen_voor_afschrijving, update_uitgave, get_fiscale_params,
+    get_afschrijving_overrides, get_afschrijving_overrides_batch,
+    set_afschrijving_override, delete_afschrijving_override,
     DB_PATH,
 )
 from fiscal.afschrijvingen import bereken_afschrijving
@@ -35,7 +37,6 @@ async def kosten_page():
     # Read fiscal params from DB
     fp = await get_fiscale_params(DB_PATH, jaar=huidig_jaar)
     repr_aftrek_pct = int(fp.repr_aftrek_pct) if fp else 80
-    inv_drempel = fp.kia_drempel_per_item if fp else 450
 
     # References to dynamic UI elements
     kosten_table = {'ref': None}
@@ -72,6 +73,11 @@ async def kosten_page():
         cat = filter_categorie['value']
         uitgaven = await get_uitgaven(DB_PATH, jaar=jaar, categorie=cat)
 
+        # Fetch overrides for investments in this view
+        inv_ids = [u.id for u in uitgaven if u.is_investering]
+        all_overrides = await get_afschrijving_overrides_batch(
+            DB_PATH, inv_ids) if inv_ids else {}
+
         rows = []
         for u in uitgaven:
             row = {
@@ -94,6 +100,7 @@ async def kosten_page():
             if u.is_investering and u.levensduur_jaren:
                 row['levensduur_fmt'] = f'{u.levensduur_jaren} jaar'
                 aanschaf = (u.aanschaf_bedrag or u.bedrag) * ((u.zakelijk_pct if u.zakelijk_pct is not None else 100) / 100)
+                overrides = all_overrides.get(u.id)
                 result = bereken_afschrijving(
                     aanschaf_bedrag=aanschaf,
                     restwaarde_pct=u.restwaarde_pct or 10,
@@ -101,6 +108,7 @@ async def kosten_page():
                     aanschaf_maand=int(u.datum[5:7]),
                     aanschaf_jaar=int(u.datum[0:4]),
                     bereken_jaar=jaar,
+                    overrides=overrides,
                 )
                 row['boekwaarde_fmt'] = format_euro(result['boekwaarde'])
             rows.append(row)
@@ -143,11 +151,16 @@ async def kosten_page():
         if not investeringen:
             return
 
+        # Fetch all overrides in one batch
+        all_overrides = await get_afschrijving_overrides_batch(
+            DB_PATH, [u.id for u in investeringen])
+
         with container:
             ui.label(f'Activastaat per 31-12-{jaar}').classes('text-subtitle1 text-bold')
             activa_rows = []
             for u in investeringen:
                 aanschaf = (u.aanschaf_bedrag or u.bedrag) * ((u.zakelijk_pct if u.zakelijk_pct is not None else 100) / 100)
+                overrides = all_overrides.get(u.id)
                 result = bereken_afschrijving(
                     aanschaf_bedrag=aanschaf,
                     restwaarde_pct=u.restwaarde_pct or 10,
@@ -155,12 +168,21 @@ async def kosten_page():
                     aanschaf_maand=int(u.datum[5:7]),
                     aanschaf_jaar=int(u.datum[0:4]),
                     bereken_jaar=jaar,
+                    overrides=overrides,
                 )
                 activa_rows.append({
+                    'id': u.id,
                     'omschrijving': u.omschrijving,
                     'aanschaf': format_euro(aanschaf),
-                    'afschr_jaar': format_euro(result['per_jaar']),
+                    'afschr_dit_jaar': format_euro(result['afschrijving']),
                     'boekwaarde': format_euro(result['boekwaarde']),
+                    'has_override': result.get('has_override', False),
+                    # Raw data for edit dialog
+                    '_aanschaf_bedrag': aanschaf,
+                    '_restwaarde_pct': u.restwaarde_pct or 10,
+                    '_levensduur': u.levensduur_jaren or 5,
+                    '_aanschaf_maand': int(u.datum[5:7]),
+                    '_aanschaf_jaar': int(u.datum[0:4]),
                 })
 
             columns = [
@@ -168,14 +190,217 @@ async def kosten_page():
                  'field': 'omschrijving', 'align': 'left'},
                 {'name': 'aanschaf', 'label': 'Aanschaf (zakelijk)',
                  'field': 'aanschaf', 'align': 'right'},
-                {'name': 'afschr_jaar', 'label': 'Afschr/jaar',
-                 'field': 'afschr_jaar', 'align': 'right'},
+                {'name': 'afschr_dit_jaar', 'label': f'Afschr {jaar}',
+                 'field': 'afschr_dit_jaar', 'align': 'right'},
                 {'name': 'boekwaarde', 'label': 'Boekwaarde',
                  'field': 'boekwaarde', 'align': 'right'},
+                {'name': 'acties', 'label': '', 'field': 'acties',
+                 'align': 'center'},
             ]
-            ui.table(
-                columns=columns, rows=activa_rows, row_key='omschrijving',
+            activa_tbl = ui.table(
+                columns=columns, rows=activa_rows, row_key='id',
             ).classes('w-full').props('dense flat')
+            activa_tbl.add_slot('body-cell-afschr_dit_jaar', '''
+                <q-td :props="props">
+                    <span>{{ props.row.afschr_dit_jaar }}</span>
+                    <q-icon v-if="props.row.has_override" name="edit"
+                            size="xs" color="primary" class="q-ml-xs" />
+                </q-td>
+            ''')
+            activa_tbl.add_slot('body-cell-acties', '''
+                <q-td :props="props">
+                    <q-btn flat dense icon="tune" size="sm"
+                           color="primary" title="Afschrijving aanpassen"
+                           @click="$parent.$emit('edit_afschr', props.row)" />
+                </q-td>
+            ''')
+            activa_tbl.on('edit_afschr',
+                          lambda e: open_afschrijving_dialog(e.args))
+
+    # --- Afschrijving edit dialog ---
+
+    async def open_afschrijving_dialog(row: dict):
+        """Open dialog to view/edit per-year depreciation for an investment.
+
+        Past years (before filter year) are locked — already filed with BD.
+        Current + future years are editable.
+        Levensduur is editable and recalculates the schedule.
+        """
+        uitgave_id = row['id']
+        aanschaf = row['_aanschaf_bedrag']
+        restwaarde_pct = row['_restwaarde_pct']
+        levensduur_state = {'value': row['_levensduur']}
+        aanschaf_maand = row['_aanschaf_maand']
+        aanschaf_jaar = row['_aanschaf_jaar']
+        huidige_jaar = filter_jaar['value']
+
+        # Fetch existing overrides
+        overrides = await get_afschrijving_overrides(DB_PATH, uitgave_id)
+
+        with ui.dialog() as dialog, ui.card().classes('w-full max-w-xl q-pa-md'):
+            ui.label(f'Afschrijving — {row["omschrijving"]}').classes(
+                'text-h6 q-mb-sm')
+
+            # Asset info + editable levensduur
+            with ui.row().classes('w-full items-end gap-4'):
+                ui.label(f'Aanschaf: {format_euro(aanschaf)}').classes(
+                    'text-caption text-grey')
+                ui.label(f'Restwaarde: {restwaarde_pct:.0f}%').classes(
+                    'text-caption text-grey')
+                levensduur_input = ui.select(
+                    LEVENSDUUR_OPTIES, label='Levensduur',
+                    value=levensduur_state['value'],
+                ).classes('w-28')
+
+            ui.separator().classes('q-my-sm')
+
+            # Build year-by-year schedule
+            schedule_container = ui.column().classes('w-full gap-0')
+            inputs_by_year: dict[int, ui.number | None] = {}
+
+            def build_schedule():
+                schedule_container.clear()
+                inputs_by_year.clear()
+                lv = levensduur_state['value']
+                laatste_jaar = aanschaf_jaar + lv
+                toon_tot = max(laatste_jaar, huidige_jaar)
+
+                with schedule_container:
+                    # Header row
+                    with ui.row().classes('w-full items-center gap-2 q-pb-xs') \
+                            .style('border-bottom: 1px solid #E2E8F0'):
+                        ui.label('Jaar').classes('text-caption text-bold') \
+                            .style('width: 60px')
+                        ui.label('Berekend').classes(
+                            'text-caption text-bold text-right') \
+                            .style('width: 90px')
+                        ui.label('Handmatig').classes(
+                            'text-caption text-bold') \
+                            .style('width: 120px')
+                        ui.label('Boekwaarde').classes(
+                            'text-caption text-bold text-right') \
+                            .style('width: 90px')
+
+                    # Year rows
+                    for y in range(aanschaf_jaar, toon_tot + 1):
+                        # Auto value (without override)
+                        auto = bereken_afschrijving(
+                            aanschaf_bedrag=aanschaf,
+                            restwaarde_pct=restwaarde_pct,
+                            levensduur=lv,
+                            aanschaf_maand=aanschaf_maand,
+                            aanschaf_jaar=aanschaf_jaar,
+                            bereken_jaar=y,
+                        )
+                        auto_val = auto['afschrijving']
+
+                        # Book value with overrides
+                        result_with = bereken_afschrijving(
+                            aanschaf_bedrag=aanschaf,
+                            restwaarde_pct=restwaarde_pct,
+                            levensduur=lv,
+                            aanschaf_maand=aanschaf_maand,
+                            aanschaf_jaar=aanschaf_jaar,
+                            bereken_jaar=y,
+                            overrides=overrides,
+                        )
+
+                        has_ov = y in overrides
+                        override_val = overrides.get(y)
+                        is_locked = y < huidige_jaar  # past = filed with BD
+
+                        with ui.row().classes('w-full items-center gap-2 q-py-xs') \
+                                .style('border-bottom: 1px solid #F1F5F9'):
+                            # Year label
+                            lbl = ui.label(str(y)).style('width: 60px')
+                            if y == huidige_jaar:
+                                lbl.classes('text-bold text-primary')
+                            else:
+                                lbl.classes('text-caption')
+
+                            # Auto-calculated value
+                            ui.label(format_euro(auto_val)).classes(
+                                'text-caption text-grey text-right') \
+                                .style('width: 90px')
+
+                            if is_locked:
+                                # Past year: show value read-only with lock icon
+                                if has_ov:
+                                    ui.label(format_euro(override_val)).classes(
+                                        'text-caption text-bold').style(
+                                        'width: 120px')
+                                else:
+                                    ui.label('—').classes(
+                                        'text-caption text-grey').style(
+                                        'width: 120px')
+                                inputs_by_year[y] = None  # not editable
+                            else:
+                                # Current/future: editable
+                                inp = ui.number(
+                                    value=override_val if has_ov else None,
+                                    format='%.2f', min=0, step=0.01,
+                                    placeholder=f'{auto_val:.2f}',
+                                ).classes('w-28').props(
+                                    'dense outlined hide-bottom-space')
+                                inputs_by_year[y] = inp
+
+                            # Book value
+                            bw_label = ui.label(
+                                format_euro(result_with['boekwaarde'])
+                            ).classes('text-caption text-right') \
+                                .style('width: 90px')
+                            if has_ov:
+                                bw_label.classes('text-bold')
+
+                    # Locked years hint
+                    if any(y < huidige_jaar
+                           for y in range(aanschaf_jaar, toon_tot + 1)):
+                        ui.label(
+                            'Voorgaande jaren zijn vergrendeld (reeds aangegeven).'
+                        ).classes('text-caption text-grey q-mt-sm')
+
+            def on_levensduur_change():
+                levensduur_state['value'] = levensduur_input.value
+                build_schedule()
+
+            levensduur_input.on('update:model-value',
+                                lambda: on_levensduur_change())
+
+            build_schedule()
+
+            # Action buttons
+            with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
+                ui.button('Annuleren', on_click=dialog.close).props('flat')
+
+                async def opslaan():
+                    """Save overrides + levensduur."""
+                    # Save levensduur if changed
+                    new_lv = levensduur_state['value']
+                    if new_lv != row['_levensduur']:
+                        await update_uitgave(DB_PATH, uitgave_id=uitgave_id,
+                                             levensduur_jaren=new_lv)
+
+                    # Save overrides (only editable years)
+                    for y, inp in inputs_by_year.items():
+                        if inp is None:
+                            continue  # locked year
+                        val = inp.value
+                        if val is not None and val >= 0:
+                            await set_afschrijving_override(
+                                DB_PATH, uitgave_id, y, float(val))
+                            overrides[y] = float(val)
+                        elif y in overrides:
+                            await delete_afschrijving_override(
+                                DB_PATH, uitgave_id, y)
+                            del overrides[y]
+                    dialog.close()
+                    ui.notify('Afschrijvingen opgeslagen', type='positive')
+                    await ververs()
+
+                ui.button('Opslaan', icon='save',
+                          on_click=opslaan).props('color=primary')
+
+        dialog.open()
 
     async def ververs():
         """Refresh table, summary and activastaat."""
@@ -230,9 +455,8 @@ async def kosten_page():
                 min=0.01, step=0.01,
             ).classes('w-full')
 
-            # Investering section
+            # Investering section (always visible)
             input_investering = ui.checkbox('Dit is een investering', value=False)
-            input_investering.set_visibility(False)
 
             investering_velden = ui.column().classes('pl-8 gap-2')
             investering_velden.set_visibility(False)
@@ -256,17 +480,6 @@ async def kosten_page():
             representatie_note.set_visibility(False)
 
             # Dynamic visibility
-            def on_bedrag_change():
-                val = input_bedrag.value or 0
-                if val >= inv_drempel:
-                    input_investering.set_visibility(True)
-                else:
-                    input_investering.set_visibility(False)
-                    input_investering.value = False
-                    investering_velden.set_visibility(False)
-
-            input_bedrag.on('update:model-value', lambda: on_bedrag_change())
-
             def on_investering_change():
                 investering_velden.set_visibility(input_investering.value)
 
@@ -341,7 +554,7 @@ async def kosten_page():
                 }
 
                 bedrag = float(input_bedrag.value)
-                if bedrag >= inv_drempel and input_investering.value:
+                if input_investering.value:
                     kwargs['is_investering'] = 1
                     kwargs['levensduur_jaren'] = input_levensduur.value
                     kwargs['restwaarde_pct'] = float(input_restwaarde.value or 10)
@@ -444,18 +657,8 @@ async def kosten_page():
                     min=0, max=100
                 ).classes('w-full')
 
-            # Show investering checkbox only if bedrag >= threshold
-            def check_edit_bedrag():
-                val = edit_bedrag.value or 0
-                if val >= inv_drempel:
-                    edit_investering.set_visibility(True)
-                else:
-                    edit_investering.set_visibility(False)
-                    edit_investering.value = False
+            # Investering fields visibility follows checkbox
 
-            edit_bedrag.on('update:model-value', lambda: check_edit_bedrag())
-            if (row.get('bedrag', 0) or 0) < inv_drempel:
-                edit_investering.set_visibility(False)
 
             # Document section
             ui.separator().classes('my-2')
@@ -575,8 +778,8 @@ async def kosten_page():
         """Open dialog to browse and import expense PDFs from archive."""
         from import_.expense_utils import scan_archive
 
-        with ui.dialog().props('maximized') as import_dialog, \
-                ui.card().classes('w-full max-w-4xl mx-auto q-pa-lg'):
+        with ui.dialog() as import_dialog, \
+                ui.card().classes('w-full q-pa-lg').style('max-width: 800px'):
             ui.label('Uitgaven importeren').classes('text-h5 q-mb-md')
 
             import_jaar = {'value': filter_jaar['value']}
@@ -724,8 +927,7 @@ async def kosten_page():
 
         # --- Header + filter row ---
         with ui.row().classes('w-full items-center gap-4'):
-            ui.label('Kosten').classes('text-h5') \
-                .style('color: #0F172A; font-weight: 700')
+            page_title('Kosten')
             ui.space()
             jaar_select = ui.select(
                 {j: str(j) for j in jaren},
@@ -778,7 +980,8 @@ async def kosten_page():
             ui.label('Uitgaven').classes('text-subtitle1 text-bold')
             kosten_table['ref'] = ui.table(
                 columns=kosten_columns, rows=[], row_key='id',
-                pagination={'rowsPerPage': 20},
+                pagination={'rowsPerPage': 20,
+                            'rowsPerPageOptions': [10, 20, 50, 0]},
             ).classes('w-full')
             _tbl = kosten_table['ref']
             _tbl.add_slot('body-cell-bon', '''

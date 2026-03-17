@@ -5,6 +5,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from database import (
+    get_afschrijving_overrides_batch,
     get_data_counts,
     get_fiscale_params,
     get_investeringen,
@@ -61,6 +62,10 @@ async def fetch_fiscal_data(db_path: Path, jaar: int) -> dict | None:
     )
     kosten_excl_inv = totaal_kosten_alle - inv_dit_jaar_bedrag + km_vergoeding
 
+    # Fetch depreciation overrides for all investments
+    all_overrides = await get_afschrijving_overrides_batch(
+        db_path, [u.id for u in investeringen]) if investeringen else {}
+
     # Afschrijvingen + activastaat
     activastaat = []
     totaal_afschrijvingen = 0.0
@@ -71,6 +76,7 @@ async def fetch_fiscal_data(db_path: Path, jaar: int) -> dict | None:
         levensduur = u.levensduur_jaren or 5
         aanschaf_maand = int(u.datum[5:7])
         aanschaf_jaar = int(u.datum[0:4])
+        overrides = all_overrides.get(u.id)
         result = bereken_afschrijving(
             aanschaf_bedrag=aanschaf_bedrag,
             restwaarde_pct=u.restwaarde_pct,
@@ -78,6 +84,7 @@ async def fetch_fiscal_data(db_path: Path, jaar: int) -> dict | None:
             aanschaf_maand=aanschaf_maand,
             aanschaf_jaar=aanschaf_jaar,
             bereken_jaar=jaar,
+            overrides=overrides,
         )
         activastaat.append({
             'omschrijving': u.omschrijving,
@@ -86,6 +93,7 @@ async def fetch_fiscal_data(db_path: Path, jaar: int) -> dict | None:
             'afschrijving_jaar': result['per_jaar'],
             'afschrijving_dit_jaar': result['afschrijving'],
             'boekwaarde': result['boekwaarde'],
+            'has_override': result.get('has_override', False),
         })
         totaal_afschrijvingen += result['afschrijving']
 

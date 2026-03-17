@@ -9,6 +9,7 @@ import pages.dashboard
 import pages.dashboard_omzet
 import pages.werkdagen
 import pages.facturen
+import pages.klanten
 import pages.kosten
 import pages.bank
 import pages.jaarafsluiting
@@ -44,5 +45,5 @@ ui.run(
     storage_secret='boekhouding-app-secret',
     port=8085,
     host='127.0.0.1',
-    show=False,
+    show=True,
 )

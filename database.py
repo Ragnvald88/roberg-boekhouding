@@ -159,6 +159,14 @@ CREATE TABLE IF NOT EXISTS aangifte_documenten (
     notitie TEXT DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_aangifte_docs_jaar ON aangifte_documenten(jaar);
+
+CREATE TABLE IF NOT EXISTS afschrijving_overrides (
+    id INTEGER PRIMARY KEY,
+    uitgave_id INTEGER NOT NULL REFERENCES uitgaven(id) ON DELETE CASCADE,
+    jaar INTEGER NOT NULL,
+    bedrag REAL NOT NULL CHECK (bedrag >= 0),
+    UNIQUE(uitgave_id, jaar)
+);
 """
 
 
@@ -570,6 +578,7 @@ async def get_facturen(db_path: Path = DB_PATH, jaar: int = None) -> list[Factuu
 
 
 async def add_factuur(db_path: Path = DB_PATH, **kwargs) -> int:
+    _validate_datum(kwargs['datum'])
     async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
             """INSERT INTO facturen
@@ -622,6 +631,8 @@ async def mark_betaald(db_path: Path = DB_PATH, factuur_id: int = 0,
 async def update_factuur(db_path: Path = DB_PATH, factuur_id: int = 0,
                          **kwargs) -> None:
     """Update factuur fields (datum, klant_id, totaal_bedrag, type, pdf_pad)."""
+    if 'datum' in kwargs:
+        _validate_datum(kwargs['datum'])
     async with get_db_ctx(db_path) as conn:
         fields = []
         values = []
@@ -1348,6 +1359,70 @@ async def get_investeringen_voor_afschrijving(db_path: Path = DB_PATH,
         return [_row_to_uitgave(r) for r in rows]
 
 
+# === Afschrijving overrides ===
+
+async def get_afschrijving_overrides(db_path: Path = DB_PATH,
+                                      uitgave_id: int = 0) -> dict[int, float]:
+    """Get all depreciation overrides for a single investment.
+
+    Returns dict mapping jaar → bedrag.
+    """
+    async with get_db_ctx(db_path) as conn:
+        cursor = await conn.execute(
+            "SELECT jaar, bedrag FROM afschrijving_overrides WHERE uitgave_id = ?",
+            (uitgave_id,))
+        rows = await cursor.fetchall()
+        return {r['jaar']: r['bedrag'] for r in rows}
+
+
+async def get_afschrijving_overrides_batch(
+    db_path: Path = DB_PATH,
+    uitgave_ids: list[int] | None = None,
+) -> dict[int, dict[int, float]]:
+    """Get overrides for multiple investments.
+
+    Returns dict mapping uitgave_id → {jaar → bedrag}.
+    """
+    if not uitgave_ids:
+        return {}
+    async with get_db_ctx(db_path) as conn:
+        placeholders = ','.join('?' * len(uitgave_ids))
+        cursor = await conn.execute(
+            f"SELECT uitgave_id, jaar, bedrag FROM afschrijving_overrides "
+            f"WHERE uitgave_id IN ({placeholders})",
+            uitgave_ids)
+        rows = await cursor.fetchall()
+        result: dict[int, dict[int, float]] = {}
+        for r in rows:
+            result.setdefault(r['uitgave_id'], {})[r['jaar']] = r['bedrag']
+        return result
+
+
+async def set_afschrijving_override(db_path: Path = DB_PATH,
+                                     uitgave_id: int = 0,
+                                     jaar: int = 0,
+                                     bedrag: float = 0.0) -> None:
+    """Set (upsert) a depreciation override for a specific investment+year."""
+    async with get_db_ctx(db_path) as conn:
+        await conn.execute(
+            """INSERT INTO afschrijving_overrides (uitgave_id, jaar, bedrag)
+               VALUES (?, ?, ?)
+               ON CONFLICT(uitgave_id, jaar) DO UPDATE SET bedrag = excluded.bedrag""",
+            (uitgave_id, jaar, bedrag))
+        await conn.commit()
+
+
+async def delete_afschrijving_override(db_path: Path = DB_PATH,
+                                        uitgave_id: int = 0,
+                                        jaar: int = 0) -> None:
+    """Delete a specific depreciation override."""
+    async with get_db_ctx(db_path) as conn:
+        await conn.execute(
+            "DELETE FROM afschrijving_overrides WHERE uitgave_id = ? AND jaar = ?",
+            (uitgave_id, jaar))
+        await conn.commit()
+
+
 # === Aangifte documenten ===
 
 async def get_aangifte_documenten(db_path: Path = DB_PATH,
@@ -1390,17 +1465,6 @@ async def delete_aangifte_document(db_path: Path = DB_PATH,
         await conn.execute(
             "DELETE FROM aangifte_documenten WHERE id = ?", (doc_id,))
         await conn.commit()
-
-
-async def get_openstaande_debiteuren(db_path: Path = DB_PATH, jaar: int = 0) -> float:
-    """Sum of unpaid invoices for the given year (current snapshot, for dashboard)."""
-    async with get_db_ctx(db_path) as conn:
-        cursor = await conn.execute(
-            "SELECT COALESCE(SUM(totaal_bedrag), 0) FROM facturen "
-            "WHERE betaald = 0 AND substr(datum, 1, 4) = ?",
-            (str(jaar),))
-        row = await cursor.fetchone()
-        return float(row[0])
 
 
 async def get_debiteuren_op_peildatum(db_path: Path = DB_PATH,
@@ -1560,23 +1624,6 @@ async def update_jaarafsluiting_status(db_path: Path = DB_PATH, jaar: int = 0,
         return cursor.rowcount > 0
 
 
-async def update_partner_inkomen(db_path: Path = DB_PATH, jaar: int = 0,
-                                  partner_bruto_loon: float = 0,
-                                  partner_loonheffing: float = 0) -> bool:
-    """Update partner income fields in fiscale_params for a year.
-
-    Returns True if a row was updated, False if no fiscale_params row exists.
-    """
-    async with get_db_ctx(db_path) as conn:
-        cursor = await conn.execute(
-            """UPDATE fiscale_params
-               SET partner_bruto_loon = ?, partner_loonheffing = ?
-               WHERE jaar = ?""",
-            (partner_bruto_loon, partner_loonheffing, jaar))
-        await conn.commit()
-        return cursor.rowcount > 0
-
-
 # --- Klant Locaties ---
 
 
@@ -1602,15 +1649,6 @@ async def add_klant_locatie(db_path, klant_id, naam, retour_km):
             (klant_id, naam, retour_km))
         await conn.commit()
         return cur.lastrowid
-
-
-async def update_klant_locatie(db_path, locatie_id, naam, retour_km):
-    """Update a location's name and/or km."""
-    async with get_db_ctx(db_path) as conn:
-        await conn.execute(
-            "UPDATE klant_locaties SET naam = ?, retour_km = ? WHERE id = ?",
-            (naam, retour_km, locatie_id))
-        await conn.commit()
 
 
 async def delete_klant_locatie(db_path, locatie_id):

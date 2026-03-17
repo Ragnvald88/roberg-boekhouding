@@ -8,7 +8,7 @@ from pathlib import Path
 
 from nicegui import app, events, ui
 
-from components.layout import create_layout
+from components.layout import create_layout, page_title
 from components.invoice_generator import generate_invoice
 from components.utils import format_euro, format_datum, generate_csv
 from database import (
@@ -39,8 +39,7 @@ async def facturen_page():
     with ui.column().classes('w-full p-6 max-w-7xl mx-auto gap-6'):
         # Header + filter
         with ui.row().classes('w-full items-center gap-4'):
-            ui.label('Facturen').classes('text-h5') \
-                .style('color: #0F172A; font-weight: 700')
+            page_title('Facturen')
             ui.space()
             jaar_select = ui.select(
                 {y: str(y) for y in range(2023, current_year + 2)},
@@ -114,7 +113,8 @@ async def facturen_page():
         table = ui.table(
             columns=columns, rows=[], row_key='id',
             selection='multiple',
-            pagination={'rowsPerPage': 20, 'sortBy': 'nummer', 'descending': True},
+            pagination={'rowsPerPage': 20, 'sortBy': 'nummer', 'descending': True,
+                        'rowsPerPageOptions': [10, 20, 50, 0]},
         ).classes('w-full')
         table_ref['ref'] = table
 
@@ -351,7 +351,7 @@ async def facturen_page():
             row = e.args
             pdf_path = row.get('pdf_pad', '')
             if pdf_path and Path(pdf_path).exists():
-                subprocess.run(['open', '-R', pdf_path])
+                await asyncio.to_thread(subprocess.run, ['open', '-R', pdf_path])
             else:
                 ui.notify('PDF niet gevonden', type='warning')
 

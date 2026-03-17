@@ -4,7 +4,7 @@ from datetime import date
 
 from nicegui import ui
 
-from components.layout import create_layout
+from components.layout import create_layout, page_title
 from components.utils import format_euro
 from database import get_omzet_per_klant, DB_PATH
 
@@ -23,8 +23,7 @@ async def omzet_detail_page():
         with ui.row().classes('w-full items-center gap-4'):
             ui.button(icon='arrow_back',
                       on_click=lambda: ui.navigate.to('/')).props('flat round')
-            ui.label('Omzet per klant').classes('text-h5') \
-                .style('color: #0F172A; font-weight: 700')
+            page_title('Omzet per klant')
             ui.space()
             jaar_select = ui.select(
                 jaren, value=huidig_jaar, label='Jaar',

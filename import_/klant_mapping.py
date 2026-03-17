@@ -90,13 +90,6 @@ ANW_FILENAME_TO_KLANT = {
     'Gr_Factuur': 'HAP NoordOost',
 }
 
-# New klanten that need to be created during import
-NEW_KLANTEN = {
-    'K. Klant4': {'tarief_uur': 0, 'retour_km': 0, 'adres': 'Hoofdstraat 4, 9636 HT Zuidbroek'},
-    'K. Klant5': {'tarief_uur': 0, 'retour_km': 0, 'adres': 'de Sluiskampen 41, 9422 AP Smilde'},
-    'K. Klant8': {'tarief_uur': 0, 'retour_km': 0, 'adres': ''},
-}
-
 
 def resolve_klant(pdf_name: str | None, filename_suffix: str | None,
                   klant_lookup: dict[str, int]) -> tuple[str | None, int | None]:
