@@ -219,6 +219,8 @@ async def init_db(db_path: Path = DB_PATH) -> None:
             ('balans_overige_vorderingen', 0), ('balans_overige_schulden', 0),
             # Phase: jaarafsluiting redesign — ZA/SA toggles + lijfrente
             ('za_actief', 1), ('sa_actief', 0), ('lijfrente_premie', 0),
+            # Phase: box3 partner persistence
+            ('box3_fiscaal_partner', 1),
         ]:
             try:
                 await conn.execute(
@@ -968,6 +970,7 @@ def _row_to_fiscale_params(r) -> FiscaleParams:
         box3_rendement_schuld_pct=_safe_get(r, 'box3_rendement_schuld_pct', 2.46, keys),
         box3_tarief_pct=_safe_get(r, 'box3_tarief_pct', 36, keys),
         box3_drempel_schulden=_safe_get(r, 'box3_drempel_schulden', 3700, keys),
+        box3_fiscaal_partner=bool(_safe_get(r, 'box3_fiscaal_partner', 1, keys)),
         za_actief=bool(_safe_get(r, 'za_actief', 1, keys)),
         sa_actief=bool(_safe_get(r, 'sa_actief', 0, keys)),
         lijfrente_premie=_safe_get(r, 'lijfrente_premie', 0, keys),
@@ -1003,6 +1006,7 @@ async def upsert_fiscale_params(db_path: Path = DB_PATH, **kwargs) -> None:
             "voorlopige_aanslag_betaald, voorlopige_aanslag_zvw, "
             "partner_bruto_loon, partner_loonheffing, "
             "box3_bank_saldo, box3_overige_bezittingen, box3_schulden, "
+            "box3_fiscaal_partner, "
             "ew_naar_partner, "
             "balans_bank_saldo, balans_crediteuren, "
             "balans_overige_vorderingen, balans_overige_schulden, "
@@ -1027,13 +1031,14 @@ async def upsert_fiscale_params(db_path: Path = DB_PATH, **kwargs) -> None:
                 aov_premie, woz_waarde, hypotheekrente, voorlopige_aanslag_betaald,
                 voorlopige_aanslag_zvw, partner_bruto_loon, partner_loonheffing,
                 box3_bank_saldo, box3_overige_bezittingen, box3_schulden,
+                box3_fiscaal_partner,
                 ew_naar_partner, lijfrente_premie,
                 balans_bank_saldo, balans_crediteuren,
                 balans_overige_vorderingen, balans_overige_schulden,
                 jaarafsluiting_status)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (kwargs['jaar'], kwargs['zelfstandigenaftrek'], kwargs.get('startersaftrek'),
              kwargs['mkb_vrijstelling_pct'], kwargs['kia_ondergrens'],
              kwargs['kia_bovengrens'], kwargs['kia_pct'],
@@ -1070,6 +1075,7 @@ async def upsert_fiscale_params(db_path: Path = DB_PATH, **kwargs) -> None:
              existing['box3_bank_saldo'] if existing else 0,
              existing['box3_overige_bezittingen'] if existing else 0,
              existing['box3_schulden'] if existing else 0,
+             existing['box3_fiscaal_partner'] if existing else 1,
              existing['ew_naar_partner'] if existing else 1,
              existing['lijfrente_premie'] if existing else 0,
              existing['balans_bank_saldo'] if existing else 0,

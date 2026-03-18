@@ -678,7 +678,8 @@ async def aangifte_page():
                     ).classes('w-52')
 
                 partner_check = ui.checkbox(
-                    'Fiscaal partner (verdubbelt heffingsvrij vermogen)', value=True,
+                    'Fiscaal partner (verdubbelt heffingsvrij vermogen)',
+                    value=bool(params.box3_fiscaal_partner),
                 ).classes('q-mt-sm')
 
                 ui.label(f'{BD["box3_bank"]}, {BD["box3_overig"]}, {BD["box3_schulden"]}').classes(
@@ -698,6 +699,15 @@ async def aangifte_page():
                     if not saved:
                         ui.notify(f'Geen fiscale parameters voor {jaar}', type='warning')
                         return
+
+                    # Persist fiscaal partner flag
+                    from database import get_db_ctx
+                    async with get_db_ctx(DB_PATH) as conn:
+                        await conn.execute(
+                            "UPDATE fiscale_params SET box3_fiscaal_partner = ? "
+                            "WHERE jaar = ?",
+                            (1 if partner_check.value else 0, jaar))
+                        await conn.commit()
 
                     p = await get_fiscale_params(DB_PATH, jaar)
                     pd = fiscale_params_to_dict(p)
@@ -764,7 +774,8 @@ async def aangifte_page():
             return
 
         params_dict = data['params_dict']
-        box3 = bereken_box3(params_dict)
+        fp_partner = bool(data['params'].box3_fiscaal_partner)
+        box3 = bereken_box3(params_dict, fiscaal_partner=fp_partner)
 
         with overzicht_container:
             ui.label('Dit overzicht toont dezelfde waarden als het eindscherm van '

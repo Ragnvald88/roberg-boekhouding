@@ -160,6 +160,7 @@ class FiscaleParams:
     box3_rendement_schuld_pct: float = 2.46
     box3_tarief_pct: float = 36.0
     box3_drempel_schulden: float = 3700.0
+    box3_fiscaal_partner: bool = True
     # ZA/SA toggles (per year — ZA phasing out, SA max 3x in first 5 years)
     za_actief: bool = True
     sa_actief: bool = False
