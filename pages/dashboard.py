@@ -283,7 +283,14 @@ async def dashboard_page():
                                     cur_ib = _fp.voorlopige_aanslag_betaald if _fp else 0
                                     cur_zvw = _fp.voorlopige_aanslag_zvw if _fp else 0
 
-                                    # Track uploaded files
+                                    # Check existing documents
+                                    existing_docs = await get_aangifte_documenten(
+                                        DB_PATH, _jaar)
+                                    existing_by_type = {
+                                        d.documenttype: d for d in existing_docs}
+                                    has_ib_doc = 'va_ib_beschikking' in existing_by_type
+                                    has_zvw_doc = 'va_zvw_beschikking' in existing_by_type
+
                                     uploads = {'ib': None, 'zvw': None}
 
                                     with ui.dialog() as dlg, \
@@ -292,50 +299,66 @@ async def dashboard_page():
                                             .classes('text-h6')
                                         ui.label(
                                             f'Vul de jaarbedragen in van je VA '
-                                            f'beschikking {_jaar} en upload de PDF\'s.'
+                                            f'beschikking {_jaar}.'
                                         ).classes('text-body2 text-grey-7 q-mb-sm')
 
-                                        # IB section
-                                        with ui.card().classes('w-full q-pa-sm') \
-                                                .style('background: #F8FAFC'):
-                                            ui.label('Inkomstenbelasting') \
-                                                .classes('text-subtitle2')
-                                            with ui.row().classes(
-                                                    'w-full items-end gap-4'):
-                                                va_ib_in = ui.number(
-                                                    'Jaarbedrag',
-                                                    value=cur_ib or 0,
-                                                    format='%.2f', prefix='\u20ac',
-                                                ).classes('flex-grow')
-                                                ui.upload(
-                                                    label='PDF beschikking',
-                                                    auto_upload=True,
-                                                    on_upload=lambda e:
-                                                        uploads.update({'ib': e}),
-                                                ).classes('w-48').props(
-                                                    'flat bordered dense '
-                                                    'accept=".pdf"')
+                                        for lbl, key, doctype, cur_val, has_doc in [
+                                            ('Inkomstenbelasting', 'ib',
+                                             'va_ib_beschikking', cur_ib, has_ib_doc),
+                                            ('Zorgverzekeringswet', 'zvw',
+                                             'va_zvw_beschikking', cur_zvw, has_zvw_doc),
+                                        ]:
+                                            with ui.card().classes('w-full q-pa-sm') \
+                                                    .style('background: #F8FAFC'):
+                                                ui.label(lbl).classes('text-subtitle2')
+                                                if has_doc:
+                                                    doc = existing_by_type[doctype]
+                                                    with ui.row().classes(
+                                                            'items-center gap-2'):
+                                                        ui.icon('check_circle',
+                                                                color='positive')
+                                                        ui.label(doc.bestandsnaam) \
+                                                            .classes(
+                                                                'text-caption text-grey-7')
 
-                                        # ZVW section
-                                        with ui.card().classes('w-full q-pa-sm') \
-                                                .style('background: #F8FAFC'):
-                                            ui.label('Zorgverzekeringswet') \
-                                                .classes('text-subtitle2')
-                                            with ui.row().classes(
-                                                    'w-full items-end gap-4'):
-                                                va_zvw_in = ui.number(
-                                                    'Jaarbedrag',
-                                                    value=cur_zvw or 0,
-                                                    format='%.2f', prefix='\u20ac',
-                                                ).classes('flex-grow')
-                                                ui.upload(
-                                                    label='PDF beschikking',
-                                                    auto_upload=True,
-                                                    on_upload=lambda e:
-                                                        uploads.update({'zvw': e}),
-                                                ).classes('w-48').props(
-                                                    'flat bordered dense '
-                                                    'accept=".pdf"')
+                                        # Amount inputs (outside the loop for reference)
+                                        ui.separator().classes('q-my-sm')
+                                        with ui.row().classes('gap-4 flex-wrap'):
+                                            va_ib_in = ui.number(
+                                                'VA IB (jaarbedrag)',
+                                                value=cur_ib or 0,
+                                                format='%.2f', prefix='\u20ac',
+                                            ).classes('flex-grow')
+                                            va_zvw_in = ui.number(
+                                                'VA ZVW (jaarbedrag)',
+                                                value=cur_zvw or 0,
+                                                format='%.2f', prefix='\u20ac',
+                                            ).classes('flex-grow')
+
+                                        # Upload section — only show if docs missing
+                                        if not has_ib_doc or not has_zvw_doc:
+                                            ui.separator().classes('q-my-sm')
+                                            ui.label('PDF beschikkingen uploaden') \
+                                                .classes('text-caption text-grey-7')
+                                            with ui.row().classes('gap-4'):
+                                                if not has_ib_doc:
+                                                    ui.upload(
+                                                        label='IB beschikking',
+                                                        auto_upload=True,
+                                                        on_upload=lambda e:
+                                                            uploads.update({'ib': e}),
+                                                    ).classes('w-48').props(
+                                                        'flat bordered dense '
+                                                        'accept=".pdf"')
+                                                if not has_zvw_doc:
+                                                    ui.upload(
+                                                        label='ZVW beschikking',
+                                                        auto_upload=True,
+                                                        on_upload=lambda e:
+                                                            uploads.update({'zvw': e}),
+                                                    ).classes('w-48').props(
+                                                        'flat bordered dense '
+                                                        'accept=".pdf"')
 
                                         async def save_va():
                                             # Validate: require amounts
