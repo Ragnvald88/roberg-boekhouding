@@ -355,7 +355,7 @@ async def dashboard_page():
                                                     continue
                                                 fname = _P(evt.file.name).name
                                                 dest = aangifte_dir / fname
-                                                content = evt.file.read()
+                                                content = await evt.file.read()
                                                 await _aio.to_thread(
                                                     dest.write_bytes, content)
                                                 await add_aangifte_document(

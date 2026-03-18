@@ -216,6 +216,12 @@ async def open_werkdag_dialog(on_save=None, werkdag=None):
             if not kid:
                 ui.notify('Selecteer een klant', type='warning')
                 return
+            if not uren_input.value or uren_input.value <= 0:
+                ui.notify('Vul het aantal uren in', type='warning')
+                return
+            if tarief_input.value is None or tarief_input.value < 0:
+                ui.notify('Vul een tarief in', type='warning')
+                return
             k = klant_data[kid]
             code = code_select.value or 'WERKDAG'
             activiteit = CODES.get(code, 'Waarneming dagpraktijk')

@@ -697,6 +697,9 @@ async def kosten_page():
                 ui.button('Annuleren', on_click=dialog.close).props('flat')
 
                 async def bewaar_wijziging():
+                    if not edit_bedrag.value or edit_bedrag.value <= 0:
+                        ui.notify('Vul een positief bedrag in', type='warning')
+                        return
                     kwargs = {
                         'datum': edit_datum.value,
                         'categorie': edit_categorie.value,

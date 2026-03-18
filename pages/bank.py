@@ -103,7 +103,7 @@ async def bank_page():
 
     async def handle_upload(e):
         """Handle CSV file upload: parse, archive, insert."""
-        content = e.file.read()
+        content = await e.file.read()
         filename = e.file.name
 
         try:
