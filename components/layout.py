@@ -60,14 +60,16 @@ def create_layout(title: str, active_page: str = ''):
     """Shared layout: teal header, dark sidebar, off-white content."""
 
     PAGES = [
-        ('DAGELIJKS', None, None),  # section header
+        ('OVERZICHT', None, None),
         ('Dashboard', 'dashboard', '/'),
         ('Werkdagen', 'schedule', '/werkdagen'),
+        ('FINANCIEEL', None, None),
         ('Facturen', 'receipt', '/facturen'),
-        ('FINANCIEEL', None, None),  # section header
         ('Kosten', 'payments', '/kosten'),
+        ('Investeringen', 'inventory_2', '/kosten?investeringen'),
         ('Bank', 'account_balance', '/bank'),
-        ('JAAREINDE', None, None),  # section header
+        ('ADMINISTRATIE', None, None),
+        ('Documenten', 'folder_open', '/documenten'),
         ('Jaarafsluiting', 'bar_chart', '/jaarafsluiting'),
         ('Aangifte', 'fact_check', '/aangifte'),
     ]
@@ -109,7 +111,8 @@ def create_layout(title: str, active_page: str = ''):
                     .style('color: #64748B; letter-spacing: 0.1em')
                 continue
 
-            is_active = (target == active_page)
+            is_active = (target == active_page
+                        or target.split('?')[0] == active_page)
             btn = ui.button(
                 label, icon=icon,
                 on_click=lambda t=target: ui.navigate.to(t)

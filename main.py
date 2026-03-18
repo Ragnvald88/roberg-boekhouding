@@ -14,6 +14,7 @@ import pages.kosten
 import pages.bank
 import pages.jaarafsluiting
 import pages.aangifte
+import pages.documenten
 import pages.instellingen
 
 

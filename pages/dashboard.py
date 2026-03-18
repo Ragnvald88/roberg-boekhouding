@@ -469,7 +469,8 @@ async def dashboard_page():
                 docs = await get_aangifte_documenten(DB_PATH, jaar)
                 done_docs = len({d.documenttype for d in docs})
                 # 13 document types defined in aangifte.py AANGIFTE_DOCS
-                total_docs = 13
+                from components.document_specs import AANGIFTE_DOCS as _ADOCS
+                total_docs = len(_ADOCS)
                 doc_color = '#059669' if done_docs >= total_docs else '#D97706'
 
                 def doc_extra(_done=done_docs, _total=total_docs):
@@ -482,7 +483,7 @@ async def dashboard_page():
                 kpi_card('Documenten',
                          f'{done_docs}/{total_docs} compleet',
                          'folder', doc_color, doc_extra,
-                         on_click=lambda: ui.navigate.to('/aangifte'))
+                         on_click=lambda: ui.navigate.to('/documenten'))
 
         # Charts + alerts
         chart_row = chart_container['ref']
