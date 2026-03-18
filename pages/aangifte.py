@@ -24,8 +24,8 @@ from database import (
     get_fiscale_params, get_aangifte_documenten,
     add_aangifte_document, delete_aangifte_document,
     update_ib_inputs, update_box3_inputs, update_ew_naar_partner,
-    update_za_sa_toggles,
-    DB_PATH,
+    update_za_sa_toggles, get_belastingdienst_betalingen,
+    update_partner_inputs, DB_PATH,
 )
 from fiscal.berekeningen import bereken_volledig, bereken_box3
 
@@ -502,21 +502,79 @@ async def aangifte_page():
                 ui.label(f'{BD["aov"]} / Inkomensvoorzieningen > Lijfrentepremie').classes(
                     'text-caption text-grey-6')
 
-            # Card 3: Voorlopige aanslagen
-            with ui.card().classes('w-full'):
-                ui.label('Voorlopige aanslagen').classes('text-subtitle1 text-weight-bold')
+            # Card 3: Voorlopige aanslagen — prominent styling
+            with ui.card().classes('w-full') \
+                    .style('border-left: 4px solid var(--q-primary)'):
+                with ui.row().classes('items-center gap-2'):
+                    ui.icon('account_balance', color='primary')
+                    ui.label('Voorlopige aanslagen') \
+                        .classes('text-subtitle1 text-weight-bold')
+                ui.label(
+                    'Vul hier de bedragen in van je VA beschikking(en).'
+                ).classes('text-caption text-grey-7 q-mb-sm')
                 ui.separator().classes('my-1')
 
                 with ui.row().classes('gap-4 flex-wrap'):
                     va_ib_input = ui.number(
-                        'VA Inkomstenbelasting', value=data['voorlopige_aanslag'],
+                        'VA Inkomstenbelasting (jaarbedrag)',
+                        value=data['voorlopige_aanslag'],
                         format='%.2f', prefix='€',
-                    ).classes('w-52')
+                    ).classes('w-60')
                     va_zvw_input = ui.number(
-                        'VA Zorgverzekeringswet', value=data['voorlopige_aanslag_zvw'],
+                        'VA Zorgverzekeringswet (jaarbedrag)',
+                        value=data['voorlopige_aanslag_zvw'],
                         format='%.2f', prefix='€',
-                    ).classes('w-52')
-                ui.label(f'{BD["va_ib"]}, {BD["va_zvw"]}').classes('text-caption text-grey-6')
+                    ).classes('w-60')
+                ui.label(f'{BD["va_ib"]}, {BD["va_zvw"]}') \
+                    .classes('text-caption text-grey-6')
+
+                # Show bank-detected payments
+                bd_betaald = await get_belastingdienst_betalingen(DB_PATH, jaar)
+                va_totaal = data['voorlopige_aanslag'] + data['voorlopige_aanslag_zvw']
+                if bd_betaald > 0 or va_totaal > 0:
+                    ui.separator().classes('q-my-sm')
+                    with ui.row().classes('gap-8 items-start'):
+                        with ui.column().classes('gap-0'):
+                            ui.label('Betaald via bank').classes(
+                                'text-caption text-grey-7')
+                            ui.label(format_euro(bd_betaald)).classes(
+                                'text-body1 text-weight-bold text-positive')
+                        if va_totaal > 0:
+                            with ui.column().classes('gap-0'):
+                                ui.label('Beschikking totaal').classes(
+                                    'text-caption text-grey-7')
+                                ui.label(format_euro(va_totaal)).classes(
+                                    'text-body1 text-weight-bold')
+                            with ui.column().classes('gap-0'):
+                                verschil = va_totaal - bd_betaald
+                                ui.label(
+                                    'Nog te betalen' if verschil > 0
+                                    else 'Meer betaald'
+                                ).classes('text-caption text-grey-7')
+                                color = ('text-warning' if verschil > 0
+                                         else 'text-positive')
+                                ui.label(format_euro(abs(verschil))) \
+                                    .classes(f'text-body1 text-weight-bold {color}')
+                    ui.label(
+                        'Banktotaal = alle betalingen aan Belastingdienst '
+                        '(IB + ZVW + evt. definitieve aanslagen)'
+                    ).classes('text-caption text-grey-6')
+
+            # Card 4: Partner gegevens
+            with ui.card().classes('w-full'):
+                ui.label('Partner').classes('text-subtitle1 text-weight-bold')
+                ui.separator().classes('my-1')
+                with ui.row().classes('gap-4 flex-wrap'):
+                    partner_loon_input = ui.number(
+                        'Bruto jaarloon', value=params.partner_bruto_loon or 0,
+                        format='%.2f', prefix='\u20ac',
+                    ).classes('w-48')
+                    partner_lh_input = ui.number(
+                        'Loonheffing', value=params.partner_loonheffing or 0,
+                        format='%.2f', prefix='\u20ac',
+                    ).classes('w-48')
+                ui.label('Nodig voor berekening AHK partner').classes(
+                    'text-caption text-grey-6')
 
             # Auto-save on blur/change for all inputs
             async def save_prive():
@@ -537,6 +595,11 @@ async def aangifte_page():
                     lijfrente_premie=lijfrente_val,
                 )
                 await update_ew_naar_partner(DB_PATH, jaar=jaar, value=ew_val)
+                await update_partner_inputs(
+                    DB_PATH, jaar=jaar,
+                    bruto_loon=float(partner_loon_input.value or 0),
+                    loonheffing=float(partner_lh_input.value or 0),
+                )
 
                 # Invalidate cache and refresh dependent views
                 _invalidate_cache()
@@ -548,7 +611,8 @@ async def aangifte_page():
 
             # Attach auto-save to all prive inputs
             for _inp in [woz_input, hyp_input, aov_input, lijfrente_input,
-                         va_ib_input, va_zvw_input]:
+                         va_ib_input, va_zvw_input,
+                         partner_loon_input, partner_lh_input]:
                 _inp.on('blur', save_prive)
             ew_partner_check.on('change', save_prive)
 

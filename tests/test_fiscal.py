@@ -119,15 +119,12 @@ class TestAfschrijvingen:
             levensduur=4, aanschaf_maand=12, aanschaf_jaar=2023,
             bereken_jaar=2024,
         )
-        # Afschrijving voor 2024 is een volledig jaar
-        assert abs(result['afschrijving'] - 611) < 5
-        # Boekwaarde eind 2024: na 1 maand (2023) + 12 maanden (2024)
-        # Pro-rata: 2023 = 611.55 * 1/12 = 50.96
-        # 2024 = 611.55
-        # Cum = 662.51, BW = 2714 - 662.51 = 2051.49
-        # NB: SKILL zegt BW=1492 (lijkt 2 volle jaren te rekenen)
-        assert result['boekwaarde'] > 1400  # Sanity check
-        assert result['per_jaar'] > 600
+        # afschrijfbaar = 2714 * 0.9 = 2442.6, per_jaar = 2442.6/4 = 610.65
+        # 2023 pro-rata: 610.65 * 1/12 = 50.89
+        # 2024 full year: 610.65, cum = 661.54, BW = 2714 - 661.54 = 2052.46
+        assert abs(result['afschrijving'] - 610.65) < 1
+        assert abs(result['boekwaarde'] - 2052.46) < 1
+        assert abs(result['per_jaar'] - 610.65) < 1
 
     def test_afschrijving_eerste_jaar_prorata(self):
         """Eerste jaar pro-rata: aanschaf in december = 1/12 van jaarbedrag."""
@@ -223,21 +220,21 @@ class TestHeffingskortingen:
     def test_arbeidskorting_2024_laag_inkomen(self):
         """2024: laag inkomen, eerste bracket."""
         ak = bereken_arbeidskorting(8000, 2024)
-        # bracket (0, 11491, 0.08425, 0): 0 + 0.08425 * 8000 = 674
+        # bracket (0, 11490, 0.08425, 0): 0 + 0.08425 * 8000 = 674
         assert abs(ak - 674) < 1
 
     def test_arbeidskorting_2024_midden_inkomen(self):
         """2024: midden inkomen, tweede bracket."""
         ak = bereken_arbeidskorting(20000, 2024)
-        # bracket (11491, 24821, 0.31433, 968): 968 + 0.31433 * (20000 - 11491) = 968 + 2674.85 = 3642.85
+        # bracket (11490, 24820, 0.31433, 968): 968 + 0.31433 * (20000 - 11490) = 968 + 2674.95 = 3642.95
         assert abs(ak - 3642.85) < 1
 
     def test_arbeidskorting_2024_hoog_inkomen(self):
         """2024: hoog inkomen, in afbouw-bracket."""
         ak = bereken_arbeidskorting(76163, 2024)
-        # bracket (39958, 124935, -0.06510, 5532)
-        # 5532 + (-0.0651) * (76163 - 39958) = 5532 - 2356.14 = 3175.86
-        assert abs(ak - 3175.86) < 2
+        # bracket (39957, 124934, -0.06510, 5532)
+        # 5532 + (-0.0651) * (76163 - 39957) = 5532 - 2357.01 = 3174.99
+        assert abs(ak - 3174.99) < 2
 
     def test_arbeidskorting_2024_boven_afbouw(self):
         """2024: boven afbouwgrens, korting = 0."""
@@ -334,7 +331,7 @@ class TestFiscaleWinst:
         assert abs(result.zelfstandigenaftrek - 3750) < 1
         assert abs(result.startersaftrek - 2123) < 1
         # Belastbare winst: Boekhouder target ~76.776
-        assert abs(result.belastbare_winst - 76777) < 100
+        assert abs(result.belastbare_winst - 76777) < 10
 
     def test_fiscale_winst_2023(self):
         """Boekhouder 2023: winst EUR62.522 (fiscale winst, correcties baked-in).
@@ -393,7 +390,7 @@ class TestVolledig:
         assert abs(result.tariefsaanpassing - 1411) < 50
 
         # Resultaat (with tariefsaanpassing, EW in verzamelinkomen, VA=28544)
-        assert -500 < result.resultaat < 0
+        assert -300 < result.resultaat < 0
 
         # Urencriterium check
         assert result.uren_criterium_gehaald is True
@@ -810,7 +807,7 @@ class TestTariefsaanpassing:
         # deductions: ZA(2470) + SA(2123) + MKB ~11484 = ~16077
         # subject = min(16077, 18183) = 16077
         # ta = 16077 * 12.02% = 1932
-        assert result.tariefsaanpassing > 1500
+        assert abs(result.tariefsaanpassing - 1932) < 50
 
     def test_tariefsaanpassing_no_urencriterium_no_deductions(self):
         """Without urencriterium, no ZA/SA, only MKB. Still can have tariefsaanpassing."""
@@ -828,7 +825,7 @@ class TestTariefsaanpassing:
         # excess = 95000 - 75518 = 19482
         # subject = min(12645, 19482) = 12645
         # ta = 12645 * 12.53% = 1584
-        assert result.tariefsaanpassing > 1000
+        assert abs(result.tariefsaanpassing - 1584) < 50
 
 
 class TestArbeidskortingInput:
@@ -837,8 +834,8 @@ class TestArbeidskortingInput:
     def test_arbeidskorting_uses_fiscale_winst_2024(self):
         """Boekhouder 2024: AK = 1.986 with fiscale_winst = 94.437.
 
-        With fiscale_winst 94437: AK = 5532 - 6.51% * (94437 - 39958) = 1983.
-        With belastbare_winst 76776: AK = 5532 - 6.51% * (76776 - 39958) = 3136. (WRONG)
+        With fiscale_winst 94437: AK = 5532 - 6.51% * (94437 - 39957) = 1985.
+        With belastbare_winst 76776: AK = 5532 - 6.51% * (76776 - 39957) = 3135. (WRONG)
         """
         params = FISCALE_PARAMS[2024]
         result = bereken_volledig(
@@ -859,11 +856,11 @@ class TestDBDrivenArbeidskorting:
         """JSON brackets produce same result as Python constants."""
         import json
         brackets_json = json.dumps([
-            {"lower": 0, "upper": 11491, "rate": 0.08425, "base": 0},
-            {"lower": 11491, "upper": 24821, "rate": 0.31433, "base": 968},
-            {"lower": 24821, "upper": 39958, "rate": 0.02471, "base": 5158},
-            {"lower": 39958, "upper": 124935, "rate": -0.06510, "base": 5532},
-            {"lower": 124935, "upper": None, "rate": 0, "base": 0},
+            {"lower": 0, "upper": 11490, "rate": 0.08425, "base": 0},
+            {"lower": 11490, "upper": 24820, "rate": 0.31433, "base": 968},
+            {"lower": 24820, "upper": 39957, "rate": 0.02471, "base": 5158},
+            {"lower": 39957, "upper": 124934, "rate": -0.06510, "base": 5532},
+            {"lower": 124934, "upper": None, "rate": 0, "base": 0},
         ])
         # Compare JSON-driven vs Python-constant for several incomes
         for income in [5000, 15000, 30000, 50000, 80000, 130000]:
@@ -1758,3 +1755,262 @@ class TestLijfrente:
             ew_naar_partner=True,
         )
         assert result.verzamelinkomen == 0
+
+
+# ============================================================
+# Edge case tests — negative, zero, boundary, high income
+# ============================================================
+
+class TestEdgeCaseNegativeWinst:
+    """When kosten > omzet, belastbare_winst should floor at 0."""
+
+    def test_loss_scenario(self):
+        """Negative winst (loss): belastbare_winst = 0."""
+        params = FISCALE_PARAMS[2024]
+        result = bereken_volledig(
+            omzet=20000, kosten=30000, afschrijvingen=0,
+            representatie=0, investeringen_totaal=0,
+            uren=1400, params=params,
+        )
+        assert result.winst == -10000
+        assert result.belastbare_winst == 0
+        assert result.bruto_ib == 0
+        assert result.netto_ib <= 0  # only heffingskortingen
+        assert result.zelfstandigenaftrek == 3750  # ZA still granted
+
+    def test_zero_income(self):
+        """Zero omzet, zero kosten: everything should be 0."""
+        params = FISCALE_PARAMS[2024]
+        result = bereken_volledig(
+            omzet=0, kosten=0, afschrijvingen=0,
+            representatie=0, investeringen_totaal=0,
+            uren=0, params=params,
+        )
+        assert result.winst == 0
+        assert result.belastbare_winst == 0
+        assert result.bruto_ib == 0
+        assert result.uren_criterium_gehaald is False
+
+
+class TestEdgeCaseArbeidskortingZero:
+    """Arbeidskorting and AHK with zero/negative income."""
+
+    def test_arbeidskorting_zero(self):
+        assert bereken_arbeidskorting(0, 2024) == 0
+
+    def test_arbeidskorting_negative(self):
+        """Negative income should return 0 (floor)."""
+        assert bereken_arbeidskorting(-1000, 2024) == 0
+
+    def test_ahk_zero_income(self):
+        """Zero income returns maximum AHK."""
+        params = FISCALE_PARAMS[2024]
+        ahk = bereken_algemene_heffingskorting(0, 2024, params)
+        assert ahk == params['ahk_max']
+
+
+class TestEdgeCaseBracketBoundaries2024:
+    """Test exact bracket boundaries for 2024 arbeidskorting (BD verified)."""
+
+    def test_at_bracket1_upper(self):
+        """Income exactly at bracket 1 upper bound (11490)."""
+        ak = bereken_arbeidskorting(11490, 2024)
+        expected = 0.08425 * 11490
+        assert abs(ak - expected) < 0.01
+
+    def test_at_bracket2_start(self):
+        """Income at start of bracket 2 (11491)."""
+        ak = bereken_arbeidskorting(11491, 2024)
+        expected = 968 + 0.31433 * (11491 - 11490)
+        assert abs(ak - expected) < 0.01
+
+    def test_at_bracket2_upper(self):
+        """Income exactly at bracket 2 upper bound (24820)."""
+        ak = bereken_arbeidskorting(24820, 2024)
+        expected = 968 + 0.31433 * (24820 - 11490)
+        assert abs(ak - expected) < 0.01
+
+    def test_at_bracket3_start(self):
+        """Income at start of bracket 3 (24821)."""
+        ak = bereken_arbeidskorting(24821, 2024)
+        expected = 5158 + 0.02471 * (24821 - 24820)
+        assert abs(ak - expected) < 0.01
+
+    def test_at_bracket4_upper(self):
+        """Income at bracket 4 upper bound (124934)."""
+        ak = bereken_arbeidskorting(124934, 2024)
+        expected = 5532 + (-0.06510) * (124934 - 39957)
+        assert abs(ak - max(0, expected)) < 0.01
+
+    def test_above_afbouw(self):
+        """Income above afbouwgrens = 0."""
+        ak = bereken_arbeidskorting(124935, 2024)
+        assert ak == 0
+
+
+class TestEdgeCaseVeryHighIncome:
+    """Very high income through full waterfall with 3-bracket system (2025)."""
+
+    def test_income_200k(self):
+        """Income 200k exercises all three brackets."""
+        params = FISCALE_PARAMS[2025]
+        result = bereken_volledig(
+            omzet=200000, kosten=0, afschrijvingen=0,
+            representatie=0, investeringen_totaal=0,
+            uren=1400, params=params,
+        )
+        assert result.belastbare_winst > 0
+        # Should hit all 3 brackets
+        assert result.bruto_ib > 50000
+        # Arbeidskorting should be near 0 (fully phased out)
+        assert result.arbeidskorting < 100
+        # AHK should be 0 (high income)
+        assert result.ahk == 0
+        # Tariefsaanpassing should be significant
+        assert result.tariefsaanpassing > 500
+
+
+class TestEdgeCaseBox3NegativeRendement:
+    """Box 3 with high schulden rendement relative to bank."""
+
+    def test_negative_rendement_yields_zero(self):
+        """When schulden outweigh bezittingen, Box 3 belasting = 0."""
+        from fiscal.berekeningen import bereken_box3
+        params = {
+            'box3_bank_saldo': 1000,
+            'box3_overige_bezittingen': 0,
+            'box3_schulden': 50000,
+            'box3_heffingsvrij_vermogen': 57000,
+            'box3_rendement_bank_pct': 1.44,
+            'box3_rendement_overig_pct': 6.04,
+            'box3_rendement_schuld_pct': 2.61,
+            'box3_tarief_pct': 36,
+            'box3_drempel_schulden': 3700,
+        }
+        result = bereken_box3(params, fiscaal_partner=False)
+        assert result.belasting == 0
+        assert result.grondslag == 0
+
+    def test_box3_only_bank_no_schulden(self):
+        """Simple Box 3: only bank above heffingsvrij."""
+        from fiscal.berekeningen import bereken_box3
+        params = {
+            'box3_bank_saldo': 100000,
+            'box3_overige_bezittingen': 0,
+            'box3_schulden': 0,
+            'box3_heffingsvrij_vermogen': 57000,
+            'box3_rendement_bank_pct': 1.44,
+            'box3_rendement_overig_pct': 6.04,
+            'box3_rendement_schuld_pct': 2.61,
+            'box3_tarief_pct': 36,
+            'box3_drempel_schulden': 3700,
+        }
+        result = bereken_box3(params, fiscaal_partner=False)
+        # grondslag = 100000 - 0 - 57000 = 43000
+        assert result.grondslag == 43000
+        # rendement = 100000 * 1.44% = 1440
+        # ratio = 1440 / 100000 = 0.0144
+        # voordeel = 43000 * 0.0144 = 619.20
+        # belasting = 619.20 * 36% = 222.91
+        assert abs(result.belasting - 222.91) < 1
+
+
+# ============================================================
+# Income extrapolation and personal data fallback tests
+# ============================================================
+
+class TestExtrapoleerJaaromzet:
+    """Tests for annual income extrapolation."""
+
+    @pytest.fixture
+    def db_path(self, tmp_path):
+        """Create temp DB with test data."""
+        import asyncio
+        from database import init_db, add_klant
+        db = tmp_path / 'test.db'
+        asyncio.run(init_db(db))
+        asyncio.run(add_klant(db, naam='Test', tarief_uur=80, retour_km=0))
+        return db
+
+    def test_past_year_returns_actual(self, db_path):
+        """Past year: no extrapolation, use actual totals."""
+        import asyncio
+        from database import add_factuur
+        from components.fiscal_utils import extrapoleer_jaaromzet
+        asyncio.run(add_factuur(db_path, nummer='2024-001', klant_id=1,
+                                 datum='2024-06-15', totaal_uren=8,
+                                 totaal_km=0, totaal_bedrag=10000))
+        result = asyncio.run(extrapoleer_jaaromzet(db_path, 2024))
+        assert result['method'] == 'actual'
+        assert result['extrapolated_omzet'] == 10000
+        assert result['confidence'] == 'high'
+
+    def test_extrapolation_linear(self, db_path):
+        """Current year: linear extrapolation from YTD."""
+        import asyncio
+        from datetime import date
+        from database import add_factuur
+        from components.fiscal_utils import extrapoleer_jaaromzet
+        # Add 3 months of revenue (Jan-Mar)
+        for m in range(1, 4):
+            asyncio.run(add_factuur(db_path, nummer=f'2026-{m:03d}', klant_id=1,
+                                     datum=f'2026-{m:02d}-15', totaal_uren=80,
+                                     totaal_km=0, totaal_bedrag=10000))
+        result = asyncio.run(extrapoleer_jaaromzet(db_path, date.today().year))
+        # 30000 YTD in ~3 months → ~120000 annual
+        assert result['ytd_omzet'] == 30000
+        assert 100000 < result['extrapolated_omzet'] < 140000
+        assert result['confidence'] in ('low', 'medium')
+
+    def test_zero_revenue_returns_zero(self, db_path):
+        """No revenue: returns zero with low confidence."""
+        import asyncio
+        from datetime import date
+        from components.fiscal_utils import extrapoleer_jaaromzet
+        result = asyncio.run(extrapoleer_jaaromzet(db_path, date.today().year))
+        assert result['extrapolated_omzet'] == 0
+        assert result['confidence'] == 'low'
+
+
+class TestPersonalDataFallback:
+    """Tests for prior-year personal data fallback."""
+
+    def test_current_year_values_preferred(self):
+        from components.fiscal_utils import get_personal_data_with_fallback
+        current = type('P', (), {'woz_waarde': 700000, 'hypotheekrente': 7000,
+                                  'aov_premie': 3500, 'partner_bruto_loon': 0,
+                                  'partner_loonheffing': 0, 'box3_bank_saldo': 0,
+                                  'box3_overige_bezittingen': 0, 'box3_schulden': 0})()
+        prior = type('P', (), {'woz_waarde': 650000, 'hypotheekrente': 7200,
+                                'aov_premie': 3000, 'partner_bruto_loon': 40000,
+                                'partner_loonheffing': 7000, 'box3_bank_saldo': 25000,
+                                'box3_overige_bezittingen': 0, 'box3_schulden': 35000})()
+        result, fallbacks = get_personal_data_with_fallback(current, prior)
+        assert result['woz']['value'] == 700000
+        assert result['woz']['source'] == 'current'
+        assert 'woz_waarde' not in fallbacks
+
+    def test_fallback_to_prior_year(self):
+        from components.fiscal_utils import get_personal_data_with_fallback
+        current = type('P', (), {'woz_waarde': 0, 'hypotheekrente': 0,
+                                  'aov_premie': 0, 'partner_bruto_loon': 0,
+                                  'partner_loonheffing': 0, 'box3_bank_saldo': 0,
+                                  'box3_overige_bezittingen': 0, 'box3_schulden': 0})()
+        prior = type('P', (), {'woz_waarde': 650000, 'hypotheekrente': 7200,
+                                'aov_premie': 3000, 'partner_bruto_loon': 40000,
+                                'partner_loonheffing': 7000, 'box3_bank_saldo': 25000,
+                                'box3_overige_bezittingen': 0, 'box3_schulden': 35000})()
+        result, fallbacks = get_personal_data_with_fallback(current, prior)
+        assert result['woz']['value'] == 650000
+        assert result['woz']['source'] == 'prior'
+        assert 'woz_waarde' in fallbacks
+
+    def test_no_prior_returns_zero(self):
+        from components.fiscal_utils import get_personal_data_with_fallback
+        current = type('P', (), {'woz_waarde': 0, 'hypotheekrente': 0,
+                                  'aov_premie': 0, 'partner_bruto_loon': 0,
+                                  'partner_loonheffing': 0, 'box3_bank_saldo': 0,
+                                  'box3_overige_bezittingen': 0, 'box3_schulden': 0})()
+        result, fallbacks = get_personal_data_with_fallback(current, None)
+        assert result['woz']['value'] == 0
+        assert result['woz']['source'] == 'none'

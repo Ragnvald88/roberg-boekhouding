@@ -5,7 +5,7 @@ from datetime import datetime
 from nicegui import ui
 
 from components.layout import create_layout, page_title
-from components.utils import format_euro, generate_csv, BANK_CATEGORIEEN
+from components.utils import format_euro, format_datum, generate_csv, BANK_CATEGORIEEN
 from database import (
     get_banktransacties, add_banktransacties, update_banktransactie,
     delete_banktransacties, DB_PATH,
@@ -56,6 +56,7 @@ async def bank_page():
             rows.append({
                 'id': t.id,
                 'datum': t.datum,
+                'datum_fmt': format_datum(t.datum),
                 'bedrag': t.bedrag,
                 'bedrag_fmt': format_euro(t.bedrag),
                 'tegenpartij': t.tegenpartij,
@@ -102,8 +103,8 @@ async def bank_page():
 
     async def handle_upload(e):
         """Handle CSV file upload: parse, archive, insert."""
-        content = e.content.read()
-        filename = e.name
+        content = e.file.read()
+        filename = e.file.name
 
         try:
             transacties = parse_rabobank_csv(content)
@@ -305,7 +306,7 @@ async def bank_page():
                 <q-td auto-width>
                     <q-checkbox v-model="props.selected" dense />
                 </q-td>
-                <q-td key="datum" :props="props">{{ props.row.datum }}</q-td>
+                <q-td key="datum" :props="props">{{ props.row.datum_fmt }}</q-td>
                 <q-td key="bedrag_fmt" :props="props"
                        :class="props.row.bedrag >= 0 ? 'text-teal-8 text-bold' : 'text-red-8 text-bold'"
                        style="text-align: right">

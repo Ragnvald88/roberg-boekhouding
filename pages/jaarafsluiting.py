@@ -23,15 +23,6 @@ from database import (
 
 # === Shared helpers ===
 
-def _wv_line(label: str, value: float, prefix: str = '', bold: bool = False):
-    """Render a W&V line with label and euro value."""
-    css = 'text-bold' if bold else ''
-    with ui.row().classes('w-full justify-between'):
-        text = f'{prefix}  {label}' if prefix else label
-        ui.label(text).classes(css)
-        ui.label(format_euro(value)).classes(f'{css} text-right') \
-            .style('min-width: 120px; font-variant-numeric: tabular-nums')
-
 
 def _balans_line(label: str, value: float, bold: bool = False, indent: bool = False):
     """Render a balance sheet line."""
@@ -83,7 +74,8 @@ async def _load_year_data(jaar: int):
         DB_PATH, jaar, data['activastaat'],
         winst=winst, begin_vermogen=begin_vermogen)
 
-    return data, balans, winst, vorig_jaar_balans
+    vj_w = vj_winst if vorig_jaar_data else None
+    return data, balans, winst, vorig_jaar_balans, vorig_jaar_data, vj_w
 
 
 # === Page ===
@@ -170,7 +162,7 @@ async def jaarafsluiting_page():
             kpi_container.clear()
             return
 
-        data, balans, winst, vorig_jaar_balans = result
+        data, balans, winst, vorig_jaar_balans, vorig_jaar_data, vorig_winst = result
 
         # KPI strip
         kpi_container.clear()
@@ -183,7 +175,7 @@ async def jaarafsluiting_page():
             )
 
         render_balans(data, balans, vorig_jaar_balans)
-        render_wv(data, winst)
+        render_wv(data, winst, vorig_jaar_data, vorig_winst)
         render_toelichting(data)
         render_controles(data, balans, winst)
         await render_document(data, balans, winst, vorig_jaar_balans)
@@ -304,9 +296,12 @@ async def jaarafsluiting_page():
                     ui.button('Annuleren', icon='close',
                               on_click=cancel_edit).props('flat')
 
-    def render_wv(data, winst):
-        """Render W&V tab."""
+    def render_wv(data, winst, vorig_data=None, vorig_winst=None):
+        """Render W&V tab with optional year-over-year comparison."""
         wv_panel.clear()
+        jaar = state['jaar']
+        has_vorig = vorig_data is not None and vorig_data.get('omzet', 0) > 0
+
         with wv_panel:
             # Data source info
             n_f = data['n_facturen']
@@ -324,29 +319,96 @@ async def jaarafsluiting_page():
                         ui.label('Geen uitgaven gevonden voor dit jaar.') \
                             .classes('text-warning')
 
+            def _wv_vergelijk(label, bedrag, vorig_bedrag=None,
+                              bold=False, indent=False):
+                """W&V line with optional prior-year column and delta."""
+                css = 'text-bold' if bold else ''
+                ml = 'q-ml-md' if indent else ''
+                num_style = ('text-align: right; '
+                             'font-variant-numeric: tabular-nums')
+                with ui.row().classes(
+                        f'w-full items-center {ml}').style('min-height: 28px'):
+                    ui.label(label).classes(f'{css} flex-grow')
+                    ui.label(format_euro(bedrag)).classes(css) \
+                        .style(f'width: 110px; {num_style}')
+                    if has_vorig:
+                        vb = vorig_bedrag if vorig_bedrag is not None else 0
+                        ui.label(format_euro(vb)) \
+                            .classes('text-grey-6') \
+                            .style(f'width: 110px; {num_style}')
+                        if vb and bedrag:
+                            delta = (bedrag - vb) / abs(vb) * 100
+                            color = ('text-positive' if delta >= 0
+                                     else 'text-negative')
+                            ui.label(f'{delta:+.1f}%') \
+                                .classes(f'text-caption {color}') \
+                                .style(f'width: 60px; {num_style}')
+
             # W&V
-            ui.label('Winst- en verliesrekening').classes('text-h6 text-primary')
+            ui.label('Winst- en verliesrekening') \
+                .classes('text-h6 text-primary')
             with ui.card().classes('w-full q-pa-md'):
-                _wv_line('Netto-omzet', data['omzet'], bold=True)
+                # Column headers
+                if has_vorig:
+                    num_style = 'text-align: right'
+                    with ui.row().classes('w-full items-center') \
+                            .style('min-height: 24px'):
+                        ui.label('').classes('flex-grow')
+                        ui.label(str(jaar)) \
+                            .classes('text-caption text-bold') \
+                            .style(f'width: 110px; {num_style}')
+                        ui.label(str(jaar - 1)) \
+                            .classes('text-caption text-grey-6') \
+                            .style(f'width: 110px; {num_style}')
+                        ui.label('\u0394') \
+                            .classes('text-caption text-grey-6') \
+                            .style(f'width: 60px; {num_style}')
+
+                vorig_omzet = vorig_data['omzet'] if has_vorig else None
+                _wv_vergelijk('Netto-omzet', data['omzet'],
+                              vorig_omzet, bold=True)
                 ui.separator().classes('q-my-sm')
-                _wv_line('Bedrijfslasten (excl. investeringen)', data['kosten_excl_inv'])
-                _wv_line('Afschrijvingen', data['totaal_afschrijvingen'])
+
+                # Km-vergoeding as separate line
+                vorig_km = vorig_data.get('km_vergoeding', 0) \
+                    if has_vorig else None
+                _wv_vergelijk('Km-vergoeding', data['km_vergoeding'],
+                              vorig_km, indent=True)
+
+                # Overige bedrijfskosten
+                overige = data['kosten_excl_inv'] - data['km_vergoeding']
+                vorig_overige = (
+                    vorig_data['kosten_excl_inv']
+                    - vorig_data.get('km_vergoeding', 0)
+                ) if has_vorig else None
+                _wv_vergelijk('Overige bedrijfskosten', overige,
+                              vorig_overige, indent=True)
+
+                vorig_afschr = vorig_data['totaal_afschrijvingen'] \
+                    if has_vorig else None
+                _wv_vergelijk('Afschrijvingen',
+                              data['totaal_afschrijvingen'], vorig_afschr)
                 ui.separator().classes('q-my-sm')
-                _wv_line('Winst', winst, bold=True)
+                _wv_vergelijk('Winst', winst, vorig_winst, bold=True)
 
             # Kostenspecificatie
             if data['kosten_per_cat']:
-                ui.label('Kostenspecificatie').classes('text-subtitle1 text-primary q-mt-lg')
+                ui.label('Kostenspecificatie') \
+                    .classes('text-subtitle1 text-primary q-mt-lg')
                 columns = [
-                    {'name': 'cat', 'label': 'Categorie', 'field': 'categorie', 'align': 'left'},
-                    {'name': 'bedrag', 'label': 'Bedrag', 'field': 'bedrag', 'align': 'right'},
+                    {'name': 'cat', 'label': 'Categorie',
+                     'field': 'categorie', 'align': 'left'},
+                    {'name': 'bedrag', 'label': 'Bedrag',
+                     'field': 'bedrag', 'align': 'right'},
                 ]
                 rows = [{'categorie': k['categorie'],
                          'bedrag': format_euro(k['totaal'])}
                         for k in data['kosten_per_cat']]
                 rows.append({'categorie': 'Totaal',
-                             'bedrag': format_euro(data['totaal_kosten_alle'])})
-                ui.table(columns=columns, rows=rows).classes('w-full max-w-lg')
+                             'bedrag': format_euro(
+                                 data['totaal_kosten_alle'])})
+                ui.table(columns=columns, rows=rows) \
+                    .classes('w-full max-w-lg')
 
     def render_toelichting(data):
         """Render Toelichting tab (activastaat + grondslagen)."""

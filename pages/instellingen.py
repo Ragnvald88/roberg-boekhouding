@@ -1,5 +1,6 @@
 """Instellingen pagina — bedrijfsgegevens, fiscale parameters, backup."""
 
+import asyncio
 from datetime import date
 import json
 import zipfile
@@ -192,7 +193,6 @@ async def instellingen_page():
                                             ('AHK max', 'ahk_max'),
                                             ('AHK afbouw %', 'ahk_afbouw_pct'),
                                             ('AHK drempel', 'ahk_drempel'),
-                                            ('AK max', 'ak_max'),
                                         ]),
                                         ('ZVW', [
                                             ('ZVW %', 'zvw_pct'),
@@ -393,20 +393,29 @@ async def instellingen_page():
                     async with get_db_ctx(DB_PATH) as conn:
                         await conn.execute("PRAGMA wal_checkpoint(FULL)")
 
-                    with zipfile.ZipFile(backup_path, 'w', zipfile.ZIP_DEFLATED) as zf:
-                        # Database
-                        if DB_PATH.exists():
-                            zf.write(DB_PATH, 'boekhouding.sqlite3')
-                        # Include all data subdirectories
-                        for subdir in ['facturen', 'uitgaven', 'jaarafsluiting', 'bank_csv', 'aangifte']:
-                            dir_path = DB_PATH.parent / subdir
-                            if dir_path.exists():
-                                for f in dir_path.rglob('*'):
-                                    if f.is_file():
-                                        zf.write(f, f"{subdir}/{f.relative_to(dir_path)}")
+                    def _create_zip():
+                        with zipfile.ZipFile(backup_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+                            if DB_PATH.exists():
+                                zf.write(DB_PATH, 'boekhouding.sqlite3')
+                            for subdir in ['facturen', 'uitgaven', 'jaarafsluiting', 'bank_csv', 'aangifte']:
+                                dir_path = DB_PATH.parent / subdir
+                                if dir_path.exists():
+                                    for f in dir_path.rglob('*'):
+                                        if f.is_file():
+                                            zf.write(f, f"{subdir}/{f.relative_to(dir_path)}")
 
+                    await asyncio.to_thread(_create_zip)
                     ui.download(str(backup_path))
                     ui.notify(f'Backup {backup_name} aangemaakt', type='positive')
+
+                    # Clean up ZIP after download starts
+                    async def _cleanup():
+                        await asyncio.sleep(10)
+                        try:
+                            backup_path.unlink(missing_ok=True)
+                        except OSError:
+                            pass
+                    asyncio.create_task(_cleanup())
 
                 ui.button('Download backup', icon='download',
                           on_click=download_backup).props('color=primary')

@@ -11,6 +11,7 @@ from database import (
     get_investeringen,
     get_investeringen_voor_afschrijving,
     get_km_totaal,
+    get_omzet_per_maand,
     get_omzet_totaal,
     get_debiteuren_op_peildatum,
     get_nog_te_factureren,
@@ -190,3 +191,107 @@ async def bereken_balans(db_path: Path, jaar: int, activastaat: list[dict],
         'winst': winst,
         'prive_onttrekkingen': prive_onttrekkingen,
     }
+
+
+async def extrapoleer_jaaromzet(db_path: Path, jaar: int) -> dict:
+    """Extrapolate annual revenue from YTD data.
+
+    Returns dict with ytd_omzet, extrapolated_omzet, method, confidence, basis_maanden.
+    Past years return actual data with confidence='high'.
+    Current year extrapolates linearly, weighted with prior-year pattern if available.
+    """
+    from datetime import date as _d
+    huidig_jaar = _d.today().year
+
+    ytd_omzet = await get_omzet_totaal(db_path, jaar)
+
+    if jaar != huidig_jaar:
+        return {
+            'ytd_omzet': ytd_omzet,
+            'extrapolated_omzet': ytd_omzet,
+            'method': 'actual',
+            'confidence': 'high',
+            'basis_maanden': 12,
+        }
+
+    month = _d.today().month
+    complete_months = month if _d.today().day >= 15 else max(month - 1, 1)
+
+    if complete_months == 0 or ytd_omzet == 0:
+        return {
+            'ytd_omzet': 0,
+            'extrapolated_omzet': 0,
+            'method': 'ytd_linear',
+            'confidence': 'low',
+            'basis_maanden': 0,
+        }
+
+    linear = ytd_omzet * (12 / complete_months)
+
+    # Weight with prior-year monthly pattern if available
+    # NOTE: get_omzet_per_maand returns list[float] (index 0=Jan .. 11=Dec)
+    prior_maanden = await get_omzet_per_maand(db_path, jaar - 1)
+    prior_total = sum(prior_maanden)
+
+    if prior_total > 0 and complete_months >= 3:
+        prior_ytd = sum(prior_maanden[:month])
+        prior_fraction = prior_ytd / prior_total if prior_total > 0 else (month / 12)
+        if prior_fraction > 0.05:
+            pattern = ytd_omzet / prior_fraction
+            extrapolated = round(0.7 * linear + 0.3 * pattern, 2)
+        else:
+            extrapolated = round(linear, 2)
+    else:
+        extrapolated = round(linear, 2)
+
+    if complete_months <= 2:
+        confidence = 'low'
+    elif complete_months <= 5:
+        confidence = 'medium'
+    else:
+        confidence = 'high'
+
+    return {
+        'ytd_omzet': ytd_omzet,
+        'extrapolated_omzet': extrapolated,
+        'method': 'weighted' if (prior_total > 0 and complete_months >= 3) else 'ytd_linear',
+        'confidence': confidence,
+        'basis_maanden': complete_months,
+    }
+
+
+def get_personal_data_with_fallback(params_current, params_prior) -> tuple[dict, list[str]]:
+    """Use current-year data if available, fall back to prior year.
+
+    Returns (result_dict, fallbacks_used_list).
+    result_dict maps short keys to {'value': float, 'source': 'current'|'prior'|'none'}.
+    """
+    fields = {
+        'woz_waarde': 'woz',
+        'hypotheekrente': 'hypotheekrente',
+        'aov_premie': 'aov',
+        'partner_bruto_loon': 'partner_loon',
+        'partner_loonheffing': 'partner_lh',
+        'box3_bank_saldo': 'box3_bank',
+        'box3_overige_bezittingen': 'box3_overig',
+        'box3_schulden': 'box3_schulden',
+    }
+
+    result = {}
+    fallbacks = []
+
+    for attr, key in fields.items():
+        current_val = getattr(params_current, attr, 0) or 0
+        if current_val > 0:
+            result[key] = {'value': current_val, 'source': 'current'}
+        elif params_prior:
+            prior_val = getattr(params_prior, attr, 0) or 0
+            if prior_val > 0:
+                result[key] = {'value': prior_val, 'source': 'prior'}
+                fallbacks.append(attr)
+            else:
+                result[key] = {'value': 0, 'source': 'none'}
+        else:
+            result[key] = {'value': 0, 'source': 'none'}
+
+    return result, fallbacks

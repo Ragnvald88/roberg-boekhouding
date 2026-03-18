@@ -47,12 +47,27 @@ async def werkdagen_page():
                 klant_options, value=0, label='Klant',
             ).classes('w-48')
 
+            STATUS_OPTIONS = {
+                '': 'Alle',
+                'ongefactureerd': 'Ongefactureerd',
+                'gefactureerd': 'Gefactureerd',
+                'betaald': 'Betaald',
+            }
+            status_sel = ui.select(
+                STATUS_OPTIONS, value='', label='Status',
+            ).classes('w-40')
+
             ui.space()
 
             async def export_csv():
                 year = jaar_select.value
                 month = maand_select.value if maand_select.value != 0 else None
-                werkdagen = await get_werkdagen(DB_PATH, jaar=year, maand=month)
+                klant = klant_sel.value if klant_sel.value != 0 else None
+                status = status_sel.value or None
+                all_wd = await get_werkdagen(DB_PATH, jaar=year, maand=month,
+                                              klant_id=klant)
+                werkdagen = [w for w in all_wd
+                             if status is None or w.status == status]
                 headers = ['Datum', 'Klant', 'Code', 'Uren', 'Km', 'Tarief',
                            'Km-tarief', 'Totaal', 'Status']
                 rows = []
@@ -216,9 +231,11 @@ async def werkdagen_page():
                 klant_id = None
             klant_sel.update()
 
+            status_filter = status_sel.value or None
             werkdagen = [
                 w for w in all_werkdagen
-                if klant_id is None or w.klant_id == klant_id
+                if (klant_id is None or w.klant_id == klant_id)
+                and (status_filter is None or w.status == status_filter)
             ]
 
             rows = []
@@ -295,6 +312,7 @@ async def werkdagen_page():
         jaar_select.on_value_change(lambda _: refresh_table())
         maand_select.on_value_change(lambda _: refresh_table())
         klant_sel.on_value_change(lambda _: refresh_table())
+        status_sel.on_value_change(lambda _: refresh_table())
 
         # Initial load
         await refresh_table()

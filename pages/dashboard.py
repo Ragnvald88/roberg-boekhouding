@@ -11,12 +11,12 @@ from components.layout import create_layout, page_title
 from components.utils import format_euro, format_datum
 from database import (
     get_kpis, get_omzet_per_maand, get_uitgaven_per_categorie,
-    get_recente_facturen, get_openstaande_facturen, get_factuur_count,
+    get_openstaande_facturen,
     get_werkdagen_ongefactureerd_summary, get_km_totaal,
-    get_fiscale_params,
-    DB_PATH,
+    get_fiscale_params, update_ib_inputs, add_aangifte_document,
+    get_aangifte_documenten, DB_PATH,
 )
-from components.fiscal_utils import fetch_fiscal_data
+from components.fiscal_utils import fetch_fiscal_data, extrapoleer_jaaromzet
 from fiscal.berekeningen import bereken_volledig
 
 URENCRITERIUM_DEFAULT = 1225
@@ -66,63 +66,100 @@ async def dashboard_page():
         return None
 
     async def _compute_ib_estimate(jaar: int) -> dict | None:
-        """Compute estimated IB resultaat. Prorates VA for current year by month."""
+        """Compute IB estimate based on BUSINESS data only.
+
+        Dashboard = business performance. Personal deductions (hypotheek, WOZ,
+        AOV, lijfrente) belong on the Aangifte page. The VA beschikking from BD
+        already includes those deductions, so the bij/terug comparison still works.
+        """
         data = await fetch_fiscal_data(DB_PATH, jaar)
         if data is None:
             return None
 
-        annual_va_ib = data['voorlopige_aanslag']
-        annual_va_zvw = data['voorlopige_aanslag_zvw']
+        try:
+            huidig_jaar = date.today().year
+            annual_va_ib = data['voorlopige_aanslag']
+            annual_va_zvw = data['voorlopige_aanslag_zvw']
 
-        # Prorate VA for current year based on current month
-        huidig_jaar = date.today().year
-        if jaar == huidig_jaar:
-            month = date.today().month
-            va_ib = round(annual_va_ib * month / 12, 2)
-            va_zvw = round(annual_va_zvw * month / 12, 2)
-        else:
-            month = 12
-            va_ib = annual_va_ib
-            va_zvw = annual_va_zvw
+            if jaar == huidig_jaar:
+                month = date.today().month
 
-        f = bereken_volledig(
-            omzet=data['omzet'], kosten=data['kosten_excl_inv'],
-            afschrijvingen=data['totaal_afschrijvingen'],
-            representatie=data['representatie'],
-            investeringen_totaal=data['inv_totaal_dit_jaar'],
-            uren=data['uren'], params=data['params_dict'],
-            aov=data['aov'], lijfrente=data.get('lijfrente', 0),
-            woz=data['woz'],
-            hypotheekrente=data['hypotheekrente'],
-            voorlopige_aanslag=va_ib,
-            voorlopige_aanslag_zvw=va_zvw,
-            ew_naar_partner=data['ew_naar_partner'],
-        )
-        return {
-            'resultaat': f.resultaat,
-            'netto_ib': f.netto_ib,
-            'zvw': f.zvw,
-            'va_ib_betaald': va_ib,
-            'va_zvw_betaald': va_zvw,
-            'prorated': jaar == huidig_jaar,
-            'month': month,
-        }
+                # Extrapolate income
+                projection = await extrapoleer_jaaromzet(DB_PATH, jaar)
+                complete_months = projection['basis_maanden'] or 1
+                kosten_factor = 12 / complete_months
+
+                omzet = projection['extrapolated_omzet']
+                kosten = data['kosten_excl_inv'] * kosten_factor
+                repr_ = data['representatie'] * kosten_factor
+                uren = data['uren'] * kosten_factor
+
+                # Prorate VA for "how much have I paid so far"
+                va_ib_ytd = round(annual_va_ib * month / 12, 2)
+                va_zvw_ytd = round(annual_va_zvw * month / 12, 2)
+            else:
+                omzet = data['omzet']
+                kosten = data['kosten_excl_inv']
+                repr_ = data['representatie']
+                uren = data['uren']
+                va_ib_ytd = annual_va_ib
+                va_zvw_ytd = annual_va_zvw
+                month = 12
+                projection = {
+                    'confidence': 'high',
+                    'basis_maanden': 12,
+                    'extrapolated_omzet': omzet,
+                    'ytd_omzet': omzet,
+                }
+
+            # Business-only calculation — NO personal deductions
+            f = bereken_volledig(
+                omzet=omzet, kosten=kosten,
+                afschrijvingen=data['totaal_afschrijvingen'],
+                representatie=repr_,
+                investeringen_totaal=data['inv_totaal_dit_jaar'],
+                uren=uren, params=data['params_dict'],
+                aov=0, lijfrente=0,       # personal → Aangifte
+                woz=0, hypotheekrente=0,  # personal → Aangifte
+                voorlopige_aanslag=annual_va_ib,
+                voorlopige_aanslag_zvw=annual_va_zvw,
+                ew_naar_partner=True,
+            )
+
+            ytd_winst = (data['omzet'] - data['kosten_excl_inv']
+                         - data['totaal_afschrijvingen'])
+
+            return {
+                'resultaat': f.resultaat,
+                'netto_ib': f.netto_ib,
+                'zvw': f.zvw,
+                'winst': f.winst,
+                'ytd_winst': ytd_winst,
+                'va_ib_betaald': va_ib_ytd,
+                'va_zvw_betaald': va_zvw_ytd,
+                'prorated': jaar == huidig_jaar,
+                'month': month,
+                'confidence': projection['confidence'],
+                'basis_maanden': projection['basis_maanden'],
+            }
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            return None
 
     async def refresh_dashboard():
         jaar = jaar_select.value
 
         # Run all independent DB calls concurrently
         (kpis, kpis_vorig, omzet_huidig, omzet_vorig, kosten_per_cat,
-         recente, openstaande, factuur_count, ongefact, km_data,
+         openstaande, ongefact, km_data,
          ib_resultaat, fp) = await asyncio.gather(
             get_kpis(DB_PATH, jaar=jaar),
             get_kpis(DB_PATH, jaar=jaar - 1),
             get_omzet_per_maand(DB_PATH, jaar=jaar),
             get_omzet_per_maand(DB_PATH, jaar=jaar - 1),
             get_uitgaven_per_categorie(DB_PATH, jaar=jaar),
-            get_recente_facturen(DB_PATH, limit=5),
             get_openstaande_facturen(DB_PATH, jaar=jaar),
-            get_factuur_count(DB_PATH, jaar=jaar),
             get_werkdagen_ongefactureerd_summary(DB_PATH, jaar=jaar),
             get_km_totaal(DB_PATH, jaar=jaar),
             _compute_ib_estimate(jaar),
@@ -131,42 +168,252 @@ async def dashboard_page():
 
         uren_criterium = int(fp.urencriterium) if fp else URENCRITERIUM_DEFAULT
 
-        # KPI cards
+        _MND = {1: 'jan', 2: 'feb', 3: 'mrt', 4: 'apr',
+                5: 'mei', 6: 'jun', 7: 'jul', 8: 'aug',
+                9: 'sep', 10: 'okt', 11: 'nov', 12: 'dec'}
+
+        # KPI cards — responsive CSS grid
         kpi_row = kpi_container['ref']
         kpi_row.clear()
         with kpi_row:
-            # Row 1: Revenue KPIs
-            with ui.row().classes('w-full gap-4 flex-wrap'):
+            with ui.element('div').classes('w-full').style(
+                    'display: grid; grid-template-columns: '
+                    'repeat(auto-fill, minmax(260px, 1fr)); gap: 16px'):
+
+                # 1. Bruto omzet
                 kpi_card('Bruto omzet', format_euro(kpis['omzet']),
                          'trending_up', '#0F766E',
                          on_click=lambda: ui.navigate.to('/werkdagen'),
                          delta_pct=_yoy_delta(kpis['omzet'],
                                               kpis_vorig['omzet']))
 
-                openstaand_count = len(openstaande)
-                openstaand_label = (f"{openstaand_count} ({format_euro(kpis['openstaand'])})"
-                                    if openstaand_count > 0 else "0")
-                kpi_card('Openstaand', openstaand_label,
-                         'pending',
-                         '#D97706' if openstaand_count > 0 else '#059669',
-                         on_click=lambda: ui.navigate.to('/facturen'))
-
-                resultaat = kpis['winst']
+                # 2. Resultaat (actual YTD winst — NOT extrapolated)
+                if ib_resultaat is not None:
+                    resultaat = ib_resultaat.get('ytd_winst', ib_resultaat['winst'])
+                else:
+                    resultaat = kpis['winst']
                 kpi_card('Resultaat', format_euro(resultaat),
                          'account_balance',
-                         '#059669' if resultaat >= 0 else '#DC2626',
-                         delta_pct=_yoy_delta(kpis['winst'],
-                                              kpis_vorig['winst']))
+                         '#059669' if resultaat >= 0 else '#DC2626')
 
-            # Row 2: Operations KPIs
-            with ui.row().classes('w-full gap-4 flex-wrap'):
+                # 3. Belasting prognose (enhanced)
+                if ib_resultaat is not None:
+                    ib_data = ib_resultaat
+                    belasting_totaal = ib_data['netto_ib'] + ib_data['zvw']
+
+                    # Check if VA has been entered (annual amounts, not YTD)
+                    va_ib_annual = fp.voorlopige_aanslag_betaald if fp else 0
+                    va_zvw_annual = fp.voorlopige_aanslag_zvw if fp else 0
+                    has_va = (va_ib_annual or 0) > 0 or (va_zvw_annual or 0) > 0
+
+                    va_ytd = ib_data['va_ib_betaald'] + ib_data['va_zvw_betaald']
+
+                    if has_va:
+                        # VA is entered — show bij/terug result
+                        res = ib_data['resultaat']
+                        if res < 0:
+                            ib_label = f'Terug: {format_euro(abs(res))}'
+                            ib_color = '#059669'
+                        elif res > 0:
+                            ib_label = f'Bij: {format_euro(res)}'
+                            ib_color = '#DC2626'
+                        else:
+                            ib_label = format_euro(0)
+                            ib_color = '#0F766E'
+                    else:
+                        # VA NOT entered — show computed tax, NOT "bij"
+                        ib_label = format_euro(belasting_totaal)
+                        ib_color = '#0F766E'
+
+                    def ib_extra(d=ib_data, _has_va=has_va, _vt=va_ytd,
+                                 _bel=belasting_totaal, _jaar=jaar):
+                        with ui.column().classes('gap-1 q-mt-xs w-full'):
+                            if _has_va:
+                                # Show progress bars: berekend vs VA betaald
+                                va_label = (f"VA t/m {_MND[d['month']]}"
+                                            if d['prorated'] else 'VA betaald')
+                                for label, value, color in [
+                                    ('Berekend', _bel, 'negative'),
+                                    (va_label, -_vt, 'positive'),
+                                ]:
+                                    with ui.row().classes(
+                                            'w-full items-center gap-2'):
+                                        ui.label(label).classes('text-caption') \
+                                            .style('width: 80px; color: #64748B')
+                                        max_val = max(abs(_bel), abs(_vt), 1)
+                                        ui.linear_progress(
+                                            value=min(abs(value) / max_val, 1.0),
+                                            color=color,
+                                        ).classes('flex-grow') \
+                                            .props('rounded size=6px')
+                                        ui.label(format_euro(value)) \
+                                            .classes('text-caption') \
+                                            .style(
+                                                'min-width: 80px; text-align: right; '
+                                                'font-variant-numeric: tabular-nums')
+                            else:
+                                # VA not entered — show clear message + button
+                                ui.label('Berekende jaarbelasting (IB + ZVW)') \
+                                    .classes('text-caption text-grey-6')
+
+                                async def open_va_dialog():
+                                    import asyncio as _aio
+                                    from pathlib import Path as _P
+
+                                    _fp = await get_fiscale_params(DB_PATH, _jaar)
+                                    cur_ib = _fp.voorlopige_aanslag_betaald if _fp else 0
+                                    cur_zvw = _fp.voorlopige_aanslag_zvw if _fp else 0
+
+                                    # Track uploaded files
+                                    uploads = {'ib': None, 'zvw': None}
+
+                                    with ui.dialog() as dlg, \
+                                            ui.card().classes('w-full max-w-lg q-pa-md'):
+                                        ui.label('Voorlopige aanslagen invoeren') \
+                                            .classes('text-h6')
+                                        ui.label(
+                                            f'Vul de jaarbedragen in van je VA '
+                                            f'beschikking {_jaar} en upload de PDF\'s.'
+                                        ).classes('text-body2 text-grey-7 q-mb-sm')
+
+                                        # IB section
+                                        with ui.card().classes('w-full q-pa-sm') \
+                                                .style('background: #F8FAFC'):
+                                            ui.label('Inkomstenbelasting') \
+                                                .classes('text-subtitle2')
+                                            with ui.row().classes(
+                                                    'w-full items-end gap-4'):
+                                                va_ib_in = ui.number(
+                                                    'Jaarbedrag',
+                                                    value=cur_ib or 0,
+                                                    format='%.2f', prefix='\u20ac',
+                                                ).classes('flex-grow')
+                                                ui.upload(
+                                                    label='PDF beschikking',
+                                                    auto_upload=True,
+                                                    on_upload=lambda e:
+                                                        uploads.update({'ib': e}),
+                                                ).classes('w-48').props(
+                                                    'flat bordered dense '
+                                                    'accept=".pdf"')
+
+                                        # ZVW section
+                                        with ui.card().classes('w-full q-pa-sm') \
+                                                .style('background: #F8FAFC'):
+                                            ui.label('Zorgverzekeringswet') \
+                                                .classes('text-subtitle2')
+                                            with ui.row().classes(
+                                                    'w-full items-end gap-4'):
+                                                va_zvw_in = ui.number(
+                                                    'Jaarbedrag',
+                                                    value=cur_zvw or 0,
+                                                    format='%.2f', prefix='\u20ac',
+                                                ).classes('flex-grow')
+                                                ui.upload(
+                                                    label='PDF beschikking',
+                                                    auto_upload=True,
+                                                    on_upload=lambda e:
+                                                        uploads.update({'zvw': e}),
+                                                ).classes('w-48').props(
+                                                    'flat bordered dense '
+                                                    'accept=".pdf"')
+
+                                        async def save_va():
+                                            # Validate: require amounts
+                                            ib_val = float(va_ib_in.value or 0)
+                                            zvw_val = float(va_zvw_in.value or 0)
+                                            if ib_val <= 0 and zvw_val <= 0:
+                                                ui.notify(
+                                                    'Vul minimaal één jaarbedrag in',
+                                                    type='warning')
+                                                return
+
+                                            # Save amounts
+                                            await update_ib_inputs(
+                                                DB_PATH, jaar=_jaar,
+                                                aov_premie=_fp.aov_premie or 0,
+                                                woz_waarde=_fp.woz_waarde or 0,
+                                                hypotheekrente=_fp.hypotheekrente or 0,
+                                                voorlopige_aanslag_betaald=float(
+                                                    va_ib_in.value or 0),
+                                                voorlopige_aanslag_zvw=float(
+                                                    va_zvw_in.value or 0),
+                                                lijfrente_premie=_fp.lijfrente_premie or 0,
+                                            )
+
+                                            # Save uploaded PDFs
+                                            aangifte_dir = DB_PATH.parent / 'aangifte'
+                                            aangifte_dir.mkdir(exist_ok=True)
+                                            today = date.today().isoformat()
+
+                                            for key, doctype in [
+                                                ('ib', 'va_ib_beschikking'),
+                                                ('zvw', 'va_zvw_beschikking'),
+                                            ]:
+                                                evt = uploads.get(key)
+                                                if evt is None:
+                                                    continue
+                                                fname = _P(evt.file.name).name
+                                                dest = aangifte_dir / fname
+                                                content = evt.file.read()
+                                                await _aio.to_thread(
+                                                    dest.write_bytes, content)
+                                                await add_aangifte_document(
+                                                    DB_PATH, jaar=_jaar,
+                                                    categorie='voorlopige_aanslag',
+                                                    documenttype=doctype,
+                                                    bestandsnaam=fname,
+                                                    bestandspad=str(dest),
+                                                    upload_datum=today,
+                                                )
+
+                                            dlg.close()
+                                            ui.notify('VA opgeslagen', type='positive')
+                                            await refresh_dashboard()
+
+                                        with ui.row().classes(
+                                                'w-full justify-end gap-2 q-mt-md'):
+                                            ui.button('Annuleren',
+                                                      on_click=dlg.close) \
+                                                .props('flat')
+                                            ui.button('Opslaan', icon='save',
+                                                      on_click=save_va) \
+                                                .props('color=primary')
+                                    dlg.open()
+
+                                ui.button(
+                                    'VA invoeren', icon='edit',
+                                    on_click=open_va_dialog,
+                                ).props('flat dense color=primary size=sm') \
+                                    .classes('q-mt-xs')
+
+                            # Confidence badge
+                            conf = d.get('confidence', 'high')
+                            conf_map = {
+                                'low': ('warning', 'Schatting'),
+                                'medium': ('primary', 'Prognose'),
+                                'high': ('positive', 'Betrouwbaar'),
+                            }
+                            c_color, c_label = conf_map.get(conf, ('grey', ''))
+                            ui.badge(c_label, color=c_color) \
+                                .classes('text-xs q-mt-xs')
+
+                    kpi_card(
+                        'Belasting prognose', ib_label,
+                        'calculate', ib_color,
+                        extra=ib_extra,
+                        on_click=(lambda: ui.navigate.to('/aangifte'))
+                        if has_va else None,
+                    )
+
+                # 4. Bedrijfslasten
                 kpi_card('Bedrijfslasten', format_euro(kpis['kosten']),
                          'payments', '#D97706',
                          on_click=lambda: ui.navigate.to('/kosten'),
                          delta_pct=_yoy_delta(kpis['kosten'],
                                               kpis_vorig['kosten']))
 
-                # Urencriterium with progress
+                # 5. Urencriterium
                 uren = kpis['uren']
                 uren_voldaan = uren >= uren_criterium
                 uren_hex = '#059669' if uren_voldaan else '#D97706'
@@ -182,57 +429,41 @@ async def dashboard_page():
                          f"{uren:.0f} / {uren_criterium:,} uur".replace(",", "."),
                          'schedule', uren_hex, uren_extra)
 
-                kpi_card('Facturen', f"{factuur_count} facturen",
-                         'receipt', '#0F766E',
+                # 6. Openstaand
+                openstaand_count = len(openstaande)
+                openstaand_label = (
+                    f"{openstaand_count} ({format_euro(kpis['openstaand'])})"
+                    if openstaand_count > 0 else "0")
+                kpi_card('Openstaand', openstaand_label,
+                         'pending',
+                         '#D97706' if openstaand_count > 0 else '#059669',
                          on_click=lambda: ui.navigate.to('/facturen'))
 
-            # Row 3: Belasting prognose + Km
-            with ui.row().classes('w-full gap-4 flex-wrap'):
-                if ib_resultaat is not None:
-                    ib_data = ib_resultaat  # dict from _compute_ib_estimate
-                    res = ib_data['resultaat']
-                    if res < 0:
-                        ib_label = f'Terug: {format_euro(abs(res))}'
-                        ib_color = '#059669'
-                    elif res > 0:
-                        ib_label = f'Bij: {format_euro(res)}'
-                        ib_color = '#DC2626'
-                    else:
-                        ib_label = format_euro(0)
-                        ib_color = '#0F766E'
-
-                    va_totaal = ib_data['va_ib_betaald'] + ib_data['va_zvw_betaald']
-
-                    def ib_extra(d=ib_data, vt=va_totaal):
-                        _MND = {1: 'jan', 2: 'feb', 3: 'mrt', 4: 'apr',
-                                5: 'mei', 6: 'jun', 7: 'jul', 8: 'aug',
-                                9: 'sep', 10: 'okt', 11: 'nov', 12: 'dec'}
-                        with ui.column().classes('gap-0 q-mt-xs'):
-                            belasting = d['netto_ib'] + d['zvw']
-                            ui.label(
-                                f'Berekend: {format_euro(belasting)}'
-                            ).classes('text-caption text-grey-6')
-                            if vt > 0:
-                                if d['prorated']:
-                                    ui.label(
-                                        f'VA t/m {_MND[d["month"]]}: '
-                                        f'{format_euro(-vt)}'
-                                    ).classes('text-caption text-grey-6')
-                                else:
-                                    ui.label(
-                                        f'VA betaald: {format_euro(-vt)}'
-                                    ).classes('text-caption text-grey-6')
-
-                    kpi_card('Belasting prognose', ib_label,
-                             'calculate', ib_color,
-                             extra=ib_extra,
-                             on_click=lambda: ui.navigate.to('/aangifte'))
-
+                # 7. Km-vergoeding (if applicable)
                 if km_data['km'] > 0:
                     km_label = (f"{km_data['km']:.0f} km "
                                 f"({format_euro(km_data['vergoeding'])})")
                     kpi_card('Km-vergoeding', km_label,
                              'directions_car', '#0F766E')
+
+                # 8. Documenten completeness
+                docs = await get_aangifte_documenten(DB_PATH, jaar)
+                done_docs = len({d.documenttype for d in docs})
+                # 13 document types defined in aangifte.py AANGIFTE_DOCS
+                total_docs = 13
+                doc_color = '#059669' if done_docs >= total_docs else '#D97706'
+
+                def doc_extra(_done=done_docs, _total=total_docs):
+                    ratio = _done / _total if _total else 0
+                    ui.linear_progress(
+                        value=ratio,
+                        color='positive' if ratio == 1 else 'warning',
+                    ).classes('w-full q-mt-sm').props('rounded size=8px')
+
+                kpi_card('Documenten',
+                         f'{done_docs}/{total_docs} compleet',
+                         'folder', doc_color, doc_extra,
+                         on_click=lambda: ui.navigate.to('/aangifte'))
 
         # Charts + alerts
         chart_row = chart_container['ref']
@@ -313,42 +544,6 @@ async def dashboard_page():
                         ui.label('Geen uitgaven gevonden.') \
                             .classes('q-pa-md').style('color: #64748B')
 
-            # Recente facturen
-            if recente:
-                with ui.card().classes('w-full q-pa-lg'):
-                    ui.label('Recente facturen').classes('text-subtitle1') \
-                        .style('color: #0F172A; font-weight: 600')
-                    columns = [
-                        {'name': 'nummer', 'label': 'Nummer', 'field': 'nummer',
-                         'align': 'left'},
-                        {'name': 'datum', 'label': 'Datum', 'field': 'datum_fmt',
-                         'align': 'left'},
-                        {'name': 'klant', 'label': 'Klant', 'field': 'klant_naam',
-                         'align': 'left'},
-                        {'name': 'bedrag', 'label': 'Bedrag', 'field': 'bedrag_fmt',
-                         'align': 'right'},
-                        {'name': 'status', 'label': 'Status', 'field': 'status',
-                         'align': 'center'},
-                    ]
-                    rows = []
-                    for f in recente:
-                        rows.append({
-                            'nummer': f.nummer,
-                            'datum_fmt': format_datum(f.datum),
-                            'klant_naam': f.klant_naam,
-                            'bedrag_fmt': format_euro(f.totaal_bedrag),
-                            'status': 'Betaald' if f.betaald else 'Openstaand',
-                            'betaald': f.betaald,
-                        })
-                    t = ui.table(
-                        columns=columns, rows=rows, row_key='nummer',
-                    ).classes('w-full').props('dense flat')
-                    t.add_slot('body-cell-status', '''
-                        <q-td :props="props">
-                            <q-badge :color="props.row.betaald ? 'positive' : 'warning'"
-                                     :label="props.row.status" />
-                        </q-td>
-                    ''')
 
     jaar_select.on_value_change(lambda _: refresh_dashboard())
     await refresh_dashboard()

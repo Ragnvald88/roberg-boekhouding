@@ -64,7 +64,6 @@ def create_layout(title: str, active_page: str = ''):
         ('Dashboard', 'dashboard', '/'),
         ('Werkdagen', 'schedule', '/werkdagen'),
         ('Facturen', 'receipt', '/facturen'),
-        ('Klanten', 'people', '/klanten'),
         ('FINANCIEEL', None, None),  # section header
         ('Kosten', 'payments', '/kosten'),
         ('Bank', 'account_balance', '/bank'),
@@ -122,15 +121,17 @@ def create_layout(title: str, active_page: str = ''):
             else:
                 btn.classes('nav-btn').style('color: #CBD5E1')
 
-        # Separator + settings
+        # Separator + setup pages
         ui.separator().classes('q-my-md').style('background-color: #1E293B')
 
-        settings_active = active_page == '/instellingen'
-        settings_btn = ui.button(
-            'Instellingen', icon='settings',
-            on_click=lambda: ui.navigate.to('/instellingen')
-        ).props('flat align=left no-caps').classes('w-full rounded-lg')
-        if settings_active:
-            settings_btn.classes('nav-active')
-        else:
-            settings_btn.classes('nav-btn').style('color: #CBD5E1')
+        for lbl, icn, tgt in [('Klanten', 'people', '/klanten'),
+                               ('Instellingen', 'settings', '/instellingen')]:
+            is_act = tgt == active_page
+            btn = ui.button(
+                lbl, icon=icn,
+                on_click=lambda t=tgt: ui.navigate.to(t),
+            ).props('flat align=left no-caps').classes('w-full rounded-lg')
+            if is_act:
+                btn.classes('nav-active')
+            else:
+                btn.classes('nav-btn').style('color: #CBD5E1')

@@ -2,7 +2,7 @@
 
 import re
 from contextlib import asynccontextmanager
-from datetime import date as _date
+from datetime import date as _date, timedelta as _timedelta
 
 import aiosqlite
 from pathlib import Path
@@ -609,6 +609,8 @@ async def get_next_factuurnummer(db_path: Path = DB_PATH, jaar: int = 2026) -> s
 
 async def mark_betaald(db_path: Path = DB_PATH, factuur_id: int = 0,
                        datum: str = '', betaald: bool = True) -> None:
+    if datum:
+        _validate_datum(datum)
     async with get_db_ctx(db_path) as conn:
         await conn.execute(
             "UPDATE facturen SET betaald = ?, betaald_datum = ? WHERE id = ?",
@@ -977,7 +979,7 @@ def _row_to_fiscale_params(r) -> FiscaleParams:
     )
 
 
-async def get_fiscale_params(db_path: Path = DB_PATH, jaar: int = 0) -> FiscaleParams:
+async def get_fiscale_params(db_path: Path = DB_PATH, jaar: int = 0) -> FiscaleParams | None:
     async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute("SELECT * FROM fiscale_params WHERE jaar = ?", (jaar,))
         r = await cursor.fetchone()
@@ -1144,6 +1146,23 @@ async def update_box3_inputs(db_path: Path = DB_PATH, jaar: int = 0,
                    box3_schulden = ?
                WHERE jaar = ?""",
             (bank_saldo, overige_bezittingen, schulden, jaar))
+        await conn.commit()
+        return cursor.rowcount > 0
+
+
+async def update_partner_inputs(db_path: Path = DB_PATH, jaar: int = 0,
+                                 bruto_loon: float = 0,
+                                 loonheffing: float = 0) -> bool:
+    """Update partner input fields in fiscale_params for a year.
+
+    Returns True if a row was updated, False if no fiscale_params row exists.
+    """
+    async with get_db_ctx(db_path) as conn:
+        cursor = await conn.execute(
+            """UPDATE fiscale_params
+               SET partner_bruto_loon = ?, partner_loonheffing = ?
+               WHERE jaar = ?""",
+            (bruto_loon, loonheffing, jaar))
         await conn.commit()
         return cursor.rowcount > 0
 
@@ -1526,17 +1545,8 @@ async def auto_match_betaald_datum(db_path: Path = DB_PATH) -> int:
 
         def date_ok(bank_datum, factuur_datum):
             """Bank payment within 14 days before to any time after factuur date."""
-            # Allow bank_datum >= factuur_datum - 14 days
-            # Simple string comparison: factuur_datum minus ~14 days
-            y, m, d = int(factuur_datum[:4]), int(factuur_datum[5:7]), int(factuur_datum[8:10])
-            d -= 14
-            if d < 1:
-                m -= 1
-                d += 30  # approximate, good enough
-            if m < 1:
-                m = 12
-                y -= 1
-            earliest = f'{y:04d}-{m:02d}-{max(1, d):02d}'
+            fd = _date.fromisoformat(factuur_datum)
+            earliest = (fd - _timedelta(days=14)).isoformat()
             return bank_datum >= earliest
 
         # Pass 1: Match by invoice number in bank omschrijving + amount sanity
@@ -1585,11 +1595,33 @@ async def auto_match_betaald_datum(db_path: Path = DB_PATH) -> int:
 
 
 async def get_nog_te_factureren(db_path: Path = DB_PATH, jaar: int = 0) -> float:
-    """Sum of (uren * tarief + km * km_tarief) for unfactured werkdagen in the given year."""
+    """Sum of (uren * tarief + km * km_tarief) for unfactured werkdagen in the given year.
+
+    Excludes werkdagen with zero revenue (admin/study hours) since those are
+    never invoiced — they only count toward urencriterium.
+    """
     async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
             "SELECT COALESCE(SUM(uren * tarief + km * km_tarief), 0.0) FROM werkdagen "
-            "WHERE status = 'ongefactureerd' AND substr(datum, 1, 4) = ?",
+            "WHERE status = 'ongefactureerd' AND substr(datum, 1, 4) = ? "
+            "AND tarief > 0",
+            (str(jaar),))
+        row = await cursor.fetchone()
+        return float(row[0])
+
+
+async def get_belastingdienst_betalingen(db_path: Path = DB_PATH,
+                                         jaar: int = 0) -> float:
+    """Sum of payments to Belastingdienst for a given year (negative = paid out).
+
+    Returns positive number representing total paid. Excludes Boekhouder and refunds.
+    """
+    async with get_db_ctx(db_path) as conn:
+        cursor = await conn.execute(
+            """SELECT COALESCE(SUM(ABS(bedrag)), 0.0) FROM banktransacties
+               WHERE LOWER(tegenpartij) LIKE '%belastingdienst%'
+               AND bedrag < 0
+               AND substr(datum, 1, 4) = ?""",
             (str(jaar),))
         row = await cursor.fetchone()
         return float(row[0])

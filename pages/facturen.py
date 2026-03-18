@@ -15,8 +15,8 @@ from database import (
     get_facturen, add_factuur, get_next_factuurnummer,
     mark_betaald, delete_factuur, update_factuur,
     get_klanten, get_werkdagen_ongefactureerd,
-    link_werkdagen_to_factuur, get_bedrijfsgegevens, get_db, add_werkdag,
-    DB_PATH,
+    link_werkdagen_to_factuur, get_bedrijfsgegevens, get_db_ctx, add_werkdag,
+    get_fiscale_params, DB_PATH,
 )
 from import_.pdf_parser import (
     extract_pdf_text, detect_invoice_type,
@@ -382,8 +382,18 @@ async def facturen_page():
 
                 # Datum
                 edit_datum = ui.input(
-                    'Datum (YYYY-MM-DD)', value=row['datum'],
+                    'Datum', value=row['datum'],
                 ).classes('w-full')
+                with edit_datum:
+                    with ui.menu().props('no-parent-event') as dmenu:
+                        with ui.date(value=row['datum']).bind_value(
+                                edit_datum) as dpicker:
+                            dpicker.on('update:model-value',
+                                       lambda: dmenu.close())
+                    with edit_datum.add_slot('append'):
+                        ui.icon('edit_calendar').on(
+                            'click', dmenu.open
+                        ).classes('cursor-pointer')
 
                 # Klant
                 edit_klant = ui.select(
@@ -464,7 +474,13 @@ async def facturen_page():
                         if not edit_klant.value:
                             ui.notify('Selecteer een klant', type='warning')
                             return
+                        try:
+                            await _do_opslaan()
+                        except Exception as exc:
+                            ui.notify(f'Fout bij opslaan: {exc}',
+                                      type='negative')
 
+                    async def _do_opslaan():
                         # Update main fields
                         kwargs = {
                             'datum': edit_datum.value,
@@ -543,12 +559,9 @@ async def facturen_page():
             klant_options = {k.id: k.naam for k in klanten}
 
             # Load existing factuurnummers for dedup
-            conn = await get_db(DB_PATH)
-            try:
+            async with get_db_ctx(DB_PATH) as conn:
                 cursor = await conn.execute("SELECT nummer FROM facturen")
                 existing_nummers = {row[0] for row in await cursor.fetchall()}
-            finally:
-                await conn.close()
 
             with ui.dialog() as dlg, ui.card().classes('w-full max-w-5xl'):
                 ui.label('Facturen importeren uit PDF').classes('text-h6 q-mb-sm')
@@ -813,6 +826,12 @@ async def facturen_page():
 
                         try:
                             datum = item.get('factuurdatum', '')
+                            inv_jaar = int(datum[:4]) if len(datum) >= 4 else 0
+                            fp_inv = await get_fiscale_params(
+                                DB_PATH, inv_jaar) if inv_jaar else None
+                            inv_km_tarief = (
+                                fp_inv.km_tarief if fp_inv and fp_inv.km_tarief
+                                else 0.23)
                             bedrag = item.get('totaal_bedrag', 0)
                             inv_type = item.get('_type', 'factuur')
                             line_items = item.get('line_items', [])
@@ -855,8 +874,7 @@ async def facturen_page():
 
                             # Create or link werkdagen
                             if opt_werkdagen['value'] and line_items:
-                                conn = await get_db(DB_PATH)
-                                try:
+                                async with get_db_ctx(DB_PATH) as conn:
                                     for li in line_items:
                                         li_datum = li.get('datum', '')
                                         if not li_datum:
@@ -888,7 +906,7 @@ async def facturen_page():
                                                     round(bedrag_li / uren, 2)
                                                     if uren else 0)
                                                 km = 0.0
-                                                km_tarief = 0.23
+                                                km_tarief = inv_km_tarief
                                                 urennorm = 0
                                             else:
                                                 uren_val = li.get('uren', 0)
@@ -904,7 +922,7 @@ async def facturen_page():
                                                 tarief = tarief_val
                                                 km = li.get('km', 0)
                                                 km_tarief = li.get(
-                                                    'km_tarief', 0.23)
+                                                    'km_tarief', inv_km_tarief)
                                                 urennorm = 1
 
                                             await add_werkdag(
@@ -922,8 +940,6 @@ async def facturen_page():
                                                 urennorm=urennorm,
                                             )
                                             werkdagen_created += 1
-                                finally:
-                                    await conn.close()
 
                         except Exception as ex:
                             errors += 1
