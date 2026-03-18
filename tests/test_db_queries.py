@@ -5,8 +5,8 @@ from database import (
     init_db, add_klant, add_werkdag, add_factuur, add_uitgave,
     add_banktransacties, mark_betaald,
     get_omzet_totaal, get_representatie_totaal,
-    get_debiteuren_op_peildatum, auto_match_betaald_datum,
-    match_betalingen_aan_facturen,
+    get_debiteuren_op_peildatum,
+    find_factuur_matches, apply_factuur_matches,
     get_nog_te_factureren, get_kpis, get_data_counts,
     get_afschrijving_overrides, get_afschrijving_overrides_batch,
     set_afschrijving_override, delete_afschrijving_override,
@@ -270,94 +270,191 @@ async def test_debiteuren_peildatum_future_invoices_excluded(db):
 
 
 # ============================================================
-# auto_match_betaald_datum
+# find_factuur_matches + apply_factuur_matches
 # ============================================================
 
 @pytest.mark.asyncio
-async def test_auto_match_simple(db):
-    """Matches a paid factuur to a bank transaction by amount."""
-    kid = await add_klant(db, naam="Test", tarief_uur=80)
-    fid = await add_factuur(db, nummer="2026-001", klant_id=kid,
-                            datum="2026-01-15", totaal_bedrag=1234.56,
-                            betaald=1)  # no betaald_datum
-    await add_banktransacties(db, transacties=[
-        {'datum': '2026-02-01', 'bedrag': 1234.56,
-         'tegenpartij': 'Test', 'omschrijving': 'Betaling'},
-    ])
+async def test_find_matches_by_nummer(db):
+    """Pass 1: match by invoice number in bank omschrijving."""
+    kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=0)
+    await add_factuur(db, nummer='2026-001', klant_id=kid,
+                       datum='2026-01-15', totaal_uren=8, totaal_km=0,
+                       totaal_bedrag=640.00, betaald=0)
+    await add_banktransacties(db, [
+        {'datum': '2026-01-20', 'bedrag': 640.00, 'tegenpartij': 'Test BV',
+         'omschrijving': '2026-001 jan', 'categorie': ''},
+    ], csv_bestand='test.csv')
 
-    count = await auto_match_betaald_datum(db)
+    matches = await find_factuur_matches(db)
+    assert len(matches) == 1
+    assert matches[0]['factuur_nummer'] == '2026-001'
+    assert matches[0]['bank_datum'] == '2026-01-20'
+    assert matches[0]['match_type'] == 'nummer'
+
+    # Verify NO changes applied yet (read-only)
+    async with get_db_ctx(db) as conn:
+        cur = await conn.execute('SELECT betaald FROM facturen WHERE nummer=?',
+                                  ('2026-001',))
+        assert (await cur.fetchone())['betaald'] == 0
+
+
+@pytest.mark.asyncio
+async def test_find_matches_by_amount(db):
+    """Pass 2: match by amount when no nummer found in omschrijving."""
+    kid = await add_klant(db, naam="Test", tarief_uur=77.50, retour_km=52)
+    await add_factuur(db, nummer='2026-010', klant_id=kid,
+                       datum='2026-02-10', totaal_uren=9, totaal_km=52,
+                       totaal_bedrag=709.46, betaald=0)
+    await add_banktransacties(db, [
+        {'datum': '2026-02-15', 'bedrag': 709.46, 'tegenpartij': 'Klant',
+         'omschrijving': 'betaling feb', 'categorie': ''},
+    ], csv_bestand='test.csv')
+
+    matches = await find_factuur_matches(db)
+    assert len(matches) == 1
+    assert matches[0]['factuur_nummer'] == '2026-010'
+    assert matches[0]['match_type'] == 'bedrag'
+
+
+@pytest.mark.asyncio
+async def test_find_matches_skips_betaald(db):
+    """Already-paid facturen are not matched."""
+    kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=0)
+    await add_factuur(db, nummer='2026-005', klant_id=kid,
+                       datum='2026-03-01', totaal_uren=8, totaal_km=0,
+                       totaal_bedrag=640.00, betaald=1, betaald_datum='2026-03-05')
+    await add_banktransacties(db, [
+        {'datum': '2026-03-05', 'bedrag': 640.00, 'tegenpartij': 'Test',
+         'omschrijving': '2026-005', 'categorie': ''},
+    ], csv_bestand='test.csv')
+
+    matches = await find_factuur_matches(db)
+    assert len(matches) == 0
+
+
+@pytest.mark.asyncio
+async def test_find_matches_skips_linked_bank(db):
+    """Bank transactions already linked are not reused."""
+    kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=0)
+    await add_factuur(db, nummer='2026-020', klant_id=kid,
+                       datum='2026-03-10', totaal_uren=8, totaal_km=0,
+                       totaal_bedrag=640.00, betaald=0)
+    await add_banktransacties(db, [
+        {'datum': '2026-03-15', 'bedrag': 640.00, 'tegenpartij': 'Test',
+         'omschrijving': '2026-020', 'categorie': ''},
+    ], csv_bestand='test.csv')
+    async with get_db_ctx(db) as conn:
+        await conn.execute(
+            "UPDATE banktransacties SET koppeling_type='factuur' WHERE bedrag=640")
+        await conn.commit()
+
+    matches = await find_factuur_matches(db)
+    assert len(matches) == 0
+
+
+@pytest.mark.asyncio
+async def test_find_matches_same_amount_chronological(db):
+    """Two facturen with same amount: first by date wins."""
+    kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=0)
+    await add_factuur(db, nummer='2026-A', klant_id=kid,
+                       datum='2026-01-10', totaal_uren=8, totaal_km=0,
+                       totaal_bedrag=640.00, betaald=0)
+    await add_factuur(db, nummer='2026-B', klant_id=kid,
+                       datum='2026-01-20', totaal_uren=8, totaal_km=0,
+                       totaal_bedrag=640.00, betaald=0)
+    await add_banktransacties(db, [
+        {'datum': '2026-01-25', 'bedrag': 640.00, 'tegenpartij': 'Test',
+         'omschrijving': 'payment', 'categorie': ''},
+    ], csv_bestand='test.csv')
+
+    matches = await find_factuur_matches(db)
+    assert len(matches) == 1
+    assert matches[0]['factuur_nummer'] == '2026-A'
+
+
+@pytest.mark.asyncio
+async def test_find_matches_anw_nummer(db):
+    """ANW factuurnummers with special format are matched correctly."""
+    kid = await add_klant(db, naam="ANW Diensten", tarief_uur=80, retour_km=0)
+    await add_factuur(db, nummer='22470-26-27', klant_id=kid,
+                       datum='2026-01-10', totaal_uren=8, totaal_km=0,
+                       totaal_bedrag=640.00, betaald=0)
+    await add_banktransacties(db, [
+        {'datum': '2026-01-20', 'bedrag': 640.00, 'tegenpartij': 'ANW',
+         'omschrijving': 'Betaling 22470-26-27', 'categorie': ''},
+    ], csv_bestand='test.csv')
+
+    matches = await find_factuur_matches(db)
+    assert len(matches) == 1
+    assert matches[0]['match_type'] == 'nummer'
+
+
+@pytest.mark.asyncio
+async def test_find_matches_amount_outside_tolerance(db):
+    """Amount difference > EUR 1 → no match."""
+    kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=0)
+    await add_factuur(db, nummer='2026-X', klant_id=kid,
+                       datum='2026-02-01', totaal_uren=8, totaal_km=0,
+                       totaal_bedrag=640.00, betaald=0)
+    await add_banktransacties(db, [
+        {'datum': '2026-02-10', 'bedrag': 650.00, 'tegenpartij': 'Test',
+         'omschrijving': 'payment', 'categorie': ''},
+    ], csv_bestand='test.csv')
+
+    matches = await find_factuur_matches(db)
+    assert len(matches) == 0
+
+
+@pytest.mark.asyncio
+async def test_find_matches_empty_db(db):
+    """No facturen, no bank transactions → empty list."""
+    matches = await find_factuur_matches(db)
+    assert matches == []
+
+
+@pytest.mark.asyncio
+async def test_apply_matches(db):
+    """apply_factuur_matches marks factuur betaald and links bank transaction."""
+    kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=0)
+    fid = await add_factuur(db, nummer='2026-030', klant_id=kid,
+                             datum='2026-03-01', totaal_uren=8, totaal_km=0,
+                             totaal_bedrag=640.00, betaald=0)
+    await add_werkdag(db, datum='2026-03-01', klant_id=kid,
+                       uren=8, tarief=80, km=0, km_tarief=0.23,
+                       status='gefactureerd', factuurnummer='2026-030')
+    await add_banktransacties(db, [
+        {'datum': '2026-03-10', 'bedrag': 640.00, 'tegenpartij': 'Test',
+         'omschrijving': '2026-030', 'categorie': ''},
+    ], csv_bestand='test.csv')
+
+    matches = await find_factuur_matches(db)
+    assert len(matches) == 1
+
+    count = await apply_factuur_matches(db, matches)
     assert count == 1
 
-    # Now the peildatum query should see it as a receivable at 31-01
-    assert await get_debiteuren_op_peildatum(db, '2026-01-31') == 1234.56
-    # But not at 28-02 (paid by then)
-    assert await get_debiteuren_op_peildatum(db, '2026-02-28') == 0.0
+    async with get_db_ctx(db) as conn:
+        cur = await conn.execute('SELECT betaald, betaald_datum FROM facturen WHERE id=?', (fid,))
+        row = await cur.fetchone()
+        assert row['betaald'] == 1
+        assert row['betaald_datum'] == '2026-03-10'
+
+        cur = await conn.execute(
+            "SELECT koppeling_type, koppeling_id FROM banktransacties WHERE bedrag=640")
+        row = await cur.fetchone()
+        assert row['koppeling_type'] == 'factuur'
+        assert row['koppeling_id'] == fid
+
+        cur = await conn.execute(
+            "SELECT status FROM werkdagen WHERE factuurnummer='2026-030'")
+        row = await cur.fetchone()
+        assert row['status'] == 'betaald'
 
 
 @pytest.mark.asyncio
-async def test_auto_match_tolerance(db):
-    """Matches within €1 tolerance for rounding differences."""
-    kid = await add_klant(db, naam="Test", tarief_uur=80)
-    await add_factuur(db, nummer="2026-001", klant_id=kid,
-                      datum="2026-01-15", totaal_bedrag=2569.68,
-                      betaald=1)
-    await add_banktransacties(db, transacties=[
-        {'datum': '2026-02-01', 'bedrag': 2569.83,  # €0.15 difference
-         'tegenpartij': 'Test', 'omschrijving': 'Betaling'},
-    ])
-
-    count = await auto_match_betaald_datum(db)
-    assert count == 1
-
-
-@pytest.mark.asyncio
-async def test_auto_match_no_double_use(db):
-    """Each bank transaction is used at most once."""
-    kid = await add_klant(db, naam="Test", tarief_uur=80)
-    # Two facturen with same amount
-    await add_factuur(db, nummer="2026-001", klant_id=kid,
-                      datum="2026-01-15", totaal_bedrag=500, betaald=1)
-    await add_factuur(db, nummer="2026-002", klant_id=kid,
-                      datum="2026-02-15", totaal_bedrag=500, betaald=1)
-    # Only ONE bank transaction
-    await add_banktransacties(db, transacties=[
-        {'datum': '2026-02-01', 'bedrag': 500,
-         'tegenpartij': 'Test', 'omschrijving': 'Betaling'},
-    ])
-
-    count = await auto_match_betaald_datum(db)
-    assert count == 1  # only one match, not two
-
-
-@pytest.mark.asyncio
-async def test_auto_match_idempotent(db):
-    """Running auto_match twice doesn't change already-matched facturen."""
-    kid = await add_klant(db, naam="Test", tarief_uur=80)
-    await add_factuur(db, nummer="2026-001", klant_id=kid,
-                      datum="2026-01-15", totaal_bedrag=800, betaald=1)
-    await add_banktransacties(db, transacties=[
-        {'datum': '2026-02-01', 'bedrag': 800,
-         'tegenpartij': 'Test', 'omschrijving': 'Betaling'},
-    ])
-
-    count1 = await auto_match_betaald_datum(db)
-    assert count1 == 1
-    count2 = await auto_match_betaald_datum(db)
-    assert count2 == 0  # already matched, no changes
-
-
-@pytest.mark.asyncio
-async def test_auto_match_ignores_negative_bank(db):
-    """Outgoing (negative) bank transactions are not matched."""
-    kid = await add_klant(db, naam="Test", tarief_uur=80)
-    await add_factuur(db, nummer="2026-001", klant_id=kid,
-                      datum="2026-01-15", totaal_bedrag=300, betaald=1)
-    await add_banktransacties(db, transacties=[
-        {'datum': '2026-02-01', 'bedrag': -300,  # outgoing
-         'tegenpartij': 'Test', 'omschrijving': 'Uitgave'},
-    ])
-
-    count = await auto_match_betaald_datum(db)
+async def test_apply_matches_empty(db):
+    """Empty match list → no changes, returns 0."""
+    count = await apply_factuur_matches(db, [])
     assert count == 0
 
 
@@ -445,90 +542,3 @@ async def test_override_cascade_delete(db):
     assert overrides == {}
 
 
-# ============================================================
-# match_betalingen_aan_facturen (bank-factuur auto-matching)
-# ============================================================
-
-@pytest.mark.asyncio
-async def test_match_betalingen_by_nummer(db):
-    """Match bank payment to open factuur by invoice number in omschrijving."""
-    kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=0)
-    # Create open factuur
-    await add_factuur(db, nummer='2026-001', klant_id=kid,
-                       datum='2026-01-15', totaal_uren=8, totaal_km=0,
-                       totaal_bedrag=640.00, betaald=0)
-    # Add bank payment with invoice number in omschrijving
-    await add_banktransacties(db, [
-        {'datum': '2026-01-20', 'bedrag': 640.00, 'tegenpartij': 'Test BV',
-         'omschrijving': '2026-001 jan', 'categorie': ''},
-    ], csv_bestand='test.csv')
-
-    matches = await match_betalingen_aan_facturen(db)
-    assert len(matches) == 1
-    assert matches[0]['factuur_nummer'] == '2026-001'
-    assert matches[0]['bank_datum'] == '2026-01-20'
-
-    # Verify factuur is now betaald
-    async with get_db_ctx(db) as conn:
-        cur = await conn.execute('SELECT betaald, betaald_datum FROM facturen WHERE nummer = ?',
-                                  ('2026-001',))
-        row = await cur.fetchone()
-        assert row['betaald'] == 1
-        assert row['betaald_datum'] == '2026-01-20'
-
-
-@pytest.mark.asyncio
-async def test_match_betalingen_by_amount(db):
-    """Match bank payment to open factuur by amount when no nummer match."""
-    kid = await add_klant(db, naam="Test", tarief_uur=77.50, retour_km=52)
-    await add_factuur(db, nummer='2026-010', klant_id=kid,
-                       datum='2026-02-10', totaal_uren=9, totaal_km=52,
-                       totaal_bedrag=709.46, betaald=0)
-    await add_banktransacties(db, [
-        {'datum': '2026-02-15', 'bedrag': 709.46, 'tegenpartij': 'Klant',
-         'omschrijving': 'betaling feb', 'categorie': ''},
-    ], csv_bestand='test.csv')
-
-    matches = await match_betalingen_aan_facturen(db)
-    assert len(matches) == 1
-    assert matches[0]['factuur_nummer'] == '2026-010'
-
-
-@pytest.mark.asyncio
-async def test_match_betalingen_skips_already_betaald(db):
-    """Already-paid facturen are not matched again."""
-    kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=0)
-    await add_factuur(db, nummer='2026-005', klant_id=kid,
-                       datum='2026-03-01', totaal_uren=8, totaal_km=0,
-                       totaal_bedrag=640.00, betaald=1, betaald_datum='2026-03-05')
-    await add_banktransacties(db, [
-        {'datum': '2026-03-05', 'bedrag': 640.00, 'tegenpartij': 'Test',
-         'omschrijving': '2026-005', 'categorie': ''},
-    ], csv_bestand='test.csv')
-
-    matches = await match_betalingen_aan_facturen(db)
-    assert len(matches) == 0  # Already betaald, no new match
-
-
-@pytest.mark.asyncio
-async def test_match_betalingen_links_bank_transaction(db):
-    """Bank transaction gets koppeling_type='factuur' after match."""
-    kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=0)
-    fid = await add_factuur(db, nummer='2026-020', klant_id=kid,
-                             datum='2026-03-10', totaal_uren=8, totaal_km=0,
-                             totaal_bedrag=640.00, betaald=0)
-    await add_banktransacties(db, [
-        {'datum': '2026-03-15', 'bedrag': 640.00, 'tegenpartij': 'Klant',
-         'omschrijving': '2026-020', 'categorie': ''},
-    ], csv_bestand='test.csv')
-
-    matches = await match_betalingen_aan_facturen(db)
-    assert len(matches) == 1
-
-    # Verify bank transaction is linked
-    async with get_db_ctx(db) as conn:
-        cur = await conn.execute(
-            "SELECT koppeling_type, koppeling_id FROM banktransacties WHERE bedrag = 640")
-        row = await cur.fetchone()
-        assert row['koppeling_type'] == 'factuur'
-        assert row['koppeling_id'] == fid
