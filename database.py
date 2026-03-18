@@ -1517,20 +1517,19 @@ async def get_debiteuren_op_peildatum(db_path: Path = DB_PATH,
         return float(row[0])
 
 
-async def match_betalingen_aan_facturen(db_path: Path = DB_PATH) -> list[dict]:
-    """Match incoming bank payments to open (onbetaalde) facturen.
+async def find_factuur_matches(db_path: Path = DB_PATH) -> list[dict]:
+    """Find matches between open facturen and incoming bank payments.
 
-    Two-pass matching:
-    1. Match by invoice number in bank omschrijving + amount within 5%
+    Returns match proposals WITHOUT applying them. Two-pass matching:
+    1. Match by invoice number in bank omschrijving + amount within EUR 1
     2. Fall back to amount matching (within EUR 1 tolerance)
 
-    Marks matched facturen as betaald, sets betaald_datum from bank payment,
-    and links the bank transaction via koppeling_type='factuur'.
+    Bank payment may arrive up to 14 days before factuur date.
+    Each bank transaction used at most once (greedy, chronological).
 
-    Returns list of match dicts: [{factuur_nummer, bedrag, bank_datum, tegenpartij}].
+    Returns list of match dicts with factuur and bank details + match_type.
     """
     async with get_db_ctx(db_path) as conn:
-        # Get open facturen
         cur = await conn.execute(
             """SELECT id, nummer, datum, totaal_bedrag FROM facturen
                WHERE betaald = 0 ORDER BY datum""")
@@ -1538,7 +1537,6 @@ async def match_betalingen_aan_facturen(db_path: Path = DB_PATH) -> list[dict]:
         if not open_facturen:
             return []
 
-        # Get unlinked incoming bank payments
         cur = await conn.execute(
             """SELECT id, datum, bedrag, tegenpartij, omschrijving
                FROM banktransacties
@@ -1555,7 +1553,7 @@ async def match_betalingen_aan_facturen(db_path: Path = DB_PATH) -> list[dict]:
             earliest = (fd - _timedelta(days=14)).isoformat()
             return bank_datum >= earliest
 
-        # Pass 1: Match by invoice number in omschrijving
+        # Pass 1: Match by invoice number in omschrijving + amount sanity
         for f in open_facturen:
             nummer = f['nummer'].lower()
             for b in bank_txns:
@@ -1565,18 +1563,19 @@ async def match_betalingen_aan_facturen(db_path: Path = DB_PATH) -> list[dict]:
                     continue
                 omschr = (b['omschrijving'] or '').lower()
                 if nummer in omschr:
-                    if f['totaal_bedrag'] > 0:
-                        pct_diff = abs(b['bedrag'] - f['totaal_bedrag']) / f['totaal_bedrag']
-                        if pct_diff > 0.05:
-                            continue
+                    if abs(b['bedrag'] - f['totaal_bedrag']) > 1.00:
+                        continue
                     used_bank_ids.add(b['id'])
                     matches.append({
                         'factuur_id': f['id'],
                         'factuur_nummer': f['nummer'],
-                        'bedrag': f['totaal_bedrag'],
+                        'factuur_bedrag': f['totaal_bedrag'],
+                        'factuur_datum': f['datum'],
                         'bank_id': b['id'],
                         'bank_datum': b['datum'],
-                        'tegenpartij': b['tegenpartij'] or '',
+                        'bank_bedrag': b['bedrag'],
+                        'bank_tegenpartij': b['tegenpartij'] or '',
+                        'match_type': 'nummer',
                     })
                     break
 
@@ -1596,14 +1595,30 @@ async def match_betalingen_aan_facturen(db_path: Path = DB_PATH) -> list[dict]:
                     matches.append({
                         'factuur_id': f['id'],
                         'factuur_nummer': f['nummer'],
-                        'bedrag': f['totaal_bedrag'],
+                        'factuur_bedrag': f['totaal_bedrag'],
+                        'factuur_datum': f['datum'],
                         'bank_id': b['id'],
                         'bank_datum': b['datum'],
-                        'tegenpartij': b['tegenpartij'] or '',
+                        'bank_bedrag': b['bedrag'],
+                        'bank_tegenpartij': b['tegenpartij'] or '',
+                        'match_type': 'bedrag',
                     })
                     break
 
-        # Apply matches
+        return matches
+
+
+async def apply_factuur_matches(db_path: Path = DB_PATH,
+                                 matches: list[dict] = None) -> int:
+    """Apply confirmed factuur-bank matches.
+
+    For each match: marks factuur as betaald, links bank transaction,
+    updates werkdagen status. Returns count of applied matches.
+    """
+    if not matches:
+        return 0
+
+    async with get_db_ctx(db_path) as conn:
         for m in matches:
             await conn.execute(
                 "UPDATE facturen SET betaald = 1, betaald_datum = ? WHERE id = ?",
@@ -1612,101 +1627,12 @@ async def match_betalingen_aan_facturen(db_path: Path = DB_PATH) -> list[dict]:
                 "UPDATE banktransacties SET koppeling_type = 'factuur', "
                 "koppeling_id = ? WHERE id = ?",
                 (m['factuur_id'], m['bank_id']))
-            # Update linked werkdagen status
-            cur2 = await conn.execute(
-                "SELECT nummer FROM facturen WHERE id = ?", (m['factuur_id'],))
-            row = await cur2.fetchone()
-            if row and row['nummer']:
-                await conn.execute(
-                    "UPDATE werkdagen SET status = 'betaald' WHERE factuurnummer = ?",
-                    (row['nummer'],))
-
-        if matches:
-            await conn.commit()
-        return matches
-
-
-async def auto_match_betaald_datum(db_path: Path = DB_PATH) -> int:
-    """Auto-populate betaald_datum for paid facturen by matching bank transactions.
-
-    Two-pass matching:
-    1. Match by invoice number in bank omschrijving + amount within 5%
-    2. Fall back to amount matching (within €1 tolerance, chronological dedup)
-
-    Bank payment may arrive up to 14 days before factuur date (factuur date =
-    last werkdag, not issue date — payment can precede it).
-
-    Returns count of newly matched facturen.
-    """
-    async with get_db_ctx(db_path) as conn:
-        # Get unmatched paid facturen, ordered by date
-        cur = await conn.execute(
-            """SELECT id, nummer, datum, totaal_bedrag FROM facturen
-               WHERE betaald = 1 AND (betaald_datum = '' OR betaald_datum IS NULL)
-               ORDER BY datum""")
-        unmatched = await cur.fetchall()
-        if not unmatched:
-            return 0
-
-        # Get all positive bank transactions
-        cur = await conn.execute(
-            """SELECT id, datum, bedrag, omschrijving FROM banktransacties
-               WHERE bedrag > 0 ORDER BY datum""")
-        bank_txns = await cur.fetchall()
-
-        used_bank_ids = set()
-        matched_factuur_ids = set()
-        count = 0
-
-        def date_ok(bank_datum, factuur_datum):
-            """Bank payment within 14 days before to any time after factuur date."""
-            fd = _date.fromisoformat(factuur_datum)
-            earliest = (fd - _timedelta(days=14)).isoformat()
-            return bank_datum >= earliest
-
-        # Pass 1: Match by invoice number in bank omschrijving + amount sanity
-        for f in unmatched:
-            nummer = f['nummer'].lower()
-            for b in bank_txns:
-                if b['id'] in used_bank_ids:
-                    continue
-                if not date_ok(b['datum'], f['datum']):
-                    continue
-                omschr = (b['omschrijving'] or '').lower()
-                if nummer in omschr:
-                    # Verify amount is in the right ballpark (within 5%)
-                    if f['totaal_bedrag'] > 0:
-                        pct_diff = abs(b['bedrag'] - f['totaal_bedrag']) / f['totaal_bedrag']
-                        if pct_diff > 0.05:
-                            continue  # Amount too different, skip
-                    used_bank_ids.add(b['id'])
-                    matched_factuur_ids.add(f['id'])
-                    await conn.execute(
-                        "UPDATE facturen SET betaald_datum = ? WHERE id = ?",
-                        (b['datum'], f['id']))
-                    count += 1
-                    break
-
-        # Pass 2: Amount matching for remaining unmatched
-        for f in unmatched:
-            if f['id'] in matched_factuur_ids:
-                continue
-            for b in bank_txns:
-                if b['id'] in used_bank_ids:
-                    continue
-                if not date_ok(b['datum'], f['datum']):
-                    continue
-                if abs(b['bedrag'] - f['totaal_bedrag']) < 1.00:
-                    used_bank_ids.add(b['id'])
-                    await conn.execute(
-                        "UPDATE facturen SET betaald_datum = ? WHERE id = ?",
-                        (b['datum'], f['id']))
-                    count += 1
-                    break
-
-        if count > 0:
-            await conn.commit()
-        return count
+            await conn.execute(
+                "UPDATE werkdagen SET status = 'betaald' "
+                "WHERE factuurnummer = ?",
+                (m['factuur_nummer'],))
+        await conn.commit()
+    return len(matches)
 
 
 async def get_nog_te_factureren(db_path: Path = DB_PATH, jaar: int = 0) -> float:
