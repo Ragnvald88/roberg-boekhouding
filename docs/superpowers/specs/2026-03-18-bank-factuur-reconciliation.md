@@ -48,8 +48,8 @@ Each match dict:
 }
 ```
 
-Algorithm (same two passes as existing code):
-- **Pass 1 (nummer)**: Factuurnummer (lowercased) found as substring in bank omschrijving. Amount within 5%.
+Algorithm (two passes):
+- **Pass 1 (nummer)**: Factuurnummer (lowercased) found as substring in bank omschrijving. Amount within EUR 1 (same tolerance as pass 2 — the nummer is already a strong match signal, the amount check is only a sanity check).
 - **Pass 2 (bedrag)**: Amount within EUR 1 tolerance. Bank date >= factuur date - 14 days.
 - Only incoming payments (`bedrag > 0`) with empty `koppeling_type`.
 - Each bank transaction used at most once (greedy, chronological).
@@ -69,12 +69,21 @@ Returns count of applied matches.
 
 **New**: After `add_banktransacties()` in `handle_upload()`:
 1. Call `find_factuur_matches(DB_PATH)`
-2. If no matches: continue as before (just show import count)
-3. If matches found: open a `ui.dialog` with:
+2. Also query remaining open facturen (betaald=0, not in matches)
+3. If no matches AND no open facturen: continue as before (just show import count)
+4. If matches or open facturen exist: open a `ui.dialog` with:
+
+   **Matches section** (if any):
    - Title: "X betalingen gevonden voor open facturen"
-   - Table with columns: Factuur, Bedrag, Tegenpartij, Bankdatum, Type
+   - Table with columns: Factuur, Bedrag, Tegenpartij, Bankdatum
    - Each row has a checkbox (pre-checked)
-   - "Bevestig" button: calls `apply_factuur_matches` with checked items, closes dialog, refreshes table, shows notification
+   - "Bevestig" button: calls `apply_factuur_matches` with checked items
+
+   **Remaining open section** (if any unmatched open facturen):
+   - Title: "X facturen nog openstaand"
+   - List showing: factuur nummer, bedrag, klant, factuurdatum
+   - Informational only — helps the user see what's still unpaid
+
    - "Annuleren" button: closes dialog without applying
 
 **Update import**: Replace `match_betalingen_aan_facturen` with `find_factuur_matches, apply_factuur_matches`.
@@ -88,7 +97,7 @@ if matches:
     await apply_factuur_matches(DB_PATH, matches)
 ```
 
-Jaarafsluiting auto-confirms all matches (year-end cleanup, no user interaction needed).
+Jaarafsluiting auto-confirms all matches (year-end cleanup, no user interaction needed). The number of auto-matched facturen is shown in the Controles tab so the user can verify.
 
 **Update import**: Replace `auto_match_betaald_datum` with `find_factuur_matches, apply_factuur_matches`.
 
