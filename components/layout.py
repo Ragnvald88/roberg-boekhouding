@@ -66,7 +66,6 @@ def create_layout(title: str, active_page: str = ''):
         ('FINANCIEEL', None, None),
         ('Facturen', 'receipt', '/facturen'),
         ('Kosten', 'payments', '/kosten'),
-        ('Investeringen', 'inventory_2', '/kosten?investeringen'),
         ('Bank', 'account_balance', '/bank'),
         ('ADMINISTRATIE', None, None),
         ('Documenten', 'folder_open', '/documenten'),
