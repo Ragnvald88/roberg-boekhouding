@@ -168,6 +168,25 @@ async def dashboard_page():
 
         uren_criterium = int(fp.urencriterium) if fp else URENCRITERIUM_DEFAULT
 
+        # For YoY delta: compare same period (YTD vs YTD) for current year
+        huidig_jaar = date.today().year
+        if jaar == huidig_jaar:
+            month = date.today().month
+            # omzet_vorig is list[float] indexed 0=Jan..11=Dec
+            vorig_ytd_omzet = sum(omzet_vorig[:month])
+            vorig_ytd_kosten = kpis_vorig['kosten']  # kosten already full-year
+            # For fair comparison, estimate prior YTD kosten proportionally
+            vorig_full_kosten = kpis_vorig['kosten']
+            vorig_full_omzet = kpis_vorig['omzet']
+            if vorig_full_omzet > 0:
+                vorig_ratio = vorig_ytd_omzet / vorig_full_omzet
+                vorig_ytd_kosten = vorig_full_kosten * vorig_ratio
+            else:
+                vorig_ytd_kosten = 0
+        else:
+            vorig_ytd_omzet = kpis_vorig['omzet']
+            vorig_ytd_kosten = kpis_vorig['kosten']
+
         _MND = {1: 'jan', 2: 'feb', 3: 'mrt', 4: 'apr',
                 5: 'mei', 6: 'jun', 7: 'jul', 8: 'aug',
                 9: 'sep', 10: 'okt', 11: 'nov', 12: 'dec'}
@@ -185,7 +204,7 @@ async def dashboard_page():
                          'trending_up', '#0F766E',
                          on_click=lambda: ui.navigate.to('/werkdagen'),
                          delta_pct=_yoy_delta(kpis['omzet'],
-                                              kpis_vorig['omzet']))
+                                              vorig_ytd_omzet))
 
                 # 2. Resultaat (actual YTD winst — NOT extrapolated)
                 if ib_resultaat is not None:
@@ -411,7 +430,7 @@ async def dashboard_page():
                          'payments', '#D97706',
                          on_click=lambda: ui.navigate.to('/kosten'),
                          delta_pct=_yoy_delta(kpis['kosten'],
-                                              kpis_vorig['kosten']))
+                                              vorig_ytd_kosten))
 
                 # 5. Urencriterium
                 uren = kpis['uren']
