@@ -8,7 +8,7 @@ from components.layout import create_layout, page_title
 from components.utils import format_euro, format_datum, generate_csv, BANK_CATEGORIEEN
 from database import (
     get_banktransacties, add_banktransacties, update_banktransactie,
-    delete_banktransacties, DB_PATH,
+    delete_banktransacties, match_betalingen_aan_facturen, DB_PATH,
 )
 from import_.rabobank_csv import parse_rabobank_csv
 
@@ -134,6 +134,17 @@ async def bank_page():
         count = await add_banktransacties(DB_PATH, transacties, csv_bestand=archive_name)
 
         ui.notify(f"{count} transacties geimporteerd uit {filename}", type='positive')
+
+        # Auto-match incoming payments to open facturen
+        matches = await match_betalingen_aan_facturen(DB_PATH)
+        if matches:
+            nummers = ', '.join(m['factuur_nummer'] for m in matches[:5])
+            extra = f' (+{len(matches) - 5} meer)' if len(matches) > 5 else ''
+            ui.notify(
+                f"{len(matches)} facturen automatisch als betaald gemarkeerd: "
+                f"{nummers}{extra}",
+                type='positive', timeout=8000)
+
         await refresh_table()
         await refresh_csv_list()
 
