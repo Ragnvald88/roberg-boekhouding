@@ -8,7 +8,8 @@ from components.layout import create_layout, page_title
 from components.utils import format_euro, format_datum, generate_csv, BANK_CATEGORIEEN
 from database import (
     get_banktransacties, add_banktransacties, update_banktransactie,
-    delete_banktransacties, match_betalingen_aan_facturen, DB_PATH,
+    delete_banktransacties, find_factuur_matches, apply_factuur_matches,
+    get_db_ctx, DB_PATH,
 )
 from import_.rabobank_csv import parse_rabobank_csv
 
@@ -135,15 +136,98 @@ async def bank_page():
 
         ui.notify(f"{count} transacties geimporteerd uit {filename}", type='positive')
 
-        # Auto-match incoming payments to open facturen
-        matches = await match_betalingen_aan_facturen(DB_PATH)
-        if matches:
-            nummers = ', '.join(m['factuur_nummer'] for m in matches[:5])
-            extra = f' (+{len(matches) - 5} meer)' if len(matches) > 5 else ''
-            ui.notify(
-                f"{len(matches)} facturen automatisch als betaald gemarkeerd: "
-                f"{nummers}{extra}",
-                type='positive', timeout=8000)
+        # Find matches between incoming payments and open facturen
+        matches = await find_factuur_matches(DB_PATH)
+
+        # Query remaining open facturen (not matched)
+        matched_ids = {m['factuur_id'] for m in matches}
+        async with get_db_ctx(DB_PATH) as conn:
+            cur = await conn.execute(
+                "SELECT f.nummer, f.datum, f.totaal_bedrag, k.naam "
+                "FROM facturen f JOIN klanten k ON f.klant_id = k.id "
+                "WHERE f.betaald = 0 ORDER BY f.datum")
+            all_open = await cur.fetchall()
+        remaining_open = [r for r in all_open if r['nummer'] not in
+                          {m['factuur_nummer'] for m in matches}]
+
+        if matches or remaining_open:
+            # Show confirmation dialog
+            with ui.dialog() as match_dlg, \
+                    ui.card().classes('w-full max-w-2xl q-pa-md'):
+
+                if matches:
+                    ui.label(f'{len(matches)} betalingen gevonden '
+                             f'voor open facturen') \
+                        .classes('text-h6')
+
+                    # Checkboxes per match
+                    checks = {}
+                    for m in matches:
+                        with ui.row().classes(
+                                'w-full items-center gap-3 q-py-xs'):
+                            cb = ui.checkbox('', value=True)
+                            checks[m['factuur_id']] = (cb, m)
+                            ui.label(m['factuur_nummer']) \
+                                .classes('text-weight-bold') \
+                                .style('min-width: 100px')
+                            ui.label(format_euro(m['factuur_bedrag'])) \
+                                .style('min-width: 90px; text-align: right; '
+                                       'font-variant-numeric: tabular-nums')
+                            ui.icon('arrow_back', size='sm') \
+                                .classes('text-grey-5')
+                            ui.label(m['bank_tegenpartij'][:25]) \
+                                .classes('text-grey-7')
+                            ui.label(format_datum(m['bank_datum'])) \
+                                .classes('text-caption text-grey-6')
+
+                if remaining_open:
+                    if matches:
+                        ui.separator().classes('q-my-sm')
+                    with ui.row().classes('items-center gap-2'):
+                        ui.icon('info_outline', color='grey-6')
+                        ui.label(f'{len(remaining_open)} facturen '
+                                 f'nog openstaand') \
+                            .classes('text-subtitle2 text-grey-7')
+                    for r in remaining_open:
+                        with ui.row().classes(
+                                'w-full items-center gap-3 q-py-xs '
+                                'q-pl-md'):
+                            ui.icon('radio_button_unchecked',
+                                    size='sm', color='grey-5')
+                            ui.label(r['nummer']) \
+                                .style('min-width: 100px') \
+                                .classes('text-grey-6')
+                            ui.label(format_euro(r['totaal_bedrag'])) \
+                                .classes('text-grey-6') \
+                                .style('min-width: 90px; text-align: right')
+                            ui.label(r['naam'][:25]) \
+                                .classes('text-grey-6')
+
+                with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
+                    ui.button('Annuleren',
+                              on_click=match_dlg.close).props('flat')
+                    if matches:
+                        async def confirm_matches():
+                            selected = [m for fid, (cb, m) in
+                                        checks.items() if cb.value]
+                            if selected:
+                                n = await apply_factuur_matches(
+                                    DB_PATH, selected)
+                                ui.notify(
+                                    f'{n} facturen als betaald gemarkeerd',
+                                    type='positive')
+                            match_dlg.close()
+                            await refresh_table()
+
+                        ui.button('Bevestig', icon='check',
+                                  on_click=confirm_matches) \
+                            .props('color=primary')
+
+            match_dlg.open()
+        else:
+            await refresh_table()
+            await refresh_csv_list()
+            return
 
         await refresh_table()
         await refresh_csv_list()
