@@ -12,7 +12,7 @@ from components.kpi_card import kpi_strip
 from components.layout import create_layout
 from components.utils import format_euro
 from database import (
-    auto_match_betaald_datum,
+    find_factuur_matches, apply_factuur_matches,
     update_balans_inputs,
     update_jaarafsluiting_status,
     get_bedrijfsgegevens,
@@ -40,8 +40,10 @@ def _balans_line(label: str, value: float, bold: bool = False, indent: bool = Fa
 
 async def _load_year_data(jaar: int):
     """Load all business data for a year. Returns (data, balans, winst, vorig_jaar_balans) or None."""
-    # Auto-match betaald_datum from bank transactions for accurate year-end receivables
-    await auto_match_betaald_datum(DB_PATH)
+    # Auto-match open facturen to bank payments for accurate year-end receivables
+    matches = await find_factuur_matches(DB_PATH)
+    if matches:
+        await apply_factuur_matches(DB_PATH, matches)
     data = await fetch_fiscal_data(DB_PATH, jaar)
     if data is None:
         return None
