@@ -17,6 +17,8 @@ from database import (
     update_jaarafsluiting_status,
     get_bedrijfsgegevens,
     get_fiscale_params,
+    get_aangifte_documenten,
+    get_db_ctx,
     DB_PATH,
 )
 
@@ -177,7 +179,7 @@ async def jaarafsluiting_page():
         render_balans(data, balans, vorig_jaar_balans)
         render_wv(data, winst, vorig_jaar_data, vorig_winst)
         render_toelichting(data)
-        render_controles(data, balans, winst)
+        await render_controles(data, balans, winst)
         await render_document(data, balans, winst, vorig_jaar_balans)
 
     def render_balans(data, balans, vorig_jaar_balans):
@@ -461,11 +463,14 @@ async def jaarafsluiting_page():
                 ui.label('Geen investeringen / afschrijvingen.') \
                     .classes('text-grey-6')
 
-    def render_controles(data, balans, _winst):
-        """Render Controles tab — business checks only."""
+    async def render_controles(data, balans, _winst):
+        """Render Controles tab — kengetallen + data integrity checks."""
         controles_panel.clear()
+        jaar = state['jaar']
+
         with controles_panel:
-            ui.label('Controles en kengetallen').classes('text-h6 text-primary')
+            # === Section 1: Kengetallen ===
+            ui.label('Kengetallen').classes('text-h6 text-primary')
 
             # Kosten/omzet ratio
             ratio = round(data['kosten_excl_inv'] / data['omzet'] * 100, 1) \
@@ -513,23 +518,166 @@ async def jaarafsluiting_page():
                     ui.label(f'Verschil: {format_euro(diff)}') \
                         .classes('text-caption text-negative q-mt-xs')
 
-            # Missing data warnings
-            warnings = []
-            if data['n_uitgaven'] == 0:
-                warnings.append('Geen uitgaven ingevoerd voor dit jaar.')
-            if data['n_facturen'] == 0:
-                warnings.append('Geen facturen gevonden voor dit jaar.')
-            if balans['bank_saldo'] == 0:
-                warnings.append('Bank saldo is €0 — vul in via Bewerken op de Balans tab.')
+            # === Section 2: Data-integriteit ===
+            ui.label('Data-integriteit').classes('text-h6 text-primary q-mt-lg')
 
-            if warnings:
-                with ui.card().classes('w-full q-pa-md bg-orange-1'):
+            issues = []
+            ok_checks = []
+
+            async with get_db_ctx(DB_PATH) as conn:
+                # 1. Ongefactureerde werkdagen
+                cur = await conn.execute(
+                    "SELECT COUNT(*) FROM werkdagen "
+                    "WHERE substr(datum,1,4)=? AND status='ongefactureerd' "
+                    "AND tarief > 0", (str(jaar),))
+                ongefact = (await cur.fetchone())[0]
+                if ongefact > 0:
+                    issues.append((
+                        'warning',
+                        f'{ongefact} ongefactureerde werkdagen met tarief > 0',
+                        '/werkdagen'))
+                else:
+                    ok_checks.append('Alle werkdagen gefactureerd')
+
+                # 2. Facturen zonder werkdagen
+                cur = await conn.execute(
+                    "SELECT nummer, totaal_bedrag FROM facturen "
+                    "WHERE substr(datum,1,4)=? AND type='factuur' "
+                    "AND NOT EXISTS ("
+                    "  SELECT 1 FROM werkdagen w "
+                    "  WHERE w.factuurnummer = facturen.nummer"
+                    ")", (str(jaar),))
+                orphans = await cur.fetchall()
+                if orphans:
+                    nrs = ', '.join(r[0] for r in orphans[:5])
+                    issues.append((
+                        'warning',
+                        f'{len(orphans)} facturen zonder werkdagen: {nrs}',
+                        '/facturen'))
+                else:
+                    ok_checks.append('Alle facturen gekoppeld aan werkdagen')
+
+                # 3. Betaalde facturen zonder betaald_datum
+                cur = await conn.execute(
+                    "SELECT COUNT(*) FROM facturen "
+                    "WHERE substr(datum,1,4)=? AND betaald=1 "
+                    "AND (betaald_datum IS NULL OR betaald_datum='')",
+                    (str(jaar),))
+                no_date = (await cur.fetchone())[0]
+                if no_date > 0:
+                    issues.append((
+                        'info',
+                        f'{no_date} betaalde facturen zonder betaaldatum',
+                        '/facturen'))
+                else:
+                    ok_checks.append('Alle betaalde facturen hebben betaaldatum')
+
+                # 4. Niet-gecategoriseerde banktransacties
+                cur = await conn.execute(
+                    "SELECT COUNT(*) FROM banktransacties "
+                    "WHERE substr(datum,1,4)=? "
+                    "AND (categorie IS NULL OR categorie='') "
+                    "AND koppeling_type IS NULL",
+                    (str(jaar),))
+                uncat = (await cur.fetchone())[0]
+                if uncat > 0:
+                    issues.append((
+                        'info',
+                        f'{uncat} banktransacties niet gecategoriseerd',
+                        '/bank'))
+
+            # 5. VA bedragen zonder beschikking PDF
+            params = data['params']
+            va_total = (params.voorlopige_aanslag_betaald or 0) + \
+                       (params.voorlopige_aanslag_zvw or 0)
+            docs = await get_aangifte_documenten(DB_PATH, jaar)
+            doc_types = {d.documenttype for d in docs}
+            has_va_docs = ('va_ib_beschikking' in doc_types or
+                           'va_zvw_beschikking' in doc_types)
+            if va_total > 0 and not has_va_docs:
+                issues.append((
+                    'warning',
+                    f'VA bedragen ingevuld ({format_euro(va_total)}) '
+                    f'maar geen beschikking PDF geüpload',
+                    '/documenten'))
+            elif va_total == 0:
+                issues.append((
+                    'warning',
+                    'Voorlopige aanslag niet ingevuld',
+                    '/aangifte'))
+            else:
+                ok_checks.append('VA bedragen + beschikking PDF aanwezig')
+
+            # 6. Persoonlijke gegevens
+            missing_personal = []
+            if (params.woz_waarde or 0) == 0:
+                missing_personal.append('WOZ-waarde')
+            if (params.hypotheekrente or 0) == 0:
+                missing_personal.append('Hypotheekrente')
+            if (params.aov_premie or 0) == 0:
+                missing_personal.append('AOV premie')
+            if missing_personal:
+                issues.append((
+                    'info',
+                    f'Persoonlijke gegevens ontbreken: '
+                    f'{", ".join(missing_personal)}',
+                    '/aangifte'))
+            else:
+                ok_checks.append('Persoonlijke gegevens compleet')
+
+            # 7. Document completeness
+            from components.document_specs import AANGIFTE_DOCS
+            total_docs = len(AANGIFTE_DOCS)
+            done_docs = len({d.documenttype for d in docs})
+            if done_docs < total_docs:
+                issues.append((
+                    'info',
+                    f'Documenten: {done_docs}/{total_docs} geüpload',
+                    '/documenten'))
+            else:
+                ok_checks.append(f'Alle {total_docs} documenten geüpload')
+
+            # 8. Missing data warnings (existing)
+            if data['n_uitgaven'] == 0:
+                issues.append(('warning', 'Geen uitgaven ingevoerd', '/kosten'))
+            if data['n_facturen'] == 0:
+                issues.append(('warning', 'Geen facturen gevonden', '/facturen'))
+            if balans['bank_saldo'] == 0:
+                issues.append((
+                    'info', 'Bank saldo is €0 — vul in via Balans tab', None))
+
+            # Render issues
+            if issues:
+                with ui.card().classes('w-full q-pa-md q-mb-md'):
                     with ui.row().classes('items-center gap-2 q-mb-sm'):
-                        ui.icon('warning', color='warning')
-                        ui.label('Ontbrekende gegevens').classes(
-                            'text-subtitle1 text-warning')
-                    for w in warnings:
-                        ui.label(f'• {w}').classes('text-body2 text-warning')
+                        ui.icon('report_problem', color='warning')
+                        ui.label(f'{len(issues)} aandachtspunten') \
+                            .classes('text-subtitle1 text-weight-bold')
+                    for severity, msg, link in issues:
+                        icon = ('warning' if severity == 'warning'
+                                else 'info_outline')
+                        color = ('text-warning' if severity == 'warning'
+                                 else 'text-grey-7')
+                        with ui.row().classes('w-full items-center gap-2'):
+                            ui.icon(icon, size='sm').classes(color)
+                            ui.label(msg).classes(f'flex-grow {color}')
+                            if link:
+                                ui.button(
+                                    icon='open_in_new',
+                                    on_click=lambda l=link: ui.navigate.to(l),
+                                ).props('flat dense round size=sm color=primary')
+
+            # Render OK checks
+            if ok_checks:
+                with ui.card().classes('w-full q-pa-md'):
+                    with ui.row().classes('items-center gap-2 q-mb-sm'):
+                        ui.icon('check_circle', color='positive')
+                        ui.label('Goedgekeurd').classes(
+                            'text-subtitle1 text-weight-bold text-positive')
+                    for msg in ok_checks:
+                        with ui.row().classes('items-center gap-2'):
+                            ui.icon('check', size='sm', color='positive')
+                            ui.label(msg).classes('text-grey-7')
 
     async def render_document(data, balans, winst, vorig_jaar_balans):
         """Render Document tab — inline HTML preview + PDF export."""
