@@ -16,6 +16,7 @@ from database import (
     get_fiscale_params, update_ib_inputs, add_aangifte_document,
     get_aangifte_documenten, DB_PATH,
 )
+from components.document_specs import AANGIFTE_DOCS
 from components.fiscal_utils import fetch_fiscal_data, extrapoleer_jaaromzet
 from fiscal.berekeningen import bereken_volledig
 
@@ -492,8 +493,7 @@ async def dashboard_page():
                 docs = await get_aangifte_documenten(DB_PATH, jaar)
                 done_docs = len({d.documenttype for d in docs})
                 # 13 document types defined in aangifte.py AANGIFTE_DOCS
-                from components.document_specs import AANGIFTE_DOCS as _ADOCS
-                total_docs = len(_ADOCS)
+                total_docs = len(AANGIFTE_DOCS)
                 doc_color = '#059669' if done_docs >= total_docs else '#D97706'
 
                 def doc_extra(_done=done_docs, _total=total_docs):

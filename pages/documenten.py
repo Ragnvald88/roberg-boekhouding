@@ -1,5 +1,6 @@
 """Documenten pagina — centraal overzicht van alle beschikkingen en jaaroverzichten."""
 
+import asyncio
 from datetime import date
 from pathlib import Path
 
@@ -150,7 +151,7 @@ async def documenten_page():
                                         fname = e.file.name
                                         dest = AANGIFTE_DIR / fname
                                         content = await e.file.read()
-                                        dest.write_bytes(content)
+                                        await asyncio.to_thread(dest.write_bytes, content)
                                         await add_aangifte_document(
                                             DB_PATH, jaar=_jaar,
                                             categorie=_spec.categorie,

@@ -1249,20 +1249,6 @@ async def get_omzet_per_klant(db_path: Path = DB_PATH, jaar: int = 2026) -> list
                  'km': r['km'] or 0, 'bedrag': r['bedrag'] or 0} for r in rows]
 
 
-async def get_recente_facturen(db_path: Path = DB_PATH,
-                                limit: int = 5) -> list[Factuur]:
-    """Get most recent invoices across all years."""
-    async with get_db_ctx(db_path) as conn:
-        cursor = await conn.execute(
-            """SELECT f.*, k.naam as klant_naam
-               FROM facturen f JOIN klanten k ON f.klant_id = k.id
-               ORDER BY f.datum DESC LIMIT ?""",
-            (limit,)
-        )
-        rows = await cursor.fetchall()
-        return [_row_to_factuur(r) for r in rows]
-
-
 async def get_openstaande_facturen(db_path: Path = DB_PATH,
                                     jaar: int = None) -> list[Factuur]:
     """Get unpaid invoices."""
@@ -1278,16 +1264,6 @@ async def get_openstaande_facturen(db_path: Path = DB_PATH,
         cursor = await conn.execute(sql, params)
         rows = await cursor.fetchall()
         return [_row_to_factuur(r) for r in rows]
-
-
-async def get_factuur_count(db_path: Path = DB_PATH, jaar: int = 2026) -> int:
-    """Count invoices for a year."""
-    async with get_db_ctx(db_path) as conn:
-        cur = await conn.execute(
-            "SELECT COUNT(*) FROM facturen WHERE substr(datum, 1, 4) = ? AND type = 'factuur'",
-            (str(jaar),)
-        )
-        return (await cur.fetchone())[0]
 
 
 async def get_uren_totaal(db_path: Path = DB_PATH, jaar: int = 2026,

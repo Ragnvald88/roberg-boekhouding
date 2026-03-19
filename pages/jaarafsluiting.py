@@ -44,6 +44,10 @@ async def _load_year_data(jaar: int):
     matches = await find_factuur_matches(DB_PATH)
     if matches:
         await apply_factuur_matches(DB_PATH, matches)
+        ui.notify(
+            f'{len(matches)} facturen automatisch als betaald gemarkeerd',
+            type='info',
+        )
     data = await fetch_fiscal_data(DB_PATH, jaar)
     if data is None:
         return None
@@ -141,20 +145,16 @@ async def jaarafsluiting_page():
         status = getattr(params, 'jaarafsluiting_status', 'concept') or 'concept'
         is_definitief = status == 'definitief'
         status_badge.set_text('Definitief' if is_definitief else 'Concept')
-        status_badge._props['color'] = 'positive' if is_definitief else 'warning'
-        status_badge.update()
+        status_badge.props(f"color={'positive' if is_definitief else 'warning'}")
 
         # Update button states
         edit_btn.set_visibility(not is_definitief)
         if is_definitief:
             status_btn.set_text('Heropenen')
-            status_btn._props['icon'] = 'lock_open'
-            status_btn._props['color'] = 'warning'
+            status_btn.props('icon=lock_open color=warning')
         else:
             status_btn.set_text('Markeer als definitief')
-            status_btn._props['icon'] = 'check_circle'
-            status_btn._props['color'] = 'primary'
-        status_btn.update()
+            status_btn.props('icon=check_circle color=primary')
 
         if result is None:
             for panel in [balans_panel, wv_panel, toelichting_panel,

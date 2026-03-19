@@ -1,5 +1,6 @@
 """Bank pagina — Rabobank CSV import + categoriseren."""
 
+import asyncio
 from datetime import datetime
 
 from nicegui import ui
@@ -129,7 +130,7 @@ async def bank_page():
         csv_dir.mkdir(parents=True, exist_ok=True)
         archive_name = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{filename}"
         archive_path = csv_dir / archive_name
-        archive_path.write_bytes(content)
+        await asyncio.to_thread(archive_path.write_bytes, content)
 
         # Insert into database
         count = await add_banktransacties(DB_PATH, transacties, csv_bestand=archive_name)
