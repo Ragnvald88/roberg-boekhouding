@@ -264,7 +264,7 @@ async def facturen_page():
             with ui.dialog() as dialog, ui.card():
                 ui.label(f"Factuur {row['nummer']} markeren als betaald?")
                 ui.label(f"{row['klant_naam']} — {row['bedrag_fmt']}").classes('text-grey')
-                with ui.row().classes('w-full justify-end gap-2 mt-2'):
+                with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
                     ui.button('Annuleren', on_click=dialog.close).props('flat')
 
                     async def do_mark():
@@ -280,11 +280,25 @@ async def facturen_page():
 
         async def on_mark_onbetaald(e):
             row = e.args
-            await mark_betaald(DB_PATH, factuur_id=row['id'],
-                               datum='', betaald=False)
-            ui.notify(f"Factuur {row['nummer']} gemarkeerd als onbetaald",
-                      type='info')
-            await refresh_table()
+            with ui.dialog() as dialog, ui.card():
+                ui.label(f"Factuur {row['nummer']} markeren als onbetaald?") \
+                    .classes('text-h6')
+                ui.label(f"{row['klant_naam']} — {row['bedrag_fmt']}") \
+                    .classes('text-grey')
+                with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
+                    ui.button('Annuleren', on_click=dialog.close).props('flat')
+
+                    async def do_mark():
+                        await mark_betaald(DB_PATH, factuur_id=row['id'],
+                                           datum='', betaald=False)
+                        dialog.close()
+                        ui.notify(f"Factuur {row['nummer']} gemarkeerd als onbetaald",
+                                  type='info')
+                        await refresh_table()
+
+                    ui.button('Ja, onbetaald', on_click=do_mark) \
+                        .props('color=warning')
+            dialog.open()
 
         async def on_delete_factuur(e):
             row = e.args
@@ -297,7 +311,7 @@ async def facturen_page():
                     'Werkdagen worden losgekoppeld en weer beschikbaar '
                     'voor facturatie.'
                 ).classes('text-caption text-grey q-mt-sm')
-                with ui.row().classes('w-full justify-end gap-2 mt-2'):
+                with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
                     ui.button('Annuleren', on_click=dialog.close).props('flat')
 
                     async def do_delete():
@@ -324,7 +338,7 @@ async def facturen_page():
                     'Werkdagen worden losgekoppeld en weer beschikbaar '
                     'voor facturatie.'
                 ).classes('text-caption text-grey q-mt-sm')
-                with ui.row().classes('w-full justify-end gap-2 mt-2'):
+                with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
                     ui.button('Annuleren', on_click=dialog.close).props('flat')
 
                     async def do_bulk():
@@ -990,6 +1004,9 @@ async def facturen_page():
                     }
                     if len(pre_klant_ids) == 1:
                         pre_klant_id = pre_klant_ids.pop()
+                    else:
+                        ui.notify('Selecteer werkdagen van één klant om te factureren',
+                                  type='warning')
 
                 klant_select = ui.select(
                     klant_options, label='Klant',
@@ -1071,9 +1088,12 @@ async def facturen_page():
                     await load_werkdagen()
 
                 # Date input
-                datum_input = ui.input(
-                    'Factuurdatum', value=date.today().isoformat()
-                ).classes('w-48 q-mt-md')
+                with ui.input('Factuurdatum', value=date.today().isoformat()) \
+                        .classes('w-48 q-mt-md') as datum_input:
+                    with datum_input.add_slot('append'):
+                        ui.icon('event').classes('cursor-pointer')
+                    with ui.menu() as date_menu:
+                        ui.date(mask='YYYY-MM-DD').bind_value(datum_input)
 
                 with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
                     ui.button('Annuleren', on_click=dialog.close).props('flat')

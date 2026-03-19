@@ -9,7 +9,7 @@ from nicegui import ui
 
 from components.fiscal_utils import bereken_balans, fetch_fiscal_data
 from components.kpi_card import kpi_strip
-from components.layout import create_layout
+from components.layout import create_layout, page_title
 from components.utils import format_euro
 from database import (
     find_factuur_matches, apply_factuur_matches,
@@ -96,9 +96,10 @@ async def jaarafsluiting_page():
     state = {'jaar': vorig_jaar, 'editing': False}
 
     # --- Containers ---
-    with ui.column().classes('w-full max-w-6xl mx-auto q-pa-md gap-4'):
+    with ui.column().classes('w-full max-w-7xl mx-auto p-6 gap-4'):
         # Top bar: year selector + status badge + actions
         with ui.row().classes('w-full items-center gap-3'):
+            page_title('Jaarafsluiting')
             jaar_select = ui.select(
                 options=list(range(2023, date.today().year + 1)),
                 value=vorig_jaar,
@@ -295,10 +296,10 @@ async def jaarafsluiting_page():
                     await render_all()
 
                 with ui.row().classes('q-mt-md gap-2'):
-                    ui.button('Opslaan', icon='save',
-                              on_click=save_balans).props('color=positive')
                     ui.button('Annuleren', icon='close',
                               on_click=cancel_edit).props('flat')
+                    ui.button('Opslaan', icon='save',
+                              on_click=save_balans).props('color=primary')
 
     def render_wv(data, winst, vorig_data=None, vorig_winst=None):
         """Render W&V tab with optional year-over-year comparison."""

@@ -253,7 +253,7 @@ async def bank_page():
             ui.label('Transactie verwijderen?').classes('text-h6')
             ui.label(f"{row['datum']} — {row['tegenpartij']} — "
                      f"{row['bedrag_fmt']}").classes('text-grey')
-            with ui.row().classes('w-full justify-end gap-2 mt-2'):
+            with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
                 ui.button('Annuleren', on_click=dialog.close).props('flat')
 
                 async def do_delete():
@@ -274,7 +274,7 @@ async def bank_page():
             return
         with ui.dialog() as dialog, ui.card():
             ui.label(f'{len(ids)} transacties verwijderen?').classes('text-h6')
-            with ui.row().classes('w-full justify-end gap-2 mt-2'):
+            with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
                 ui.button('Annuleren', on_click=dialog.close).props('flat')
 
                 async def do_bulk():
@@ -291,7 +291,7 @@ async def bank_page():
 
     # --- Page layout ---
     with ui.column().classes('w-full p-6 max-w-7xl mx-auto gap-6'):
-        page_title('Banktransacties')
+        page_title('Bank')
 
         # Top bar: filters + upload
         with ui.row().classes('w-full items-center gap-4 q-mb-md'):
@@ -361,6 +361,18 @@ async def bank_page():
             ui.button('Verwijder selectie', icon='delete',
                       on_click=lambda: on_bulk_delete()) \
                 .props('color=negative outline')
+
+        # Color legend
+        with ui.row().classes('gap-4 items-center q-mb-sm'):
+            for bg_class, label in [
+                ('bg-teal-1', 'Gekoppeld aan factuur'),
+                ('bg-amber-1', 'Gecategoriseerd'),
+                ('bg-red-1', 'Niet gekoppeld'),
+            ]:
+                with ui.row().classes('items-center gap-1'):
+                    ui.element('div').classes(f'{bg_class} rounded-sm') \
+                        .style('width: 14px; height: 14px')
+                    ui.label(label).classes('text-caption text-grey-7')
 
         # Transactions table
         columns = [

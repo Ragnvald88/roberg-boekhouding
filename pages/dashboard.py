@@ -28,7 +28,7 @@ async def dashboard_page():
     create_layout('Dashboard', '/')
 
     huidig_jaar = date.today().year
-    jaren = {y: str(y) for y in range(huidig_jaar + 1, 2022, -1)}
+    jaren = {y: str(y) for y in range(huidig_jaar, 2022, -1)}
 
     kpi_container = {'ref': None}
     chart_container = {'ref': None}
@@ -46,9 +46,6 @@ async def dashboard_page():
         # KPI cards
         kpi_container['ref'] = ui.column().classes('w-full gap-4')
 
-        # Charts
-        chart_container['ref'] = ui.column().classes('w-full gap-4')
-
         # Quick actions
         with ui.row().classes('w-full gap-3'):
             ui.button(
@@ -59,6 +56,9 @@ async def dashboard_page():
                 'Nieuwe factuur', icon='receipt_long',
                 on_click=lambda: ui.navigate.to('/facturen'),
             ).props('outline color=primary')
+
+        # Charts
+        chart_container['ref'] = ui.column().classes('w-full gap-4')
 
     def _yoy_delta(current: float, previous: float) -> float | None:
         """Calculate YoY delta percentage. Returns None if no previous data."""
@@ -212,7 +212,7 @@ async def dashboard_page():
                     resultaat = ib_resultaat.get('ytd_winst', ib_resultaat['winst'])
                 else:
                     resultaat = kpis['winst']
-                kpi_card('Resultaat', format_euro(resultaat),
+                kpi_card('Bedrijfswinst', format_euro(resultaat),
                          'account_balance',
                          '#059669' if resultaat >= 0 else '#DC2626')
 

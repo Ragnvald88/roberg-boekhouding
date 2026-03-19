@@ -251,12 +251,16 @@ async def open_werkdag_dialog(on_save=None, werkdag=None):
                 opmerking=opmerking_input.value or '',
             )
 
-            if is_edit:
-                await update_werkdag(DB_PATH, werkdag_id=werkdag.id, **kwargs)
-                ui.notify('Werkdag bijgewerkt', type='positive')
-            else:
-                await add_werkdag(DB_PATH, **kwargs)
-                ui.notify('Werkdag toegevoegd', type='positive')
+            try:
+                if is_edit:
+                    await update_werkdag(DB_PATH, werkdag_id=werkdag.id, **kwargs)
+                    ui.notify('Werkdag bijgewerkt', type='positive')
+                else:
+                    await add_werkdag(DB_PATH, **kwargs)
+                    ui.notify('Werkdag toegevoegd', type='positive')
+            except Exception as e:
+                ui.notify(str(e), type='negative')
+                return
 
             if on_save:
                 await on_save()

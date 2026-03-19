@@ -661,7 +661,7 @@ async def kosten_page():
 
 
             # Document section
-            ui.separator().classes('my-2')
+            ui.separator().classes('q-my-sm')
             edit_upload_file = {}
             existing_pdf = row.get('pdf_pad', '')
             if existing_pdf and Path(existing_pdf).exists():
@@ -693,7 +693,7 @@ async def kosten_page():
                 ).classes('w-full').props(
                     'flat bordered accept=".pdf,.jpg,.jpeg,.png"')
 
-            with ui.row().classes('w-full justify-end gap-2 mt-2'):
+            with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
                 ui.button('Annuleren', on_click=dialog.close).props('flat')
 
                 async def bewaar_wijziging():
@@ -735,7 +735,7 @@ async def kosten_page():
             ui.label('Weet je zeker dat je deze uitgave wilt verwijderen?')
             ui.label(f"{row['datum']} — {row['omschrijving']} — "
                      f"{format_euro(row['bedrag'])}").classes('text-grey')
-            with ui.row().classes('w-full justify-end gap-2 mt-2'):
+            with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
                 ui.button('Annuleren', on_click=dialog.close).props('flat')
 
                 async def verwijder():

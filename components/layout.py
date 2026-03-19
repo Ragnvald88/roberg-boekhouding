@@ -132,7 +132,7 @@ def create_layout(title: str, active_page: str = ''):
             btn = ui.button(
                 lbl, icon=icn,
                 on_click=lambda t=tgt: ui.navigate.to(t),
-            ).props('flat align=left no-caps').classes('w-full rounded-lg')
+            ).props('flat align=left no-caps').classes('w-full rounded-lg q-mb-xs')
             if is_act:
                 btn.classes('nav-active')
             else:

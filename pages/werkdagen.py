@@ -166,6 +166,8 @@ async def werkdagen_page():
              'style': 'width:75px'},
             {'name': 'status', 'label': 'Status', 'field': 'status', 'align': 'center',
              'style': 'width:85px'},
+            {'name': 'factuur', 'label': 'Factuur', 'field': 'factuurnummer', 'align': 'left',
+             'style': 'width:85px'},
             {'name': 'actions', 'label': '', 'field': 'actions', 'align': 'center',
              'style': 'width:70px'},
         ]
@@ -177,6 +179,10 @@ async def werkdagen_page():
                         'rowsPerPageOptions': [10, 20, 50, 0]},
         ).classes('w-full')
         table_ref['ref'] = table
+
+        table.add_slot('body-cell-datum', '''
+            <q-td :props="props">{{ props.row.datum_fmt }}</q-td>
+        ''')
 
         table.add_slot('body-cell-status', '''
             <q-td :props="props">
@@ -256,6 +262,7 @@ async def werkdagen_page():
                     'tarief_fmt': format_euro(w.tarief),
                     'totaal_fmt': format_euro(bedrag),
                     'status': w.status,
+                    'factuurnummer': w.factuurnummer or '',
                 })
                 totaal_uren += w.uren
                 totaal_km += w.km

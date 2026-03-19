@@ -127,11 +127,20 @@ async def documenten_page():
                                                 'flat dense round size=sm '
                                                 'color=primary')
 
-                                        async def del_doc(did=doc.id):
-                                            await delete_aangifte_document(
-                                                DB_PATH, doc_id=did)
-                                            ui.notify('Verwijderd', type='info')
-                                            await refresh()
+                                        async def del_doc(did=doc.id, fname=doc.bestandsnaam):
+                                            with ui.dialog() as del_dlg, ui.card():
+                                                ui.label('Document verwijderen?').classes('text-h6')
+                                                ui.label(fname).classes('text-grey')
+                                                with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
+                                                    ui.button('Annuleren', on_click=del_dlg.close).props('flat')
+
+                                                    async def confirm_del():
+                                                        await delete_aangifte_document(DB_PATH, doc_id=did)
+                                                        del_dlg.close()
+                                                        ui.notify('Verwijderd', type='info')
+                                                        await refresh()
+                                                    ui.button('Verwijderen', on_click=confirm_del).props('color=negative')
+                                            del_dlg.open()
 
                                         ui.button(
                                             icon='delete',
