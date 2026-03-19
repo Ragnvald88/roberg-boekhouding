@@ -1,6 +1,7 @@
 """SQLite database: schema, connectie, en alle queries."""
 
 import re
+import sqlite3
 from contextlib import asynccontextmanager
 from datetime import date as _date, timedelta as _timedelta
 
@@ -50,7 +51,9 @@ CREATE TABLE IF NOT EXISTS werkdagen (
     status TEXT DEFAULT 'ongefactureerd' CHECK (status IN ('ongefactureerd', 'gefactureerd', 'betaald')),
     factuurnummer TEXT DEFAULT '',
     opmerking TEXT DEFAULT '',
-    urennorm INTEGER DEFAULT 1 CHECK (urennorm IN (0, 1))
+    urennorm INTEGER DEFAULT 1 CHECK (urennorm IN (0, 1)),
+    -- Migration 6 column
+    locatie_id INTEGER REFERENCES klant_locaties(id) ON DELETE SET NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_werkdagen_datum ON werkdagen(datum);
@@ -126,14 +129,46 @@ CREATE TABLE IF NOT EXISTS fiscale_params (
     zvw_pct REAL,
     zvw_max_grondslag REAL,
     repr_aftrek_pct REAL DEFAULT 80,
+    -- Migration 1 columns
+    aov_premie REAL DEFAULT 0,
+    woz_waarde REAL DEFAULT 0,
+    hypotheekrente REAL DEFAULT 0,
+    voorlopige_aanslag_betaald REAL DEFAULT 0,
+    -- Migration 2 columns
     ew_forfait_pct REAL DEFAULT 0.35,
     villataks_grens REAL DEFAULT 1350000,
     wet_hillen_pct REAL DEFAULT 0,
     urencriterium REAL DEFAULT 1225,
-    aov_premie REAL DEFAULT 0,
-    woz_waarde REAL DEFAULT 0,
-    hypotheekrente REAL DEFAULT 0,
-    voorlopige_aanslag_betaald REAL DEFAULT 0
+    partner_bruto_loon REAL DEFAULT 0,
+    partner_loonheffing REAL DEFAULT 0,
+    pvv_premiegrondslag REAL DEFAULT 0,
+    ew_naar_partner REAL DEFAULT 1,
+    voorlopige_aanslag_zvw REAL DEFAULT 0,
+    -- Migration 3 columns
+    pvv_aow_pct REAL DEFAULT 17.90,
+    pvv_anw_pct REAL DEFAULT 0.10,
+    pvv_wlz_pct REAL DEFAULT 9.65,
+    box3_bank_saldo REAL DEFAULT 0,
+    box3_overige_bezittingen REAL DEFAULT 0,
+    box3_schulden REAL DEFAULT 0,
+    box3_heffingsvrij_vermogen REAL DEFAULT 57000,
+    box3_rendement_bank_pct REAL DEFAULT 1.03,
+    box3_rendement_overig_pct REAL DEFAULT 6.17,
+    box3_rendement_schuld_pct REAL DEFAULT 2.46,
+    box3_tarief_pct REAL DEFAULT 36,
+    -- Migration 4 columns
+    box3_drempel_schulden REAL DEFAULT 3700,
+    balans_bank_saldo REAL DEFAULT 0,
+    balans_crediteuren REAL DEFAULT 0,
+    balans_overige_vorderingen REAL DEFAULT 0,
+    balans_overige_schulden REAL DEFAULT 0,
+    za_actief REAL DEFAULT 1,
+    sa_actief REAL DEFAULT 0,
+    lijfrente_premie REAL DEFAULT 0,
+    box3_fiscaal_partner REAL DEFAULT 1,
+    -- Migration 5 columns
+    arbeidskorting_brackets TEXT DEFAULT '',
+    jaarafsluiting_status TEXT DEFAULT 'concept'
 );
 
 CREATE TABLE IF NOT EXISTS bedrijfsgegevens (
@@ -167,6 +202,12 @@ CREATE TABLE IF NOT EXISTS afschrijving_overrides (
     bedrag REAL NOT NULL CHECK (bedrag >= 0),
     UNIQUE(uitgave_id, jaar)
 );
+
+CREATE TABLE IF NOT EXISTS schema_version (
+    version INTEGER PRIMARY KEY,
+    description TEXT NOT NULL,
+    applied_at TEXT NOT NULL
+);
 """
 
 
@@ -192,136 +233,216 @@ async def get_db_ctx(db_path: Path = DB_PATH):
         await conn.close()
 
 
+async def _get_existing_columns(conn, table: str) -> set[str]:
+    """Get set of column names for a table via PRAGMA."""
+    cur = await conn.execute(f"PRAGMA table_info({table})")
+    rows = await cur.fetchall()
+    return {row[1] for row in rows}
+
+
+# --- Versioned migrations ---
+# Each tuple: (version, description, sql_list_or_None)
+# sql_list=None means a callable handles it (see MIGRATION_CALLABLES).
+MIGRATIONS = [
+    # Schema migrations — ADD COLUMN for fiscale_params REAL columns
+    (1, "add_aov_woz_hypotheek_va_columns", [
+        "ALTER TABLE fiscale_params ADD COLUMN aov_premie REAL DEFAULT 0",
+        "ALTER TABLE fiscale_params ADD COLUMN woz_waarde REAL DEFAULT 0",
+        "ALTER TABLE fiscale_params ADD COLUMN hypotheekrente REAL DEFAULT 0",
+        "ALTER TABLE fiscale_params ADD COLUMN voorlopige_aanslag_betaald REAL DEFAULT 0",
+    ]),
+    (2, "add_ew_uren_partner_pvv_columns", [
+        "ALTER TABLE fiscale_params ADD COLUMN ew_forfait_pct REAL DEFAULT 0.35",
+        "ALTER TABLE fiscale_params ADD COLUMN villataks_grens REAL DEFAULT 1350000",
+        "ALTER TABLE fiscale_params ADD COLUMN wet_hillen_pct REAL DEFAULT 0",
+        "ALTER TABLE fiscale_params ADD COLUMN urencriterium REAL DEFAULT 1225",
+        "ALTER TABLE fiscale_params ADD COLUMN partner_bruto_loon REAL DEFAULT 0",
+        "ALTER TABLE fiscale_params ADD COLUMN partner_loonheffing REAL DEFAULT 0",
+        "ALTER TABLE fiscale_params ADD COLUMN pvv_premiegrondslag REAL DEFAULT 0",
+        "ALTER TABLE fiscale_params ADD COLUMN ew_naar_partner REAL DEFAULT 1",
+        "ALTER TABLE fiscale_params ADD COLUMN voorlopige_aanslag_zvw REAL DEFAULT 0",
+    ]),
+    (3, "add_pvv_box3_columns", [
+        "ALTER TABLE fiscale_params ADD COLUMN pvv_aow_pct REAL DEFAULT 17.90",
+        "ALTER TABLE fiscale_params ADD COLUMN pvv_anw_pct REAL DEFAULT 0.10",
+        "ALTER TABLE fiscale_params ADD COLUMN pvv_wlz_pct REAL DEFAULT 9.65",
+        "ALTER TABLE fiscale_params ADD COLUMN box3_bank_saldo REAL DEFAULT 0",
+        "ALTER TABLE fiscale_params ADD COLUMN box3_overige_bezittingen REAL DEFAULT 0",
+        "ALTER TABLE fiscale_params ADD COLUMN box3_schulden REAL DEFAULT 0",
+        "ALTER TABLE fiscale_params ADD COLUMN box3_heffingsvrij_vermogen REAL DEFAULT 57000",
+        "ALTER TABLE fiscale_params ADD COLUMN box3_rendement_bank_pct REAL DEFAULT 1.03",
+        "ALTER TABLE fiscale_params ADD COLUMN box3_rendement_overig_pct REAL DEFAULT 6.17",
+        "ALTER TABLE fiscale_params ADD COLUMN box3_rendement_schuld_pct REAL DEFAULT 2.46",
+        "ALTER TABLE fiscale_params ADD COLUMN box3_tarief_pct REAL DEFAULT 36",
+    ]),
+    (4, "add_balans_za_sa_lijfrente_columns", [
+        "ALTER TABLE fiscale_params ADD COLUMN box3_drempel_schulden REAL DEFAULT 3700",
+        "ALTER TABLE fiscale_params ADD COLUMN balans_bank_saldo REAL DEFAULT 0",
+        "ALTER TABLE fiscale_params ADD COLUMN balans_crediteuren REAL DEFAULT 0",
+        "ALTER TABLE fiscale_params ADD COLUMN balans_overige_vorderingen REAL DEFAULT 0",
+        "ALTER TABLE fiscale_params ADD COLUMN balans_overige_schulden REAL DEFAULT 0",
+        "ALTER TABLE fiscale_params ADD COLUMN za_actief REAL DEFAULT 1",
+        "ALTER TABLE fiscale_params ADD COLUMN sa_actief REAL DEFAULT 0",
+        "ALTER TABLE fiscale_params ADD COLUMN lijfrente_premie REAL DEFAULT 0",
+        "ALTER TABLE fiscale_params ADD COLUMN box3_fiscaal_partner REAL DEFAULT 1",
+    ]),
+    (5, "add_text_columns", [
+        "ALTER TABLE fiscale_params ADD COLUMN arbeidskorting_brackets TEXT DEFAULT ''",
+        "ALTER TABLE fiscale_params ADD COLUMN jaarafsluiting_status TEXT DEFAULT 'concept'",
+    ]),
+    (6, "add_werkdagen_locatie_id", [
+        "ALTER TABLE werkdagen ADD COLUMN locatie_id INTEGER REFERENCES klant_locaties(id) ON DELETE SET NULL",
+    ]),
+    # Data migrations — all idempotent via WHERE guards
+    (7, "set_ew_uren_per_year", None),  # handled by callable
+    (8, "populate_ak_brackets_and_box3", None),  # handled by callable
+    (9, "fix_box3_2025_definitief", [
+        """UPDATE fiscale_params SET
+           box3_rendement_bank_pct = 1.37,
+           box3_rendement_overig_pct = 5.88,
+           box3_rendement_schuld_pct = 2.70
+           WHERE jaar = 2025 AND box3_rendement_bank_pct = 1.28""",
+    ]),
+    (10, "set_sa_actief_first_years", [
+        "UPDATE fiscale_params SET sa_actief = 1 WHERE jaar = 2023 AND sa_actief = 0",
+        "UPDATE fiscale_params SET sa_actief = 1 WHERE jaar = 2024 AND sa_actief = 0",
+        "UPDATE fiscale_params SET sa_actief = 1 WHERE jaar = 2025 AND sa_actief = 0",
+    ]),
+    (11, "fix_2026_box3_heffingsvrij", [
+        """UPDATE fiscale_params
+           SET box3_heffingsvrij_vermogen = 59357, box3_drempel_schulden = 3800
+           WHERE jaar = 2026 AND box3_heffingsvrij_vermogen = 57684""",
+    ]),
+    (12, "fix_date_format", [
+        """UPDATE uitgaven
+           SET datum = substr(datum,7,4) || '-' || substr(datum,4,2) || '-' || substr(datum,1,2)
+           WHERE datum GLOB '[0-3][0-9]-[0-1][0-9]-[0-9][0-9][0-9][0-9]'""",
+        """UPDATE werkdagen
+           SET datum = substr(datum,7,4) || '-' || substr(datum,4,2) || '-' || substr(datum,1,2)
+           WHERE datum GLOB '[0-3][0-9]-[0-1][0-9]-[0-9][0-9][0-9][0-9]'""",
+    ]),
+]
+
+
+async def _run_migration_7(conn):
+    """Data migration: set correct per-year EW/uren values."""
+    year_data = {
+        2023: {'ew_forfait_pct': 0.35, 'villataks_grens': 1200000, 'wet_hillen_pct': 83.333, 'urencriterium': 1225},
+        2024: {'ew_forfait_pct': 0.35, 'villataks_grens': 1310000, 'wet_hillen_pct': 80.0, 'urencriterium': 1225},
+        2025: {'ew_forfait_pct': 0.35, 'villataks_grens': 1330000, 'wet_hillen_pct': 76.667, 'urencriterium': 1225},
+        2026: {'ew_forfait_pct': 0.35, 'villataks_grens': 1350000, 'wet_hillen_pct': 71.867, 'urencriterium': 1225},
+    }
+    for jaar, vals in year_data.items():
+        await conn.execute(
+            """UPDATE fiscale_params SET ew_forfait_pct = ?, villataks_grens = ?,
+               wet_hillen_pct = ?, urencriterium = ?
+               WHERE jaar = ? AND wet_hillen_pct = 0""",
+            (vals['ew_forfait_pct'], vals['villataks_grens'],
+             vals['wet_hillen_pct'], vals['urencriterium'], jaar))
+
+
+async def _run_migration_8(conn):
+    """Data migration: populate AK brackets and Box 3 defaults."""
+    from import_.seed_data import AK_BRACKETS, BOX3_DEFAULTS
+    import json as _json
+    for jaar in [2023, 2024, 2025, 2026]:
+        await conn.execute(
+            "UPDATE fiscale_params SET arbeidskorting_brackets = ? "
+            "WHERE jaar = ? AND (arbeidskorting_brackets IS NULL OR arbeidskorting_brackets = '')",
+            (_json.dumps(AK_BRACKETS.get(jaar, [])), jaar))
+        b3 = BOX3_DEFAULTS.get(jaar)
+        if b3:
+            await conn.execute(
+                "UPDATE fiscale_params SET "
+                "box3_heffingsvrij_vermogen = ?, box3_rendement_bank_pct = ?, "
+                "box3_rendement_overig_pct = ?, box3_rendement_schuld_pct = ?, "
+                "box3_tarief_pct = ? "
+                "WHERE jaar = ? AND box3_rendement_bank_pct = 1.03 "
+                "AND box3_heffingsvrij_vermogen = 57000",
+                (b3['heffingsvrij'], b3['bank'], b3['overig'], b3['schuld'], b3['tarief'], jaar))
+            if 'drempel_schulden' in b3:
+                await conn.execute(
+                    "UPDATE fiscale_params SET box3_drempel_schulden = ? "
+                    "WHERE jaar = ? AND box3_drempel_schulden = 3700",
+                    (b3['drempel_schulden'], jaar))
+
+
+_MIGRATION_CALLABLES = {7: _run_migration_7, 8: _run_migration_8}
+
+
 async def init_db(db_path: Path = DB_PATH) -> None:
-    """Create all tables if they don't exist, then run migrations."""
+    """Create all tables if they don't exist, then run versioned migrations."""
     db_path.parent.mkdir(parents=True, exist_ok=True)
     async with aiosqlite.connect(db_path) as conn:
         await conn.executescript(SCHEMA_SQL)
         await conn.commit()
-        # Migrations: add columns to fiscale_params (idempotent)
-        for col, default in [
-            ('aov_premie', 0), ('woz_waarde', 0),
-            ('hypotheekrente', 0), ('voorlopige_aanslag_betaald', 0),
-            ('ew_forfait_pct', 0.35), ('villataks_grens', 1350000),
-            ('wet_hillen_pct', 0), ('urencriterium', 1225),
-            ('partner_bruto_loon', 0), ('partner_loonheffing', 0),
-            ('pvv_premiegrondslag', 0),
-            ('ew_naar_partner', 1), ('voorlopige_aanslag_zvw', 0),
-            # Phase: fiscal overhaul v2 — PVV rates + Box 3
-            ('pvv_aow_pct', 17.90), ('pvv_anw_pct', 0.10), ('pvv_wlz_pct', 9.65),
-            ('box3_bank_saldo', 0), ('box3_overige_bezittingen', 0), ('box3_schulden', 0),
-            ('box3_heffingsvrij_vermogen', 57000),
-            ('box3_rendement_bank_pct', 1.03), ('box3_rendement_overig_pct', 6.17),
-            ('box3_rendement_schuld_pct', 2.46), ('box3_tarief_pct', 36),
-            # Phase: jaarafsluiting enhancement — balance sheet + drempel schulden
-            ('box3_drempel_schulden', 3700),
-            ('balans_bank_saldo', 0), ('balans_crediteuren', 0),
-            ('balans_overige_vorderingen', 0), ('balans_overige_schulden', 0),
-            # Phase: jaarafsluiting redesign — ZA/SA toggles + lijfrente
-            ('za_actief', 1), ('sa_actief', 0), ('lijfrente_premie', 0),
-            # Phase: box3 partner persistence
-            ('box3_fiscaal_partner', 1),
-        ]:
-            try:
-                await conn.execute(
-                    f"ALTER TABLE fiscale_params ADD COLUMN {col} REAL DEFAULT {default}"
-                )
-            except Exception:
-                pass  # Column already exists
 
-        # TEXT column migration (separate because type differs)
-        for col, default in [
-            ('arbeidskorting_brackets', "''"),
-            ('jaarafsluiting_status', "'concept'"),
-        ]:
-            try:
-                await conn.execute(
-                    f"ALTER TABLE fiscale_params ADD COLUMN {col} TEXT DEFAULT {default}"
-                )
-            except Exception:
-                pass  # Column already exists
+        # Determine current schema version
+        cur = await conn.execute(
+            "SELECT MAX(version) FROM schema_version")
+        row = await cur.fetchone()
+        current_version = row[0] or 0
 
-        # Migration: add locatie_id to werkdagen
-        try:
-            await conn.execute(
-                "ALTER TABLE werkdagen ADD COLUMN locatie_id INTEGER "
-                "REFERENCES klant_locaties(id) ON DELETE SET NULL"
-            )
-        except Exception:
-            pass  # Column already exists
+        # First-run detection: if schema_version is empty but tables exist,
+        # introspect to find which migrations are already applied
+        if current_version == 0:
+            fp_cols = await _get_existing_columns(conn, 'fiscale_params')
+            wd_cols = await _get_existing_columns(conn, 'werkdagen')
 
-        # Data migration: set correct per-year values for newly added columns
-        year_data = {
-            2023: {'ew_forfait_pct': 0.35, 'villataks_grens': 1200000, 'wet_hillen_pct': 83.333, 'urencriterium': 1225},
-            2024: {'ew_forfait_pct': 0.35, 'villataks_grens': 1310000, 'wet_hillen_pct': 80.0, 'urencriterium': 1225},
-            2025: {'ew_forfait_pct': 0.35, 'villataks_grens': 1330000, 'wet_hillen_pct': 76.667, 'urencriterium': 1225},
-            2026: {'ew_forfait_pct': 0.35, 'villataks_grens': 1350000, 'wet_hillen_pct': 71.867, 'urencriterium': 1225},
-        }
-        for jaar, vals in year_data.items():
-            # Only update if wet_hillen_pct is still 0 (= not yet migrated)
-            await conn.execute(
-                """UPDATE fiscale_params SET ew_forfait_pct = ?, villataks_grens = ?,
-                   wet_hillen_pct = ?, urencriterium = ?
-                   WHERE jaar = ? AND wet_hillen_pct = 0""",
-                (vals['ew_forfait_pct'], vals['villataks_grens'],
-                 vals['wet_hillen_pct'], vals['urencriterium'], jaar))
-        # Data migration: populate AK brackets and Box 3 defaults for existing years
-        from import_.seed_data import AK_BRACKETS, BOX3_DEFAULTS
-        import json as _json
-        for jaar in [2023, 2024, 2025, 2026]:
-            await conn.execute(
-                "UPDATE fiscale_params SET arbeidskorting_brackets = ? "
-                "WHERE jaar = ? AND (arbeidskorting_brackets IS NULL OR arbeidskorting_brackets = '')",
-                (_json.dumps(AK_BRACKETS.get(jaar, [])), jaar))
-            b3 = BOX3_DEFAULTS.get(jaar)
-            if b3:
-                await conn.execute(
-                    "UPDATE fiscale_params SET "
-                    "box3_heffingsvrij_vermogen = ?, box3_rendement_bank_pct = ?, "
-                    "box3_rendement_overig_pct = ?, box3_rendement_schuld_pct = ?, "
-                    "box3_tarief_pct = ? "
-                    "WHERE jaar = ? AND box3_rendement_bank_pct = 1.03 "
-                    "AND box3_heffingsvrij_vermogen = 57000",
-                    (b3['heffingsvrij'], b3['bank'], b3['overig'], b3['schuld'], b3['tarief'], jaar))
-                # Set drempel_schulden for years that still have default 3700
-                if 'drempel_schulden' in b3:
+            # Check marker columns for each schema migration group
+            if ('locatie_id' in wd_cols
+                    and 'jaarafsluiting_status' in fp_cols
+                    and 'box3_fiscaal_partner' in fp_cols):
+                current_version = 6
+            elif 'jaarafsluiting_status' in fp_cols:
+                current_version = 5
+            elif 'box3_fiscaal_partner' in fp_cols:
+                current_version = 4
+            elif 'pvv_aow_pct' in fp_cols:
+                current_version = 3
+            elif 'ew_forfait_pct' in fp_cols:
+                current_version = 2
+            elif 'aov_premie' in fp_cols:
+                current_version = 1
+
+            # Record detected version
+            if current_version > 0:
+                from datetime import datetime as _dt
+                now = _dt.now().isoformat()
+                for v in range(1, current_version + 1):
+                    desc = next(
+                        (d for ver, d, _ in MIGRATIONS if ver == v),
+                        f'migration_{v}')
                     await conn.execute(
-                        "UPDATE fiscale_params SET box3_drempel_schulden = ? "
-                        "WHERE jaar = ? AND box3_drempel_schulden = 3700",
-                        (b3['drempel_schulden'], jaar))
+                        "INSERT OR IGNORE INTO schema_version "
+                        "(version, description, applied_at) VALUES (?, ?, ?)",
+                        (v, desc, now))
+                await conn.commit()
 
-        # Data migration: fix Box 3 2025 voorlopig → definitief rendementen
-        await conn.execute(
-            "UPDATE fiscale_params SET "
-            "box3_rendement_bank_pct = 1.37, "
-            "box3_rendement_overig_pct = 5.88, "
-            "box3_rendement_schuld_pct = 2.70 "
-            "WHERE jaar = 2025 AND box3_rendement_bank_pct = 1.28"
-        )
+        # Apply pending migrations
+        for version, description, sql_list in MIGRATIONS:
+            if version <= current_version:
+                continue
+            try:
+                if sql_list is not None:
+                    for sql in sql_list:
+                        try:
+                            await conn.execute(sql)
+                        except sqlite3.OperationalError as e:
+                            if 'duplicate column' not in str(e).lower():
+                                raise
+                elif version in _MIGRATION_CALLABLES:
+                    await _MIGRATION_CALLABLES[version](conn)
 
-        # Data migration: set sa_actief=1 for first 3 years (2023-2025) on existing DBs
-        for jaar in [2023, 2024, 2025]:
-            await conn.execute(
-                "UPDATE fiscale_params SET sa_actief = 1 "
-                "WHERE jaar = ? AND sa_actief = 0",
-                (jaar,))
-
-        # Data migration: fix 2026 Box 3 heffingsvrij + drempel (was copied from 2025, now corrected per BD)
-        await conn.execute("""
-            UPDATE fiscale_params
-            SET box3_heffingsvrij_vermogen = 59357, box3_drempel_schulden = 3800
-            WHERE jaar = 2026 AND box3_heffingsvrij_vermogen = 57684
-        """)
-
-        # Data migration: fix DD-MM-YYYY dates → YYYY-MM-DD in uitgaven and werkdagen
-        for table in ('uitgaven', 'werkdagen'):
-            await conn.execute(
-                f"""UPDATE {table}
-                    SET datum = substr(datum,7,4) || '-' || substr(datum,4,2) || '-' || substr(datum,1,2)
-                    WHERE datum GLOB '[0-3][0-9]-[0-1][0-9]-[0-9][0-9][0-9][0-9]'"""
-            )
-
-        await conn.commit()
+                from datetime import datetime as _dt
+                await conn.execute(
+                    "INSERT INTO schema_version "
+                    "(version, description, applied_at) VALUES (?, ?, ?)",
+                    (version, description, _dt.now().isoformat()))
+                await conn.commit()
+            except Exception:
+                await conn.rollback()
+                raise
 
 
 def _validate_datum(datum: str) -> str:

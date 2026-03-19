@@ -3,8 +3,9 @@
 import pytest
 import aiosqlite
 from database import (
-    init_db, get_db, add_klant, get_klanten, add_werkdag, get_werkdagen,
-    update_werkdag, delete_werkdag, get_werkdagen_ongefactureerd,
+    init_db, get_db, get_db_ctx, add_klant, get_klanten, add_werkdag,
+    get_werkdagen, update_werkdag, delete_werkdag,
+    get_werkdagen_ongefactureerd,
     add_factuur, get_facturen, get_next_factuurnummer,
     add_uitgave, get_uitgaven, get_uitgaven_per_categorie,
 )
@@ -168,3 +169,32 @@ async def test_check_constraint_bedrag_positive(db):
     with pytest.raises(Exception):
         await add_uitgave(db, datum="2026-01-01", categorie="Test",
                           omschrijving="Test", bedrag=-10)
+
+
+@pytest.mark.asyncio
+async def test_migrations_fresh_db(tmp_path):
+    """Fresh database gets all migrations applied."""
+    db = tmp_path / 'test.db'
+    await init_db(db)
+    async with get_db_ctx(db) as conn:
+        cur = await conn.execute("SELECT MAX(version) FROM schema_version")
+        row = await cur.fetchone()
+        assert row[0] is not None and row[0] > 0
+
+
+@pytest.mark.asyncio
+async def test_migrations_idempotent(tmp_path):
+    """Running init_db twice doesn't fail or re-apply migrations."""
+    db = tmp_path / 'test.db'
+    await init_db(db)
+    await init_db(db)  # second run should be a no-op
+    async with get_db_ctx(db) as conn:
+        cur = await conn.execute("SELECT COUNT(*) FROM schema_version")
+        count = (await cur.fetchone())[0]
+        assert count > 0
+
+        # Verify fiscale_params columns exist
+        cur = await conn.execute("PRAGMA table_info(fiscale_params)")
+        columns = {row[1] for row in await cur.fetchall()}
+        assert 'box3_fiscaal_partner' in columns
+        assert 'jaarafsluiting_status' in columns

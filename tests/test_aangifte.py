@@ -173,20 +173,23 @@ async def test_upsert_preserves_partner_fields(db):
 async def test_ddmmyyyy_migration_fixes_uitgaven(tmp_path):
     """init_db migrates DD-MM-YYYY dates to YYYY-MM-DD in uitgaven."""
     db_path = tmp_path / "test_migration.sqlite3"
-    await init_db(db_path)
 
-    # Insert a row with DD-MM-YYYY format directly (bypassing validation)
-    conn = await get_db(db_path)
-    await conn.execute(
-        "INSERT INTO uitgaven (datum, categorie, omschrijving, bedrag) "
-        "VALUES ('15-03-2024', 'kantoor', 'Test', 50.00)")
-    await conn.execute(
-        "INSERT INTO uitgaven (datum, categorie, omschrijving, bedrag) "
-        "VALUES ('2024-03-15', 'kantoor', 'Good', 25.00)")
-    await conn.commit()
-    await conn.close()
+    # Create tables via SCHEMA_SQL but without running migrations
+    import aiosqlite
+    from database import SCHEMA_SQL
+    async with aiosqlite.connect(db_path) as conn:
+        await conn.executescript(SCHEMA_SQL)
+        await conn.commit()
+        # Insert bad dates before init_db runs migrations
+        await conn.execute(
+            "INSERT INTO uitgaven (datum, categorie, omschrijving, bedrag) "
+            "VALUES ('15-03-2024', 'kantoor', 'Test', 50.00)")
+        await conn.execute(
+            "INSERT INTO uitgaven (datum, categorie, omschrijving, bedrag) "
+            "VALUES ('2024-03-15', 'kantoor', 'Good', 25.00)")
+        await conn.commit()
 
-    # Run init_db again — migration should fix the bad date
+    # Run init_db — migration 12 should fix the bad date
     await init_db(db_path)
 
     conn = await get_db(db_path)
@@ -202,20 +205,22 @@ async def test_ddmmyyyy_migration_fixes_uitgaven(tmp_path):
 async def test_ddmmyyyy_migration_fixes_werkdagen(tmp_path):
     """init_db migrates DD-MM-YYYY dates to YYYY-MM-DD in werkdagen."""
     db_path = tmp_path / "test_migration.sqlite3"
-    await init_db(db_path)
 
-    # Insert klant first (FK requirement)
-    conn = await get_db(db_path)
-    await conn.execute(
-        "INSERT INTO klanten (naam, tarief_uur) VALUES ('Test', 80)")
-    # Insert werkdag with bad date directly
-    await conn.execute(
-        "INSERT INTO werkdagen (datum, klant_id, uren, tarief) "
-        "VALUES ('27-01-2024', 1, 8, 80)")
-    await conn.commit()
-    await conn.close()
+    # Create tables via SCHEMA_SQL but without running migrations
+    import aiosqlite
+    from database import SCHEMA_SQL
+    async with aiosqlite.connect(db_path) as conn:
+        await conn.executescript(SCHEMA_SQL)
+        await conn.commit()
+        # Insert klant + werkdag with bad date before migrations
+        await conn.execute(
+            "INSERT INTO klanten (naam, tarief_uur) VALUES ('Test', 80)")
+        await conn.execute(
+            "INSERT INTO werkdagen (datum, klant_id, uren, tarief) "
+            "VALUES ('27-01-2024', 1, 8, 80)")
+        await conn.commit()
 
-    # Run init_db again
+    # Run init_db — migration 12 should fix the bad date
     await init_db(db_path)
 
     conn = await get_db(db_path)
