@@ -458,6 +458,43 @@ async def test_apply_matches_empty(db):
     assert count == 0
 
 
+@pytest.mark.asyncio
+async def test_find_matches_14_day_boundary_pass(db):
+    """Payment exactly 14 days before factuur date should match (Pass 2)."""
+    kid = await add_klant(db, naam="Boundary", tarief_uur=80, retour_km=0)
+    # Factuur dated 2026-03-15
+    await add_factuur(db, nummer='2026-BND', klant_id=kid,
+                       datum='2026-03-15', totaal_uren=8, totaal_km=0,
+                       totaal_bedrag=640.00, betaald=0)
+    # Payment 14 days before = 2026-03-01 (exactly on boundary)
+    await add_banktransacties(db, [
+        {'datum': '2026-03-01', 'bedrag': 640.00, 'tegenpartij': 'Someone',
+         'omschrijving': 'payment', 'categorie': ''},
+    ], csv_bestand='test.csv')
+
+    matches = await find_factuur_matches(db)
+    assert len(matches) == 1
+    assert matches[0]['match_type'] == 'bedrag'
+
+
+@pytest.mark.asyncio
+async def test_find_matches_15_day_boundary_fail(db):
+    """Payment 15 days before factuur date should NOT match."""
+    kid = await add_klant(db, naam="Boundary", tarief_uur=80, retour_km=0)
+    # Factuur dated 2026-03-16
+    await add_factuur(db, nummer='2026-BND2', klant_id=kid,
+                       datum='2026-03-16', totaal_uren=8, totaal_km=0,
+                       totaal_bedrag=640.00, betaald=0)
+    # Payment 15 days before = 2026-03-01
+    await add_banktransacties(db, [
+        {'datum': '2026-03-01', 'bedrag': 640.00, 'tegenpartij': 'Someone',
+         'omschrijving': 'betaling', 'categorie': ''},
+    ], csv_bestand='test.csv')
+
+    matches = await find_factuur_matches(db)
+    assert len(matches) == 0
+
+
 # ============================================================
 # Afschrijving overrides CRUD
 # ============================================================

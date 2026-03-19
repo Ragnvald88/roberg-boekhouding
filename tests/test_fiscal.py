@@ -17,82 +17,7 @@ from fiscal.berekeningen import (
 )
 
 
-# === Fiscale parameters per jaar (identiek aan seed_data.py) ===
-
-FISCALE_PARAMS = {
-    2023: {
-        "jaar": 2023,
-        "zelfstandigenaftrek": 5030, "startersaftrek": 2123,
-        "za_actief": True, "sa_actief": True,
-        "mkb_vrijstelling_pct": 14.0,
-        "kia_ondergrens": 2601, "kia_bovengrens": 69764, "kia_pct": 28,
-        "km_tarief": 0.21,
-        "schijf1_grens": 73031, "schijf1_pct": 36.93,
-        "schijf2_grens": 73031, "schijf2_pct": 36.93,  # same as schijf1 (2 brackets)
-        "schijf3_pct": 49.50,
-        "ahk_max": 3070, "ahk_afbouw_pct": 6.095, "ahk_drempel": 22660,
-        "ak_max": 5052,
-        "zvw_pct": 5.43, "zvw_max_grondslag": 66956,
-        "repr_aftrek_pct": 80,
-        "ew_forfait_pct": 0.35, "villataks_grens": 1_200_000,
-        "wet_hillen_pct": 83.333, "urencriterium": 1225,
-        "pvv_premiegrondslag": 37149,
-    },
-    2024: {
-        "jaar": 2024,
-        "zelfstandigenaftrek": 3750, "startersaftrek": 2123,
-        "za_actief": True, "sa_actief": True,
-        "mkb_vrijstelling_pct": 13.31,
-        "kia_ondergrens": 2801, "kia_bovengrens": 69764, "kia_pct": 28,
-        "km_tarief": 0.23,
-        "schijf1_grens": 75518, "schijf1_pct": 36.97,
-        "schijf2_grens": 75518, "schijf2_pct": 36.97,  # same as schijf1 (2 brackets)
-        "schijf3_pct": 49.50,
-        "ahk_max": 3362, "ahk_afbouw_pct": 6.63, "ahk_drempel": 24812,
-        "ak_max": 5532,
-        "zvw_pct": 5.32, "zvw_max_grondslag": 71628,
-        "repr_aftrek_pct": 80,
-        "ew_forfait_pct": 0.35, "villataks_grens": 1_310_000,
-        "wet_hillen_pct": 80.0, "urencriterium": 1225,
-        "pvv_premiegrondslag": 38098,
-    },
-    2025: {
-        "jaar": 2025,
-        "zelfstandigenaftrek": 2470, "startersaftrek": 2123,
-        "za_actief": True, "sa_actief": True,
-        "mkb_vrijstelling_pct": 12.70,
-        "kia_ondergrens": 2901, "kia_bovengrens": 70602, "kia_pct": 28,
-        "km_tarief": 0.23,
-        "schijf1_grens": 38441, "schijf1_pct": 35.82,
-        "schijf2_grens": 76817, "schijf2_pct": 37.48,
-        "schijf3_pct": 49.50,
-        "ahk_max": 3068, "ahk_afbouw_pct": 6.337, "ahk_drempel": 28406,
-        "ak_max": 5599,
-        "zvw_pct": 5.26, "zvw_max_grondslag": 75860,
-        "repr_aftrek_pct": 80,
-        "ew_forfait_pct": 0.35, "villataks_grens": 1_330_000,
-        "wet_hillen_pct": 76.667, "urencriterium": 1225,
-        "pvv_premiegrondslag": 38441,  # = schijf1_grens for 2025+
-    },
-    2026: {
-        "jaar": 2026,
-        "zelfstandigenaftrek": 1200, "startersaftrek": 2123,
-        "za_actief": True, "sa_actief": False,  # Year 4+: SA no longer active
-        "mkb_vrijstelling_pct": 12.70,
-        "kia_ondergrens": 2901, "kia_bovengrens": 70602, "kia_pct": 28,
-        "km_tarief": 0.23,
-        "schijf1_grens": 38883, "schijf1_pct": 35.75,
-        "schijf2_grens": 78426, "schijf2_pct": 37.56,
-        "schijf3_pct": 49.50,
-        "ahk_max": 3115, "ahk_afbouw_pct": 6.398, "ahk_drempel": 29736,
-        "ak_max": 5685,
-        "zvw_pct": 4.85, "zvw_max_grondslag": 79409,
-        "repr_aftrek_pct": 80,
-        "ew_forfait_pct": 0.35, "villataks_grens": 1_350_000,
-        "wet_hillen_pct": 71.867, "urencriterium": 1225,
-        "pvv_premiegrondslag": 38883,  # = schijf1_grens for 2025+
-    },
-}
+from import_.seed_data import FISCALE_PARAMS
 
 
 # ============================================================
@@ -1970,6 +1895,37 @@ class TestExtrapoleerJaaromzet:
         result = asyncio.run(extrapoleer_jaaromzet(db_path, date.today().year))
         assert result['extrapolated_omzet'] == 0
         assert result['confidence'] == 'low'
+
+    def test_january_early_month_no_crash(self, db_path):
+        """Jan 1-14: complete_months=max(0,1)=1, should not divide by zero."""
+        import asyncio
+        import datetime
+        from database import add_factuur
+        from components.fiscal_utils import extrapoleer_jaaromzet
+
+        # Add a small amount of revenue for January
+        asyncio.run(add_factuur(db_path, nummer='2026-JAN', klant_id=1,
+                                 datum='2026-01-03', totaal_uren=4,
+                                 totaal_km=0, totaal_bedrag=500))
+
+        # Mock datetime.date so that date.today() returns Jan 5
+        original_date = datetime.date
+
+        class MockDate(datetime.date):
+            @classmethod
+            def today(cls):
+                return original_date(2026, 1, 5)
+
+        datetime.date = MockDate
+        try:
+            result = asyncio.run(extrapoleer_jaaromzet(db_path, 2026))
+        finally:
+            datetime.date = original_date
+
+        assert result['confidence'] == 'low'
+        assert result['basis_maanden'] == 1  # max(month-1, 1) = max(0, 1) = 1
+        assert result['extrapolated_omzet'] > 0
+        assert result['extrapolated_omzet'] == 500 * 12  # 500/1month * 12
 
 
 class TestPersonalDataFallback:
