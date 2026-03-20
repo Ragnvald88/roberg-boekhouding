@@ -14,6 +14,8 @@ CHART_COLORS = [
     '#64748B',  # slate
 ]
 
+DONUT_COLORS = ['#0F766E', '#14B8A6', '#5EEAD4', '#99F6E4']
+
 
 def revenue_bar_chart(data_current: list[float], data_previous: list[float],
                       jaar: int) -> ui.echart:
@@ -59,7 +61,7 @@ def revenue_bar_chart(data_current: list[float], data_previous: list[float],
 
 
 def cost_donut_chart(data: list[dict]) -> ui.echart:
-    """Cost breakdown donut chart."""
+    """Cost breakdown donut chart — monochromatic teal palette."""
     chart_data = [
         {'value': round(d['totaal'], 2), 'name': d['categorie']}
         for d in data if d['totaal'] > 0
@@ -72,15 +74,18 @@ def cost_donut_chart(data: list[dict]) -> ui.echart:
         },
         'legend': {
             'orient': 'vertical',
-            'right': '5%',
-            'top': 'center',
-            'textStyle': {'color': '#64748B'},
+            'left': 'center',
+            'bottom': '0%',
+            'textStyle': {'color': '#475569', 'fontSize': 12},
+            'itemWidth': 8,
+            'itemHeight': 8,
+            'icon': 'circle',
         },
-        'color': CHART_COLORS,
+        'color': DONUT_COLORS,
         'series': [{
             'type': 'pie',
             'radius': ['40%', '70%'],
-            'center': ['40%', '50%'],
+            'center': ['50%', '40%'],
             'avoidLabelOverlap': True,
             'itemStyle': {'borderRadius': 6, 'borderColor': '#fff', 'borderWidth': 2},
             'label': {'show': False},
