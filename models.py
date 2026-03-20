@@ -99,6 +99,7 @@ class Banktransactie:
     koppeling_type: str = ''
     koppeling_id: Optional[int] = None
     csv_bestand: str = ''
+    betalingskenmerk: str = ''
 
 
 @dataclass

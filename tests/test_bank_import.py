@@ -368,3 +368,22 @@ def test_parse_empty_betalingskenmerk():
     csv_bytes = build_csv([make_csv_row()])
     result = parse_rabobank_csv(csv_bytes)
     assert result[0].get('betalingskenmerk', '') == ''
+
+
+@pytest.mark.asyncio
+async def test_add_banktransacties_with_betalingskenmerk(db):
+    """Betalingskenmerk is stored when provided."""
+    txns = [{
+        'datum': '2026-02-23',
+        'bedrag': -2800.0,
+        'tegenrekening': 'NL86INGB0002445588',
+        'tegenpartij': 'Belastingdienst',
+        'omschrijving': '',
+        'betalingskenmerk': '0124412647060001',
+    }]
+    count = await add_banktransacties(db, txns, csv_bestand='test.csv')
+    assert count == 1
+
+    result = await get_banktransacties(db)
+    assert len(result) == 1
+    assert result[0].betalingskenmerk == '0124412647060001'

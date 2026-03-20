@@ -321,6 +321,9 @@ MIGRATIONS = [
            SET datum = substr(datum,7,4) || '-' || substr(datum,4,2) || '-' || substr(datum,1,2)
            WHERE datum GLOB '[0-3][0-9]-[0-1][0-9]-[0-9][0-9][0-9][0-9]'""",
     ]),
+    (13, "add_betalingskenmerk_to_banktransacties", [
+        "ALTER TABLE banktransacties ADD COLUMN betalingskenmerk TEXT DEFAULT ''",
+    ]),
 ]
 
 
@@ -942,7 +945,8 @@ async def get_banktransacties(db_path: Path = DB_PATH,
             categorie=r['categorie'] or '',
             koppeling_type=r['koppeling_type'] or '',
             koppeling_id=r['koppeling_id'],
-            csv_bestand=r['csv_bestand'] or ''
+            csv_bestand=r['csv_bestand'] or '',
+            betalingskenmerk=r['betalingskenmerk'] or '',
         ) for r in rows]
 
 
@@ -985,11 +989,12 @@ async def add_banktransacties(db_path: Path = DB_PATH,
             for t in matching[:to_insert]:
                 await conn.execute(
                     """INSERT INTO banktransacties
-                       (datum, bedrag, tegenrekening, tegenpartij, omschrijving, csv_bestand)
-                       VALUES (?, ?, ?, ?, ?, ?)""",
+                       (datum, bedrag, tegenrekening, tegenpartij, omschrijving,
+                        betalingskenmerk, csv_bestand)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
                     (t['datum'], t['bedrag'], t.get('tegenrekening', ''),
                      t.get('tegenpartij', ''), t.get('omschrijving', ''),
-                     csv_bestand)
+                     t.get('betalingskenmerk', ''), csv_bestand)
                 )
                 count += 1
         await conn.commit()
