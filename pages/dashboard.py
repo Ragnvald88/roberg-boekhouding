@@ -226,24 +226,21 @@ async def dashboard_page():
                     'gap: 20px; align-items: stretch'):
 
                 # Card 1: Bruto omzet
-                with ui.card().classes('q-pa-lg').style(
-                        'border-radius: 14px; border: 1px solid #E2E8F0; '
-                        'cursor: pointer') \
+                with ui.card().classes('q-pa-lg card-hero') \
+                        .style('cursor: pointer') \
                         .on('click', lambda: ui.navigate.to('/werkdagen')):
                     with ui.row().classes('w-full justify-between items-center'):
-                        ui.label('Bruto omzet').style(
-                            'font-size: 13px; color: #64748B; font-weight: 500')
+                        ui.label('Bruto omzet').classes('hero-label')
                         delta = _yoy_delta(kpis['omzet'], vorig_ytd_omzet)
                         if delta is not None:
                             _render_delta_badge(delta)
-                    ui.label(format_euro(kpis['omzet'], decimals=0)).style(
-                        'font-size: 30px; font-weight: 700; color: #0F172A; '
-                        'font-variant-numeric: tabular-nums; margin: 6px 0 2px')
+                    ui.label(format_euro(kpis['omzet'], decimals=0)).classes(
+                        'hero-value')
                     if vorig_ytd_omzet > 0:
                         ui.label(
                             f'vs {format_euro(vorig_ytd_omzet, decimals=0)} '
                             f'vorig jaar'
-                        ).style('font-size: 12px; color: #94A3B8')
+                        ).classes('context-text')
                     # Sparkline
                     if any(v > 0 for v in omzet_huidig):
                         _render_sparkline(omzet_huidig, '#0F766E')
@@ -251,33 +248,29 @@ async def dashboard_page():
                 # Card 2: Bedrijfswinst
                 ytd_winst = ib_resultaat['ytd_winst'] if ib_resultaat else (
                     kpis['omzet'] - kpis['kosten'])
-                winst_color = '#059669' if ytd_winst >= 0 else '#DC2626'
                 vorig_winst = vorig_ytd_omzet - vorig_ytd_kosten
 
-                with ui.card().classes('q-pa-lg').style(
-                        'border-radius: 14px; border: 1px solid #E2E8F0'):
+                with ui.card().classes('q-pa-lg card-hero'):
                     with ui.row().classes('w-full justify-between items-center'):
-                        ui.label('Bedrijfswinst').style(
-                            'font-size: 13px; color: #64748B; font-weight: 500')
+                        ui.label('Bedrijfswinst').classes('hero-label')
                         delta = _yoy_delta(ytd_winst, vorig_winst) \
                             if vorig_winst else None
                         if delta is not None:
                             _render_delta_badge(delta)
-                    ui.label(format_euro(ytd_winst, decimals=0)).style(
-                        f'font-size: 30px; font-weight: 700; color: {winst_color}; '
-                        'font-variant-numeric: tabular-nums; margin: 6px 0 2px')
+                    ui.label(format_euro(ytd_winst, decimals=0)).classes(
+                        'hero-value-positive' if ytd_winst >= 0
+                        else 'hero-value-negative')
                     if vorig_winst and vorig_winst > 0:
                         ui.label(
                             f'vs {format_euro(vorig_winst, decimals=0)} vorig jaar'
-                        ).style('font-size: 12px; color: #94A3B8')
+                        ).classes('context-text')
                     # Sparkline (revenue as proxy for profit trend)
                     if any(v > 0 for v in omzet_huidig):
                         _render_sparkline(omzet_huidig, '#059669')
 
                 # Card 3: Belasting prognose
-                with ui.card().classes('q-pa-lg').style(
-                        'border-radius: 14px; border: 1px solid #E2E8F0; '
-                        'cursor: pointer') \
+                with ui.card().classes('q-pa-lg card-hero') \
+                        .style('cursor: pointer') \
                         .on('click', lambda: ui.navigate.to('/aangifte')):
 
                     if ib_resultaat is not None:
@@ -291,9 +284,8 @@ async def dashboard_page():
                         # Header with confidence badge
                         with ui.row().classes(
                                 'w-full justify-between items-center'):
-                            ui.label('Belasting prognose').style(
-                                'font-size: 13px; color: #64748B; '
-                                'font-weight: 500')
+                            ui.label('Belasting prognose').classes(
+                                'hero-label')
                             conf_map = {
                                 'low': ('Schatting', '#D97706', '#FEF3C7'),
                                 'medium': ('Prognose', '#0369A1', '#F0F9FF'),
@@ -310,19 +302,15 @@ async def dashboard_page():
                             # Bij/terug display
                             if resultaat >= 0:
                                 val_text = f'Bij: {format_euro(resultaat, decimals=0)}'
-                                val_color = '#DC2626'
                             else:
                                 val_text = f'Terug: {format_euro(abs(resultaat), decimals=0)}'
-                                val_color = '#059669'
-                            ui.label(val_text).style(
-                                f'font-size: 30px; font-weight: 700; '
-                                f'color: {val_color}; '
-                                'font-variant-numeric: tabular-nums; '
-                                'margin: 6px 0 2px')
+                            ui.label(val_text).classes(
+                                'hero-value-negative' if resultaat >= 0
+                                else 'hero-value-positive')
                             ui.label(
                                 f'o.b.v. {ib_resultaat["basis_maanden"]} '
                                 f'maanden'
-                            ).style('font-size: 12px; color: #94A3B8; '
+                            ).classes('context-text').style(
                                     'margin-bottom: 16px')
 
                             # Progress bar: berekend vs VA betaald
@@ -382,22 +370,18 @@ async def dashboard_page():
                             # No VA data — show estimated tax total
                             total_tax = (ib_resultaat['netto_ib']
                                          + ib_resultaat['zvw'])
-                            ui.label(format_euro(total_tax, decimals=0)).style(
-                                'font-size: 30px; font-weight: 700; '
-                                'color: #0F172A; '
-                                'font-variant-numeric: tabular-nums; '
-                                'margin: 6px 0 2px')
-                            ui.label('Geschatte belasting').style(
-                                'font-size: 12px; color: #94A3B8')
+                            ui.label(format_euro(total_tax, decimals=0)).classes(
+                                'hero-value')
+                            ui.label('Geschatte belasting').classes(
+                                'context-text')
                             ui.label('VA invoeren \u2192').style(
                                 'font-size: 12px; color: #0F766E; '
                                 'cursor: pointer; margin-top: 8px')
                     else:
                         # No fiscal data at all
-                        ui.label('Belasting prognose').style(
-                            'font-size: 13px; color: #64748B; font-weight: 500')
-                        ui.label('Geen gegevens').style(
-                            'font-size: 14px; color: #94A3B8; margin-top: 8px')
+                        ui.label('Belasting prognose').classes('hero-label')
+                        ui.label('Geen gegevens').classes(
+                            'context-text').style('margin-top: 8px')
 
             # === SECONDARY METRICS STRIP ===
             with ui.row().classes('w-full gap-3'):
@@ -416,11 +400,8 @@ async def dashboard_page():
                             ui.label(
                                 f'{uren:,.0f} / {uren_criterium:,} uur'
                                 .replace(',', '.')
-                            ).style(
-                                'font-size: 14px; font-weight: 600; '
-                                'color: #0F172A')
-                            ui.label(f'{uren_pct}%').style(
-                                'font-size: 11px; color: #94A3B8')
+                            ).classes('strip-value')
+                            ui.label(f'{uren_pct}%').classes('strip-pct')
                         ui.linear_progress(
                             value=min(uren_pct / 100, 1.0), size='3px',
                             color='positive' if uren_pct >= 100 else 'warning',
@@ -437,11 +418,10 @@ async def dashboard_page():
                         ui.icon('directions_car', size='20px').style(
                             'color: #0F766E')
                         with ui.row().classes('items-baseline gap-1'):
-                            ui.label(f'{km:,.0f} km'.replace(',', '.')).style(
-                                'font-size: 14px; font-weight: 600; '
-                                'color: #0F172A')
-                            ui.label(format_euro(km_bedrag)).style(
-                                'font-size: 12px; color: #94A3B8')
+                            ui.label(f'{km:,.0f} km'.replace(',', '.')).classes(
+                                'strip-value')
+                            ui.label(format_euro(km_bedrag)).classes(
+                                'context-text')
 
                 # Documenten
                 docs = await get_aangifte_documenten(DB_PATH, jaar)
@@ -460,11 +440,8 @@ async def dashboard_page():
                                 'w-full justify-between items-baseline'):
                             ui.label(
                                 f'{docs_done} / {docs_total} documenten'
-                            ).style(
-                                'font-size: 14px; font-weight: 600; '
-                                'color: #0F172A')
-                            ui.label(f'{docs_pct}%').style(
-                                'font-size: 11px; color: #94A3B8')
+                            ).classes('strip-value')
+                            ui.label(f'{docs_pct}%').classes('strip-pct')
                         ui.linear_progress(
                             value=min(docs_pct / 100, 1.0), size='3px',
                             color='positive' if docs_pct >= 100 else 'warning',
@@ -485,15 +462,12 @@ async def dashboard_page():
                 cum_vorig.append(round(rv))
 
             # Chart 1: Revenue bar chart — FULL WIDTH
-            with ui.card().classes('w-full q-pa-lg').style(
-                    'border-radius: 14px; border: 1px solid #E2E8F0'):
+            with ui.card().classes('w-full q-pa-lg card-hero'):
                 with ui.row().classes(
                         'w-full justify-between items-baseline'):
-                    ui.label('Omzet per maand').style(
-                        'font-size: 15px; font-weight: 600; '
-                        'color: #0F172A')
-                    ui.label(f'{jaar} vs {jaar - 1}').style(
-                        'font-size: 12px; color: #94A3B8')
+                    ui.label('Omzet per maand').classes('chart-title')
+                    ui.label(f'{jaar} vs {jaar - 1}').classes(
+                        'chart-subtitle')
                 revenue_bar_chart(omzet_huidig, omzet_vorig, jaar)
 
             # Chart 2: Cumulative + Donut side by side (or just cumulative)
@@ -549,38 +523,27 @@ async def dashboard_page():
                 with ui.element('div').style(
                         'display: grid; grid-template-columns: 1fr 1fr;'
                         ' gap: 20px'):
-                    with ui.card().classes('q-pa-lg').style(
-                            'border-radius: 14px; '
-                            'border: 1px solid #E2E8F0'):
+                    with ui.card().classes('q-pa-lg card-hero'):
                         with ui.row().classes(
                                 'w-full justify-between items-baseline'):
-                            ui.label('Cumulatieve omzet').style(
-                                'font-size: 15px; font-weight: 600; '
-                                'color: #0F172A')
-                            ui.label(f'{jaar} vs {jaar - 1}').style(
-                                'font-size: 12px; color: #94A3B8')
+                            ui.label('Cumulatieve omzet').classes(
+                                'chart-title')
+                            ui.label(f'{jaar} vs {jaar - 1}').classes(
+                                'chart-subtitle')
                         ui.echart(cum_chart_config).style(
                             'height: 300px; width: 100%')
 
-                    with ui.card().classes('q-pa-lg').style(
-                            'border-radius: 14px; '
-                            'border: 1px solid #E2E8F0'):
-                        ui.label('Kostenverdeling').style(
-                            'font-size: 15px; font-weight: 600; '
-                            'color: #0F172A')
+                    with ui.card().classes('q-pa-lg card-hero'):
+                        ui.label('Kostenverdeling').classes('chart-title')
                         cost_donut_chart(kosten_per_cat)
             else:
                 # No costs — full-width cumulative
-                with ui.card().classes('w-full q-pa-lg').style(
-                        'border-radius: 14px; '
-                        'border: 1px solid #E2E8F0'):
+                with ui.card().classes('w-full q-pa-lg card-hero'):
                     with ui.row().classes(
                             'w-full justify-between items-baseline'):
-                        ui.label('Cumulatieve omzet').style(
-                            'font-size: 15px; font-weight: 600; '
-                            'color: #0F172A')
-                        ui.label(f'{jaar} vs {jaar - 1}').style(
-                            'font-size: 12px; color: #94A3B8')
+                        ui.label('Cumulatieve omzet').classes('chart-title')
+                        ui.label(f'{jaar} vs {jaar - 1}').classes(
+                            'chart-subtitle')
                     ui.echart(cum_chart_config).style(
                         'height: 300px; width: 100%')
 
@@ -588,9 +551,7 @@ async def dashboard_page():
             has_ongefact = ongefact and ongefact.get('aantal', 0) > 0
             has_openstaand = len(openstaande) > 0
             if has_ongefact or has_openstaand:
-                ui.label('AANDACHTSPUNTEN').style(
-                    'font-size: 13px; font-weight: 600; color: #64748B; '
-                    'text-transform: uppercase; letter-spacing: 0.05em')
+                ui.label('AANDACHTSPUNTEN').classes('section-label')
 
                 if has_ongefact:
                     with ui.element('div').style(
