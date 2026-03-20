@@ -1,0 +1,66 @@
+<h2>Dashboard Redesign: 3 Approaches</h2>
+<p class="subtitle">Which direction feels right for your boekhouding dashboard?</p>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Command Center</h3>
+      <p><strong>Hero metrics on top, everything else earns its space</strong></p>
+      <p>3 large hero cards (Omzet, Winst, Belasting) dominate the top. Below: a compact secondary strip for Uren, Km, Documenten — only when they have meaningful values. Alerts appear contextually. Charts get more room. Empty states are hidden, not shown as zeros.</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>Pros</h4><ul>
+          <li>Clear hierarchy — you instantly see what matters</li>
+          <li>Sparklines in hero cards show trends at a glance</li>
+          <li>Clean, professional, inspired by Xero/FreshBooks</li>
+          <li>Empty/zero metrics hidden → no visual noise</li>
+        </ul></div>
+        <div class="cons"><h4>Cons</h4><ul>
+          <li>Some metrics only visible when relevant (intentional trade-off)</li>
+        </ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Financial Story</h3>
+      <p><strong>Top-down narrative: Earn → Spend → Keep → Act</strong></p>
+      <p>Dashboard reads like a financial summary. Section 1: "Wat je verdient" (Omzet + trend chart integrated). Section 2: "Wat je uitgeeft" (Kosten + donut). Section 3: "Wat je houdt" (Winst + Belasting). Section 4: "Wat je moet doen" (alerts, openstaand, ongefactureerd). Each section is a visual block.</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>Pros</h4><ul>
+          <li>Tells a story — logical flow that makes sense</li>
+          <li>Charts are integrated with their KPIs, not separated</li>
+          <li>Alerts become a clear action section</li>
+        </ul></div>
+        <div class="cons"><h4>Cons</h4><ul>
+          <li>Longer page — more scrolling needed</li>
+          <li>Less "at a glance" — more "read through"</li>
+          <li>More radical departure from current layout</li>
+        </ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Hybrid: Command Center + Smart Sections</h3>
+      <p><strong>Best of both — hero KPIs up top, sectioned content below</strong></p>
+      <p>3 hero KPI cards with sparklines at the top (Omzet, Winst, Belasting). Below: two clear sections — "Overzicht" with the revenue chart + cost donut side by side, and "Aandachtspunten" with contextual alerts (ongefactureerd, openstaand, uren, documenten) that only appear when relevant. Secondary metrics (Km, Uren, Documenten) become a compact icon-strip, not full cards. Quick actions integrated into the header area.</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>Pros</h4><ul>
+          <li>Hero KPIs give instant pulse check</li>
+          <li>Sections create logical grouping without forcing a narrative</li>
+          <li>Contextual alerts = zero noise when things are fine</li>
+          <li>Compact secondary strip avoids card bloat</li>
+          <li>Still fits on one screen without excessive scrolling</li>
+        </ul></div>
+        <div class="cons"><h4>Cons</h4><ul>
+          <li>Slightly more complex layout logic</li>
+        </ul></div>
+      </div>
+    </div>
+  </div>
+</div>

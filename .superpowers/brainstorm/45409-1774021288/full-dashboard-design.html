@@ -1,0 +1,257 @@
+<link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet">
+
+<h2>Complete Dashboard Redesign</h2>
+<p class="subtitle">Full layout: Hero KPIs → Secondary strip → Charts → Aandachtspunten</p>
+
+<div class="mockup">
+  <div class="mockup-header">Dashboard — Complete View</div>
+  <div class="mockup-body" style="background: #F8FAFC; padding: 28px 32px;">
+
+    <!-- Header row -->
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px;">
+      <h2 style="margin: 0; font-size: 22px; color: #0F172A; font-weight: 600;">Overzicht</h2>
+      <div style="display: flex; gap: 10px; align-items: center;">
+        <button style="background: white; border: 1px solid #E2E8F0; border-radius: 8px; padding: 7px 14px; font-size: 13px; color: #475569; cursor: pointer; display: flex; align-items: center; gap: 5px; font-family: inherit;">
+          <span class="material-icons-round" style="font-size: 16px; color: #0F766E;">add</span> Werkdag
+        </button>
+        <button style="background: white; border: 1px solid #E2E8F0; border-radius: 8px; padding: 7px 14px; font-size: 13px; color: #475569; cursor: pointer; display: flex; align-items: center; gap: 5px; font-family: inherit;">
+          <span class="material-icons-round" style="font-size: 16px; color: #0F766E;">add</span> Factuur
+        </button>
+        <select style="border: 1px solid #E2E8F0; border-radius: 8px; padding: 7px 12px; font-size: 13px; color: #0F172A; background: white; font-family: inherit;">
+          <option>2026</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════ -->
+    <!-- HERO KPI CARDS                              -->
+    <!-- ═══════════════════════════════════════════ -->
+    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-bottom: 16px;">
+
+      <!-- Omzet -->
+      <div style="background: white; border-radius: 14px; padding: 24px; border: 1px solid #E2E8F0; cursor: pointer;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px;">
+          <span style="font-size: 13px; color: #64748B; font-weight: 500;">Bruto omzet</span>
+          <span style="font-size: 12px; color: #059669; font-weight: 600; background: #ECFDF5; padding: 2px 8px; border-radius: 10px;">↑ 11%</span>
+        </div>
+        <div style="font-size: 30px; font-weight: 700; color: #0F172A; font-variant-numeric: tabular-nums; margin: 6px 0 2px;">€ 28.702</div>
+        <div style="font-size: 12px; color: #94A3B8; margin-bottom: 14px;">vs € 25.848 vorig jaar</div>
+        <svg viewBox="0 0 200 40" style="width: 100%; height: 36px;">
+          <defs><linearGradient id="g1" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#0F766E" stop-opacity="0.12"/><stop offset="100%" stop-color="#0F766E" stop-opacity="0"/></linearGradient></defs>
+          <polygon points="0,35 20,32 40,28 60,30 80,25 100,20 120,18 140,22 160,15 180,10 200,8 200,40 0,40" fill="url(#g1)"/>
+          <polyline points="0,35 20,32 40,28 60,30 80,25 100,20 120,18 140,22 160,15 180,10 200,8" fill="none" stroke="#0F766E" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </div>
+
+      <!-- Bedrijfswinst -->
+      <div style="background: white; border-radius: 14px; padding: 24px; border: 1px solid #E2E8F0;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px;">
+          <span style="font-size: 13px; color: #64748B; font-weight: 500;">Bedrijfswinst</span>
+          <span style="font-size: 12px; color: #059669; font-weight: 600; background: #ECFDF5; padding: 2px 8px; border-radius: 10px;">↑ 8%</span>
+        </div>
+        <div style="font-size: 30px; font-weight: 700; color: #0F172A; font-variant-numeric: tabular-nums; margin: 6px 0 2px;">€ 26.401</div>
+        <div style="font-size: 12px; color: #94A3B8; margin-bottom: 14px;">vs € 24.445 vorig jaar</div>
+        <svg viewBox="0 0 200 40" style="width: 100%; height: 36px;">
+          <defs><linearGradient id="g2" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#059669" stop-opacity="0.12"/><stop offset="100%" stop-color="#059669" stop-opacity="0"/></linearGradient></defs>
+          <polygon points="0,36 20,34 40,30 60,28 80,26 100,22 120,20 140,18 160,14 180,12 200,10 200,40 0,40" fill="url(#g2)"/>
+          <polyline points="0,36 20,34 40,30 60,28 80,26 100,22 120,20 140,18 160,14 180,12 200,10" fill="none" stroke="#059669" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </div>
+
+      <!-- Belasting prognose -->
+      <div style="background: white; border-radius: 14px; padding: 24px; border: 1px solid #E2E8F0; cursor: pointer;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px;">
+          <span style="font-size: 13px; color: #64748B; font-weight: 500;">Belasting prognose</span>
+          <span style="font-size: 11px; color: #0369A1; font-weight: 500; background: #F0F9FF; padding: 2px 8px; border-radius: 10px;">Prognose</span>
+        </div>
+        <div style="font-size: 30px; font-weight: 700; color: #DC2626; font-variant-numeric: tabular-nums; margin: 6px 0 2px;">Bij: € 8.177</div>
+        <div style="font-size: 12px; color: #94A3B8; margin-bottom: 16px;">o.b.v. 3 maanden</div>
+        <div style="display: flex; justify-content: space-between; font-size: 11px; color: #64748B; margin-bottom: 5px;">
+          <span>Berekend € 41.655</span>
+          <span>VA betaald € 33.478</span>
+        </div>
+        <div style="height: 5px; background: #F1F5F9; border-radius: 3px; overflow: hidden;">
+          <div style="width: 80%; height: 100%; background: linear-gradient(90deg, #DC2626 0%, #EF4444 100%); border-radius: 3px;"></div>
+        </div>
+        <div style="font-size: 10px; color: #94A3B8; margin-top: 6px; text-align: right;">3 van 12 termijnen ontvangen</div>
+      </div>
+
+    </div>
+
+    <!-- ═══════════════════════════════════════════ -->
+    <!-- SECONDARY METRICS STRIP                     -->
+    <!-- ═══════════════════════════════════════════ -->
+    <div style="display: flex; gap: 12px; margin-bottom: 28px;">
+      <div style="flex: 1; background: white; border-radius: 10px; padding: 12px 16px; border: 1px solid #E2E8F0; display: flex; align-items: center; gap: 10px;">
+        <span class="material-icons-round" style="font-size: 20px; color: #D97706;">schedule</span>
+        <div style="flex: 1;">
+          <div style="display: flex; justify-content: space-between; align-items: baseline;">
+            <span style="font-size: 14px; font-weight: 600; color: #0F172A;">282 / 1.225 uur</span>
+            <span style="font-size: 11px; color: #94A3B8;">23%</span>
+          </div>
+          <div style="height: 3px; background: #F1F5F9; border-radius: 2px; overflow: hidden; margin-top: 6px;">
+            <div style="width: 23%; height: 100%; background: #D97706; border-radius: 2px;"></div>
+          </div>
+        </div>
+      </div>
+      <div style="flex: 1; background: white; border-radius: 10px; padding: 12px 16px; border: 1px solid #E2E8F0; display: flex; align-items: center; gap: 10px;">
+        <span class="material-icons-round" style="font-size: 20px; color: #0F766E;">directions_car</span>
+        <div>
+          <span style="font-size: 14px; font-weight: 600; color: #0F172A;">1.988 km</span>
+          <span style="font-size: 12px; color: #94A3B8; margin-left: 4px;">€ 457</span>
+        </div>
+      </div>
+      <div style="flex: 1; background: white; border-radius: 10px; padding: 12px 16px; border: 1px solid #E2E8F0; display: flex; align-items: center; gap: 10px;">
+        <span class="material-icons-round" style="font-size: 20px; color: #D97706;">folder_open</span>
+        <div style="flex: 1;">
+          <div style="display: flex; justify-content: space-between; align-items: baseline;">
+            <span style="font-size: 14px; font-weight: 600; color: #0F172A;">2 / 13 documenten</span>
+            <span style="font-size: 11px; color: #94A3B8;">15%</span>
+          </div>
+          <div style="height: 3px; background: #F1F5F9; border-radius: 2px; overflow: hidden; margin-top: 6px;">
+            <div style="width: 15%; height: 100%; background: #D97706; border-radius: 2px;"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════ -->
+    <!-- CHARTS                                      -->
+    <!-- ═══════════════════════════════════════════ -->
+    <div style="display: grid; grid-template-columns: 3fr 2fr; gap: 20px; margin-bottom: 28px;">
+
+      <!-- Revenue bar chart -->
+      <div style="background: white; border-radius: 14px; padding: 24px; border: 1px solid #E2E8F0;">
+        <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 4px;">
+          <span style="font-size: 15px; font-weight: 600; color: #0F172A;">Omzet per maand</span>
+          <span style="font-size: 12px; color: #94A3B8;">2026 vs 2025</span>
+        </div>
+        <div style="height: 180px; display: flex; align-items: flex-end; gap: 6px; padding-top: 16px;">
+          <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px"><div style="display:flex;gap:2px;align-items:flex-end;width:100%;height:148px"><div style="flex:1;background:#0F766E;border-radius:3px 3px 0 0;height:55%"></div><div style="flex:1;background:#CBD5E1;border-radius:3px 3px 0 0;height:50%"></div></div><span style="font-size:10px;color:#94A3B8">J</span></div>
+          <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px"><div style="display:flex;gap:2px;align-items:flex-end;width:100%;height:148px"><div style="flex:1;background:#0F766E;border-radius:3px 3px 0 0;height:65%"></div><div style="flex:1;background:#CBD5E1;border-radius:3px 3px 0 0;height:55%"></div></div><span style="font-size:10px;color:#94A3B8">F</span></div>
+          <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px"><div style="display:flex;gap:2px;align-items:flex-end;width:100%;height:148px"><div style="flex:1;background:#0F766E;border-radius:3px 3px 0 0;height:90%"></div><div style="flex:1;background:#CBD5E1;border-radius:3px 3px 0 0;height:70%"></div></div><span style="font-size:10px;color:#94A3B8">M</span></div>
+          <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px"><div style="display:flex;gap:2px;align-items:flex-end;width:100%;height:148px"><div style="flex:1;background:transparent;height:0%"></div><div style="flex:1;background:#CBD5E1;border-radius:3px 3px 0 0;height:60%"></div></div><span style="font-size:10px;color:#94A3B8">A</span></div>
+          <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px"><div style="display:flex;gap:2px;align-items:flex-end;width:100%;height:148px"><div style="flex:1;background:transparent;height:0%"></div><div style="flex:1;background:#CBD5E1;border-radius:3px 3px 0 0;height:75%"></div></div><span style="font-size:10px;color:#94A3B8">M</span></div>
+          <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px"><div style="display:flex;gap:2px;align-items:flex-end;width:100%;height:148px"><div style="flex:1;background:transparent;height:0%"></div><div style="flex:1;background:#CBD5E1;border-radius:3px 3px 0 0;height:65%"></div></div><span style="font-size:10px;color:#94A3B8">J</span></div>
+          <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px"><div style="display:flex;gap:2px;align-items:flex-end;width:100%;height:148px"><div style="flex:1;background:transparent;height:0%"></div><div style="flex:1;background:#CBD5E1;border-radius:3px 3px 0 0;height:45%"></div></div><span style="font-size:10px;color:#94A3B8">J</span></div>
+          <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px"><div style="display:flex;gap:2px;align-items:flex-end;width:100%;height:148px"><div style="flex:1;background:transparent;height:0%"></div><div style="flex:1;background:#CBD5E1;border-radius:3px 3px 0 0;height:50%"></div></div><span style="font-size:10px;color:#94A3B8">A</span></div>
+          <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px"><div style="display:flex;gap:2px;align-items:flex-end;width:100%;height:148px"><div style="flex:1;background:transparent;height:0%"></div><div style="flex:1;background:#CBD5E1;border-radius:3px 3px 0 0;height:80%"></div></div><span style="font-size:10px;color:#94A3B8">S</span></div>
+          <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px"><div style="display:flex;gap:2px;align-items:flex-end;width:100%;height:148px"><div style="flex:1;background:transparent;height:0%"></div><div style="flex:1;background:#CBD5E1;border-radius:3px 3px 0 0;height:100%"></div></div><span style="font-size:10px;color:#94A3B8">O</span></div>
+          <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px"><div style="display:flex;gap:2px;align-items:flex-end;width:100%;height:148px"><div style="flex:1;background:transparent;height:0%"></div><div style="flex:1;background:#CBD5E1;border-radius:3px 3px 0 0;height:70%"></div></div><span style="font-size:10px;color:#94A3B8">N</span></div>
+          <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px"><div style="display:flex;gap:2px;align-items:flex-end;width:100%;height:148px"><div style="flex:1;background:transparent;height:0%"></div><div style="flex:1;background:#CBD5E1;border-radius:3px 3px 0 0;height:85%"></div></div><span style="font-size:10px;color:#94A3B8">D</span></div>
+        </div>
+        <div style="display: flex; gap: 16px; margin-top: 10px; justify-content: center;">
+          <div style="display: flex; align-items: center; gap: 6px;"><div style="width: 10px; height: 10px; background: #0F766E; border-radius: 2px;"></div><span style="font-size: 11px; color: #64748B;">2026</span></div>
+          <div style="display: flex; align-items: center; gap: 6px;"><div style="width: 10px; height: 10px; background: #CBD5E1; border-radius: 2px;"></div><span style="font-size: 11px; color: #64748B;">2025</span></div>
+        </div>
+      </div>
+
+      <!-- Cost donut -->
+      <div style="background: white; border-radius: 14px; padding: 24px; border: 1px solid #E2E8F0;">
+        <span style="font-size: 15px; font-weight: 600; color: #0F172A;">Kostenverdeling</span>
+        <div style="display: flex; justify-content: center; margin: 16px 0;">
+          <svg viewBox="0 0 120 120" style="width: 130px; height: 130px; transform: rotate(-90deg);">
+            <circle cx="60" cy="60" r="48" fill="none" stroke="#0F766E" stroke-width="18" stroke-dasharray="105 302" stroke-dashoffset="0"/>
+            <circle cx="60" cy="60" r="48" fill="none" stroke="#14B8A6" stroke-width="18" stroke-dasharray="75 302" stroke-dashoffset="-105"/>
+            <circle cx="60" cy="60" r="48" fill="none" stroke="#5EEAD4" stroke-width="18" stroke-dasharray="60 302" stroke-dashoffset="-180"/>
+            <circle cx="60" cy="60" r="48" fill="none" stroke="#99F6E4" stroke-width="18" stroke-dasharray="62 302" stroke-dashoffset="-240"/>
+          </svg>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 7px;">
+          <div style="display:flex;justify-content:space-between;align-items:center"><div style="display:flex;align-items:center;gap:8px"><div style="width:8px;height:8px;background:#0F766E;border-radius:50%"></div><span style="font-size:12px;color:#475569">Verzekeringen</span></div><span style="font-size:12px;font-weight:600;color:#0F172A;font-variant-numeric:tabular-nums">€ 3.588</span></div>
+          <div style="display:flex;justify-content:space-between;align-items:center"><div style="display:flex;align-items:center;gap:8px"><div style="width:8px;height:8px;background:#14B8A6;border-radius:50%"></div><span style="font-size:12px;color:#475569">Kantoorkosten</span></div><span style="font-size:12px;font-weight:600;color:#0F172A;font-variant-numeric:tabular-nums">€ 1.240</span></div>
+          <div style="display:flex;justify-content:space-between;align-items:center"><div style="display:flex;align-items:center;gap:8px"><div style="width:8px;height:8px;background:#5EEAD4;border-radius:50%"></div><span style="font-size:12px;color:#475569">Representatie</span></div><span style="font-size:12px;font-weight:600;color:#0F172A;font-variant-numeric:tabular-nums">€ 890</span></div>
+          <div style="display:flex;justify-content:space-between;align-items:center"><div style="display:flex;align-items:center;gap:8px"><div style="width:8px;height:8px;background:#99F6E4;border-radius:50%"></div><span style="font-size:12px;color:#475569">Overig</span></div><span style="font-size:12px;font-weight:600;color:#0F172A;font-variant-numeric:tabular-nums">€ 720</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════ -->
+    <!-- AANDACHTSPUNTEN                             -->
+    <!-- ═══════════════════════════════════════════ -->
+    <div style="margin-bottom: 10px;">
+      <span style="font-size: 13px; font-weight: 600; color: #64748B; text-transform: uppercase; letter-spacing: 0.05em;">Aandachtspunten</span>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 10px;">
+      <div style="background: #FFFBEB; border-radius: 10px; padding: 14px 18px; border: 1px solid #FDE68A; display: flex; align-items: center; justify-content: space-between;">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <span class="material-icons-round" style="font-size: 20px; color: #D97706;">pending_actions</span>
+          <div>
+            <span style="font-size: 13px; font-weight: 600; color: #92400E;">12 werkdagen ongefactureerd</span>
+            <span style="font-size: 12px; color: #A16207; margin-left: 8px;">€ 4.280</span>
+          </div>
+        </div>
+        <button style="background:none;border:1px solid #D97706;border-radius:6px;padding:4px 12px;font-size:12px;color:#D97706;cursor:pointer;font-family:inherit">Bekijk</button>
+      </div>
+      <div style="background: #FFF7ED; border-radius: 10px; padding: 14px 18px; border: 1px solid #FED7AA; display: flex; align-items: center; justify-content: space-between;">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <span class="material-icons-round" style="font-size: 20px; color: #EA580C;">receipt_long</span>
+          <div>
+            <span style="font-size: 13px; font-weight: 600; color: #9A3412;">3 facturen openstaand</span>
+            <span style="font-size: 12px; color: #C2410C; margin-left: 8px;">€ 6.120 · oudste 28 dagen</span>
+          </div>
+        </div>
+        <button style="background:none;border:1px solid #EA580C;border-radius:6px;padding:4px 12px;font-size:12px;color:#EA580C;cursor:pointer;font-family:inherit">Bekijk</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div class="section" style="margin-top: 24px;">
+  <h3>Full Design Summary</h3>
+  <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+    <tr style="border-bottom: 1px solid #333;">
+      <th style="text-align: left; padding: 8px 12px; color: #999;">Zone</th>
+      <th style="text-align: left; padding: 8px 12px; color: #999;">Content</th>
+      <th style="text-align: left; padding: 8px 12px; color: #999;">Key Change</th>
+    </tr>
+    <tr style="border-bottom: 1px solid #333;">
+      <td style="padding: 8px 12px;">Header</td>
+      <td style="padding: 8px 12px;">Title + quick actions + year selector</td>
+      <td style="padding: 8px 12px;">Actions moved from floating buttons to header row</td>
+    </tr>
+    <tr style="border-bottom: 1px solid #333;">
+      <td style="padding: 8px 12px;">Hero KPIs</td>
+      <td style="padding: 8px 12px;">Omzet, Winst, Belasting (3 large cards)</td>
+      <td style="padding: 8px 12px;">Sparklines, rounded values, real VA from bank</td>
+    </tr>
+    <tr style="border-bottom: 1px solid #333;">
+      <td style="padding: 8px 12px;">Secondary strip</td>
+      <td style="padding: 8px 12px;">Uren, Km, Documenten (compact bars)</td>
+      <td style="padding: 8px 12px;">Half-height, icons only here, progress bars</td>
+    </tr>
+    <tr style="border-bottom: 1px solid #333;">
+      <td style="padding: 8px 12px;">Charts</td>
+      <td style="padding: 8px 12px;">Revenue bars (60%) + Cost donut (40%)</td>
+      <td style="padding: 8px 12px;">Asymmetric split, teal monochrome donut</td>
+    </tr>
+    <tr style="border-bottom: 1px solid #333;">
+      <td style="padding: 8px 12px;">Aandachtspunten</td>
+      <td style="padding: 8px 12px;">Contextual alerts (only when relevant)</td>
+      <td style="padding: 8px 12px;">Replaces flat "Openstaand: 0" cards</td>
+    </tr>
+  </table>
+</div>
+
+<div class="section" style="margin-top: 16px;">
+  <h3>Feature: Real VA Bank Matching</h3>
+  <p>The Belasting prognose card currently fakes "VA betaald" via <code>annual_va × month ÷ 12</code>. The redesign will:</p>
+  <ul>
+    <li>Scan <code>banktransacties</code> for Belastingdienst payments (by IBAN/description)</li>
+    <li>Categorize as IB or ZVW and sum actual payments</li>
+    <li>Show "3 van 12 termijnen ontvangen" with real amounts</li>
+    <li>Fall back to proration with "geschat" label only when no bank matches exist</li>
+  </ul>
+</div>
+
+<div class="section" style="margin-top: 16px;">
+  <h3>Removed / Changed</h3>
+  <ul>
+    <li><strong>Bedrijfslasten card</strong> — removed (redundant: Winst = Omzet − Lasten)</li>
+    <li><strong>VA dialog on dashboard</strong> — moved to Aangifte page</li>
+    <li><strong>"Openstaand: 0"</strong> — hidden when zero (shown as alert only when > 0)</li>
+    <li><strong>Icons on hero cards</strong> — removed (the number is the hero)</li>
+    <li><strong>Empty chart states</strong> — purposeful message or section hidden entirely</li>
+  </ul>
+</div>

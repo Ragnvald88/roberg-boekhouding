@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dashboard Mockup</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #F8FAFC; color: #0F172A; }
+
+  .header { background: #0F172A; color: white; padding: 12px 24px; display: flex; align-items: center; gap: 16px; }
+  .header .title { font-size: 14px; font-weight: 600; }
+  .header .subtitle { color: #94A3B8; font-size: 13px; }
+
+  .page { max-width: 1200px; margin: 0 auto; padding: 24px; }
+  .page-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
+  .page-title { font-size: 22px; font-weight: 700; }
+  .year-badge { background: #F1F5F9; border: 1px solid #E2E8F0; border-radius: 8px; padding: 6px 16px; font-size: 14px; font-weight: 500; }
+
+  /* Action items */
+  .actions-strip { display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
+  .action-item { display: flex; align-items: center; gap: 10px; background: white; border: 1px solid #E2E8F0; border-radius: 10px; padding: 10px 16px; font-size: 13px; cursor: pointer; transition: all 0.15s; border-left: 3px solid; }
+  .action-item:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+  .action-item.warning { border-left-color: #D97706; }
+  .action-item.info { border-left-color: #0F766E; }
+  .action-item.danger { border-left-color: #DC2626; }
+  .action-count { font-weight: 700; font-size: 18px; min-width: 28px; }
+  .action-count.warning { color: #D97706; }
+  .action-count.info { color: #0F766E; }
+  .action-count.danger { color: #DC2626; }
+  .action-text { color: #475569; }
+  .action-text strong { color: #0F172A; }
+  .action-arrow { color: #94A3B8; font-size: 18px; }
+
+  /* Pipeline */
+  .pipeline { display: flex; align-items: stretch; background: white; border: 1px solid #E2E8F0; border-radius: 12px; margin-bottom: 20px; overflow: hidden; }
+  .pipeline-stage { flex: 1; padding: 16px 20px; text-align: center; position: relative; }
+  .pipeline-stage:not(:last-child) { border-right: 1px solid #E2E8F0; }
+  .pipeline-stage:not(:last-child)::after { content: '→'; position: absolute; right: -8px; top: 50%; transform: translateY(-50%); color: #CBD5E1; font-size: 16px; z-index: 1; background: white; padding: 2px; }
+  .pipeline-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: #64748B; margin-bottom: 4px; font-weight: 600; }
+  .pipeline-amount { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .pipeline-count { font-size: 12px; color: #94A3B8; margin-top: 2px; }
+  .pipeline-stage.highlight { background: #F0FDF9; }
+
+  /* KPI row */
+  .kpi-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px; }
+  .kpi { background: white; border: 1px solid #E2E8F0; border-radius: 10px; padding: 14px 18px; }
+  .kpi-label { font-size: 12px; color: #64748B; font-weight: 500; margin-bottom: 2px; }
+  .kpi-value { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .kpi-delta { font-size: 12px; margin-top: 2px; }
+  .kpi-delta.positive { color: #059669; }
+  .kpi-delta.negative { color: #DC2626; }
+  .kpi-sub { font-size: 11px; color: #94A3B8; margin-top: 4px; }
+
+  /* Quick actions */
+  .quick-actions { display: flex; gap: 10px; margin-bottom: 24px; }
+  .quick-btn { display: flex; align-items: center; gap: 6px; background: white; border: 1px solid #0F766E; color: #0F766E; border-radius: 8px; padding: 8px 16px; font-size: 13px; font-weight: 500; cursor: pointer; }
+  .quick-btn:hover { background: #F0FDF9; }
+  .quick-btn .icon { font-size: 16px; }
+
+  /* Charts */
+  .charts { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .chart-card { background: white; border: 1px solid #E2E8F0; border-radius: 12px; padding: 20px; }
+  .chart-title { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+  .chart-sub { font-size: 12px; color: #94A3B8; margin-bottom: 16px; }
+  .chart-placeholder { height: 180px; background: linear-gradient(to top, #F0FDF9 0%, transparent 100%); border-radius: 8px; display: flex; align-items: flex-end; justify-content: space-around; padding: 0 16px 16px; }
+  .chart-bar { background: #0F766E; border-radius: 4px 4px 0 0; width: 32px; opacity: 0.8; }
+  .chart-bar.prev { background: #CBD5E1; }
+  .donut-placeholder { height: 180px; display: flex; align-items: center; justify-content: center; }
+  .donut { width: 140px; height: 140px; border-radius: 50%; background: conic-gradient(#0F766E 0% 45%, #14B8A6 45% 65%, #5EEAD4 65% 78%, #99F6E4 78% 88%, #CBD5E1 88% 100%); position: relative; }
+  .donut::after { content: '€28.4k'; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; width: 80px; height: 80px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 14px; color: #0F172A; }
+
+  .section-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px; color: #94A3B8; font-weight: 600; margin-bottom: 12px; }
+
+  .freshness { font-size: 11px; color: #94A3B8; text-align: right; margin-bottom: 8px; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="title">☰ Roberg Boekhouding</div>
+  <div class="subtitle">Dashboard</div>
+</div>
+
+<div class="page">
+  <div class="page-header">
+    <div class="page-title">Overzicht</div>
+    <div style="display: flex; align-items: center; gap: 12px;">
+      <div class="freshness">Laatste bank import: 15 maart</div>
+      <div class="year-badge">2026 ▾</div>
+    </div>
+  </div>
+
+  <!-- Action items strip -->
+  <div class="section-label">Aandachtspunten</div>
+  <div class="actions-strip">
+    <div class="action-item warning">
+      <div class="action-count warning">5</div>
+      <div class="action-text"><strong>werkdagen</strong> te factureren</div>
+      <div class="action-arrow">›</div>
+    </div>
+    <div class="action-item danger">
+      <div class="action-count danger">2</div>
+      <div class="action-text"><strong>facturen</strong> &gt; 30 dagen onbetaald</div>
+      <div class="action-arrow">›</div>
+    </div>
+    <div class="action-item info">
+      <div class="action-count info">8</div>
+      <div class="action-text"><strong>transacties</strong> te categoriseren</div>
+      <div class="action-arrow">›</div>
+    </div>
+  </div>
+
+  <!-- Financial pipeline -->
+  <div class="section-label">Geldstroom</div>
+  <div class="pipeline">
+    <div class="pipeline-stage">
+      <div class="pipeline-label">Te factureren</div>
+      <div class="pipeline-amount" style="color: #D97706;">€ 2.400</div>
+      <div class="pipeline-count">5 werkdagen</div>
+    </div>
+    <div class="pipeline-stage">
+      <div class="pipeline-label">Openstaand</div>
+      <div class="pipeline-amount" style="color: #0F766E;">€ 4.180</div>
+      <div class="pipeline-count">3 facturen</div>
+    </div>
+    <div class="pipeline-stage highlight">
+      <div class="pipeline-label">Betaald deze maand</div>
+      <div class="pipeline-amount" style="color: #059669;">€ 6.240</div>
+      <div class="pipeline-count">4 facturen</div>
+    </div>
+    <div class="pipeline-stage">
+      <div class="pipeline-label">YTD omzet</div>
+      <div class="pipeline-amount">€ 25.698</div>
+      <div class="pipeline-count">17 facturen</div>
+    </div>
+  </div>
+
+  <!-- KPI row -->
+  <div class="kpi-row">
+    <div class="kpi">
+      <div class="kpi-label">Bedrijfswinst</div>
+      <div class="kpi-value">€ 21.340</div>
+      <div class="kpi-delta positive">↑ 12% vs 2025</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Belasting prognose</div>
+      <div class="kpi-value" style="color: #059669;">€ 1.240 terug</div>
+      <div class="kpi-sub">VA betaald: € 7.463 / Berekend: € 6.223</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Urencriterium</div>
+      <div class="kpi-value">342 / 1.225</div>
+      <div style="margin-top: 6px; height: 6px; background: #E2E8F0; border-radius: 3px; overflow: hidden;">
+        <div style="width: 28%; height: 100%; background: #D97706; border-radius: 3px;"></div>
+      </div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Bedrijfslasten</div>
+      <div class="kpi-value">€ 4.358</div>
+      <div class="kpi-delta negative">↑ 8% vs 2025</div>
+    </div>
+  </div>
+
+  <!-- Quick actions -->
+  <div class="quick-actions">
+    <div class="quick-btn">＋ Werkdag toevoegen</div>
+    <div class="quick-btn">📄 Nieuwe factuur</div>
+    <div class="quick-btn">📥 Bank importeren</div>
+  </div>
+
+  <!-- Charts -->
+  <div class="charts">
+    <div class="chart-card">
+      <div class="chart-title">Omzet per maand</div>
+      <div class="chart-sub">2026 vs 2025</div>
+      <div class="chart-placeholder">
+        <div class="chart-bar prev" style="height: 60%;"></div>
+        <div class="chart-bar" style="height: 75%;"></div>
+        <div class="chart-bar prev" style="height: 55%;"></div>
+        <div class="chart-bar" style="height: 85%;"></div>
+        <div class="chart-bar prev" style="height: 70%;"></div>
+        <div class="chart-bar" style="height: 90%;"></div>
+        <div class="chart-bar prev" style="height: 40%;"></div>
+        <div class="chart-bar" style="height: 0%;"></div>
+        <div style="width:32px"></div>
+        <div style="width:32px"></div>
+        <div style="width:32px"></div>
+        <div style="width:32px"></div>
+      </div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">Kostenverdeling</div>
+      <div class="chart-sub">2026</div>
+      <div class="donut-placeholder">
+        <div class="donut"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>
