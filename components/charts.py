@@ -2,19 +2,18 @@
 
 from nicegui import ui
 
-# Coordinated chart palette
-CHART_COLORS = [
-    '#0F766E',  # teal (primary)
-    '#F59E0B',  # amber (accent)
-    '#6366F1',  # indigo
-    '#EC4899',  # pink
-    '#8B5CF6',  # violet
-    '#14B8A6',  # light teal
-    '#F97316',  # orange
-    '#64748B',  # slate
+DONUT_COLORS = [
+    '#0F766E',  # teal-700
+    '#14B8A6',  # teal-500
+    '#2DD4BF',  # teal-400
+    '#5EEAD4',  # teal-300
+    '#99F6E4',  # teal-200
+    '#0D9488',  # teal-600
+    '#115E59',  # teal-800
+    '#CCFBF1',  # teal-100
+    '#134E4A',  # teal-900
+    '#F0FDFA',  # teal-50
 ]
-
-DONUT_COLORS = ['#0F766E', '#14B8A6', '#5EEAD4', '#99F6E4']
 
 
 def revenue_bar_chart(data_current: list[float], data_previous: list[float],
@@ -73,10 +72,6 @@ def revenue_bar_chart(data_current: list[float], data_previous: list[float],
             },
         ],
     }).style('height: 360px; width: 100%')
-
-
-# Alias for backward compatibility
-revenue_chart = revenue_bar_chart
 
 
 def cost_donut_chart(data: list[dict]) -> ui.echart:
