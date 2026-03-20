@@ -57,7 +57,7 @@ def revenue_bar_chart(data_current: list[float], data_previous: list[float],
                 'itemStyle': {'color': '#CBD5E1', 'borderRadius': [4, 4, 0, 0]},
             },
         ],
-    }).classes('w-full h-80')
+    }).style('height: 300px; width: 100%')
 
 
 def cost_donut_chart(data: list[dict]) -> ui.echart:
@@ -94,4 +94,4 @@ def cost_donut_chart(data: list[dict]) -> ui.echart:
             },
             'data': chart_data,
         }],
-    }).classes('w-full h-72')
+    }).style('height: 280px; width: 100%')
