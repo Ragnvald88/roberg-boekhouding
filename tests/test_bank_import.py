@@ -31,13 +31,15 @@ def make_csv_row(
     omschrijving1: str = "Betaling factuur",
     omschrijving2: str = "januari 2026",
     omschrijving3: str = "",
+    betalingskenmerk: str = "",
 ) -> str:
     """Build a single Rabobank CSV data row."""
     return (
         f'"NL00TEST0000000001";"EUR";"RABONL2U";"000000000000001234";'
         f'"{datum}";"{datum}";"{bedrag}";"+1234,56";'
-        f'"{tegenrekening}";"{tegenpartij}";"";"";"RABONL2U";"ba";"";"";"";"";"";"'
-        f'{omschrijving1}";"{omschrijving2}";"{omschrijving3}";"";"";"";""'
+        f'"{tegenrekening}";"{tegenpartij}";"";"";"RABONL2U";"ba";"";"";"";"";'
+        f'"{betalingskenmerk}";'
+        f'"{omschrijving1}";"{omschrijving2}";"{omschrijving3}";"";"";"";""'
     )
 
 
@@ -335,3 +337,34 @@ async def test_duplicate_transactions_rejected(db):
 
     all_trans = await get_banktransacties(db, jaar=2024)
     assert len(all_trans) == 1
+
+
+def test_parse_betalingskenmerk():
+    """Betalingskenmerk column is captured when present."""
+    csv_bytes = build_csv([
+        make_csv_row(
+            tegenrekening="NL86INGB0002445588",
+            tegenpartij="Belastingdienst",
+            bedrag="-2800,00",
+            betalingskenmerk="0124412647060001",
+            omschrijving1="",
+        ),
+        make_csv_row(
+            tegenrekening="NL86INGB0002445588",
+            tegenpartij="Belastingdienst",
+            bedrag="-1808,00",
+            betalingskenmerk="0124412647560014",
+            omschrijving1="",
+        ),
+    ])
+    result = parse_rabobank_csv(csv_bytes)
+    assert len(result) == 2
+    assert result[0]['betalingskenmerk'] == '0124412647060001'
+    assert result[1]['betalingskenmerk'] == '0124412647560014'
+
+
+def test_parse_empty_betalingskenmerk():
+    """Missing betalingskenmerk defaults to empty string."""
+    csv_bytes = build_csv([make_csv_row()])
+    result = parse_rabobank_csv(csv_bytes)
+    assert result[0].get('betalingskenmerk', '') == ''

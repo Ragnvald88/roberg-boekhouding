@@ -77,12 +77,15 @@ def parse_rabobank_csv(file_content: bytes) -> list[dict]:
         tegenrekening = (row.get('Tegenrekening IBAN/BBAN', '')
                          or row.get('IBAN/BBAN tegenpartij', ''))
 
+        betalingskenmerk = row.get('Betalingskenmerk', '').strip().strip('"')
+
         transactions.append({
             'datum': datum,
             'bedrag': bedrag,
             'tegenrekening': tegenrekening.strip().strip('"'),
             'tegenpartij': row.get('Naam tegenpartij', '').strip().strip('"'),
             'omschrijving': omschrijving,
+            'betalingskenmerk': betalingskenmerk,
         })
 
     return transactions
