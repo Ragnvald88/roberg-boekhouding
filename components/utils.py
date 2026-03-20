@@ -32,7 +32,7 @@ def generate_csv(headers: list[str], rows: list[list]) -> str:
     return output.getvalue()
 
 
-def format_euro(value: float, decimals: int = 2) -> str:
+def format_euro(value: float | None, decimals: int = 2) -> str:
     """Format als Nederlands bedrag: € 1.234,56 (or € 1.235 with decimals=0)"""
     if value is None:
         value = 0
