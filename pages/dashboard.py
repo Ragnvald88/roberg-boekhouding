@@ -334,7 +334,7 @@ async def dashboard_page():
                             with ui.row().classes(
                                     'w-full justify-between').style(
                                     'font-size: 11px; color: #64748B; '
-                                    'margin-bottom: 5px'):
+                                    'margin-bottom: 8px'):
                                 ui.label(
                                     f'Berekend '
                                     f'{format_euro(berekend, decimals=0)}')
@@ -347,8 +347,8 @@ async def dashboard_page():
                                 if total > 0 else 0.5
                             ui.linear_progress(
                                 value=ratio, size='5px',
-                            ).style('border-radius: 3px') \
-                                .props('color=negative track-color=grey-3')
+                            ).props('rounded color=negative '
+                                    'track-color=grey-3')
 
                             # Termijn info from real bank data
                             if va_data['has_bank_data']:
@@ -467,8 +467,9 @@ async def dashboard_page():
             # === CHARTS (60/40 split) ===
             with ui.element('div').style(
                     'display: grid; grid-template-columns: 3fr 2fr; gap: 20px'):
-                with ui.card().classes('q-pa-lg').style(
-                        'border-radius: 14px; border: 1px solid #E2E8F0'):
+                with ui.card().classes('q-pa-xl').style(
+                        'border-radius: 14px; border: 1px solid #E2E8F0; '
+                        'min-height: 380px'):
                     with ui.row().classes(
                             'w-full justify-between items-baseline'):
                         ui.label('Omzet per maand').style(
@@ -478,8 +479,9 @@ async def dashboard_page():
                             'font-size: 12px; color: #94A3B8')
                     revenue_bar_chart(omzet_huidig, omzet_vorig, jaar)
 
-                with ui.card().classes('q-pa-lg').style(
-                        'border-radius: 14px; border: 1px solid #E2E8F0'):
+                with ui.card().classes('q-pa-xl').style(
+                        'border-radius: 14px; border: 1px solid #E2E8F0; '
+                        'min-height: 380px'):
                     ui.label('Kostenverdeling').style(
                         'font-size: 15px; font-weight: 600; color: #0F172A')
                     if any(d['totaal'] > 0 for d in kosten_per_cat):
@@ -487,9 +489,101 @@ async def dashboard_page():
                     else:
                         with ui.element('div').style(
                                 'display: flex; align-items: center; '
-                                'justify-content: center; height: 200px'):
-                            ui.label('Nog geen kosten dit jaar').style(
-                                'font-size: 14px; color: #94A3B8')
+                                'justify-content: center; height: 250px'):
+                            with ui.column().classes('items-center gap-2'):
+                                ui.icon('payments', size='48px').style(
+                                    'color: #E2E8F0')
+                                ui.label('Nog geen kosten dit jaar').style(
+                                    'font-size: 14px; color: #94A3B8')
+
+            # === CUMULATIVE REVENUE CHART ===
+            with ui.card().classes('w-full q-pa-xl').style(
+                    'border-radius: 14px; border: 1px solid #E2E8F0'):
+                with ui.row().classes('w-full justify-between items-baseline'):
+                    ui.label('Cumulatieve omzet').style(
+                        'font-size: 15px; font-weight: 600; color: #0F172A')
+                    ui.label(f'{jaar} vs {jaar - 1}').style(
+                        'font-size: 12px; color: #94A3B8')
+
+                # Calculate cumulative sums
+                cum_huidig = []
+                cum_vorig = []
+                running_h = 0
+                running_v = 0
+                for i in range(12):
+                    running_h += omzet_huidig[i]
+                    running_v += omzet_vorig[i]
+                    cum_huidig.append(round(running_h))
+                    cum_vorig.append(round(running_v))
+
+                maanden = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun',
+                           'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dec']
+
+                ui.echart({
+                    'tooltip': {
+                        'trigger': 'axis',
+                        'axisPointer': {'type': 'cross'},
+                    },
+                    'legend': {
+                        'data': [str(jaar), str(jaar - 1)],
+                        'textStyle': {'color': '#64748B'},
+                    },
+                    'grid': {
+                        'left': '3%', 'right': '4%', 'bottom': '3%',
+                        'containLabel': True,
+                    },
+                    'xAxis': {
+                        'type': 'category',
+                        'data': maanden,
+                        'axisLabel': {'color': '#64748B'},
+                        'axisLine': {'lineStyle': {'color': '#E2E8F0'}},
+                    },
+                    'yAxis': {
+                        'type': 'value',
+                        'axisLabel': {
+                            'formatter': '\u20ac {value}',
+                            'color': '#64748B',
+                        },
+                        'splitLine': {'lineStyle': {'color': '#F1F5F9'}},
+                    },
+                    'series': [
+                        {
+                            'name': str(jaar),
+                            'type': 'line',
+                            'data': cum_huidig,
+                            'smooth': True,
+                            'symbol': 'circle',
+                            'symbolSize': 6,
+                            'lineStyle': {'width': 3, 'color': '#0F766E'},
+                            'itemStyle': {'color': '#0F766E'},
+                            'areaStyle': {
+                                'color': {
+                                    'type': 'linear',
+                                    'x': 0, 'y': 0, 'x2': 0, 'y2': 1,
+                                    'colorStops': [
+                                        {'offset': 0,
+                                         'color': '#0F766E20'},
+                                        {'offset': 1,
+                                         'color': '#0F766E00'},
+                                    ],
+                                },
+                            },
+                        },
+                        {
+                            'name': str(jaar - 1),
+                            'type': 'line',
+                            'data': cum_vorig,
+                            'smooth': True,
+                            'symbol': 'circle',
+                            'symbolSize': 4,
+                            'lineStyle': {
+                                'width': 2, 'color': '#94A3B8',
+                                'type': 'dashed',
+                            },
+                            'itemStyle': {'color': '#94A3B8'},
+                        },
+                    ],
+                }).classes('w-full h-80')
 
             # === AANDACHTSPUNTEN (only when relevant) ===
             has_ongefact = ongefact and ongefact.get('aantal', 0) > 0

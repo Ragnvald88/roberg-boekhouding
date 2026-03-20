@@ -54,10 +54,10 @@ def revenue_bar_chart(data_current: list[float], data_previous: list[float],
                 'name': str(jaar - 1),
                 'type': 'bar',
                 'data': data_previous,
-                'itemStyle': {'color': '#E2E8F0', 'borderRadius': [4, 4, 0, 0]},
+                'itemStyle': {'color': '#CBD5E1', 'borderRadius': [4, 4, 0, 0]},
             },
         ],
-    }).classes('w-full h-72')
+    }).classes('w-full h-80')
 
 
 def cost_donut_chart(data: list[dict]) -> ui.echart:
