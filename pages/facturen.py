@@ -18,7 +18,7 @@ from database import (
     link_werkdagen_to_factuur, get_bedrijfsgegevens, get_db_ctx, add_werkdag,
     get_fiscale_params, DB_PATH,
 )
-from components.shared_ui import year_options
+from components.shared_ui import year_options, date_input
 from import_.pdf_parser import (
     extract_pdf_text, detect_invoice_type,
     parse_dagpraktijk_text, parse_anw_text,
@@ -396,19 +396,7 @@ async def facturen_page():
                 ui.separator().classes('q-my-sm')
 
                 # Datum
-                edit_datum = ui.input(
-                    'Datum', value=row['datum'],
-                ).classes('w-full')
-                with edit_datum:
-                    with ui.menu().props('no-parent-event') as dmenu:
-                        with ui.date(value=row['datum']).bind_value(
-                                edit_datum) as dpicker:
-                            dpicker.on('update:model-value',
-                                       lambda: dmenu.close())
-                    with edit_datum.add_slot('append'):
-                        ui.icon('edit_calendar').on(
-                            'click', dmenu.open
-                        ).classes('cursor-pointer')
+                edit_datum = date_input('Factuurdatum', value=row['datum'])
 
                 # Klant
                 edit_klant = ui.select(

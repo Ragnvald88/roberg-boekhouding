@@ -17,7 +17,7 @@ from database import (
     set_afschrijving_override, delete_afschrijving_override,
     DB_PATH,
 )
-from components.shared_ui import year_options
+from components.shared_ui import year_options, date_input
 from fiscal.afschrijvingen import bereken_afschrijving
 
 UITGAVEN_DIR = DB_PATH.parent / 'uitgaven'
@@ -426,20 +426,11 @@ async def kosten_page():
         with ui.dialog() as dialog, ui.card().classes('w-full max-w-lg q-pa-md'):
             ui.label('Uitgave toevoegen').classes('text-h6 q-mb-md')
 
-            input_datum = ui.input(
+            input_datum = date_input(
                 'Datum',
                 value=prefill.get('datum', date.today().isoformat())
                 if prefill else date.today().isoformat(),
-            ).classes('w-40')
-            with input_datum:
-                with ui.menu().props('no-parent-event') as datum_menu:
-                    with ui.date(value=input_datum.value).bind_value(
-                            input_datum) as datum_picker:
-                        datum_picker.on('update:model-value',
-                                        lambda: datum_menu.close())
-                with input_datum.add_slot('append'):
-                    ui.icon('edit_calendar').on('click', datum_menu.open) \
-                        .classes('cursor-pointer')
+            )
 
             input_categorie = ui.select(
                 CATEGORIEEN, label='Categorie',
@@ -621,14 +612,7 @@ async def kosten_page():
         with ui.dialog() as dialog, ui.card().classes('w-full max-w-lg q-pa-md'):
             ui.label('Uitgave bewerken').classes('text-h6')
 
-            edit_datum = ui.input('Datum', value=row['datum']).classes('w-full')
-            with edit_datum:
-                with ui.menu().props('no-parent-event') as menu:
-                    with ui.date(value=row['datum']).bind_value(edit_datum) as dp:
-                        dp.on('update:model-value', lambda: menu.close())
-                with edit_datum.add_slot('append'):
-                    ui.icon('edit_calendar').on('click', menu.open).classes(
-                        'cursor-pointer')
+            edit_datum = date_input('Datum', value=row['datum'])
 
             edit_categorie = ui.select(
                 CATEGORIEEN, label='Categorie', value=row['categorie']
