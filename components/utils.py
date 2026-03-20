@@ -32,11 +32,12 @@ def generate_csv(headers: list[str], rows: list[list]) -> str:
     return output.getvalue()
 
 
-def format_euro(value: float) -> str:
-    """Format als Nederlands bedrag: € 1.234,56"""
+def format_euro(value: float, decimals: int = 2) -> str:
+    """Format als Nederlands bedrag: € 1.234,56 (or € 1.235 with decimals=0)"""
     if value is None:
-        return "\u20ac 0,00"
-    return f"\u20ac {value:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        value = 0
+    formatted = f"{value:,.{decimals}f}"
+    return f"\u20ac {formatted}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 
 def format_datum(iso_date: str) -> str:
