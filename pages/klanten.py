@@ -15,248 +15,175 @@ from database import (
 async def klanten_page():
     create_layout('Klanten', '/klanten')
 
-    klanten_container = {'ref': None}
+    # --- Dialog functions (unchanged) ---
 
-    async def refresh_klanten():
-        container = klanten_container['ref']
-        if container is None:
-            return
-        container.clear()
-        klanten = await get_klanten(DB_PATH)
+    async def open_edit_dialog(row: dict):
+        """Dialog to edit a klant + manage locaties."""
+        with ui.dialog() as dialog, ui.card().classes('w-96'):
+            ui.label('Klant bewerken').classes('text-h6')
+            ed_naam = ui.input('Naam', value=row['naam']).classes('w-full')
+            ed_tarief = ui.number('Tarief/uur (€)',
+                                  value=row['tarief_uur']).classes('w-full')
+            ed_km = ui.number('Retour km',
+                              value=row['retour_km']).classes('w-full')
+            ed_adres = ui.input('Adres',
+                                value=row['adres']).classes('w-full')
 
-        with container:
-            # Add button
-            with ui.row().classes('w-full items-center gap-4'):
-                page_title('Klanten')
-                ui.space()
-                ui.button(
-                    'Nieuwe klant', icon='add',
-                    on_click=lambda: open_add_dialog(),
-                ).props('color=primary')
+            # --- Locaties sub-section ---
+            ui.separator().classes('q-my-sm')
+            ui.label('Locaties').classes(
+                'text-subtitle2 text-weight-medium')
+            ui.label(
+                'Werklocaties met retourafstand (km). '
+                'Verschijnt als dropdown in het '
+                'werkdagformulier.'
+            ).classes('text-caption text-grey')
 
-            # Klanten table
-            if not klanten:
-                ui.label('Geen klanten gevonden.').classes('text-grey')
-            else:
-                columns = [
-                    {'name': 'naam', 'label': 'Naam', 'field': 'naam',
-                     'align': 'left'},
-                    {'name': 'tarief', 'label': 'Tarief/uur',
-                     'field': 'tarief_fmt', 'align': 'right'},
-                    {'name': 'km', 'label': 'Retour km', 'field': 'retour_km',
-                     'align': 'right'},
-                    {'name': 'adres', 'label': 'Adres', 'field': 'adres',
-                     'align': 'left'},
-                    {'name': 'actief', 'label': 'Actief', 'field': 'actief_txt',
-                     'align': 'center'},
-                    {'name': 'actions', 'label': '', 'field': 'actions',
-                     'align': 'center'},
-                ]
+            loc_container = ui.column().classes('w-full gap-1')
 
-                rows = [{
-                    'id': k.id,
-                    'naam': k.naam,
-                    'tarief_uur': k.tarief_uur,
-                    'tarief_fmt': format_euro(k.tarief_uur),
-                    'retour_km': k.retour_km,
-                    'adres': k.adres,
-                    'actief': k.actief,
-                    'actief_txt': 'Ja' if k.actief else 'Nee',
-                } for k in klanten]
+            async def refresh_locaties():
+                loc_container.clear()
+                klant_id = row['id']
+                locaties = await get_klant_locaties(
+                    DB_PATH, klant_id)
+                with loc_container:
+                    for loc in locaties:
+                        with ui.row().classes(
+                            'w-full items-center gap-2'
+                        ):
+                            ui.label(loc.naam).classes('flex-grow')
+                            ui.label(
+                                f'{loc.retour_km:.0f} km'
+                            ).classes('text-caption text-grey')
 
-                table = ui.table(
-                    columns=columns, rows=rows, row_key='id',
-                    pagination={'rowsPerPage': 20,
-                                'rowsPerPageOptions': [10, 20, 50, 0]},
-                ).classes('w-full')
-
-                table.add_slot('body-cell-actions', '''
-                    <q-td :props="props">
-                        <q-btn icon="edit" flat dense round size="sm"
-                            @click="() => $parent.$emit('edit', props.row)" />
-                        <q-btn :icon="props.row.actief ? 'visibility_off' : 'visibility'"
-                            flat dense round size="sm"
-                            :color="props.row.actief ? 'orange' : 'green'"
-                            @click="() => $parent.$emit('toggle', props.row)" />
-                        <q-btn icon="delete" flat dense round size="sm"
-                            color="negative"
-                            @click="() => $parent.$emit('deleteklant', props.row)" />
-                    </q-td>
-                ''')
-
-                async def on_edit(e):
-                    row = e.args
-                    with ui.dialog() as dialog, ui.card().classes('w-96'):
-                        ui.label('Klant bewerken').classes('text-h6')
-                        ed_naam = ui.input('Naam', value=row['naam']).classes('w-full')
-                        ed_tarief = ui.number('Tarief/uur (€)',
-                                              value=row['tarief_uur']).classes('w-full')
-                        ed_km = ui.number('Retour km',
-                                          value=row['retour_km']).classes('w-full')
-                        ed_adres = ui.input('Adres',
-                                            value=row['adres']).classes('w-full')
-
-                        # --- Locaties sub-section ---
-                        ui.separator().classes('q-my-sm')
-                        ui.label('Locaties').classes(
-                            'text-subtitle2 text-weight-medium')
-                        ui.label(
-                            'Werklocaties met retourafstand (km). '
-                            'Verschijnt als dropdown in het '
-                            'werkdagformulier.'
-                        ).classes('text-caption text-grey')
-
-                        loc_container = ui.column().classes('w-full gap-1')
-
-                        async def refresh_locaties():
-                            loc_container.clear()
-                            klant_id = row['id']
-                            locaties = await get_klant_locaties(
-                                DB_PATH, klant_id)
-                            with loc_container:
-                                for loc in locaties:
+                            async def del_loc(
+                                lid=loc.id, lnaam=loc.naam,
+                            ):
+                                with ui.dialog() as cdlg, \
+                                        ui.card():
+                                    ui.label(
+                                        f'Locatie "{lnaam}" '
+                                        'verwijderen?'
+                                    ).classes('text-h6')
                                     with ui.row().classes(
-                                        'w-full items-center gap-2'
+                                        'w-full justify-end '
+                                        'gap-2 mt-2'
                                     ):
-                                        ui.label(loc.naam).classes('flex-grow')
-                                        ui.label(
-                                            f'{loc.retour_km:.0f} km'
-                                        ).classes('text-caption text-grey')
+                                        ui.button(
+                                            'Annuleren',
+                                            on_click=cdlg.close,
+                                        ).props('flat')
 
-                                        async def del_loc(
-                                            lid=loc.id, lnaam=loc.naam,
-                                        ):
-                                            with ui.dialog() as cdlg, \
-                                                    ui.card():
-                                                ui.label(
-                                                    f'Locatie "{lnaam}" '
-                                                    'verwijderen?'
-                                                ).classes('text-h6')
-                                                with ui.row().classes(
-                                                    'w-full justify-end '
-                                                    'gap-2 mt-2'
-                                                ):
-                                                    ui.button(
-                                                        'Annuleren',
-                                                        on_click=cdlg.close,
-                                                    ).props('flat')
-
-                                                    async def do_del(_lid=lid):
-                                                        await delete_klant_locatie(
-                                                            DB_PATH, _lid)
-                                                        cdlg.close()
-                                                        ui.notify(
-                                                            'Locatie verwijderd',
-                                                            type='info')
-                                                        await refresh_locaties()
-
-                                                    ui.button(
-                                                        'Verwijderen',
-                                                        on_click=do_del,
-                                                    ).props('color=negative')
-                                            cdlg.open()
+                                        async def do_del(_lid=lid):
+                                            await delete_klant_locatie(
+                                                DB_PATH, _lid)
+                                            cdlg.close()
+                                            ui.notify(
+                                                'Locatie verwijderd',
+                                                type='info')
+                                            await refresh_locaties()
 
                                         ui.button(
-                                            icon='close',
-                                            on_click=del_loc,
-                                        ).props(
-                                            'flat dense round '
-                                            'size=sm color=negative'
-                                        )
+                                            'Verwijderen',
+                                            on_click=do_del,
+                                        ).props('color=negative')
+                                cdlg.open()
 
-                                # Add new location row
-                                with ui.row().classes(
-                                    'w-full items-end gap-2'
-                                ):
-                                    new_loc_naam = ui.input(
-                                        'Locatienaam',
-                                    ).classes('flex-grow').props('dense')
-                                    new_loc_km = ui.number(
-                                        'Km retour', value=0, min=0,
-                                    ).classes('w-24').props('dense')
+                            ui.button(
+                                icon='close',
+                                on_click=del_loc,
+                            ).props(
+                                'flat dense round '
+                                'size=sm color=negative'
+                            )
 
-                                    async def add_loc():
-                                        naam = new_loc_naam.value
-                                        km = new_loc_km.value or 0
-                                        if not naam:
-                                            ui.notify(
-                                                'Vul een locatienaam in',
-                                                type='warning')
-                                            return
-                                        try:
-                                            await add_klant_locatie(
-                                                DB_PATH, row['id'], naam, km)
-                                        except Exception:
-                                            ui.notify(
-                                                f'Locatie "{naam}" bestaat al',
-                                                type='warning')
-                                            return
-                                        ui.notify(
-                                            f'Locatie "{naam}" toegevoegd',
-                                            type='positive')
-                                        await refresh_locaties()
+                    # Add new location row
+                    with ui.row().classes(
+                        'w-full items-end gap-2'
+                    ):
+                        new_loc_naam = ui.input(
+                            'Locatienaam',
+                        ).classes('flex-grow').props('dense')
+                        new_loc_km = ui.number(
+                            'Km retour', value=0, min=0,
+                        ).classes('w-24').props('dense')
 
-                                    ui.button(
-                                        icon='add', on_click=add_loc,
-                                    ).props('flat dense round color=primary')
+                        async def add_loc():
+                            naam = new_loc_naam.value
+                            km = new_loc_km.value or 0
+                            if not naam:
+                                ui.notify(
+                                    'Vul een locatienaam in',
+                                    type='warning')
+                                return
+                            try:
+                                await add_klant_locatie(
+                                    DB_PATH, row['id'], naam, km)
+                            except Exception:
+                                ui.notify(
+                                    f'Locatie "{naam}" bestaat al',
+                                    type='warning')
+                                return
+                            ui.notify(
+                                f'Locatie "{naam}" toegevoegd',
+                                type='positive')
+                            await refresh_locaties()
 
-                        await refresh_locaties()
+                        ui.button(
+                            icon='add', on_click=add_loc,
+                        ).props('flat dense round color=primary')
 
-                        with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
-                            ui.button('Annuleren', on_click=dialog.close).props('flat')
+            await refresh_locaties()
 
-                            async def save_edit():
-                                await update_klant(
-                                    DB_PATH, klant_id=row['id'],
-                                    naam=ed_naam.value,
-                                    tarief_uur=ed_tarief.value,
-                                    retour_km=ed_km.value,
-                                    adres=ed_adres.value,
-                                )
-                                dialog.close()
-                                ui.notify('Klant bijgewerkt', type='positive')
-                                await refresh_klanten()
+            with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
+                ui.button('Annuleren', on_click=dialog.close).props('flat')
 
-                            ui.button('Opslaan', on_click=save_edit) \
-                                .props('color=primary')
-                    dialog.open()
-
-                async def on_toggle(e):
-                    row = e.args
-                    new_actief = 0 if row['actief'] else 1
-                    await update_klant(DB_PATH, klant_id=row['id'],
-                                       actief=new_actief)
-                    status = 'geactiveerd' if new_actief else 'gedeactiveerd'
-                    ui.notify(f"{row['naam']} {status}", type='info')
+                async def save_edit():
+                    await update_klant(
+                        DB_PATH, klant_id=row['id'],
+                        naam=ed_naam.value,
+                        tarief_uur=ed_tarief.value,
+                        retour_km=ed_km.value,
+                        adres=ed_adres.value,
+                    )
+                    dialog.close()
+                    ui.notify('Klant bijgewerkt', type='positive')
                     await refresh_klanten()
 
-                async def on_delete_klant(e):
-                    row = e.args
-                    with ui.dialog() as dialog, ui.card():
-                        ui.label(f"Klant '{row['naam']}' verwijderen?").classes('text-h6')
-                        ui.label(
-                            'Verwijderen is alleen mogelijk als er geen '
-                            'werkdagen of facturen aan deze klant gekoppeld zijn.'
-                        ).classes('text-body2 text-grey')
-                        with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
-                            ui.button('Annuleren', on_click=dialog.close).props('flat')
+                ui.button('Opslaan', on_click=save_edit) \
+                    .props('color=primary')
+        dialog.open()
 
-                            async def confirm_del(kid=row['id'], dlg=dialog):
-                                try:
-                                    await delete_klant(DB_PATH, klant_id=kid)
-                                    dlg.close()
-                                    ui.notify('Klant verwijderd', type='positive')
-                                    await refresh_klanten()
-                                except ValueError as exc:
-                                    ui.notify(str(exc), type='negative')
+    async def on_toggle(row: dict):
+        new_actief = 0 if row['actief'] else 1
+        await update_klant(DB_PATH, klant_id=row['id'],
+                           actief=new_actief)
+        status = 'geactiveerd' if new_actief else 'gedeactiveerd'
+        ui.notify(f"{row['naam']} {status}", type='info')
+        await refresh_klanten()
 
-                            ui.button('Verwijderen', on_click=confirm_del) \
-                                .props('color=negative')
-                    dialog.open()
+    async def on_delete_klant(row: dict):
+        with ui.dialog() as dialog, ui.card():
+            ui.label(f"Klant '{row['naam']}' verwijderen?").classes('text-h6')
+            ui.label(
+                'Verwijderen is alleen mogelijk als er geen '
+                'werkdagen of facturen aan deze klant gekoppeld zijn.'
+            ).classes('text-body2 text-grey')
+            with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
+                ui.button('Annuleren', on_click=dialog.close).props('flat')
 
-                table.on('edit', on_edit)
-                table.on('toggle', on_toggle)
-                table.on('deleteklant', on_delete_klant)
+                async def confirm_del(kid=row['id'], dlg=dialog):
+                    try:
+                        await delete_klant(DB_PATH, klant_id=kid)
+                        dlg.close()
+                        ui.notify('Klant verwijderd', type='positive')
+                        await refresh_klanten()
+                    except ValueError as exc:
+                        ui.notify(str(exc), type='negative')
+
+                ui.button('Verwijderen', on_click=confirm_del) \
+                    .props('color=negative')
+        dialog.open()
 
     async def open_add_dialog():
         """Dialog to add a new klant."""
@@ -288,7 +215,81 @@ async def klanten_page():
                           on_click=add_new).props('color=primary')
         dialog.open()
 
-    with ui.column().classes('w-full p-6 max-w-7xl mx-auto gap-6'):
-        klanten_container['ref'] = ui.column().classes('w-full gap-4')
+    # --- Refresh: only update data ---
 
+    async def refresh_klanten():
+        """Reload klanten table rows (preserves pagination/sort state)."""
+        klanten = await get_klanten(DB_PATH)
+        rows = [{
+            'id': k.id,
+            'naam': k.naam,
+            'tarief_uur': k.tarief_uur,
+            'tarief_fmt': format_euro(k.tarief_uur),
+            'retour_km': k.retour_km,
+            'adres': k.adres,
+            'actief': k.actief,
+            'actief_txt': 'Ja' if k.actief else 'Nee',
+        } for k in klanten]
+        _tbl.rows = rows
+        _tbl.update()
+
+    # === PAGE LAYOUT (created once) ===
+
+    columns = [
+        {'name': 'naam', 'label': 'Naam', 'field': 'naam',
+         'align': 'left'},
+        {'name': 'tarief', 'label': 'Tarief/uur',
+         'field': 'tarief_fmt', 'align': 'right'},
+        {'name': 'km', 'label': 'Retour km', 'field': 'retour_km',
+         'align': 'right'},
+        {'name': 'adres', 'label': 'Adres', 'field': 'adres',
+         'align': 'left'},
+        {'name': 'actief', 'label': 'Actief', 'field': 'actief_txt',
+         'align': 'center'},
+        {'name': 'actions', 'label': '', 'field': 'actions',
+         'align': 'center'},
+    ]
+
+    with ui.column().classes('w-full p-6 max-w-7xl mx-auto gap-6'):
+        # --- Header row ---
+        with ui.row().classes('w-full items-center gap-4'):
+            page_title('Klanten')
+            ui.space()
+            ui.button(
+                'Nieuwe klant', icon='add',
+                on_click=lambda: open_add_dialog(),
+            ).props('color=primary')
+
+        # --- Table (created once, rows updated via refresh_klanten) ---
+        _tbl = ui.table(
+            columns=columns, rows=[], row_key='id',
+            pagination={'rowsPerPage': 20,
+                        'rowsPerPageOptions': [10, 20, 50, 0]},
+        ).classes('w-full')
+
+        _tbl.add_slot('body-cell-actions', '''
+            <q-td :props="props">
+                <q-btn icon="edit" flat dense round size="sm"
+                    @click="() => $parent.$emit('edit', props.row)" />
+                <q-btn :icon="props.row.actief ? 'visibility_off' : 'visibility'"
+                    flat dense round size="sm"
+                    :color="props.row.actief ? 'orange' : 'green'"
+                    @click="() => $parent.$emit('toggle', props.row)" />
+                <q-btn icon="delete" flat dense round size="sm"
+                    color="negative"
+                    @click="() => $parent.$emit('deleteklant', props.row)" />
+            </q-td>
+        ''')
+
+        _tbl.add_slot('no-data', '''
+            <q-tr><q-td colspan="100%" class="text-center q-pa-lg text-grey">
+                Geen klanten gevonden.
+            </q-td></q-tr>
+        ''')
+
+        _tbl.on('edit', lambda e: open_edit_dialog(e.args))
+        _tbl.on('toggle', lambda e: on_toggle(e.args))
+        _tbl.on('deleteklant', lambda e: on_delete_klant(e.args))
+
+    # Initial load
     await refresh_klanten()
