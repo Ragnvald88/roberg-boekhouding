@@ -57,8 +57,9 @@ def revenue_bar_chart(data_current: list[float], data_previous: list[float],
                 'name': str(jaar),
                 'type': 'bar',
                 'data': [round(v) for v in data_current],
-                'barMaxWidth': 28,
-                'barGap': '20%',
+                'barMaxWidth': 48,
+                'barGap': '15%',
+                'barCategoryGap': '30%',
                 'itemStyle': {'color': '#0F766E',
                               'borderRadius': [4, 4, 0, 0]},
             },
@@ -66,12 +67,12 @@ def revenue_bar_chart(data_current: list[float], data_previous: list[float],
                 'name': str(jaar - 1),
                 'type': 'bar',
                 'data': [round(v) for v in data_previous],
-                'barMaxWidth': 28,
+                'barMaxWidth': 48,
                 'itemStyle': {'color': '#E2E8F0',
                               'borderRadius': [4, 4, 0, 0]},
             },
         ],
-    }).style('height: 300px; width: 100%')
+    }).style('height: 360px; width: 100%')
 
 
 # Alias for backward compatibility
