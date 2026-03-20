@@ -1,7 +1,7 @@
 """Tests voor Rabobank CSV parser en bank import."""
 
 import pytest
-from database import init_db, add_banktransacties, get_banktransacties
+from database import init_db, add_banktransacties, get_banktransacties, backfill_betalingskenmerken
 from import_.rabobank_csv import parse_rabobank_csv
 
 
@@ -386,4 +386,32 @@ async def test_add_banktransacties_with_betalingskenmerk(db):
 
     result = await get_banktransacties(db)
     assert len(result) == 1
+    assert result[0].betalingskenmerk == '0124412647060001'
+
+
+@pytest.mark.asyncio
+async def test_backfill_betalingskenmerken(db, tmp_path):
+    """Backfill reads archived CSVs and updates betalingskenmerk on existing rows."""
+    # Insert a transaction without betalingskenmerk
+    txns = [{'datum': '2026-02-23', 'bedrag': -2800.0,
+             'tegenrekening': 'NL86INGB0002445588',
+             'tegenpartij': 'Belastingdienst', 'omschrijving': ''}]
+    await add_banktransacties(db, txns)
+
+    # Create a CSV archive that has the betalingskenmerk
+    csv_dir = tmp_path / 'bank_csv'
+    csv_dir.mkdir()
+    csv_content = build_csv([
+        make_csv_row(datum='23-02-2026', bedrag='-2.800,00',
+                     tegenrekening='NL86INGB0002445588',
+                     tegenpartij='Belastingdienst',
+                     betalingskenmerk='0124412647060001',
+                     omschrijving1='', omschrijving2=''),
+    ])
+    (csv_dir / 'test.csv').write_bytes(csv_content)
+
+    count = await backfill_betalingskenmerken(db, csv_dir)
+    assert count >= 1
+
+    result = await get_banktransacties(db)
     assert result[0].betalingskenmerk == '0124412647060001'

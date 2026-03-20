@@ -447,6 +447,9 @@ async def init_db(db_path: Path = DB_PATH) -> None:
                 await conn.rollback()
                 raise
 
+    # One-time backfill for betalingskenmerk
+    await backfill_betalingskenmerken(db_path)
+
 
 def _validate_datum(datum: str) -> str:
     """Validate datum is a valid YYYY-MM-DD date. Raises ValueError if not."""
@@ -1031,6 +1034,121 @@ async def delete_banktransacties(db_path: Path = DB_PATH,
         )
         await conn.commit()
         return cursor.rowcount
+
+
+BELASTINGDIENST_IBAN = 'NL86INGB0002445588'
+
+
+async def get_va_betalingen(db_path: Path = DB_PATH, jaar: int = 0) -> dict:
+    """Get actual VA payments from bank transactions for a given year.
+
+    Matches by Belastingdienst IBAN. Uses betalingskenmerk to split IB vs ZVW.
+    IB kenmerken have digits at position 10-11 below 50, ZVW have 50+.
+    """
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            """SELECT ABS(bedrag) as amount, betalingskenmerk
+               FROM banktransacties
+               WHERE tegenrekening = ?
+                 AND datum >= ? AND datum <= ?
+                 AND bedrag < 0""",
+            (BELASTINGDIENST_IBAN, f'{jaar}-01-01', f'{jaar}-12-31')
+        )
+        rows = await cur.fetchall()
+
+    if not rows:
+        return {
+            'ib_betaald': 0, 'ib_termijnen': 0,
+            'zvw_betaald': 0, 'zvw_termijnen': 0,
+            'totaal_betaald': 0, 'has_bank_data': False,
+        }
+
+    ib_betaald = 0.0
+    ib_count = 0
+    zvw_betaald = 0.0
+    zvw_count = 0
+    unmatched = 0.0
+
+    for amount, kenmerk in rows:
+        if kenmerk and len(kenmerk) >= 12:
+            year_type_digits = int(kenmerk[10:12])
+            if year_type_digits >= 50:
+                zvw_betaald += amount
+                zvw_count += 1
+            else:
+                ib_betaald += amount
+                ib_count += 1
+        else:
+            unmatched += amount
+
+    return {
+        'ib_betaald': round(ib_betaald, 2),
+        'ib_termijnen': ib_count,
+        'zvw_betaald': round(zvw_betaald, 2),
+        'zvw_termijnen': zvw_count,
+        'totaal_betaald': round(ib_betaald + zvw_betaald + unmatched, 2),
+        'has_bank_data': True,
+    }
+
+
+async def backfill_betalingskenmerken(db_path: Path = DB_PATH,
+                                       csv_dir: Path = None) -> int:
+    """One-time backfill: read archived CSVs to populate betalingskenmerk
+    on existing bank transactions that are missing it.
+
+    Matches by (datum, bedrag, tegenpartij, omschrijving) — same dedup key
+    as add_banktransacties. Returns count of rows updated.
+    """
+    from import_.rabobank_csv import parse_rabobank_csv
+
+    if csv_dir is None:
+        csv_dir = db_path.parent / 'bank_csv'
+    if not csv_dir.exists():
+        return 0
+
+    # Check if backfill is needed
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            """SELECT COUNT(*) FROM banktransacties
+               WHERE tegenrekening = 'NL86INGB0002445588'
+                 AND (betalingskenmerk IS NULL OR betalingskenmerk = '')"""
+        )
+        needs_backfill = (await cur.fetchone())[0]
+    if needs_backfill == 0:
+        return 0
+
+    # Parse all archived CSVs
+    kenmerk_map = {}
+    for csv_file in sorted(csv_dir.glob('*.csv')):
+        try:
+            content = csv_file.read_bytes()
+            txns = parse_rabobank_csv(content)
+            for t in txns:
+                k = t.get('betalingskenmerk', '')
+                if k:
+                    key = (t['datum'], t['bedrag'],
+                           t.get('tegenpartij', ''), t.get('omschrijving', ''))
+                    kenmerk_map[key] = k
+        except Exception:
+            continue
+
+    if not kenmerk_map:
+        return 0
+
+    # Update existing rows
+    count = 0
+    async with get_db_ctx(db_path) as conn:
+        for key, kenmerk in kenmerk_map.items():
+            cur = await conn.execute(
+                """UPDATE banktransacties SET betalingskenmerk = ?
+                   WHERE datum = ? AND bedrag = ? AND tegenpartij = ?
+                     AND omschrijving = ?
+                     AND (betalingskenmerk IS NULL OR betalingskenmerk = '')""",
+                (kenmerk, *key)
+            )
+            count += cur.rowcount
+        await conn.commit()
+    return count
 
 
 # === Fiscale Parameters ===

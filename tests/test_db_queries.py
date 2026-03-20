@@ -10,7 +10,7 @@ from database import (
     get_nog_te_factureren, get_kpis, get_data_counts,
     get_afschrijving_overrides, get_afschrijving_overrides_batch,
     set_afschrijving_override, delete_afschrijving_override,
-    get_db_ctx,
+    get_db_ctx, get_va_betalingen,
 )
 
 
@@ -577,5 +577,59 @@ async def test_override_cascade_delete(db):
     await delete_uitgave(db, uitgave_id=uid)
     overrides = await get_afschrijving_overrides(db, uitgave_id=uid)
     assert overrides == {}
+
+
+# ============================================================
+# get_va_betalingen (IB/ZVW split from bank transactions)
+# ============================================================
+
+BELASTINGDIENST_IBAN = 'NL86INGB0002445588'
+
+
+@pytest.mark.asyncio
+async def test_get_va_betalingen_splits_ib_zvw(db):
+    """VA payments are split by betalingskenmerk into IB and ZVW."""
+    txns = [
+        {'datum': '2026-02-23', 'bedrag': -2800.0,
+         'tegenrekening': BELASTINGDIENST_IBAN, 'tegenpartij': 'Belastingdienst',
+         'omschrijving': '', 'betalingskenmerk': '0124412647060001'},
+        {'datum': '2026-01-22', 'bedrag': -1808.0,
+         'tegenrekening': BELASTINGDIENST_IBAN, 'tegenpartij': 'Belastingdienst',
+         'omschrijving': '', 'betalingskenmerk': '0124412647560014'},
+    ]
+    await add_banktransacties(db, txns)
+
+    result = await get_va_betalingen(db, 2026)
+    assert result['has_bank_data'] is True
+    assert result['ib_betaald'] == pytest.approx(2800.0)
+    assert result['ib_termijnen'] == 1
+    assert result['zvw_betaald'] == pytest.approx(1808.0)
+    assert result['zvw_termijnen'] == 1
+    assert result['totaal_betaald'] == pytest.approx(4608.0)
+
+
+@pytest.mark.asyncio
+async def test_get_va_betalingen_no_data(db):
+    """Returns has_bank_data=False when no Belastingdienst payments exist."""
+    result = await get_va_betalingen(db, 2026)
+    assert result['has_bank_data'] is False
+    assert result['totaal_betaald'] == 0
+
+
+@pytest.mark.asyncio
+async def test_get_va_betalingen_no_kenmerk_fallback(db):
+    """Without betalingskenmerk, sums all BD payments as combined."""
+    txns = [
+        {'datum': '2025-05-28', 'bedrag': -1900.0,
+         'tegenrekening': BELASTINGDIENST_IBAN, 'tegenpartij': 'Belastingdienst',
+         'omschrijving': '', 'betalingskenmerk': ''},
+    ]
+    await add_banktransacties(db, txns)
+
+    result = await get_va_betalingen(db, 2025)
+    assert result['has_bank_data'] is True
+    assert result['totaal_betaald'] == pytest.approx(1900.0)
+    assert result['ib_termijnen'] == 0
+    assert result['zvw_termijnen'] == 0
 
 
