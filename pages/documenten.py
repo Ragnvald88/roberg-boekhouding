@@ -144,15 +144,21 @@ async def documenten_page():
                     .props('flat round')
             ui.separator().classes('q-my-sm')
 
-            name = Path(bestandspad).name
+            try:
+                rel_path = Path(bestandspad).relative_to(AANGIFTE_DIR)
+                url = f'/aangifte-files/{rel_path}'
+            except ValueError:
+                # File not under AANGIFTE_DIR — use just filename as fallback
+                url = f'/aangifte-files/{Path(bestandspad).name}'
+
             ext = Path(bestandsnaam).suffix.lower()
             if ext == '.pdf':
                 ui.html(
-                    f'<iframe src="/aangifte-files/{name}" '
+                    f'<iframe src="{url}" '
                     f'style="width:100%;height:70vh;border:none;'
                     f'border-radius:8px;"></iframe>')
             elif ext in ('.jpg', '.jpeg', '.png', '.gif'):
-                ui.image(f'/aangifte-files/{name}').classes('w-full')
+                ui.image(url).classes('w-full')
             else:
                 ui.label('Preview niet beschikbaar.') \
                     .classes('text-grey-6 q-pa-lg text-center')

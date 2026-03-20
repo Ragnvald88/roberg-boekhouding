@@ -75,6 +75,7 @@ CREATE TABLE IF NOT EXISTS facturen (
 );
 
 CREATE INDEX IF NOT EXISTS idx_facturen_klant ON facturen(klant_id);
+CREATE INDEX IF NOT EXISTS idx_facturen_datum ON facturen(datum);
 
 CREATE TABLE IF NOT EXISTS uitgaven (
     id INTEGER PRIMARY KEY,

@@ -862,7 +862,7 @@ async def facturen_page():
                             pdf_dest = import_dir / f'{safe_name}.pdf'
                             content = item.get('_content', b'')
                             if content and not pdf_dest.exists():
-                                pdf_dest.write_bytes(content)
+                                await asyncio.to_thread(pdf_dest.write_bytes, content)
                             pdf_pad = str(pdf_dest) if content else ''
 
                             # Create factuur record
