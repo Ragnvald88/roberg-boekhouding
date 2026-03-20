@@ -1478,6 +1478,29 @@ async def get_kpis(db_path: Path = DB_PATH, jaar: int = 2026) -> dict:
         }
 
 
+async def get_kpis_tot_datum(db_path: Path = DB_PATH, jaar: int = 2026,
+                             max_datum: str = '') -> dict:
+    """Get KPIs for a year up to a specific date (inclusive).
+
+    Used for fair YoY comparison: compare previous year up to the same
+    calendar date as today, not full months.
+    """
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            "SELECT COALESCE(SUM(totaal_bedrag), 0) FROM facturen "
+            "WHERE datum >= ? AND datum <= ?",
+            (f'{jaar}-01-01', max_datum))
+        omzet = (await cur.fetchone())[0]
+
+        cur = await conn.execute(
+            "SELECT COALESCE(SUM(bedrag), 0) FROM uitgaven "
+            "WHERE datum >= ? AND datum <= ? AND is_investering = 0",
+            (f'{jaar}-01-01', max_datum))
+        kosten = (await cur.fetchone())[0]
+
+        return {'omzet': omzet, 'kosten': kosten}
+
+
 async def get_omzet_per_klant(db_path: Path = DB_PATH, jaar: int = 2026) -> list[dict]:
     """Revenue breakdown per customer for a given year."""
     async with get_db_ctx(db_path) as conn:

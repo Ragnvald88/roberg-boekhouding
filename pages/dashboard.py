@@ -9,8 +9,8 @@ from components.charts import cost_donut_chart, revenue_bar_chart
 from components.layout import create_layout, page_title
 from components.utils import format_euro
 from database import (
-    get_kpis, get_omzet_per_maand, get_uitgaven_per_categorie,
-    get_openstaande_facturen,
+    get_kpis, get_kpis_tot_datum, get_omzet_per_maand,
+    get_uitgaven_per_categorie, get_openstaande_facturen,
     get_werkdagen_ongefactureerd_summary, get_km_totaal,
     get_fiscale_params, get_aangifte_documenten,
     get_va_betalingen, DB_PATH,
@@ -199,18 +199,16 @@ async def dashboard_page():
 
         uren_criterium = int(fp.urencriterium) if fp else URENCRITERIUM_DEFAULT
 
-        # For YoY delta: compare same period (YTD vs YTD) for current year
+        # For YoY delta: compare exact same calendar period
         huidig_jaar = date.today().year
         if jaar == huidig_jaar:
-            month = date.today().month
-            vorig_ytd_omzet = sum(omzet_vorig[:month])
-            vorig_full_kosten = kpis_vorig['kosten']
-            vorig_full_omzet = kpis_vorig['omzet']
-            if vorig_full_omzet > 0:
-                vorig_ratio = vorig_ytd_omzet / vorig_full_omzet
-                vorig_ytd_kosten = vorig_full_kosten * vorig_ratio
-            else:
-                vorig_ytd_kosten = 0
+            # Compare up to today's date in previous year (day-precise)
+            vandaag = date.today().isoformat()
+            vorig_datum = f'{jaar - 1}-{vandaag[5:]}'  # same MM-DD
+            vorig_ytd = await get_kpis_tot_datum(
+                DB_PATH, jaar=jaar - 1, max_datum=vorig_datum)
+            vorig_ytd_omzet = vorig_ytd['omzet']
+            vorig_ytd_kosten = vorig_ytd['kosten']
         else:
             vorig_ytd_omzet = kpis_vorig['omzet']
             vorig_ytd_kosten = kpis_vorig['kosten']
