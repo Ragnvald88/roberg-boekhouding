@@ -18,6 +18,7 @@ from database import (
     link_werkdagen_to_factuur, get_bedrijfsgegevens, get_db_ctx, add_werkdag,
     get_fiscale_params, DB_PATH,
 )
+from components.shared_ui import year_options
 from import_.pdf_parser import (
     extract_pdf_text, detect_invoice_type,
     parse_dagpraktijk_text, parse_anw_text,
@@ -42,7 +43,7 @@ async def facturen_page():
             page_title('Facturen')
             ui.space()
             jaar_select = ui.select(
-                {y: str(y) for y in range(2023, current_year + 2)},
+                year_options(include_next=True, as_dict=True, descending=False),
                 value=current_year, label='Jaar',
             ).classes('w-32')
 

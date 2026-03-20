@@ -8,6 +8,7 @@ from database import (
     get_werkdagen, get_klanten, delete_werkdag, DB_PATH,
 )
 from datetime import date
+from components.shared_ui import year_options
 
 MAANDEN = {
     0: 'Alle', 1: 'Jan', 2: 'Feb', 3: 'Mar', 4: 'Apr', 5: 'Mei', 6: 'Jun',
@@ -35,7 +36,7 @@ async def werkdagen_page():
         # Filter + action row
         with ui.row().classes('w-full items-end gap-4'):
             jaar_select = ui.select(
-                {y: str(y) for y in range(2023, current_year + 2)},
+                year_options(include_next=True, as_dict=True, descending=False),
                 value=current_year, label='Jaar',
             ).classes('w-32')
 

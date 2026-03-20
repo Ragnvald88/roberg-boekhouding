@@ -8,6 +8,7 @@ from nicegui import app, events, ui
 
 from components.document_specs import AANGIFTE_DOCS, AUTO_TYPES, CATEGORIE_LABELS
 from components.layout import create_layout, page_title
+from components.shared_ui import year_options
 from database import (
     get_aangifte_documenten, add_aangifte_document, delete_aangifte_document,
     DB_PATH,
@@ -31,7 +32,7 @@ async def documenten_page():
             progress_badge = ui.badge('0/0', color='primary').classes('text-sm')
             ui.space()
             jaar_select = ui.select(
-                {y: str(y) for y in range(huidig_jaar, 2022, -1)},
+                year_options(as_dict=True),
                 value=huidig_jaar, label='Jaar',
             ).classes('w-32')
 

@@ -26,6 +26,7 @@ from database import (
     update_za_sa_toggles, get_belastingdienst_betalingen,
     update_partner_inputs, DB_PATH,
 )
+from components.shared_ui import year_options
 from fiscal.berekeningen import bereken_volledig, bereken_box3
 
 AANGIFTE_DIR = DB_PATH.parent / 'aangifte'
@@ -75,7 +76,7 @@ async def aangifte_page():
 
     huidig_jaar = date.today().year
     vorig_jaar = huidig_jaar - 1
-    jaren = list(range(huidig_jaar, 2022, -1))
+    jaren = year_options()
     state = {'jaar': vorig_jaar}
 
     # --- Cached fiscal computation (avoid triple fetch+calc) ---

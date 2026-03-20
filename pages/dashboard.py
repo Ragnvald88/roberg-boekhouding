@@ -17,6 +17,7 @@ from database import (
 )
 from components.document_specs import AANGIFTE_DOCS
 from components.fiscal_utils import fetch_fiscal_data, extrapoleer_jaaromzet
+from components.shared_ui import year_options
 from fiscal.berekeningen import bereken_volledig
 
 URENCRITERIUM_DEFAULT = 1225
@@ -27,7 +28,7 @@ async def dashboard_page():
     create_layout('Dashboard', '/')
 
     huidig_jaar = date.today().year
-    jaren = {y: str(y) for y in range(huidig_jaar, 2022, -1)}
+    jaren = year_options(as_dict=True)
 
     with ui.column().classes('w-full p-6 max-w-7xl mx-auto gap-6'):
 

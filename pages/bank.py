@@ -12,6 +12,7 @@ from database import (
     delete_banktransacties, find_factuur_matches, apply_factuur_matches,
     get_db_ctx, DB_PATH,
 )
+from components.shared_ui import year_options
 from import_.rabobank_csv import parse_rabobank_csv
 
 
@@ -296,7 +297,7 @@ async def bank_page():
         # Top bar: filters + upload
         with ui.row().classes('w-full items-center gap-4 q-mb-md'):
             # Year selector
-            jaren = list(range(2023, current_year + 1))
+            jaren = year_options(descending=False)
             ui.select(
                 label='Jaar',
                 options=jaren,

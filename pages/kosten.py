@@ -17,6 +17,7 @@ from database import (
     set_afschrijving_override, delete_afschrijving_override,
     DB_PATH,
 )
+from components.shared_ui import year_options
 from fiscal.afschrijvingen import bereken_afschrijving
 
 UITGAVEN_DIR = DB_PATH.parent / 'uitgaven'
@@ -30,7 +31,7 @@ async def kosten_page():
 
     # --- State ---
     huidig_jaar = date.today().year
-    jaren = list(range(huidig_jaar, 2022, -1))  # 2026 down to 2023
+    jaren = year_options()
     filter_jaar = {'value': huidig_jaar}
     filter_categorie = {'value': None}  # None = alle
 

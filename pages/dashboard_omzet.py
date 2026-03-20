@@ -6,6 +6,7 @@ from nicegui import ui
 
 from components.layout import create_layout, page_title
 from components.utils import format_euro
+from components.shared_ui import year_options
 from database import get_omzet_per_klant, DB_PATH
 
 
@@ -14,7 +15,7 @@ async def omzet_detail_page():
     create_layout('Omzet per klant', '/')
 
     huidig_jaar = date.today().year
-    jaren = {y: str(y) for y in range(huidig_jaar + 1, 2022, -1)}
+    jaren = year_options(include_next=True, as_dict=True)
 
     content_container = {'ref': None}
 

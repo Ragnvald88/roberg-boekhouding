@@ -8,6 +8,7 @@ from jinja2 import Environment, FileSystemLoader
 from nicegui import ui
 
 from components.fiscal_utils import bereken_balans, fetch_fiscal_data
+from components.shared_ui import year_options
 from components.kpi_card import kpi_strip
 from components.layout import create_layout, page_title
 from components.utils import format_euro
@@ -101,7 +102,7 @@ async def jaarafsluiting_page():
         with ui.row().classes('w-full items-center gap-3'):
             page_title('Jaarafsluiting')
             jaar_select = ui.select(
-                options=list(range(2023, date.today().year + 1)),
+                options=year_options(descending=False),
                 value=vorig_jaar,
                 label='Boekjaar',
             ).classes('w-32')
