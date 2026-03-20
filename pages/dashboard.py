@@ -5,7 +5,7 @@ from datetime import date, datetime
 
 from nicegui import ui
 
-from components.charts import cost_donut_chart, revenue_bar_chart
+from components.charts import cost_donut_chart, revenue_chart
 from components.layout import create_layout, page_title
 from components.utils import format_euro
 from database import (
@@ -495,7 +495,7 @@ async def dashboard_page():
                             'color: #0F172A')
                         ui.label(f'{jaar} vs {jaar - 1}').style(
                             'font-size: 12px; color: #94A3B8')
-                    revenue_bar_chart(
+                    revenue_chart(
                         omzet_huidig, omzet_vorig, jaar)
 
                 # Right side: donut if costs exist, else cumulative
