@@ -46,6 +46,23 @@ ui.add_css('''
     .nav-btn:hover {
         background-color: rgba(255, 255, 255, 0.05) !important;
     }
+
+    /* Dashboard design tokens */
+    .hero-label { font-size: 13px; color: #64748B; font-weight: 500; }
+    .hero-value { font-size: 30px; font-weight: 700; color: #0F172A;
+                  font-variant-numeric: tabular-nums; margin: 6px 0 2px; }
+    .hero-value-positive { font-size: 30px; font-weight: 700; color: var(--q-positive);
+                           font-variant-numeric: tabular-nums; margin: 6px 0 2px; }
+    .hero-value-negative { font-size: 30px; font-weight: 700; color: var(--q-negative);
+                           font-variant-numeric: tabular-nums; margin: 6px 0 2px; }
+    .context-text { font-size: 12px; color: #94A3B8; }
+    .section-label { font-size: 13px; font-weight: 600; color: #64748B;
+                     text-transform: uppercase; letter-spacing: 0.05em; }
+    .chart-title { font-size: 15px; font-weight: 600; color: #0F172A; }
+    .chart-subtitle { font-size: 12px; color: #94A3B8; }
+    .strip-value { font-size: 14px; font-weight: 600; color: #0F172A; }
+    .strip-pct { font-size: 11px; color: #94A3B8; }
+    .card-hero { border-radius: 14px; border: 1px solid #E2E8F0; }
 }
 ''', shared=True)
 
