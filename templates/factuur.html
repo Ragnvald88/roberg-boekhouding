@@ -6,41 +6,74 @@
   @page { size: A4; margin: 20mm 20mm 25mm 20mm; }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
-         font-size: 9.5pt; line-height: 1.45; color: #2c3e50; }
+         font-size: 9.5pt; line-height: 1.45; color: #2c3e50;
+         display: flex; flex-direction: column; min-height: 100%; }
 
+  /* ── Header ────────────────────────────────── */
   .header { display: flex; justify-content: space-between;
             margin-bottom: 15mm; }
-  .sender h1 { font-size: 15pt; color: #1a5276; margin-bottom: 2mm; }
-  .sender p { font-size: 8.5pt; color: #555; }
+
+  .sender h1 { font-size: 16pt; font-weight: bold; color: #1a3c5e;
+               margin-bottom: 2mm; }
+  .sender .contact { font-size: 9pt; color: #555; }
+  .sender .details { font-size: 8.5pt; color: #555; margin-top: 2mm; }
 
   .meta { text-align: right; }
-  .meta h2 { font-size: 18pt; color: #1a5276; margin-bottom: 3mm;
-             letter-spacing: 1px; }
-  .meta table td { padding: 1mm 0; font-size: 9pt; }
-  .meta table td:first-child { color: #777; padding-right: 4mm; }
+  .meta h2 { font-size: 27pt; font-weight: 800; color: #1a3c5e;
+             letter-spacing: 2px; margin: 0; }
+  .meta .nummer { font-size: 12.5pt; color: #1a3c5e; margin-top: 1mm; }
+  .meta .dates { font-size: 9pt; color: #555; }
 
-  .client-box { margin-bottom: 10mm; padding: 4mm 5mm;
-                background: #f7f9fb; border-left: 3px solid #1a5276; }
+  /* ── Divider ───────────────────────────────── */
+  .divider { width: 50px; height: 2px; background: #1a3c5e;
+             margin: 5mm 0; }
 
+  /* ── Client ────────────────────────────────── */
+  .client { margin-bottom: 8mm; }
+  .client .label { font-size: 10pt; font-weight: bold; margin-bottom: 1mm; }
+  .client .info { font-size: 9pt; line-height: 1.5; }
+
+  /* ── Line items table ──────────────────────── */
   table.lines { width: 100%; border-collapse: collapse; margin-bottom: 8mm; }
-  table.lines th { background: #1a5276; color: #fff; padding: 2.5mm 3mm;
-                   text-align: left; font-size: 8.5pt; font-weight: 600; }
-  table.lines td { padding: 2mm 3mm; border-bottom: 0.5pt solid #dee2e6; }
-  table.lines tr:nth-child(even) td { background: #f8f9fa; }
+  table.lines th { background: #1a3c5e; color: #fff; padding: 3mm 3mm;
+                   font-size: 8pt; font-weight: 600; text-align: left; }
+  table.lines td { padding: 2.5mm 3mm; border-bottom: 0.5pt solid #eee;
+                   font-size: 9pt; }
+  table.lines tr:nth-child(even) td { background: #f9f9f9; }
   .r { text-align: right; }
 
-  .totals { width: 45%; margin-left: auto; margin-bottom: 8mm; }
-  .totals td { padding: 1.5mm 3mm; }
-  .totals .grand { font-weight: 700; font-size: 11pt;
-                   border-top: 2pt solid #1a5276; padding-top: 2mm; }
+  /* ── Totaal section ────────────────────────── */
+  .totaal-section { text-align: right; margin-bottom: 6mm; }
+  .totaal-section .subtotaal { font-size: 9pt; color: #555; margin-bottom: 1mm; }
+  .totaal-section .totaal-row { display: inline-block; }
+  .totaal-section .totaal-label { font-size: 13pt; font-weight: bold;
+                                   color: #1a3c5e; }
+  .totaal-section .totaal-amount { font-size: 16pt; font-weight: 800;
+                                    color: #1a3c5e; margin-left: 4mm; }
+  .vat-notice { font-size: 8pt; font-style: italic; color: #999;
+                text-align: right; margin-top: 1mm; margin-bottom: 8mm; }
 
-  .vat-notice { font-size: 7.5pt; font-style: italic; color: #777;
-                margin-bottom: 8mm; }
+  /* ── Betaalinformatie ──────────────────────── */
+  .betaal { margin-top: auto; }
+  .betaal-tbl { width: 100%; border-collapse: collapse;
+                border: 0.5pt solid #ddd; font-size: 8.5pt;
+                table-layout: fixed; }
+  .betaal-tbl thead th { background: #1a3c5e; color: #fff; font-size: 9.5pt;
+                         font-weight: 700; letter-spacing: 0.5px;
+                         padding: 2mm 3mm; text-align: left; }
+  .betaal-tbl td.bl { width: 30%; padding: 1.5mm 3mm; color: #666;
+                      background: #f5f7fa; border-right: 0.5pt solid #eee;
+                      border-bottom: 0.5pt solid #eee; }
+  .betaal-tbl td.bv { padding: 1.5mm 3mm; font-weight: 600; color: #2c3e50;
+                      border-bottom: 0.5pt solid #eee; }
+  .betaal-tbl td.bq { width: 25mm; border-left: 0.5pt solid #ddd;
+                      text-align: center; vertical-align: middle;
+                      padding: 2mm; }
+  .betaal-tbl td.bq img { width: 2.5cm; height: 2.5cm; object-fit: contain; }
+  .betaal-tbl tbody tr:last-child td.bl,
+  .betaal-tbl tbody tr:last-child td.bv { border-bottom: none; }
 
-  .payment { padding: 4mm 5mm; background: #eaf2f8;
-             border: 0.5pt solid #aed6f1; margin-bottom: 8mm; }
-  .payment strong { color: #1a5276; }
-
+  /* ── Footer ────────────────────────────────── */
   .footer { position: fixed; bottom: 0; left: 0; right: 0;
             padding: 3mm 20mm; font-size: 7pt; color: #999;
             border-top: 0.5pt solid #ddd; text-align: center; }
@@ -51,27 +84,37 @@
 <div class="header">
   <div class="sender">
     <h1>{{ bedrijf.bedrijfsnaam }}</h1>
-    <p>
+    <p class="contact">
       {{ bedrijf.naam }}<br>
-      {{ bedrijf.functie }}<br>
       {{ bedrijf.adres }}<br>
-      {{ bedrijf.postcode_plaats }}<br>
-      KvK: {{ bedrijf.kvk }}
+      {{ bedrijf.postcode_plaats }}
+    </p>
+    <p class="details">
+      KvK: {{ bedrijf.kvk }} — IBAN: {{ bedrijf.iban }}
     </p>
   </div>
   <div class="meta">
     <h2>FACTUUR</h2>
-    <table>
-      <tr><td>Factuurnummer</td><td><strong>{{ nummer }}</strong></td></tr>
-      <tr><td>Factuurdatum</td><td>{{ datum }}</td></tr>
-      <tr><td>Vervaldatum</td><td>{{ vervaldatum }}</td></tr>
-    </table>
+    <div class="nummer">Nummer: {{ nummer }}</div>
+    <div class="dates">
+      Factuurdatum: {{ datum }}<br>
+      Vervaldatum: {{ vervaldatum }}
+    </div>
   </div>
 </div>
 
-<div class="client-box">
-  <strong>{{ klant.naam }}</strong><br>
-  {% if klant.adres %}{{ klant.adres }}{% endif %}
+<div class="divider"></div>
+
+<div class="client">
+  <div class="label">Factuur aan:</div>
+  <div class="info">
+    {{ klant.naam }}
+    {% if klant.contactpersoon|default('') %}<br>{{ klant.contactpersoon }}{% endif %}
+    {% if klant.adres|default('') %}<br>{{ klant.adres }}{% endif %}
+    {% set pc = klant.postcode|default('') %}
+    {% set pl = klant.plaats|default('') %}
+    {% if pc or pl %}<br>{{ pc }} {{ pl }}{% endif %}
+  </div>
 </div>
 
 <table class="lines">
@@ -81,7 +124,7 @@
       <th>Omschrijving</th>
       <th class="r" style="width:10%">Aantal</th>
       <th class="r" style="width:14%">Tarief</th>
-      <th class="r" style="width:14%">Bedrag</th>
+      <th class="r" style="width:14%">Totaal</th>
     </tr>
   </thead>
   <tbody>
@@ -97,34 +140,37 @@
   </tbody>
 </table>
 
-<table class="totals">
+<div class="totaal-section">
   {% if subtotaal_werk != totaal %}
-  <tr>
-    <td>Subtotaal waarnemingen</td>
-    <td class="r">{{ subtotaal_werk | format_euro }}</td>
-  </tr>
-  <tr>
-    <td>Subtotaal reiskosten</td>
-    <td class="r">{{ subtotaal_km | format_euro }}</td>
-  </tr>
+  <div class="subtotaal">Subtotaal waarnemingen: {{ subtotaal_werk | format_euro }}</div>
+  <div class="subtotaal">Subtotaal reiskosten: {{ subtotaal_km | format_euro }}</div>
   {% endif %}
-  <tr class="grand">
-    <td>Totaal</td>
-    <td class="r">{{ totaal | format_euro }}</td>
-  </tr>
-</table>
+  <div class="totaal-row">
+    <span class="totaal-label">TOTAAL</span>
+    <span class="totaal-amount">{{ totaal | format_euro }}</span>
+  </div>
+</div>
+<p class="vat-notice">* Vrijgesteld van BTW op grond van artikel 11, lid 1, sub g, Wet op de omzetbelasting 1968.</p>
 
-<p class="vat-notice">
-  BTW vrijgesteld op grond van artikel 11, lid 1, sub g,
-  Wet op de omzetbelasting 1968.
-</p>
-
-<div class="payment">
-  <strong>Betaalinformatie</strong><br>
-  Gelieve het totaalbedrag van {{ totaal | format_euro }} over te maken op:<br>
-  <strong>IBAN:</strong> {{ bedrijf.iban }}<br>
-  <strong>t.n.v.:</strong> {{ bedrijf.naam }}<br>
-  <strong>Referentie:</strong> {{ nummer }}
+<div class="betaal">
+  <table class="betaal-tbl">
+    <thead>
+      <tr><th colspan="3">BETAALINFORMATIE</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="bl">IBAN:</td>
+        <td class="bv">{{ bedrijf.iban }}</td>
+        <td class="bq" rowspan="5">
+          {% if qr_path|default('') %}<img src="{{ qr_path }}" alt="QR">{% endif %}
+        </td>
+      </tr>
+      <tr><td class="bl">Ten name van:</td><td class="bv">{{ bedrijf.bedrijfsnaam }}</td></tr>
+      <tr><td class="bl">Onder vermelding van:</td><td class="bv">{{ nummer }}</td></tr>
+      <tr><td class="bl">Te betalen bedrag:</td><td class="bv">{{ totaal | format_euro }}</td></tr>
+      <tr><td class="bl">Betaaltermijn:</td><td class="bv">14 dagen</td></tr>
+    </tbody>
+  </table>
 </div>
 
 <div class="footer">
