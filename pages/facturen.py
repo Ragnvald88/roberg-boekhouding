@@ -10,13 +10,12 @@ from nicegui import app, events, ui
 
 from components.layout import create_layout, page_title
 from components.invoice_builder import open_invoice_builder
-from components.invoice_generator import generate_invoice
 from components.utils import format_euro, format_datum, generate_csv
 from database import (
-    get_facturen, add_factuur, get_next_factuurnummer,
+    get_facturen, add_factuur,
     mark_betaald, delete_factuur, update_factuur,
-    get_klanten, get_werkdagen_ongefactureerd,
-    link_werkdagen_to_factuur, get_bedrijfsgegevens, get_db_ctx, add_werkdag,
+    get_klanten,
+    link_werkdagen_to_factuur, get_db_ctx, add_werkdag,
     get_fiscale_params, DB_PATH,
 )
 from components.shared_ui import year_options, date_input
