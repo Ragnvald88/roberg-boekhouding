@@ -89,10 +89,16 @@ async def open_werkdag_dialog(on_save=None, werkdag=None):
             ).classes('flex-grow')
 
         # Row 2: Code + Uren
+        code_options = {k: k for k in CODES.keys()}
+        if is_edit and werkdag.code and werkdag.code not in code_options:
+            # Legacy/imported code not in standard list — include it
+            code_options[werkdag.code] = werkdag.code
+        initial_code = werkdag.code if is_edit and werkdag.code in code_options else 'WERKDAG'
+
         with ui.row().classes('w-full gap-4 items-end'):
             code_select = ui.select(
-                {k: k for k in CODES.keys()},
-                value=werkdag.code if is_edit else 'WERKDAG',
+                code_options,
+                value=initial_code,
                 label='Code',
             ).classes('w-40')
 
