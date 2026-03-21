@@ -34,6 +34,15 @@ async def open_werkdag_dialog(on_save=None, werkdag=None):
     klant_options = {k.id: k.naam for k in klanten}
     klant_data = {k.id: k for k in klanten}
 
+    # Edit mode: ensure the werkdag's klant is in the options even if inactive
+    if werkdag and werkdag.klant_id not in klant_options:
+        alle_klanten = await get_klanten(DB_PATH, alleen_actief=False)
+        for k in alle_klanten:
+            if k.id == werkdag.klant_id:
+                klant_options[k.id] = f'{k.naam} (inactief)'
+                klant_data[k.id] = k
+                break
+
     is_edit = werkdag is not None
 
     # Cache for loaded locations per klant
