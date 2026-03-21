@@ -28,8 +28,8 @@ from import_.klant_mapping import resolve_klant, resolve_anw_klant
 PDF_DIR = DB_PATH.parent / "facturen"
 
 # Serve factuur PDFs for in-browser preview
-if PDF_DIR.exists():
-    app.add_static_files('/facturen-files', str(PDF_DIR))
+PDF_DIR.mkdir(parents=True, exist_ok=True)
+app.add_static_files('/facturen-files', str(PDF_DIR))
 
 
 def _is_verlopen(datum_str: str) -> bool:
@@ -270,7 +270,8 @@ async def facturen_page():
             if status_val == 'betaald':
                 facturen = [f for f in facturen if f.betaald]
             elif status_val == 'openstaand':
-                facturen = [f for f in facturen if not f.betaald]
+                facturen = [f for f in facturen
+                            if not f.betaald and not _is_verlopen(f.datum)]
             elif status_val == 'verlopen':
                 facturen = [f for f in facturen
                             if not f.betaald and _is_verlopen(f.datum)]
@@ -280,13 +281,12 @@ async def facturen_page():
             openstaand = 0
             for f in facturen:
                 # Compute verlopen status and vervaldatum
+                is_verlopen = not f.betaald and _is_verlopen(f.datum)
                 try:
                     factuur_date = datetime.strptime(f.datum, '%Y-%m-%d').date()
-                    vervaldatum = factuur_date + timedelta(days=14)
-                    is_verlopen = not f.betaald and vervaldatum < date.today()
-                    vervaldatum_fmt = format_datum(vervaldatum.isoformat())
+                    vervaldatum_fmt = format_datum(
+                        (factuur_date + timedelta(days=14)).isoformat())
                 except (ValueError, TypeError):
-                    is_verlopen = False
                     vervaldatum_fmt = ''
 
                 rows.append({
@@ -321,26 +321,24 @@ async def facturen_page():
                                   if r.get('verlopen'))
             kpi_strip_container.clear()
             with kpi_strip_container:
-                with ui.card().classes('flex-1 q-pa-sm').style(
-                        'border-radius: 10px; border: 1px solid #E2E8F0'):
+                _kpi_style = 'font-variant-numeric: tabular-nums'
+                with ui.card().classes('flex-1 q-pa-sm card-hero'):
                     ui.label('Gefactureerd').classes('text-caption text-grey-7')
                     ui.label(format_euro(totaal)).classes(
-                        'text-subtitle1 text-weight-bold')
+                        'text-subtitle1 text-weight-bold').style(_kpi_style)
                 if openstaand > 0:
-                    with ui.card().classes('flex-1 q-pa-sm').style(
-                            'border-radius: 10px; border: 1px solid #E2E8F0'):
+                    with ui.card().classes('flex-1 q-pa-sm card-hero'):
                         ui.label('Openstaand').classes(
                             'text-caption text-grey-7')
                         ui.label(format_euro(openstaand)) \
-                            .style('color: var(--q-warning)') \
+                            .style(f'color: var(--q-warning); {_kpi_style}') \
                             .classes('text-subtitle1 text-weight-bold')
                 if verlopen_bedrag > 0:
-                    with ui.card().classes('flex-1 q-pa-sm').style(
-                            'border-radius: 10px; border: 1px solid #E2E8F0'):
+                    with ui.card().classes('flex-1 q-pa-sm card-hero'):
                         ui.label('Verlopen').classes(
                             'text-caption text-grey-7')
                         ui.label(format_euro(verlopen_bedrag)) \
-                            .style('color: var(--q-negative)') \
+                            .style(f'color: var(--q-negative); {_kpi_style}') \
                             .classes('text-subtitle1 text-weight-bold')
 
             summary_row.clear()
