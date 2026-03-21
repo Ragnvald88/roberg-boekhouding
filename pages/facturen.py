@@ -1117,20 +1117,16 @@ async def facturen_page():
 
         async def open_new_factuur_dialog():
             klanten = await get_klanten(DB_PATH, alleen_actief=True)
-            if not klanten:
-                ui.notify('Geen actieve klanten gevonden', type='warning')
-                return
 
             # Check for pre-selected werkdagen from werkdagen page
             pre_selected_ids = app.storage.user.pop('selected_werkdagen', None)
 
-            with ui.dialog() as dialog, ui.card().classes('w-full max-w-2xl'):
+            with ui.dialog() as dialog, ui.card().classes('w-full max-w-2xl q-pa-lg'):
                 ui.label('Nieuwe factuur aanmaken').classes('text-h6 q-mb-md')
 
-                # Step 1: Select klant
+                # --- Klant selection: dropdown OR free text ---
                 klant_options = {k.id: k.naam for k in klanten}
 
-                # Pre-select klant if werkdagen were pre-selected
                 pre_klant_id = None
                 if pre_selected_ids:
                     from database import get_werkdagen
@@ -1142,44 +1138,129 @@ async def facturen_page():
                     if len(pre_klant_ids) == 1:
                         pre_klant_id = pre_klant_ids.pop()
                     else:
-                        ui.notify('Selecteer werkdagen van één klant om te factureren',
-                                  type='warning')
+                        ui.notify(
+                            'Selecteer werkdagen van één klant',
+                            type='warning')
 
                 klant_select = ui.select(
-                    klant_options, label='Klant',
+                    klant_options, label='Klant (of typ een naam)',
                     value=pre_klant_id,
-                ).classes('w-full q-mb-md')
+                    with_input=True, new_value_mode='add-unique',
+                ).classes('w-full').props('use-input input-debounce=0')
 
-                # Date input (before werkdagen so update_preview can set it)
+                # Manual klant address (shown when free-text klant is entered)
+                manual_adres_container = ui.column().classes('w-full')
+                manual_adres_input = {'ref': None}
+
+                def on_klant_change(e):
+                    val = klant_select.value
+                    manual_adres_container.clear()
+                    # If value is a string (typed), show address field
+                    if isinstance(val, str) and val not in [
+                            k.naam for k in klanten]:
+                        with manual_adres_container:
+                            manual_adres_input['ref'] = ui.input(
+                                'Adres klant',
+                                placeholder='Straat, Postcode Plaats',
+                            ).classes('w-full')
+                    else:
+                        manual_adres_input['ref'] = None
+
+                klant_select.on_value_change(
+                    lambda e: (on_klant_change(e), load_werkdagen()))
+
+                # Date input
                 datum_input = date_input('Factuurdatum',
                                          value=date.today().isoformat())
 
-                # Werkdagen selection container
+                # --- Werkdagen selection ---
                 werkdagen_container = ui.column().classes('w-full')
                 selected_werkdagen = {'ids': set(), 'data': []}
+
+                # --- Manual line items ---
+                manual_lines = {'items': []}
+                manual_container = ui.column().classes('w-full q-mt-sm')
+
+                def add_manual_line():
+                    """Add a custom line item row."""
+                    line = {'omschrijving': '', 'aantal': 1, 'tarief': 0.0}
+                    manual_lines['items'].append(line)
+                    idx = len(manual_lines['items']) - 1
+
+                    with manual_container:
+                        with ui.row().classes('w-full gap-2 items-end'):
+                            om = ui.input('Omschrijving',
+                                          value='').classes('flex-grow')
+                            aa = ui.number('Aantal', value=1,
+                                           min=0, step=1).classes('w-20')
+                            ta = ui.number('Tarief (€)', value=0,
+                                           format='%.2f', min=0,
+                                           step=0.50).classes('w-28')
+
+                            def make_updater(i, om_ref, aa_ref, ta_ref):
+                                def update(_=None):
+                                    manual_lines['items'][i] = {
+                                        'omschrijving': om_ref.value or '',
+                                        'aantal': float(aa_ref.value or 0),
+                                        'tarief': float(ta_ref.value or 0),
+                                    }
+                                    update_preview()
+                                return update
+
+                            updater = make_updater(idx, om, aa, ta)
+                            om.on('blur', updater)
+                            aa.on_value_change(updater)
+                            ta.on_value_change(updater)
+
+                            def make_remover(i):
+                                def remove():
+                                    manual_lines['items'][i] = None
+                                    update_preview()
+                                return remove
+
+                            ui.button(icon='close',
+                                      on_click=make_remover(idx)) \
+                                .props('flat round dense size=sm color=negative')
+
+                ui.button('+ Voeg regel toe', icon='add',
+                          on_click=add_manual_line) \
+                    .props('flat dense color=primary').classes('q-mt-sm')
+
+                # --- Preview ---
                 preview_container = ui.column().classes('w-full q-mt-md')
 
                 async def load_werkdagen():
                     kid = klant_select.value
-                    if not kid:
-                        return
-                    werkdagen = await get_werkdagen_ongefactureerd(DB_PATH, klant_id=kid)
                     werkdagen_container.clear()
                     selected_werkdagen['ids'] = set()
+                    selected_werkdagen['data'] = []
+
+                    # Only load werkdagen for known DB klanten (int id)
+                    if not kid or not isinstance(kid, int):
+                        update_preview()
+                        return
+
+                    werkdagen = await get_werkdagen_ongefactureerd(
+                        DB_PATH, klant_id=kid)
                     selected_werkdagen['data'] = werkdagen
 
                     with werkdagen_container:
                         if not werkdagen:
-                            ui.label('Geen ongefactureerde werkdagen voor deze klant.') \
+                            ui.label(
+                                'Geen ongefactureerde werkdagen.') \
                                 .classes('text-grey')
                         else:
-                            ui.label(f'{len(werkdagen)} ongefactureerde werkdagen:') \
-                                .classes('text-subtitle2')
+                            ui.label(
+                                f'{len(werkdagen)} ongefactureerde '
+                                f'werkdagen:').classes('text-subtitle2')
                             for w in werkdagen:
-                                bedrag = w.uren * w.tarief + w.km * w.km_tarief
+                                bedrag = (w.uren * w.tarief
+                                          + w.km * w.km_tarief)
                                 cb = ui.checkbox(
-                                    f'{w.datum} — {w.uren}u × {format_euro(w.tarief)} '
-                                    f'+ {w.km} km = {format_euro(bedrag)}',
+                                    f'{w.datum} — {w.uren}u × '
+                                    f'{format_euro(w.tarief)} '
+                                    f'+ {w.km} km = '
+                                    f'{format_euro(bedrag)}',
                                     value=True,
                                 )
                                 selected_werkdagen['ids'].add(w.id)
@@ -1187,87 +1268,151 @@ async def facturen_page():
                                 def make_handler(wid, checkbox):
                                     def handler(e):
                                         if checkbox.value:
-                                            selected_werkdagen['ids'].add(wid)
+                                            selected_werkdagen['ids'].add(
+                                                wid)
                                         else:
-                                            selected_werkdagen['ids'].discard(wid)
+                                            selected_werkdagen['ids'] \
+                                                .discard(wid)
                                         update_preview()
                                     return handler
 
-                                cb.on_value_change(make_handler(w.id, cb))
+                                cb.on_value_change(
+                                    make_handler(w.id, cb))
                     update_preview()
 
                 def update_preview():
                     preview_container.clear()
+
+                    # Werkdagen totals
                     ids = selected_werkdagen['ids']
                     data = selected_werkdagen['data']
-                    selected = [w for w in data if w.id in ids]
+                    sel_wd = [w for w in data if w.id in ids]
 
-                    if not selected:
+                    wd_uren = sum(w.uren for w in sel_wd)
+                    wd_km = sum(w.km for w in sel_wd)
+                    wd_werk = sum(w.uren * w.tarief for w in sel_wd)
+                    wd_reis = sum(w.km * w.km_tarief for w in sel_wd)
+
+                    # Manual line totals
+                    ml_items = [m for m in manual_lines['items']
+                                if m is not None]
+                    ml_total = sum(
+                        m['aantal'] * m['tarief'] for m in ml_items)
+
+                    grand_total = wd_werk + wd_reis + ml_total
+
+                    if not sel_wd and not ml_items:
                         return
 
-                    # Default date to last selected werkdag
-                    last_date = max(w.datum for w in selected)
-                    datum_input.value = last_date
-
-                    totaal_uren = sum(w.uren for w in selected)
-                    totaal_km = sum(w.km for w in selected)
-                    totaal_werk = sum(w.uren * w.tarief for w in selected)
-                    totaal_reis = sum(w.km * w.km_tarief for w in selected)
-                    totaal = totaal_werk + totaal_reis
+                    # Default date to last werkdag
+                    if sel_wd:
+                        datum_input.value = max(w.datum for w in sel_wd)
 
                     with preview_container:
                         ui.separator()
                         ui.label('Preview').classes('text-subtitle2')
-                        with ui.row().classes('gap-8'):
-                            ui.label(f'Uren: {totaal_uren:.1f}')
-                            ui.label(f'Km: {totaal_km:.0f}')
-                            ui.label(f'Waarnemingen: {format_euro(totaal_werk)}')
-                            ui.label(f'Reiskosten: {format_euro(totaal_reis)}')
-                        ui.label(f'Totaal: {format_euro(totaal)}') \
+                        if sel_wd:
+                            with ui.row().classes('gap-6'):
+                                ui.label(f'Uren: {wd_uren:.1f}')
+                                ui.label(f'Km: {wd_km:.0f}')
+                                ui.label(f'Waarnemingen: '
+                                         f'{format_euro(wd_werk)}')
+                                if wd_reis > 0:
+                                    ui.label(f'Reiskosten: '
+                                             f'{format_euro(wd_reis)}')
+                        if ml_items:
+                            ui.label(
+                                f'Handmatige regels: '
+                                f'{format_euro(ml_total)}')
+                        ui.label(f'Totaal: {format_euro(grand_total)}') \
                             .classes('text-h6 text-weight-bold')
-
-                klant_select.on_value_change(lambda _: load_werkdagen())
 
                 # Auto-load werkdagen if klant was pre-selected
                 if pre_klant_id:
                     await load_werkdagen()
 
                 with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
-                    ui.button('Annuleren', on_click=dialog.close).props('flat')
+                    ui.button('Annuleren',
+                              on_click=dialog.close).props('flat')
 
                     async def genereer_factuur():
                         kid = klant_select.value
                         if not kid:
-                            ui.notify('Selecteer een klant', type='warning')
+                            ui.notify('Selecteer of typ een klant',
+                                      type='warning')
                             return
 
                         ids = selected_werkdagen['ids']
                         data = selected_werkdagen['data']
                         selected = [w for w in data if w.id in ids]
+                        ml_items = [m for m in manual_lines['items']
+                                    if m is not None]
 
-                        if not selected:
-                            ui.notify('Selecteer werkdagen', type='warning')
+                        if not selected and not ml_items:
+                            ui.notify(
+                                'Selecteer werkdagen of voeg regels toe',
+                                type='warning')
                             return
 
-                        klant = next(k for k in klanten if k.id == kid)
-                        factuur_datum = datum_input.value or date.today().isoformat()
+                        # Resolve klant info
+                        if isinstance(kid, int):
+                            klant = next(
+                                (k for k in klanten if k.id == kid), None)
+                            klant_dict = {
+                                'naam': klant.naam,
+                                'adres': klant.adres,
+                            } if klant else {'naam': str(kid), 'adres': ''}
+                            db_klant_id = kid
+                        else:
+                            # Free-text klant
+                            adres = (manual_adres_input['ref'].value
+                                     if manual_adres_input['ref'] else '')
+                            klant_dict = {
+                                'naam': str(kid), 'adres': adres}
+                            # For DB: create a temporary klant or use id=0
+                            # We store with klant_id of the first active klant
+                            # and note the manual name in the PDF
+                            db_klant_id = klanten[0].id if klanten else 1
+
+                        factuur_datum = (datum_input.value
+                                         or date.today().isoformat())
                         jaar = int(factuur_datum[:4])
-                        nummer = await get_next_factuurnummer(DB_PATH, jaar=jaar)
+                        nummer = await get_next_factuurnummer(
+                            DB_PATH, jaar=jaar)
 
                         # Prepare werkdagen data for invoice generator
                         wd_dicts = []
                         for w in selected:
+                            loc = w.locatie
+                            if isinstance(kid, int):
+                                klant_obj = next(
+                                    (k for k in klanten if k.id == kid),
+                                    None)
+                                if not loc and klant_obj:
+                                    loc = klant_obj.adres
                             wd_dicts.append({
                                 'datum': w.datum,
                                 'activiteit': w.activiteit,
-                                'locatie': w.locatie or klant.adres,
+                                'locatie': loc or '',
                                 'uren': w.uren,
                                 'tarief': w.tarief,
                                 'km': w.km,
                                 'km_tarief': w.km_tarief,
                             })
 
-                        klant_dict = {'naam': klant.naam, 'adres': klant.adres}
+                        # Add manual lines as pseudo-werkdagen
+                        for m in ml_items:
+                            wd_dicts.append({
+                                'datum': factuur_datum,
+                                'activiteit': m['omschrijving'],
+                                'locatie': '',
+                                'uren': m['aantal'],
+                                'tarief': m['tarief'],
+                                'km': 0,
+                                'km_tarief': 0,
+                            })
+
+                        klant_dict_final = klant_dict
 
                         # Load business info for invoice
                         bg = await get_bedrijfsgegevens(DB_PATH)
@@ -1284,7 +1429,8 @@ async def facturen_page():
                         try:
                             pdf_path = await asyncio.to_thread(
                                 generate_invoice,
-                                nummer, klant_dict, wd_dicts, PDF_DIR,
+                                nummer, klant_dict_final,
+                                wd_dicts, PDF_DIR,
                                 factuur_datum=factuur_datum,
                                 bedrijfsgegevens=bg_dict,
                             )
@@ -1292,19 +1438,21 @@ async def facturen_page():
                             ui.notify(f'PDF generatie mislukt: {ex}', type='negative')
                             return
 
-                        # Calculate totals
+                        # Calculate totals (werkdagen + manual)
                         totaal_uren = sum(w.uren for w in selected)
                         totaal_km = sum(w.km for w in selected)
                         totaal_bedrag = sum(
                             w.uren * w.tarief + w.km * w.km_tarief
                             for w in selected
+                        ) + sum(
+                            m['aantal'] * m['tarief'] for m in ml_items
                         )
 
                         # Save factuur record
                         await add_factuur(
                             DB_PATH,
                             nummer=nummer,
-                            klant_id=kid,
+                            klant_id=db_klant_id,
                             datum=factuur_datum,
                             totaal_uren=totaal_uren,
                             totaal_km=totaal_km,
