@@ -12,7 +12,7 @@ TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates"
 
 def generate_invoice(factuur_nummer: str, klant: dict, werkdagen: list[dict],
                      output_dir: Path, factuur_datum: str = None,
-                     bedrijfsgegevens: dict = None) -> Path:
+                     bedrijfsgegevens: dict = None, qr_path: str = '') -> Path:
     """Render Jinja2 HTML template to PDF via WeasyPrint.
 
     Args:
@@ -22,6 +22,7 @@ def generate_invoice(factuur_nummer: str, klant: dict, werkdagen: list[dict],
         output_dir: directory to save PDF
         factuur_datum: ISO date string, defaults to today
         bedrijfsgegevens: dict with bedrijfsnaam, naam, functie, adres, postcode_plaats, kvk, iban, thuisplaats
+        qr_path: path to QR code image; auto-detects from data/qr/betaal_qr.png if empty
 
     Returns: Path to generated PDF
     """
@@ -77,16 +78,36 @@ def generate_invoice(factuur_nummer: str, klant: dict, werkdagen: list[dict],
 
     totaal = subtotaal_werk + subtotaal_km
 
+    # Auto-detect QR code from default location
+    if not qr_path:
+        default_qr = output_dir.parent / 'qr' / 'betaal_qr.png'
+        if default_qr.exists():
+            qr_path = str(default_qr)
+
+    qr_uri = ''
+    if qr_path and Path(qr_path).exists():
+        qr_uri = Path(qr_path).resolve().as_uri()
+
+    # Normalize klant for backward compatibility with structured fields
+    klant_full = {
+        'naam': klant.get('naam', ''),
+        'contactpersoon': klant.get('contactpersoon', ''),
+        'adres': klant.get('adres', ''),
+        'postcode': klant.get('postcode', ''),
+        'plaats': klant.get('plaats', ''),
+    }
+
     html_content = template.render(
         nummer=factuur_nummer,
         datum=format_datum(datum.strftime('%Y-%m-%d')),
         vervaldatum=format_datum(vervaldatum.strftime('%Y-%m-%d')),
-        klant=klant,
+        klant=klant_full,
         bedrijf=bedrijfsgegevens,
         regels=regels,
         subtotaal_werk=subtotaal_werk,
         subtotaal_km=subtotaal_km,
         totaal=totaal,
+        qr_path=qr_uri,
     )
 
     # Sanitize filename
