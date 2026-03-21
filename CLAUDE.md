@@ -15,7 +15,7 @@ source .venv/bin/activate
 export DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib
 python main.py  # → http://127.0.0.1:8085
 
-# Tests (418 passing)
+# Tests (445 passing)
 DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib .venv/bin/python -m pytest tests/ -v
 ```
 
@@ -40,7 +40,9 @@ DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib .venv/bin/python -m pytest tests/ -
 - **Fiscal utils**: `components/fiscal_utils.py` (shared `fiscale_params_to_dict` + `fetch_fiscal_data` + `extrapoleer_jaaromzet` + `get_personal_data_with_fallback`)
 - **Fiscal engine**: `fiscal/berekeningen.py` (bereken_volledig waterfall + bereken_box3)
 - **Heffingskortingen**: `fiscal/heffingskortingen.py` (AK brackets + AHK)
-- **KPI cards**: `components/kpi_card.py` (shared kpi_card + kpi_strip)
+- **KPI strip**: `components/kpi_card.py` (kpi_strip for jaarafsluiting only)
+- **Shared UI**: `components/shared_ui.py` (year_options, date_input, confirm_dialog)
+- **Charts**: `components/charts.py` (revenue_bar_chart, cost_donut_chart)
 
 ### NiceGUI Patronen
 - `ui.table` (NIET AG Grid), `ui.echart` voor charts
@@ -78,5 +80,6 @@ Alle fiscale waarden in `fiscale_params` tabel (55 kolommen): ZA, SA, MKB%, KIA,
 - **PVV premiegrondslag**: Must be set explicitly per year in DB. Falls back to `schijf1_grens` if 0 (only correct for 2025+)
 - **Box 3 drempel schulden**: Per-persoon, doubled if partner. Schulden below drempel ignored
 - **Box 3 rendementen**: Must use DEFINITIEVE percentages (not voorlopig)
-- **Dashboard tax forecast**: Extrapolates YTD income to annual (`extrapoleer_jaaromzet`), falls back to prior-year personal data (`get_personal_data_with_fallback`), shows confidence badge + progress bars. Uses FULL annual VA for jaarprognose. Aangifte always uses full annual VA.
+- **Dashboard**: Hero KPIs (omzet, winst, belasting) with sparklines + secondary strip + contextual alerts. Real VA tracking from bank transactions via `betalingskenmerk` column (matched to Belastingdienst IBAN). YoY delta uses day-precise comparison (`get_kpis_tot_datum`), not full-month. CSS classes defined in `layout.py` (hero-label, hero-value, etc.).
+- **VA bank matching**: `banktransacties.betalingskenmerk` column captures Rabobank CSV payment reference. `get_va_betalingen()` splits IB/ZVW by kenmerk digit pattern. `backfill_betalingskenmerken()` runs on startup to populate existing transactions.
 - **W&V jaarafsluiting**: Shows km-vergoeding as separate line + year-over-year comparison columns with Δ%.
