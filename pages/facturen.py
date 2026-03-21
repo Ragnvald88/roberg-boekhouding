@@ -3,7 +3,7 @@
 import asyncio
 import subprocess
 import tempfile
-from datetime import date
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from nicegui import app, events, ui
@@ -26,6 +26,19 @@ from import_.pdf_parser import (
 from import_.klant_mapping import resolve_klant, resolve_anw_klant
 
 PDF_DIR = DB_PATH.parent / "facturen"
+
+# Serve factuur PDFs for in-browser preview
+if PDF_DIR.exists():
+    app.add_static_files('/facturen-files', str(PDF_DIR))
+
+
+def _is_verlopen(datum_str: str) -> bool:
+    """Check if an invoice is overdue (>14 days past datum and unpaid)."""
+    try:
+        d = datetime.strptime(datum_str, '%Y-%m-%d').date()
+        return (d + timedelta(days=14)) < date.today()
+    except (ValueError, TypeError):
+        return False
 
 
 @ui.page('/facturen')
@@ -59,6 +72,18 @@ async def facturen_page():
             ui.select(klant_opties, value=None, label='Klant',
                       on_change=on_klant_filter).props('clearable').classes('w-48')
 
+            # Status filter
+            status_options = {'': 'Alle', 'openstaand': 'Openstaand',
+                              'verlopen': 'Verlopen', 'betaald': 'Betaald'}
+            filter_status = {'value': ''}
+
+            async def on_status_filter(e):
+                filter_status['value'] = e.value
+                await refresh_table()
+
+            ui.select(status_options, value='', label='Status',
+                      on_change=on_status_filter).classes('w-40')
+
             async def export_csv():
                 facturen = await get_facturen(DB_PATH, jaar=jaar_select.value)
                 if filter_klant['value']:
@@ -84,12 +109,18 @@ async def facturen_page():
                       on_click=lambda: open_new_factuur_dialog()) \
                 .props('color=primary')
 
+        # KPI summary strip
+        kpi_strip_container = ui.row().classes('w-full gap-4')
+
         # Bulk action toolbar (hidden when nothing selected)
         bulk_bar = ui.row().classes('w-full items-center gap-4')
         bulk_bar.set_visibility(False)
         bulk_bar_ref['ref'] = bulk_bar
         with bulk_bar:
             bulk_label = ui.label('')
+            ui.button('Markeer betaald', icon='check_circle',
+                      on_click=lambda: on_bulk_betaald()) \
+                .props('color=positive outline')
             ui.button('Verwijder selectie', icon='delete',
                       on_click=lambda: on_bulk_delete()) \
                 .props('color=negative outline')
@@ -99,6 +130,8 @@ async def facturen_page():
             {'name': 'nummer', 'label': 'Nummer', 'field': 'nummer',
              'sortable': True, 'align': 'left'},
             {'name': 'datum', 'label': 'Datum', 'field': 'datum_fmt',
+             'sortable': True, 'align': 'left'},
+            {'name': 'vervaldatum', 'label': 'Vervaldatum', 'field': 'vervaldatum_fmt',
              'sortable': True, 'align': 'left'},
             {'name': 'klant', 'label': 'Klant', 'field': 'klant_naam',
              'sortable': True, 'align': 'left'},
@@ -121,8 +154,9 @@ async def facturen_page():
 
         table.add_slot('body-cell-status', '''
             <q-td :props="props">
-                <q-badge :color="props.row.betaald ? 'positive' : 'warning'"
-                         :label="props.row.betaald ? 'Betaald' : 'Openstaand'" />
+                <q-badge v-if="props.row.betaald" color="positive" label="Betaald" />
+                <q-badge v-else-if="props.row.verlopen" color="negative" label="Verlopen" />
+                <q-badge v-else color="warning" label="Openstaand" />
             </q-td>
         ''')
 
@@ -145,6 +179,14 @@ async def facturen_page():
                                             color="primary" />
                                 </q-item-section>
                                 <q-item-section>Bewerken</q-item-section>
+                            </q-item>
+                            <q-item v-if="props.row.pdf_pad" clickable
+                                @click="() => $parent.$emit('preview', props.row)">
+                                <q-item-section side>
+                                    <q-icon name="visibility" size="xs"
+                                            color="primary" />
+                                </q-item-section>
+                                <q-item-section>Preview</q-item-section>
                             </q-item>
                             <q-item v-if="props.row.pdf_pad" clickable
                                 @click="() => $parent.$emit('download',
@@ -222,15 +264,38 @@ async def facturen_page():
             if filter_klant['value']:
                 facturen = [f for f in facturen
                             if f.klant_naam == filter_klant['value']]
+
+            # Status filter
+            status_val = filter_status['value']
+            if status_val == 'betaald':
+                facturen = [f for f in facturen if f.betaald]
+            elif status_val == 'openstaand':
+                facturen = [f for f in facturen if not f.betaald]
+            elif status_val == 'verlopen':
+                facturen = [f for f in facturen
+                            if not f.betaald and _is_verlopen(f.datum)]
+
             rows = []
             totaal = 0
             openstaand = 0
             for f in facturen:
+                # Compute verlopen status and vervaldatum
+                try:
+                    factuur_date = datetime.strptime(f.datum, '%Y-%m-%d').date()
+                    vervaldatum = factuur_date + timedelta(days=14)
+                    is_verlopen = not f.betaald and vervaldatum < date.today()
+                    vervaldatum_fmt = format_datum(vervaldatum.isoformat())
+                except (ValueError, TypeError):
+                    is_verlopen = False
+                    vervaldatum_fmt = ''
+
                 rows.append({
                     'id': f.id,
                     'nummer': f.nummer,
                     'datum': f.datum,
                     'datum_fmt': format_datum(f.datum),
+                    'vervaldatum_fmt': vervaldatum_fmt,
+                    'verlopen': is_verlopen,
                     'klant_id': f.klant_id,
                     'klant_naam': f.klant_naam,
                     'totaal_uren': f.totaal_uren,
@@ -250,6 +315,33 @@ async def facturen_page():
             table.selected.clear()
             table.update()
             update_bulk_bar()
+
+            # Update KPI strip
+            verlopen_bedrag = sum(r['totaal_bedrag'] for r in rows
+                                  if r.get('verlopen'))
+            kpi_strip_container.clear()
+            with kpi_strip_container:
+                with ui.card().classes('flex-1 q-pa-sm').style(
+                        'border-radius: 10px; border: 1px solid #E2E8F0'):
+                    ui.label('Gefactureerd').classes('text-caption text-grey-7')
+                    ui.label(format_euro(totaal)).classes(
+                        'text-subtitle1 text-weight-bold')
+                if openstaand > 0:
+                    with ui.card().classes('flex-1 q-pa-sm').style(
+                            'border-radius: 10px; border: 1px solid #E2E8F0'):
+                        ui.label('Openstaand').classes(
+                            'text-caption text-grey-7')
+                        ui.label(format_euro(openstaand)) \
+                            .style('color: var(--q-warning)') \
+                            .classes('text-subtitle1 text-weight-bold')
+                if verlopen_bedrag > 0:
+                    with ui.card().classes('flex-1 q-pa-sm').style(
+                            'border-radius: 10px; border: 1px solid #E2E8F0'):
+                        ui.label('Verlopen').classes(
+                            'text-caption text-grey-7')
+                        ui.label(format_euro(verlopen_bedrag)) \
+                            .style('color: var(--q-negative)') \
+                            .classes('text-subtitle1 text-weight-bold')
 
             summary_row.clear()
             with summary_row:
@@ -354,6 +446,32 @@ async def facturen_page():
                         .props('color=negative')
             dialog.open()
 
+        async def on_bulk_betaald():
+            selected = table.selected
+            if not selected:
+                return
+            n = len(selected)
+            with ui.dialog() as dialog, ui.card():
+                ui.label(f'{n} facturen markeren als betaald?').classes('text-h6')
+                with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
+                    ui.button('Annuleren', on_click=dialog.close).props('flat')
+
+                    async def do_bulk_betaald():
+                        today = date.today().isoformat()
+                        for row in selected:
+                            if not row.get('betaald'):
+                                await mark_betaald(DB_PATH,
+                                                   factuur_id=row['id'],
+                                                   datum=today)
+                        dialog.close()
+                        ui.notify(f'{n} facturen gemarkeerd als betaald',
+                                  type='positive')
+                        await refresh_table()
+
+                    ui.button('Ja, betaald', on_click=do_bulk_betaald) \
+                        .props('color=positive')
+            dialog.open()
+
         async def on_download(e):
             row = e.args
             pdf_path = row.get('pdf_pad', '')
@@ -369,6 +487,37 @@ async def facturen_page():
                 await asyncio.to_thread(subprocess.run, ['open', '-R', pdf_path])
             else:
                 ui.notify('PDF niet gevonden', type='warning')
+
+        async def on_preview(e):
+            row = e.args
+            pdf_path = row.get('pdf_pad', '')
+            if not pdf_path or not Path(pdf_path).exists():
+                ui.notify('PDF niet gevonden', type='warning')
+                return
+            # Determine the correct static URL path
+            p = Path(pdf_path)
+            # PDFs can be in data/facturen/ or data/facturen/imports/
+            try:
+                rel = p.relative_to(PDF_DIR)
+            except ValueError:
+                ui.notify('PDF buiten facturenmap', type='warning')
+                return
+            url = f'/facturen-files/{rel}'
+            with ui.dialog().classes('full-width') as dlg, \
+                    ui.card().classes('w-full q-pa-none') \
+                    .style('max-width: 900px; height: 85vh'):
+                with ui.row().classes(
+                    'w-full justify-between items-center q-pa-sm'
+                ):
+                    ui.label(f"Factuur {row['nummer']}").classes('text-h6')
+                    ui.button(icon='close', on_click=dlg.close) \
+                        .props('flat round dense')
+                ui.html(
+                    f'<iframe src="{url}" '
+                    f'style="width:100%;height:calc(85vh - 56px);'
+                    f'border:none"></iframe>'
+                )
+            dlg.open()
 
         async def on_edit(e):
             row = e.args
@@ -552,6 +701,7 @@ async def facturen_page():
         table.on('download', on_download)
         table.on('edit', on_edit)
         table.on('openfinder', on_open_finder)
+        table.on('preview', on_preview)
 
         async def open_import_dialog():
             """Open dialog to import facturen from PDF files."""
@@ -1002,6 +1152,10 @@ async def facturen_page():
                     value=pre_klant_id,
                 ).classes('w-full q-mb-md')
 
+                # Date input (before werkdagen so update_preview can set it)
+                datum_input = date_input('Factuurdatum',
+                                         value=date.today().isoformat())
+
                 # Werkdagen selection container
                 werkdagen_container = ui.column().classes('w-full')
                 selected_werkdagen = {'ids': set(), 'data': []}
@@ -1053,6 +1207,10 @@ async def facturen_page():
                     if not selected:
                         return
 
+                    # Default date to last selected werkdag
+                    last_date = max(w.datum for w in selected)
+                    datum_input.value = last_date
+
                     totaal_uren = sum(w.uren for w in selected)
                     totaal_km = sum(w.km for w in selected)
                     totaal_werk = sum(w.uren * w.tarief for w in selected)
@@ -1075,14 +1233,6 @@ async def facturen_page():
                 # Auto-load werkdagen if klant was pre-selected
                 if pre_klant_id:
                     await load_werkdagen()
-
-                # Date input
-                with ui.input('Factuurdatum', value=date.today().isoformat()) \
-                        .classes('w-48 q-mt-md') as datum_input:
-                    with datum_input.add_slot('append'):
-                        ui.icon('event').classes('cursor-pointer')
-                    with ui.menu() as date_menu:
-                        ui.date(mask='YYYY-MM-DD').bind_value(datum_input)
 
                 with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
                     ui.button('Annuleren', on_click=dialog.close).props('flat')
