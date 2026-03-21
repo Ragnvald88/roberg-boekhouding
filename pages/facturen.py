@@ -1124,8 +1124,10 @@ async def facturen_page():
             with ui.dialog() as dialog, ui.card().classes('w-full max-w-2xl q-pa-lg'):
                 ui.label('Nieuwe factuur aanmaken').classes('text-h6 q-mb-md')
 
-                # --- Klant selection: dropdown OR free text ---
+                # --- Klant: toggle between existing and manual ---
                 klant_options = {k.id: k.naam for k in klanten}
+                klant_state = {'mode': 'existing', 'manual_naam': '',
+                               'manual_adres': '', 'klant_id': None}
 
                 pre_klant_id = None
                 if pre_selected_ids:
@@ -1142,32 +1144,64 @@ async def facturen_page():
                             'Selecteer werkdagen van één klant',
                             type='warning')
 
-                klant_select = ui.select(
-                    klant_options, label='Klant (of typ een naam)',
-                    value=pre_klant_id,
-                    with_input=True, new_value_mode='add-unique',
-                ).classes('w-full').props('use-input input-debounce=0')
+                klant_container = ui.column().classes('w-full')
 
-                # Manual klant address (shown when free-text klant is entered)
-                manual_adres_container = ui.column().classes('w-full')
-                manual_adres_input = {'ref': None}
+                # Build klant UI
+                klant_select_ref = {'ref': None}
+                manual_naam_ref = {'ref': None}
+                manual_adres_ref = {'ref': None}
 
-                def on_klant_change(e):
-                    val = klant_select.value
-                    manual_adres_container.clear()
-                    # If value is a string (typed), show address field
-                    if isinstance(val, str) and val not in [
-                            k.naam for k in klanten]:
-                        with manual_adres_container:
-                            manual_adres_input['ref'] = ui.input(
-                                'Adres klant',
-                                placeholder='Straat, Postcode Plaats',
+                def build_klant_ui():
+                    klant_container.clear()
+                    with klant_container:
+                        with ui.row().classes('w-full items-center gap-2'):
+                            ui.toggle(
+                                {'existing': 'Bestaande klant',
+                                 'manual': 'Handmatig'},
+                                value=klant_state['mode'],
+                                on_change=lambda e: switch_mode(e.value),
+                            ).props('dense no-caps size=sm')
+
+                        if klant_state['mode'] == 'existing':
+                            klant_select_ref['ref'] = ui.select(
+                                klant_options, label='Klant',
+                                value=(klant_state['klant_id']
+                                       or pre_klant_id),
                             ).classes('w-full')
-                    else:
-                        manual_adres_input['ref'] = None
+                            klant_select_ref['ref'].on_value_change(
+                                lambda e: (
+                                    klant_state.update({'klant_id': e.value}),
+                                    load_werkdagen()))
+                            manual_naam_ref['ref'] = None
+                            manual_adres_ref['ref'] = None
+                        else:
+                            manual_naam_ref['ref'] = ui.input(
+                                'Klantnaam',
+                                value=klant_state['manual_naam'],
+                            ).classes('w-full')
+                            manual_adres_ref['ref'] = ui.input(
+                                'Adres',
+                                value=klant_state['manual_adres'],
+                                placeholder='Straat 1, 1234 AB Plaats',
+                            ).classes('w-full')
+                            klant_select_ref['ref'] = None
 
-                klant_select.on_value_change(
-                    lambda e: (on_klant_change(e), load_werkdagen()))
+                def switch_mode(mode):
+                    # Save current manual values before switching
+                    if manual_naam_ref['ref']:
+                        klant_state['manual_naam'] = (
+                            manual_naam_ref['ref'].value or '')
+                    if manual_adres_ref['ref']:
+                        klant_state['manual_adres'] = (
+                            manual_adres_ref['ref'].value or '')
+                    klant_state['mode'] = mode
+                    build_klant_ui()
+                    if mode == 'existing':
+                        # Trigger werkdagen load for selected klant
+                        import asyncio as _aio
+                        _aio.ensure_future(load_werkdagen())
+
+                build_klant_ui()
 
                 # Date input
                 datum_input = date_input('Factuurdatum',
@@ -1230,13 +1264,15 @@ async def facturen_page():
                 preview_container = ui.column().classes('w-full q-mt-md')
 
                 async def load_werkdagen():
-                    kid = klant_select.value
+                    kid = (klant_state['klant_id']
+                           if klant_state['mode'] == 'existing'
+                           else None)
                     werkdagen_container.clear()
                     selected_werkdagen['ids'] = set()
                     selected_werkdagen['data'] = []
 
-                    # Only load werkdagen for known DB klanten (int id)
-                    if not kid or not isinstance(kid, int):
+                    # Only load werkdagen for known DB klanten
+                    if not kid:
                         update_preview()
                         return
 
@@ -1336,11 +1372,35 @@ async def facturen_page():
                               on_click=dialog.close).props('flat')
 
                     async def genereer_factuur():
-                        kid = klant_select.value
-                        if not kid:
-                            ui.notify('Selecteer of typ een klant',
-                                      type='warning')
-                            return
+                        # Resolve klant info based on mode
+                        if klant_state['mode'] == 'existing':
+                            kid = (klant_select_ref['ref'].value
+                                   if klant_select_ref['ref'] else None)
+                            if not kid:
+                                ui.notify('Selecteer een klant',
+                                          type='warning')
+                                return
+                            klant = next(
+                                (k for k in klanten if k.id == kid), None)
+                            klant_dict = {
+                                'naam': klant.naam,
+                                'adres': klant.adres,
+                            } if klant else {
+                                'naam': str(kid), 'adres': ''}
+                            db_klant_id = kid
+                        else:
+                            naam = (manual_naam_ref['ref'].value
+                                    if manual_naam_ref['ref'] else '')
+                            adres = (manual_adres_ref['ref'].value
+                                     if manual_adres_ref['ref'] else '')
+                            if not naam:
+                                ui.notify('Vul een klantnaam in',
+                                          type='warning')
+                                return
+                            klant_dict = {
+                                'naam': naam, 'adres': adres}
+                            db_klant_id = (klanten[0].id
+                                           if klanten else 1)
 
                         ids = selected_werkdagen['ids']
                         data = selected_werkdagen['data']
@@ -1354,26 +1414,6 @@ async def facturen_page():
                                 type='warning')
                             return
 
-                        # Resolve klant info
-                        if isinstance(kid, int):
-                            klant = next(
-                                (k for k in klanten if k.id == kid), None)
-                            klant_dict = {
-                                'naam': klant.naam,
-                                'adres': klant.adres,
-                            } if klant else {'naam': str(kid), 'adres': ''}
-                            db_klant_id = kid
-                        else:
-                            # Free-text klant
-                            adres = (manual_adres_input['ref'].value
-                                     if manual_adres_input['ref'] else '')
-                            klant_dict = {
-                                'naam': str(kid), 'adres': adres}
-                            # For DB: create a temporary klant or use id=0
-                            # We store with klant_id of the first active klant
-                            # and note the manual name in the PDF
-                            db_klant_id = klanten[0].id if klanten else 1
-
                         factuur_datum = (datum_input.value
                                          or date.today().isoformat())
                         jaar = int(factuur_datum[:4])
@@ -1384,10 +1424,10 @@ async def facturen_page():
                         wd_dicts = []
                         for w in selected:
                             loc = w.locatie
-                            if isinstance(kid, int):
+                            if isinstance(db_klant_id, int):
                                 klant_obj = next(
-                                    (k for k in klanten if k.id == kid),
-                                    None)
+                                    (k for k in klanten
+                                     if k.id == db_klant_id), None)
                                 if not loc and klant_obj:
                                     loc = klant_obj.adres
                             wd_dicts.append({
