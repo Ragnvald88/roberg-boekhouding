@@ -13,8 +13,8 @@ from components.invoice_builder import open_invoice_builder
 from components.utils import format_euro, format_datum, generate_csv
 from database import (
     get_facturen, add_factuur,
-    mark_betaald, delete_factuur, update_factuur,
-    get_klanten,
+    delete_factuur, update_factuur,
+    update_factuur_status, get_klanten,
     link_werkdagen_to_factuur, get_db_ctx, add_werkdag,
     get_fiscale_params, DB_PATH,
 )
@@ -73,7 +73,7 @@ async def facturen_page():
                       on_change=on_klant_filter).props('clearable').classes('w-48')
 
             # Status filter
-            status_options = {'': 'Alle', 'openstaand': 'Openstaand',
+            status_options = {'': 'Alle', 'concept': 'Concept', 'verstuurd': 'Verstuurd',
                               'verlopen': 'Verlopen', 'betaald': 'Betaald'}
             filter_status = {'value': ''}
 
@@ -91,9 +91,11 @@ async def facturen_page():
                                 if f.klant_naam == filter_klant['value']]
                 headers = ['Nummer', 'Datum', 'Klant', 'Uren', 'Km',
                            'Bedrag', 'Status']
+                status_labels = {'concept': 'Concept', 'verstuurd': 'Verstuurd',
+                                 'betaald': 'Betaald'}
                 rows = [[f.nummer, f.datum, f.klant_naam, f.totaal_uren,
                          f.totaal_km, f.totaal_bedrag,
-                         'Betaald' if f.betaald else 'Openstaand']
+                         status_labels.get(f.status, f.status.capitalize())]
                         for f in facturen]
                 csv_str = generate_csv(headers, rows)
                 ui.download.content(
@@ -155,9 +157,10 @@ async def facturen_page():
 
         table.add_slot('body-cell-status', '''
             <q-td :props="props">
-                <q-badge v-if="props.row.betaald" color="positive" label="Betaald" />
+                <q-badge v-if="props.row.status === 'betaald'" color="positive" label="Betaald" />
                 <q-badge v-else-if="props.row.verlopen" color="negative" label="Verlopen" />
-                <q-badge v-else color="warning" label="Openstaand" />
+                <q-badge v-else-if="props.row.status === 'verstuurd'" color="info" label="Verstuurd" />
+                <q-badge v-else color="grey-6" label="Concept" />
             </q-td>
         ''')
 
@@ -173,7 +176,7 @@ async def facturen_page():
                        color="grey-7">
                     <q-menu auto-close>
                         <q-list dense style="min-width: 200px">
-                            <q-item clickable
+                            <q-item v-if="props.row.status === 'concept'" clickable
                                 @click="() => $parent.$emit('edit', props.row)">
                                 <q-item-section side>
                                     <q-icon name="edit" size="xs"
@@ -181,7 +184,7 @@ async def facturen_page():
                                 </q-item-section>
                                 <q-item-section>Bewerken</q-item-section>
                             </q-item>
-                            <q-item v-if="props.row.pdf_pad" clickable
+                            <q-item v-if="props.row.pdf_pad && props.row.status !== 'concept'" clickable
                                 @click="() => $parent.$emit('preview', props.row)">
                                 <q-item-section side>
                                     <q-icon name="visibility" size="xs"
@@ -206,7 +209,30 @@ async def facturen_page():
                                 <q-item-section>Toon in Finder</q-item-section>
                             </q-item>
                             <q-separator />
-                            <q-item v-if="!props.row.betaald" clickable
+                            <q-item v-if="props.row.status === 'concept'" clickable
+                                @click="() => $parent.$emit('sendmail', props.row)">
+                                <q-item-section side>
+                                    <q-icon name="email" size="xs"
+                                            color="info" />
+                                </q-item-section>
+                                <q-item-section>Verstuur via e-mail</q-item-section>
+                            </q-item>
+                            <q-item v-if="props.row.status === 'concept'" clickable
+                                @click="() => $parent.$emit('markverstuurd', props.row)">
+                                <q-item-section side>
+                                    <q-icon name="send" size="xs"
+                                            color="info" />
+                                </q-item-section>
+                                <q-item-section>Markeer als verstuurd</q-item-section>
+                            </q-item>
+                            <q-item v-if="props.row.status === 'verstuurd' || props.row.verlopen" clickable
+                                @click="() => $parent.$emit('sendmail', props.row)">
+                                <q-item-section side>
+                                    <q-icon name="email" size="xs" />
+                                </q-item-section>
+                                <q-item-section>Verstuur opnieuw</q-item-section>
+                            </q-item>
+                            <q-item v-if="props.row.status === 'verstuurd' || props.row.verlopen" clickable
                                 @click="() => $parent.$emit('markbetaald',
                                     props.row)">
                                 <q-item-section side>
@@ -217,7 +243,7 @@ async def facturen_page():
                                     Markeer betaald
                                 </q-item-section>
                             </q-item>
-                            <q-item v-if="props.row.betaald" clickable
+                            <q-item v-if="props.row.status === 'betaald'" clickable
                                 @click="() => $parent.$emit('markonbetaald',
                                     props.row)">
                                 <q-item-section side>
@@ -268,21 +294,23 @@ async def facturen_page():
 
             # Status filter
             status_val = filter_status['value']
-            if status_val == 'betaald':
-                facturen = [f for f in facturen if f.betaald]
-            elif status_val == 'openstaand':
+            if status_val == 'concept':
+                facturen = [f for f in facturen if f.status == 'concept']
+            elif status_val == 'verstuurd':
                 facturen = [f for f in facturen
-                            if not f.betaald and not _is_verlopen(f.datum)]
+                            if f.status == 'verstuurd' and not _is_verlopen(f.datum)]
             elif status_val == 'verlopen':
                 facturen = [f for f in facturen
-                            if not f.betaald and _is_verlopen(f.datum)]
+                            if f.status == 'verstuurd' and _is_verlopen(f.datum)]
+            elif status_val == 'betaald':
+                facturen = [f for f in facturen if f.status == 'betaald']
 
             rows = []
             totaal = 0
             openstaand = 0
             for f in facturen:
-                # Compute verlopen status and vervaldatum
-                is_verlopen = not f.betaald and _is_verlopen(f.datum)
+                # Compute verlopen status (only applies to verstuurd invoices)
+                is_verlopen = f.status == 'verstuurd' and _is_verlopen(f.datum)
                 try:
                     factuur_date = datetime.strptime(f.datum, '%Y-%m-%d').date()
                     vervaldatum_fmt = format_datum(
@@ -303,13 +331,13 @@ async def facturen_page():
                     'totaal_km': f.totaal_km,
                     'bedrag_fmt': format_euro(f.totaal_bedrag),
                     'totaal_bedrag': f.totaal_bedrag,
-                    'betaald': f.betaald,
+                    'status': f.status,
                     'betaald_datum': f.betaald_datum,
                     'pdf_pad': f.pdf_pad,
                     'type': f.type,
                 })
                 totaal += f.totaal_bedrag
-                if not f.betaald:
+                if f.status != 'betaald' and f.status != 'concept':
                     openstaand += f.totaal_bedrag
 
             table.rows = rows
@@ -319,7 +347,7 @@ async def facturen_page():
 
             # Update KPI strip
             verlopen_bedrag = sum(r['totaal_bedrag'] for r in rows
-                                  if r.get('verlopen'))
+                                  if r.get('verlopen') and r.get('status') == 'verstuurd')
             kpi_strip_container.clear()
             with kpi_strip_container:
                 _kpi_style = 'font-variant-numeric: tabular-nums'
@@ -360,8 +388,9 @@ async def facturen_page():
                     ui.button('Annuleren', on_click=dialog.close).props('flat')
 
                     async def do_mark():
-                        await mark_betaald(DB_PATH, factuur_id=row['id'],
-                                           datum=date.today().isoformat())
+                        await update_factuur_status(DB_PATH, factuur_id=row['id'],
+                                                    status='betaald',
+                                                    betaald_datum=date.today().isoformat())
                         dialog.close()
                         ui.notify(f"Factuur {row['nummer']} gemarkeerd als betaald",
                                   type='positive')
@@ -381,8 +410,9 @@ async def facturen_page():
                     ui.button('Annuleren', on_click=dialog.close).props('flat')
 
                     async def do_mark():
-                        await mark_betaald(DB_PATH, factuur_id=row['id'],
-                                           datum='', betaald=False)
+                        await update_factuur_status(DB_PATH, factuur_id=row['id'],
+                                                    status='verstuurd',
+                                                    betaald_datum='')
                         dialog.close()
                         ui.notify(f"Factuur {row['nummer']} gemarkeerd als onbetaald",
                                   type='info')
@@ -458,10 +488,11 @@ async def facturen_page():
                     async def do_bulk_betaald():
                         today = date.today().isoformat()
                         for row in selected:
-                            if not row.get('betaald'):
-                                await mark_betaald(DB_PATH,
-                                                   factuur_id=row['id'],
-                                                   datum=today)
+                            if row.get('status') != 'betaald':
+                                await update_factuur_status(
+                                    DB_PATH, factuur_id=row['id'],
+                                    status='betaald',
+                                    betaald_datum=today)
                         dialog.close()
                         ui.notify(f'{n} facturen gemarkeerd als betaald',
                                   type='positive')
@@ -565,17 +596,21 @@ async def facturen_page():
                     label='Type', value=row.get('type', 'factuur'),
                 ).classes('w-full')
 
-                # Betaald
+                # Status
                 ui.separator().classes('q-my-sm')
                 with ui.row().classes('w-full items-center gap-4'):
-                    edit_betaald = ui.checkbox(
-                        'Betaald', value=row['betaald'])
+                    edit_status = ui.select(
+                        {'concept': 'Concept', 'verstuurd': 'Verstuurd',
+                         'betaald': 'Betaald'},
+                        label='Status', value=row['status'],
+                    ).classes('w-40')
                     edit_betaald_datum = ui.input(
                         'Betaaldatum',
                         value=row.get('betaald_datum', ''),
                     ).classes('w-40')
                     edit_betaald_datum.bind_visibility_from(
-                        edit_betaald, 'value')
+                        edit_status, 'value',
+                        backward=lambda v: v == 'betaald')
 
                 # PDF section
                 ui.separator().classes('q-my-sm')
@@ -643,21 +678,24 @@ async def facturen_page():
                         await update_factuur(
                             DB_PATH, factuur_id=row['id'], **kwargs)
 
-                        # Handle betaald change (cascades to werkdagen)
-                        new_betaald = edit_betaald.value
-                        if new_betaald != row['betaald']:
-                            await mark_betaald(
+                        # Handle status change (cascades to werkdagen)
+                        new_status = edit_status.value
+                        if new_status != row['status']:
+                            betaald_datum = ''
+                            if new_status == 'betaald':
+                                betaald_datum = (edit_betaald_datum.value
+                                                 or date.today().isoformat())
+                            await update_factuur_status(
                                 DB_PATH, factuur_id=row['id'],
-                                datum=(edit_betaald_datum.value
-                                       or date.today().isoformat())
-                                if new_betaald else '',
-                                betaald=bool(new_betaald))
-                        elif (new_betaald
+                                status=new_status,
+                                betaald_datum=betaald_datum)
+                        elif (new_status == 'betaald'
                               and edit_betaald_datum.value
                               != row.get('betaald_datum', '')):
-                            await mark_betaald(
+                            await update_factuur_status(
                                 DB_PATH, factuur_id=row['id'],
-                                datum=edit_betaald_datum.value)
+                                status='betaald',
+                                betaald_datum=edit_betaald_datum.value)
 
                         # Handle PDF removal
                         if pdf_removed['value'] and existing_pdf:
@@ -694,8 +732,23 @@ async def facturen_page():
                     ).props('color=primary')
             dialog.open()
 
+        async def on_mark_verstuurd(e):
+            row = e.args
+            await update_factuur_status(DB_PATH, factuur_id=row['id'],
+                                        status='verstuurd')
+            ui.notify(f"Factuur {row['nummer']} gemarkeerd als verstuurd",
+                      type='positive')
+            await refresh_table()
+
+        async def on_send_mail(e):
+            row = e.args
+            # TODO: Task 5 implements actual email sending
+            ui.notify('E-mail functie wordt nog geïmplementeerd', type='info')
+
         table.on('markbetaald', on_mark_betaald)
         table.on('markonbetaald', on_mark_onbetaald)
+        table.on('markverstuurd', on_mark_verstuurd)
+        table.on('sendmail', on_send_mail)
         table.on('deletefactuur', on_delete_factuur)
         table.on('download', on_download)
         table.on('edit', on_edit)
@@ -1014,7 +1067,7 @@ async def facturen_page():
                                 totaal_km=totaal_km,
                                 totaal_bedrag=bedrag,
                                 pdf_pad=pdf_pad,
-                                betaald=1 if opt_betaald['value'] else 0,
+                                status='betaald' if opt_betaald['value'] else 'verstuurd',
                                 betaald_datum=(datum if opt_betaald['value']
                                               else ''),
                                 type=ftype,
