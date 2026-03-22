@@ -325,6 +325,13 @@ MIGRATIONS = [
     (13, "add_betalingskenmerk_to_banktransacties", [
         "ALTER TABLE banktransacties ADD COLUMN betalingskenmerk TEXT DEFAULT ''",
     ]),
+    (14, "add_factuur_status_column", [
+        "ALTER TABLE facturen ADD COLUMN status TEXT DEFAULT 'concept'",
+        "UPDATE facturen SET status = CASE WHEN betaald = 1 THEN 'betaald' ELSE 'verstuurd' END",
+    ]),
+    (15, "add_klant_email", [
+        "ALTER TABLE klanten ADD COLUMN email TEXT DEFAULT ''",
+    ]),
 ]
 
 
@@ -511,7 +518,8 @@ async def get_klanten(db_path: Path = DB_PATH, alleen_actief: bool = False) -> l
         return [Klant(
             id=r['id'], naam=r['naam'], tarief_uur=r['tarief_uur'],
             retour_km=r['retour_km'], adres=r['adres'] or '',
-            kvk=r['kvk'] or '', actief=bool(r['actief'])
+            kvk=r['kvk'] or '', actief=bool(r['actief']),
+            email=(r['email'] or '') if 'email' in (r.keys() if hasattr(r, 'keys') else []) else ''
         ) for r in rows]
 
 
@@ -583,7 +591,7 @@ def _row_to_factuur(r) -> Factuur:
         totaal_uren=r['totaal_uren'] or 0,
         totaal_km=r['totaal_km'] or 0,
         totaal_bedrag=r['totaal_bedrag'],
-        pdf_pad=r['pdf_pad'] or '', betaald=bool(r['betaald']),
+        pdf_pad=r['pdf_pad'] or '', status=r['status'] or 'concept',
         betaald_datum=r['betaald_datum'] or '',
         type=r['type'] or 'factuur',
     )
@@ -713,12 +721,12 @@ async def add_factuur(db_path: Path = DB_PATH, **kwargs) -> int:
         cursor = await conn.execute(
             """INSERT INTO facturen
                (nummer, klant_id, datum, totaal_uren, totaal_km,
-                totaal_bedrag, pdf_pad, betaald, betaald_datum, type)
+                totaal_bedrag, pdf_pad, status, betaald_datum, type)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (kwargs['nummer'], kwargs['klant_id'], kwargs['datum'],
              kwargs.get('totaal_uren', 0), kwargs.get('totaal_km', 0),
              kwargs['totaal_bedrag'], kwargs.get('pdf_pad', ''),
-             kwargs.get('betaald', 0), kwargs.get('betaald_datum', ''),
+             kwargs.get('status', 'concept'), kwargs.get('betaald_datum', ''),
              kwargs.get('type', 'factuur'))
         )
         await conn.commit()
@@ -737,27 +745,39 @@ async def get_next_factuurnummer(db_path: Path = DB_PATH, jaar: int = 2026) -> s
         return f"{jaar}-{next_num:03d}"
 
 
-async def mark_betaald(db_path: Path = DB_PATH, factuur_id: int = 0,
-                       datum: str = '', betaald: bool = True) -> None:
-    if datum:
-        _validate_datum(datum)
+async def update_factuur_status(db_path: Path = DB_PATH, factuur_id: int = 0,
+                                 status: str = 'verstuurd',
+                                 betaald_datum: str = '') -> None:
+    """Update factuur status and cascade to linked werkdagen.
+
+    Status: 'concept', 'verstuurd', 'betaald'
+    Werkdagen cascade: 'betaald' -> werkdagen status 'betaald',
+                       others -> werkdagen status 'gefactureerd'
+    """
+    if betaald_datum:
+        _validate_datum(betaald_datum)
     async with get_db_ctx(db_path) as conn:
         await conn.execute(
-            "UPDATE facturen SET betaald = ?, betaald_datum = ? WHERE id = ?",
-            (1 if betaald else 0, datum, factuur_id)
-        )
-        # Cascade status to linked werkdagen
-        cursor = await conn.execute(
-            "SELECT nummer FROM facturen WHERE id = ?", (factuur_id,)
-        )
-        row = await cursor.fetchone()
+            "UPDATE facturen SET status = ?, betaald_datum = ? WHERE id = ?",
+            (status, betaald_datum, factuur_id))
+
+        # Cascade to werkdagen
+        cur = await conn.execute(
+            "SELECT nummer FROM facturen WHERE id = ?", (factuur_id,))
+        row = await cur.fetchone()
         if row and row['nummer']:
-            new_status = 'betaald' if betaald else 'gefactureerd'
+            new_wd_status = 'betaald' if status == 'betaald' else 'gefactureerd'
             await conn.execute(
                 "UPDATE werkdagen SET status = ? WHERE factuurnummer = ?",
-                (new_status, row['nummer'])
-            )
+                (new_wd_status, row['nummer']))
         await conn.commit()
+
+
+async def mark_betaald(db_path: Path = DB_PATH, factuur_id: int = 0,
+                       datum: str = '', betaald: bool = True) -> None:
+    """Backward-compatible wrapper around update_factuur_status."""
+    status = 'betaald' if betaald else 'verstuurd'
+    await update_factuur_status(db_path, factuur_id, status, betaald_datum=datum)
 
 
 async def update_factuur(db_path: Path = DB_PATH, factuur_id: int = 0,
@@ -1464,7 +1484,7 @@ async def get_kpis(db_path: Path = DB_PATH, jaar: int = 2026) -> dict:
         # Openstaand
         cur = await conn.execute(
             "SELECT COALESCE(SUM(totaal_bedrag), 0) FROM facturen "
-            "WHERE substr(datum, 1, 4) = ? AND betaald = 0",
+            "WHERE substr(datum, 1, 4) = ? AND status = 'verstuurd'",
             (jaar_str,)
         )
         openstaand = (await cur.fetchone())[0]
@@ -1523,7 +1543,7 @@ async def get_openstaande_facturen(db_path: Path = DB_PATH,
     async with get_db_ctx(db_path) as conn:
         sql = """SELECT f.*, k.naam as klant_naam
                  FROM facturen f JOIN klanten k ON f.klant_id = k.id
-                 WHERE f.betaald = 0 AND f.type = 'factuur'"""
+                 WHERE f.status = 'verstuurd' AND f.type = 'factuur'"""
         params = []
         if jaar:
             sql += " AND substr(f.datum, 1, 4) = ?"
@@ -1742,10 +1762,10 @@ async def get_debiteuren_op_peildatum(db_path: Path = DB_PATH,
 
     An invoice is a receivable at peildatum if:
     - It was issued on or before peildatum, AND
-    - It's still unpaid (betaald=0), OR
-    - It was paid AFTER peildatum (betaald=1 AND betaald_datum > peildatum)
+    - It's still unpaid (status != 'betaald'), OR
+    - It was paid AFTER peildatum (status = 'betaald' AND betaald_datum > peildatum)
 
-    Invoices with betaald=1 but no betaald_datum are assumed paid within their
+    Invoices with status='betaald' but no betaald_datum are assumed paid within their
     invoice period (conservative — not counted as receivables).
     """
     async with get_db_ctx(db_path) as conn:
@@ -1753,8 +1773,8 @@ async def get_debiteuren_op_peildatum(db_path: Path = DB_PATH,
             """SELECT COALESCE(SUM(totaal_bedrag), 0) FROM facturen
                WHERE datum <= ?
                  AND (
-                     betaald = 0
-                     OR (betaald = 1 AND betaald_datum != '' AND betaald_datum > ?)
+                     status != 'betaald'
+                     OR (status = 'betaald' AND betaald_datum != '' AND betaald_datum > ?)
                  )""",
             (peildatum, peildatum))
         row = await cursor.fetchone()
@@ -1776,7 +1796,7 @@ async def find_factuur_matches(db_path: Path = DB_PATH) -> list[dict]:
     async with get_db_ctx(db_path) as conn:
         cur = await conn.execute(
             """SELECT id, nummer, datum, totaal_bedrag FROM facturen
-               WHERE betaald = 0 ORDER BY datum""")
+               WHERE status IN ('verstuurd', 'concept') ORDER BY datum""")
         open_facturen = await cur.fetchall()
         if not open_facturen:
             return []
@@ -1865,7 +1885,7 @@ async def apply_factuur_matches(db_path: Path = DB_PATH,
     async with get_db_ctx(db_path) as conn:
         for m in matches:
             await conn.execute(
-                "UPDATE facturen SET betaald = 1, betaald_datum = ? WHERE id = ?",
+                "UPDATE facturen SET status = 'betaald', betaald_datum = ? WHERE id = ?",
                 (m['bank_datum'], m['factuur_id']))
             await conn.execute(
                 "UPDATE banktransacties SET koppeling_type = 'factuur', "

@@ -26,6 +26,7 @@ class Klant:
     adres: str = ''
     kvk: str = ''
     actief: bool = True
+    email: str = ''
 
 
 @dataclass
@@ -67,7 +68,7 @@ class Factuur:
     totaal_km: float = 0.0
     totaal_bedrag: float = 0.0
     pdf_pad: str = ''
-    betaald: bool = False
+    status: str = 'concept'
     betaald_datum: str = ''
     type: str = 'factuur'
 
