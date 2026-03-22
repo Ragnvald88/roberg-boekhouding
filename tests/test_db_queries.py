@@ -36,9 +36,11 @@ async def test_get_omzet_totaal_sums_all_types(db):
     """Omzet sums both factuur and anw types."""
     kid = await add_klant(db, naam="Test", tarief_uur=80)
     await add_factuur(db, nummer="2026-001", klant_id=kid,
-                      datum="2026-01-15", totaal_bedrag=1000, type='factuur')
+                      datum="2026-01-15", totaal_bedrag=1000, type='factuur',
+                      status='verstuurd')
     await add_factuur(db, nummer="2026-002", klant_id=kid,
-                      datum="2026-02-15", totaal_bedrag=500, type='anw')
+                      datum="2026-02-15", totaal_bedrag=500, type='anw',
+                      status='verstuurd')
     assert await get_omzet_totaal(db, jaar=2026) == 1500
 
 
@@ -47,9 +49,9 @@ async def test_get_omzet_totaal_filters_by_year(db):
     """Only facturen in the given year are summed."""
     kid = await add_klant(db, naam="Test", tarief_uur=80)
     await add_factuur(db, nummer="2025-001", klant_id=kid,
-                      datum="2025-12-15", totaal_bedrag=1000)
+                      datum="2025-12-15", totaal_bedrag=1000, status='verstuurd')
     await add_factuur(db, nummer="2026-001", klant_id=kid,
-                      datum="2026-01-15", totaal_bedrag=750)
+                      datum="2026-01-15", totaal_bedrag=750, status='verstuurd')
     assert await get_omzet_totaal(db, jaar=2026) == 750
     assert await get_omzet_totaal(db, jaar=2025) == 1000
 

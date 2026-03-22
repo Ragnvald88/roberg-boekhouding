@@ -1446,7 +1446,7 @@ async def get_omzet_per_maand(db_path: Path = DB_PATH, jaar: int = 2026) -> list
         cursor = await conn.execute(
             """SELECT substr(datum, 6, 2) as maand, SUM(totaal_bedrag) as totaal
                FROM facturen
-               WHERE substr(datum, 1, 4) = ?
+               WHERE substr(datum, 1, 4) = ? AND status != 'concept'
                GROUP BY maand ORDER BY maand""",
             (str(jaar),)
         )
@@ -1458,10 +1458,10 @@ async def get_omzet_per_maand(db_path: Path = DB_PATH, jaar: int = 2026) -> list
 async def get_kpis(db_path: Path = DB_PATH, jaar: int = 2026) -> dict:
     async with get_db_ctx(db_path) as conn:
         jaar_str = str(jaar)
-        # Omzet
+        # Omzet (excludes concept invoices)
         cur = await conn.execute(
             "SELECT COALESCE(SUM(totaal_bedrag), 0) FROM facturen "
-            "WHERE substr(datum, 1, 4) = ?",
+            "WHERE substr(datum, 1, 4) = ? AND status != 'concept'",
             (jaar_str,)
         )
         omzet = (await cur.fetchone())[0]
@@ -1508,7 +1508,7 @@ async def get_kpis_tot_datum(db_path: Path = DB_PATH, jaar: int = 2026,
     async with get_db_ctx(db_path) as conn:
         cur = await conn.execute(
             "SELECT COALESCE(SUM(totaal_bedrag), 0) FROM facturen "
-            "WHERE datum >= ? AND datum <= ?",
+            "WHERE datum >= ? AND datum <= ? AND status != 'concept'",
             (f'{jaar}-01-01', max_datum))
         omzet = (await cur.fetchone())[0]
 
@@ -1528,7 +1528,7 @@ async def get_omzet_per_klant(db_path: Path = DB_PATH, jaar: int = 2026) -> list
             """SELECT k.naam, SUM(f.totaal_uren) as uren,
                       SUM(f.totaal_km) as km, SUM(f.totaal_bedrag) as bedrag
                FROM facturen f JOIN klanten k ON f.klant_id = k.id
-               WHERE substr(f.datum, 1, 4) = ?
+               WHERE substr(f.datum, 1, 4) = ? AND f.status != 'concept'
                GROUP BY k.naam ORDER BY bedrag DESC""",
             (str(jaar),)
         )
@@ -1569,7 +1569,7 @@ async def get_omzet_totaal(db_path: Path = DB_PATH, jaar: int = 2026) -> float:
     async with get_db_ctx(db_path) as conn:
         cur = await conn.execute(
             "SELECT COALESCE(SUM(totaal_bedrag), 0) FROM facturen "
-            "WHERE substr(datum, 1, 4) = ?",
+            "WHERE substr(datum, 1, 4) = ? AND status != 'concept'",
             (str(jaar),)
         )
         return (await cur.fetchone())[0]

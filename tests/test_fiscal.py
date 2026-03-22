@@ -1864,7 +1864,8 @@ class TestExtrapoleerJaaromzet:
         from components.fiscal_utils import extrapoleer_jaaromzet
         asyncio.run(add_factuur(db_path, nummer='2024-001', klant_id=1,
                                  datum='2024-06-15', totaal_uren=8,
-                                 totaal_km=0, totaal_bedrag=10000))
+                                 totaal_km=0, totaal_bedrag=10000,
+                                 status='verstuurd'))
         result = asyncio.run(extrapoleer_jaaromzet(db_path, 2024))
         assert result['method'] == 'actual'
         assert result['extrapolated_omzet'] == 10000
@@ -1880,7 +1881,8 @@ class TestExtrapoleerJaaromzet:
         for m in range(1, 4):
             asyncio.run(add_factuur(db_path, nummer=f'2026-{m:03d}', klant_id=1,
                                      datum=f'2026-{m:02d}-15', totaal_uren=80,
-                                     totaal_km=0, totaal_bedrag=10000))
+                                     totaal_km=0, totaal_bedrag=10000,
+                                     status='verstuurd'))
         result = asyncio.run(extrapoleer_jaaromzet(db_path, date.today().year))
         # 30000 YTD in ~3 months → ~120000 annual
         assert result['ytd_omzet'] == 30000
@@ -1906,7 +1908,8 @@ class TestExtrapoleerJaaromzet:
         # Add a small amount of revenue for January
         asyncio.run(add_factuur(db_path, nummer='2026-JAN', klant_id=1,
                                  datum='2026-01-03', totaal_uren=4,
-                                 totaal_km=0, totaal_bedrag=500))
+                                 totaal_km=0, totaal_bedrag=500,
+                                 status='verstuurd'))
 
         # Mock datetime.date so that date.today() returns Jan 5
         original_date = datetime.date
