@@ -35,17 +35,30 @@ ui.add_css('''
         box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08) !important;
     }
 
-    /* Sidebar nav button active state */
-    .nav-active {
-        background-color: rgba(20, 184, 166, 0.15) !important;
-        color: #14B8A6 !important;
-        font-weight: 600;
+    /* Sidebar nav — clean minimal style */
+    .nav-item {
+        display: flex; align-items: center; gap: 10px;
+        padding: 7px 14px; margin: 1px 8px;
+        border-radius: 6px; cursor: pointer;
+        color: #94A3B8; font-size: 13px; font-weight: 400;
+        transition: all 0.15s;
+        text-decoration: none; border: none; background: none;
+        width: calc(100% - 16px);
+    }
+    .nav-item:hover { background: rgba(255,255,255,0.06); color: #E2E8F0; }
+    .nav-item .nav-icon { font-size: 18px; width: 20px; text-align: center; }
+
+    .nav-item.active {
+        color: #5EEAD4;
+        background: rgba(94,234,212,0.08);
+        font-weight: 500;
+        border-left: 3px solid #14B8A6;
+        margin-left: 5px;
+        padding-left: 11px;
     }
 
-    /* Sidebar nav button hover */
-    .nav-btn:hover {
-        background-color: rgba(255, 255, 255, 0.05) !important;
-    }
+    .nav-gap { height: 12px; }
+    .nav-divider { height: 1px; background: #1E293B; margin: 8px 16px; }
 
     /* Dashboard design tokens */
     .hero-label { font-size: 13px; color: #64748B; font-weight: 500; }
@@ -76,18 +89,20 @@ def page_title(text: str):
 def create_layout(title: str, active_page: str = ''):
     """Shared layout: teal header, dark sidebar, off-white content."""
 
-    PAGES = [
-        ('OVERZICHT', None, None),
-        ('Dashboard', 'dashboard', '/'),
-        ('Werkdagen', 'schedule', '/werkdagen'),
-        ('FINANCIEEL', None, None),
-        ('Facturen', 'receipt', '/facturen'),
-        ('Kosten', 'payments', '/kosten'),
-        ('Bank', 'account_balance', '/bank'),
-        ('ADMINISTRATIE', None, None),
-        ('Documenten', 'folder_open', '/documenten'),
-        ('Jaarafsluiting', 'bar_chart', '/jaarafsluiting'),
-        ('Aangifte', 'fact_check', '/aangifte'),
+    # Navigation groups (separated by whitespace, no headers)
+    NAV_GROUPS = [
+        [('Dashboard', 'space_dashboard', '/'),
+         ('Werkdagen', 'event_note', '/werkdagen')],
+        [('Facturen', 'receipt_long', '/facturen'),
+         ('Kosten', 'shopping_bag', '/kosten'),
+         ('Bank', 'account_balance_wallet', '/bank')],
+        [('Documenten', 'folder_open', '/documenten'),
+         ('Jaarafsluiting', 'assessment', '/jaarafsluiting'),
+         ('Aangifte', 'assignment', '/aangifte')],
+    ]
+    SETUP_PAGES = [
+        ('Klanten', 'people_outline', '/klanten'),
+        ('Instellingen', 'tune', '/instellingen'),
     ]
 
     # Brand colors
@@ -118,39 +133,26 @@ def create_layout(title: str, active_page: str = ''):
         .style('background-color: #0F172A') \
         .props('width=180')
 
+    def _nav_item(label, icon, target):
+        """Render a single nav item with active state."""
+        is_active = (target == active_page
+                     or target.split('?')[0] == active_page)
+        cls = 'nav-item active' if is_active else 'nav-item'
+        with ui.element('div').classes(cls) \
+                .on('click', lambda t=target: ui.navigate.to(t)):
+            ui.icon(icon).classes('nav-icon')
+            ui.label(label)
+
     with drawer:
-        for label, icon, target in PAGES:
-            if target is None:
-                # Section header
-                ui.label(label) \
-                    .classes('text-xs q-mt-lg q-mb-sm q-ml-md') \
-                    .style('color: #64748B; letter-spacing: 0.1em')
-                continue
+        ui.element('div').style('height: 12px')  # top spacing
 
-            is_active = (target == active_page
-                        or target.split('?')[0] == active_page)
-            btn = ui.button(
-                label, icon=icon,
-                on_click=lambda t=target: ui.navigate.to(t)
-            )
-            btn.props('flat align=left no-caps')
-            btn.classes('w-full rounded-lg q-mb-xs')
-            if is_active:
-                btn.classes('nav-active')
-            else:
-                btn.classes('nav-btn').style('color: #CBD5E1')
+        for i, group in enumerate(NAV_GROUPS):
+            if i > 0:
+                ui.element('div').classes('nav-gap')
+            for label, icon, target in group:
+                _nav_item(label, icon, target)
 
-        # Separator + setup pages
-        ui.separator().classes('q-my-md').style('background-color: #1E293B')
+        ui.element('div').classes('nav-divider')
 
-        for lbl, icn, tgt in [('Klanten', 'people', '/klanten'),
-                               ('Instellingen', 'settings', '/instellingen')]:
-            is_act = tgt == active_page
-            btn = ui.button(
-                lbl, icon=icn,
-                on_click=lambda t=tgt: ui.navigate.to(t),
-            ).props('flat align=left no-caps').classes('w-full rounded-lg q-mb-xs')
-            if is_act:
-                btn.classes('nav-active')
-            else:
-                btn.classes('nav-btn').style('color: #CBD5E1')
+        for label, icon, target in SETUP_PAGES:
+            _nav_item(label, icon, target)
