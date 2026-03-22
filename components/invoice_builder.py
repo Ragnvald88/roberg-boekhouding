@@ -496,13 +496,11 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None):
                 'display: flex; justify-content: center; '
                 'padding: 24px 0; height: 100vh;'
             ):
-                with ui.element('div').style(
-                    'background: white; width: 595px; min-height: 842px; '
-                    'box-shadow: 0 2px 20px rgba(0,0,0,0.15); '
-                    'padding: 48px; '
-                    'transform: scale(0.75); transform-origin: top center;'
-                ):
-                    preview_element = ui.html('')
+                # Use iframe for CSS isolation — template styles
+                # won't conflict with NiceGUI's Quasar CSS
+                preview_iframe = ui.html('').style(
+                    'width: 100%; max-width: 620px; height: calc(100vh - 48px); '
+                )
 
         # --- Preview update logic ---
         def schedule_preview_update():
@@ -538,7 +536,7 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None):
                 'plaats': plaats_input.value or '',
             }
 
-            html = render_invoice_html(
+            invoice_html = render_invoice_html(
                 nummer=nummer_input.value or '',
                 klant=klant,
                 regels=regels,
@@ -546,7 +544,16 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None):
                 bedrijfsgegevens=bg_dict,
                 qr_url=qr_url,
             )
-            preview_element.content = html
+            # Render in isolated iframe via base64 data URI
+            # This prevents NiceGUI/Quasar CSS from interfering
+            import base64
+            b64 = base64.b64encode(invoice_html.encode('utf-8')).decode('ascii')
+            preview_iframe.content = (
+                f'<iframe src="data:text/html;base64,{b64}" '
+                f'style="width:100%;height:100%;border:none;'
+                f'box-shadow:0 2px 20px rgba(0,0,0,0.15);'
+                f'background:white;"></iframe>'
+            )
 
         # Wire nummer + datum to preview
         nummer_input.on('blur', lambda _=None: schedule_preview_update())
