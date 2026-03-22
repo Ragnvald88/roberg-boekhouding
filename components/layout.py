@@ -116,7 +116,7 @@ def create_layout(title: str, active_page: str = ''):
     # === Dark sidebar ===
     drawer = ui.left_drawer(value=True, bordered=False) \
         .style('background-color: #0F172A') \
-        .props('width=240')
+        .props('width=180')
 
     with drawer:
         for label, icon, target in PAGES:
