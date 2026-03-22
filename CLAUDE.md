@@ -15,7 +15,7 @@ source .venv/bin/activate
 export DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib
 python main.py  # → http://127.0.0.1:8085
 
-# Tests (464 passing)
+# Tests (450 passing, 14 skipped)
 DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib .venv/bin/python -m pytest tests/ -v
 ```
 
