@@ -135,8 +135,6 @@ async def facturen_page():
              'sortable': True, 'align': 'left'},
             {'name': 'datum', 'label': 'Datum', 'field': 'datum_fmt',
              'sortable': True, 'align': 'left'},
-            {'name': 'vervaldatum', 'label': 'Vervaldatum', 'field': 'vervaldatum_fmt',
-             'sortable': True, 'align': 'left'},
             {'name': 'klant', 'label': 'Klant', 'field': 'klant_naam',
              'sortable': True, 'align': 'left'},
             {'name': 'uren', 'label': 'Uren', 'field': 'totaal_uren',
