@@ -397,9 +397,9 @@ async def test_bereken_balans_with_debiteuren(db):
     await upsert_fiscale_params(db, **FISCALE_PARAMS[2024])
     kid = await add_klant(db, naam="Test", tarief_uur=80)
     await add_factuur(db, nummer="2024-001", klant_id=kid,
-                      datum="2024-06-15", totaal_bedrag=2000, betaald=0)
+                      datum="2024-06-15", totaal_bedrag=2000, status='verstuurd')
     await add_factuur(db, nummer="2024-002", klant_id=kid,
-                      datum="2024-07-15", totaal_bedrag=1000, betaald=1)
+                      datum="2024-07-15", totaal_bedrag=1000, status='betaald')
 
     result = await bereken_balans(db, jaar=2024, activastaat=[])
     assert result['debiteuren'] == 2000.0  # only unpaid
@@ -486,7 +486,7 @@ async def test_fetch_to_bereken_pipeline(db):
                           status='gefactureerd')
     # Add a factuur
     await add_factuur(db, nummer="2024-001", klant_id=kid,
-                      datum="2024-03-15", totaal_bedrag=6800, betaald=1)
+                      datum="2024-03-15", totaal_bedrag=6800, status='betaald')
     # Add some expenses
     await add_uitgave(db, datum="2024-01-15", categorie="Bankkosten",
                       omschrijving="Rabo", bedrag=12.50)

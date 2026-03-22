@@ -81,11 +81,11 @@ async def test_mark_betaald(seeded_db):
     await add_factuur(seeded_db, nummer="2026-001", klant_id=kid,
                       datum="2026-02-15", totaal_bedrag=700)
     facturen = await get_facturen(seeded_db, jaar=2026)
-    assert not facturen[0].betaald
+    assert facturen[0].status != 'betaald'
 
     await mark_betaald(seeded_db, factuur_id=facturen[0].id, datum="2026-03-01")
     facturen = await get_facturen(seeded_db, jaar=2026)
-    assert facturen[0].betaald
+    assert facturen[0].status == 'betaald'
     assert facturen[0].betaald_datum == "2026-03-01"
 
 
@@ -114,8 +114,8 @@ async def test_update_factuur(seeded_db):
     facturen = await get_facturen(seeded_db, jaar=2026)
     assert facturen[0].type == 'anw'
 
-    # Betaald is NOT updated via update_factuur (uses mark_betaald)
-    assert not facturen[0].betaald
+    # Status is NOT updated via update_factuur (uses mark_betaald/update_factuur_status)
+    assert facturen[0].status != 'betaald'
 
 
 @pytest.mark.asyncio

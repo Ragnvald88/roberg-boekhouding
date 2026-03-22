@@ -146,9 +146,9 @@ async def test_get_kpis_with_data(db):
     kid = await add_klant(db, naam="Test", tarief_uur=80)
     # Facturen: 2000 total, 700 unpaid
     await add_factuur(db, nummer="2026-001", klant_id=kid,
-                      datum="2026-01-15", totaal_bedrag=1300, betaald=1)
+                      datum="2026-01-15", totaal_bedrag=1300, status='betaald')
     await add_factuur(db, nummer="2026-002", klant_id=kid,
-                      datum="2026-02-15", totaal_bedrag=700, betaald=0)
+                      datum="2026-02-15", totaal_bedrag=700, status='verstuurd')
     # Uitgaven: 100 regular + 500 investment (investment excluded from kosten)
     await add_uitgave(db, datum="2026-01-10", categorie="Bankkosten",
                       omschrijving="Rabo", bedrag=100)
@@ -224,9 +224,9 @@ async def test_debiteuren_peildatum_unpaid_included(db):
     """Unpaid facturen issued before peildatum are receivables."""
     kid = await add_klant(db, naam="Test", tarief_uur=80)
     await add_factuur(db, nummer="2026-001", klant_id=kid,
-                      datum="2026-12-15", totaal_bedrag=1000, betaald=0)
+                      datum="2026-12-15", totaal_bedrag=1000, status='verstuurd')
     await add_factuur(db, nummer="2026-002", klant_id=kid,
-                      datum="2026-11-15", totaal_bedrag=500, betaald=0)
+                      datum="2026-11-15", totaal_bedrag=500, status='verstuurd')
     assert await get_debiteuren_op_peildatum(db, peildatum='2026-12-31') == 1500.0
 
 
@@ -237,15 +237,15 @@ async def test_debiteuren_peildatum_paid_after_yearend(db):
     # Paid before year-end → NOT a receivable
     f1 = await add_factuur(db, nummer="2026-001", klant_id=kid,
                            datum="2026-11-15", totaal_bedrag=1000,
-                           betaald=1, betaald_datum='2026-12-20')
+                           status='betaald', betaald_datum='2026-12-20')
     # Paid AFTER year-end → IS a receivable
     f2 = await add_factuur(db, nummer="2026-002", klant_id=kid,
                            datum="2026-12-20", totaal_bedrag=700,
-                           betaald=1, betaald_datum='2027-01-10')
+                           status='betaald', betaald_datum='2027-01-10')
     # Paid after year-end, different year invoice → still a receivable
     f3 = await add_factuur(db, nummer="2025-001", klant_id=kid,
                            datum="2025-12-28", totaal_bedrag=300,
-                           betaald=1, betaald_datum='2027-02-01')
+                           status='betaald', betaald_datum='2027-02-01')
     assert await get_debiteuren_op_peildatum(db, peildatum='2026-12-31') == 1000.0
     # 700 (2026-002) + 300 (2025-001) = 1000
 
@@ -256,7 +256,7 @@ async def test_debiteuren_peildatum_no_datum_excluded(db):
     kid = await add_klant(db, naam="Test", tarief_uur=80)
     await add_factuur(db, nummer="2026-001", klant_id=kid,
                       datum="2026-12-15", totaal_bedrag=1000,
-                      betaald=1)  # no betaald_datum
+                      status='betaald')  # no betaald_datum
     assert await get_debiteuren_op_peildatum(db, peildatum='2026-12-31') == 0.0
 
 
@@ -265,7 +265,7 @@ async def test_debiteuren_peildatum_future_invoices_excluded(db):
     """Facturen issued AFTER peildatum are not receivables for that year."""
     kid = await add_klant(db, naam="Test", tarief_uur=80)
     await add_factuur(db, nummer="2027-001", klant_id=kid,
-                      datum="2027-01-05", totaal_bedrag=500, betaald=0)
+                      datum="2027-01-05", totaal_bedrag=500, status='verstuurd')
     assert await get_debiteuren_op_peildatum(db, peildatum='2026-12-31') == 0.0
 
 
@@ -279,7 +279,7 @@ async def test_find_matches_by_nummer(db):
     kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=0)
     await add_factuur(db, nummer='2026-001', klant_id=kid,
                        datum='2026-01-15', totaal_uren=8, totaal_km=0,
-                       totaal_bedrag=640.00, betaald=0)
+                       totaal_bedrag=640.00, status='verstuurd')
     await add_banktransacties(db, [
         {'datum': '2026-01-20', 'bedrag': 640.00, 'tegenpartij': 'Test BV',
          'omschrijving': '2026-001 jan', 'categorie': ''},
@@ -293,9 +293,9 @@ async def test_find_matches_by_nummer(db):
 
     # Verify NO changes applied yet (read-only)
     async with get_db_ctx(db) as conn:
-        cur = await conn.execute('SELECT betaald FROM facturen WHERE nummer=?',
+        cur = await conn.execute('SELECT status FROM facturen WHERE nummer=?',
                                   ('2026-001',))
-        assert (await cur.fetchone())['betaald'] == 0
+        assert (await cur.fetchone())['status'] == 'verstuurd'
 
 
 @pytest.mark.asyncio
@@ -304,7 +304,7 @@ async def test_find_matches_by_amount(db):
     kid = await add_klant(db, naam="Test", tarief_uur=77.50, retour_km=52)
     await add_factuur(db, nummer='2026-010', klant_id=kid,
                        datum='2026-02-10', totaal_uren=9, totaal_km=52,
-                       totaal_bedrag=709.46, betaald=0)
+                       totaal_bedrag=709.46, status='verstuurd')
     await add_banktransacties(db, [
         {'datum': '2026-02-15', 'bedrag': 709.46, 'tegenpartij': 'Klant',
          'omschrijving': 'betaling feb', 'categorie': ''},
@@ -322,7 +322,7 @@ async def test_find_matches_skips_betaald(db):
     kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=0)
     await add_factuur(db, nummer='2026-005', klant_id=kid,
                        datum='2026-03-01', totaal_uren=8, totaal_km=0,
-                       totaal_bedrag=640.00, betaald=1, betaald_datum='2026-03-05')
+                       totaal_bedrag=640.00, status='betaald', betaald_datum='2026-03-05')
     await add_banktransacties(db, [
         {'datum': '2026-03-05', 'bedrag': 640.00, 'tegenpartij': 'Test',
          'omschrijving': '2026-005', 'categorie': ''},
@@ -338,7 +338,7 @@ async def test_find_matches_skips_linked_bank(db):
     kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=0)
     await add_factuur(db, nummer='2026-020', klant_id=kid,
                        datum='2026-03-10', totaal_uren=8, totaal_km=0,
-                       totaal_bedrag=640.00, betaald=0)
+                       totaal_bedrag=640.00, status='verstuurd')
     await add_banktransacties(db, [
         {'datum': '2026-03-15', 'bedrag': 640.00, 'tegenpartij': 'Test',
          'omschrijving': '2026-020', 'categorie': ''},
@@ -358,10 +358,10 @@ async def test_find_matches_same_amount_chronological(db):
     kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=0)
     await add_factuur(db, nummer='2026-A', klant_id=kid,
                        datum='2026-01-10', totaal_uren=8, totaal_km=0,
-                       totaal_bedrag=640.00, betaald=0)
+                       totaal_bedrag=640.00, status='verstuurd')
     await add_factuur(db, nummer='2026-B', klant_id=kid,
                        datum='2026-01-20', totaal_uren=8, totaal_km=0,
-                       totaal_bedrag=640.00, betaald=0)
+                       totaal_bedrag=640.00, status='verstuurd')
     await add_banktransacties(db, [
         {'datum': '2026-01-25', 'bedrag': 640.00, 'tegenpartij': 'Test',
          'omschrijving': 'payment', 'categorie': ''},
@@ -378,7 +378,7 @@ async def test_find_matches_anw_nummer(db):
     kid = await add_klant(db, naam="ANW Diensten", tarief_uur=80, retour_km=0)
     await add_factuur(db, nummer='22470-26-27', klant_id=kid,
                        datum='2026-01-10', totaal_uren=8, totaal_km=0,
-                       totaal_bedrag=640.00, betaald=0)
+                       totaal_bedrag=640.00, status='verstuurd')
     await add_banktransacties(db, [
         {'datum': '2026-01-20', 'bedrag': 640.00, 'tegenpartij': 'ANW',
          'omschrijving': 'Betaling 22470-26-27', 'categorie': ''},
@@ -395,7 +395,7 @@ async def test_find_matches_amount_outside_tolerance(db):
     kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=0)
     await add_factuur(db, nummer='2026-X', klant_id=kid,
                        datum='2026-02-01', totaal_uren=8, totaal_km=0,
-                       totaal_bedrag=640.00, betaald=0)
+                       totaal_bedrag=640.00, status='verstuurd')
     await add_banktransacties(db, [
         {'datum': '2026-02-10', 'bedrag': 650.00, 'tegenpartij': 'Test',
          'omschrijving': 'payment', 'categorie': ''},
@@ -418,7 +418,7 @@ async def test_apply_matches(db):
     kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=0)
     fid = await add_factuur(db, nummer='2026-030', klant_id=kid,
                              datum='2026-03-01', totaal_uren=8, totaal_km=0,
-                             totaal_bedrag=640.00, betaald=0)
+                             totaal_bedrag=640.00, status='verstuurd')
     await add_werkdag(db, datum='2026-03-01', klant_id=kid,
                        uren=8, tarief=80, km=0, km_tarief=0.23,
                        status='gefactureerd', factuurnummer='2026-030')
@@ -434,9 +434,9 @@ async def test_apply_matches(db):
     assert count == 1
 
     async with get_db_ctx(db) as conn:
-        cur = await conn.execute('SELECT betaald, betaald_datum FROM facturen WHERE id=?', (fid,))
+        cur = await conn.execute('SELECT status, betaald_datum FROM facturen WHERE id=?', (fid,))
         row = await cur.fetchone()
-        assert row['betaald'] == 1
+        assert row['status'] == 'betaald'
         assert row['betaald_datum'] == '2026-03-10'
 
         cur = await conn.execute(
@@ -465,7 +465,7 @@ async def test_find_matches_14_day_boundary_pass(db):
     # Factuur dated 2026-03-15
     await add_factuur(db, nummer='2026-BND', klant_id=kid,
                        datum='2026-03-15', totaal_uren=8, totaal_km=0,
-                       totaal_bedrag=640.00, betaald=0)
+                       totaal_bedrag=640.00, status='verstuurd')
     # Payment 14 days before = 2026-03-01 (exactly on boundary)
     await add_banktransacties(db, [
         {'datum': '2026-03-01', 'bedrag': 640.00, 'tegenpartij': 'Someone',
@@ -484,7 +484,7 @@ async def test_find_matches_15_day_boundary_fail(db):
     # Factuur dated 2026-03-16
     await add_factuur(db, nummer='2026-BND2', klant_id=kid,
                        datum='2026-03-16', totaal_uren=8, totaal_km=0,
-                       totaal_bedrag=640.00, betaald=0)
+                       totaal_bedrag=640.00, status='verstuurd')
     # Payment 15 days before = 2026-03-01
     await add_banktransacties(db, [
         {'datum': '2026-03-01', 'bedrag': 640.00, 'tegenpartij': 'Someone',
