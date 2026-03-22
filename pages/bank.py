@@ -147,7 +147,7 @@ async def bank_page():
             cur = await conn.execute(
                 "SELECT f.nummer, f.datum, f.totaal_bedrag, k.naam "
                 "FROM facturen f JOIN klanten k ON f.klant_id = k.id "
-                "WHERE f.betaald = 0 ORDER BY f.datum")
+                "WHERE f.status IN ('verstuurd', 'concept') ORDER BY f.datum")
             all_open = await cur.fetchall()
         remaining_open = [r for r in all_open if r['nummer'] not in
                           {m['factuur_nummer'] for m in matches}]

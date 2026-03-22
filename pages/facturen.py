@@ -15,6 +15,7 @@ from database import (
     get_facturen, add_factuur,
     delete_factuur, update_factuur,
     update_factuur_status, get_klanten,
+    get_bedrijfsgegevens,
     link_werkdagen_to_factuur, get_db_ctx, add_werkdag,
     get_fiscale_params, DB_PATH,
 )
@@ -741,9 +742,92 @@ async def facturen_page():
             await refresh_table()
 
         async def on_send_mail(e):
+            """Send invoice via email using macOS Mail.app, then mark as verstuurd."""
             row = e.args
-            # TODO: Task 5 implements actual email sending
-            ui.notify('E-mail functie wordt nog geïmplementeerd', type='info')
+            pdf_path = row.get('pdf_pad', '')
+            if not pdf_path or not Path(pdf_path).exists():
+                ui.notify('PDF niet gevonden — genereer eerst de factuur', type='warning')
+                return
+
+            # Get klant email if available
+            klant_id = row.get('klant_id')
+            klant_email = ''
+            if klant_id:
+                all_klanten = await get_klanten(DB_PATH, alleen_actief=False)
+                klant = next((k for k in all_klanten if k.id == klant_id), None)
+                if klant and hasattr(klant, 'email'):
+                    klant_email = klant.email or ''
+
+            # Get business info for email body
+            bg = await get_bedrijfsgegevens(DB_PATH)
+
+            nummer = row['nummer']
+            bedrag = format_euro(row['totaal_bedrag'])
+            iban = bg.iban if bg else 'NL00 TEST 0000 0000 00'
+            bedrijfsnaam = bg.bedrijfsnaam if bg else 'TestBV huisartswaarnemer'
+            naam = bg.naam if bg else 'Test Gebruiker'
+
+            subject = f'Factuur {nummer}'
+            body = (
+                f'Bijgaand stuur ik u factuur {nummer}.\\n'
+                f'\\n'
+                f'Het totaalbedrag van {bedrag} verzoek ik u binnen 14 dagen '
+                f'over te maken op rekeningnummer {iban} t.n.v. {bedrijfsnaam}, '
+                f'onder vermelding van factuurnummer {nummer}.\\n'
+                f'\\n'
+                f'Mocht u vragen hebben, dan hoor ik het graag.\\n'
+                f'\\n'
+                f'\\n'
+                f'Met vriendelijke groet,\\n'
+                f'\\n'
+                f'{naam}\\n'
+                f'\\n'
+                f'{bedrijfsnaam}\\n'
+                f'Tel: 06 0000 0000\\n'
+                f'info@testbedrijf.nl'
+            )
+
+            # Escape for AppleScript (double backslash for quotes)
+            body_osa = body.replace('\\', '\\\\').replace('"', '\\\\"')
+            subject_osa = subject.replace('"', '\\\\"')
+            pdf_path_abs = str(Path(pdf_path).resolve())
+
+            # Build AppleScript
+            to_line = ''
+            if klant_email:
+                to_line = f'make new to recipient with properties {{address:"{klant_email}"}}'
+
+            applescript = (
+                'tell application "Mail"\n'
+                f'  set newMsg to make new outgoing message with properties '
+                f'{{subject:"{subject_osa}", content:"{body_osa}", visible:true}}\n'
+                f'  tell newMsg\n'
+                f'    {to_line}\n'
+                f'    make new attachment with properties '
+                f'{{file name:POSIX file "{pdf_path_abs}"}} '
+                f'at after last paragraph of content\n'
+                f'  end tell\n'
+                f'  activate\n'
+                f'end tell'
+            )
+
+            try:
+                await asyncio.to_thread(
+                    subprocess.run,
+                    ['osascript', '-e', applescript],
+                    capture_output=True, timeout=15)
+
+                # Mark as verstuurd if currently concept
+                if row.get('status') == 'concept':
+                    await update_factuur_status(
+                        DB_PATH, factuur_id=row['id'], status='verstuurd')
+
+                ui.notify(f'Factuur {nummer} geopend in Mail.app', type='positive')
+                await refresh_table()
+            except subprocess.TimeoutExpired:
+                ui.notify('Mail.app reageerde niet — probeer handmatig', type='warning')
+            except Exception as ex:
+                ui.notify(f'Fout bij openen Mail.app: {ex}', type='negative')
 
         table.on('markbetaald', on_mark_betaald)
         table.on('markonbetaald', on_mark_onbetaald)

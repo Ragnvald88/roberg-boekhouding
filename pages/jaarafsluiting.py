@@ -564,7 +564,7 @@ async def jaarafsluiting_page():
                 # 3. Betaalde facturen zonder betaald_datum
                 cur = await conn.execute(
                     "SELECT COUNT(*) FROM facturen "
-                    "WHERE substr(datum,1,4)=? AND betaald=1 "
+                    "WHERE substr(datum,1,4)=? AND status = 'betaald' "
                     "AND (betaald_datum IS NULL OR betaald_datum='')",
                     (str(jaar),))
                 no_date = (await cur.fetchone())[0]
