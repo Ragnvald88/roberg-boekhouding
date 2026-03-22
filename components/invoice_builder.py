@@ -31,7 +31,6 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None):
     """
     # Load reference data
     klanten = await get_klanten(DB_PATH, alleen_actief=True)
-    klant_names = [k.naam for k in klanten]
     klant_by_name = {k.naam: k for k in klanten}
     bg = await get_bedrijfsgegevens(DB_PATH)
     bg_dict = {}
@@ -92,9 +91,14 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None):
                 ui.label('Klantgegevens').classes(
                     'text-subtitle2 text-grey-8 q-mt-md')
 
-                bedrijf_input = ui.input(
-                    'Bedrijf / Praktijk', autocomplete=klant_names,
-                ).props('outlined dense').classes('w-full')
+                klant_options = {k.naam: k.naam for k in klanten}
+                bedrijf_input = ui.select(
+                    klant_options,
+                    label='Bedrijf / Praktijk',
+                    with_input=True,
+                    new_value_mode='add-unique',
+                ).props('outlined dense use-input input-debounce=0'
+                         ).classes('w-full')
 
                 contact_input = ui.input(
                     'Contactpersoon',
