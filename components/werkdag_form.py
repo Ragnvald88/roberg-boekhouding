@@ -53,7 +53,7 @@ async def open_werkdag_dialog(on_save=None, werkdag=None):
     default_km_tarief = fp.km_tarief if fp else _KM_TARIEF_FALLBACK
 
     with ui.dialog() as dialog, ui.card().classes('w-full max-w-lg q-pa-md'):
-        title_label = ui.label(
+        ui.label(
             'Werkdag bewerken' if is_edit else 'Werkdag toevoegen'
         ).classes('text-h6 q-mb-md')
 
