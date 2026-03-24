@@ -49,6 +49,8 @@ async def instellingen_page():
                                 ('Functie', 'functie'),
                                 ('Adres', 'adres'),
                                 ('Postcode + Plaats', 'postcode_plaats'),
+                                ('Telefoon', 'telefoon'),
+                                ('E-mail', 'email'),
                                 ('KvK-nummer', 'kvk'),
                                 ('IBAN', 'iban'),
                                 ('Thuisplaats (voor reiskosten)', 'thuisplaats'),
@@ -66,6 +68,48 @@ async def instellingen_page():
                             ui.button(
                                 'Opslaan', icon='save', on_click=save_bedrijf
                             ).props('color=primary').classes('q-mt-md')
+
+                        # Logo upload section
+                        with ui.card().classes('w-full q-mt-md'):
+                            ui.label('Bedrijfslogo').classes(
+                                'text-subtitle2 text-grey-8')
+                            ui.label(
+                                'Upload een logo dat op facturen wordt getoond.'
+                            ).classes('text-caption text-grey')
+
+                            logo_dir = DB_PATH.parent / 'logo'
+                            logo_dir.mkdir(parents=True, exist_ok=True)
+                            logo_files = list(logo_dir.glob('logo.*'))
+
+                            logo_preview = ui.column().classes('q-mt-sm')
+                            if logo_files:
+                                with logo_preview:
+                                    ui.image(
+                                        f'/logo-files/{logo_files[0].name}'
+                                    ).classes('w-48')
+
+                            async def handle_logo_upload(e):
+                                content = e.content.read()
+                                ext = e.name.rsplit('.', 1)[-1].lower()
+                                # Remove any existing logo files
+                                for f in logo_dir.glob('logo.*'):
+                                    f.unlink()
+                                dest = logo_dir / f'logo.{ext}'
+                                await asyncio.to_thread(dest.write_bytes, content)
+                                logo_preview.clear()
+                                with logo_preview:
+                                    ui.image(
+                                        f'/logo-files/logo.{ext}'
+                                    ).classes('w-48')
+                                ui.notify('Logo opgeslagen', type='positive')
+
+                            ui.upload(
+                                label='Upload logo', auto_upload=True,
+                                on_upload=handle_logo_upload,
+                                max_file_size=5_000_000,
+                            ).props(
+                                'flat bordered accept=".png,.jpg,.jpeg,.svg"'
+                            ).classes('w-full q-mt-sm')
 
                 await refresh_bedrijf()
 
@@ -391,7 +435,7 @@ async def instellingen_page():
 
                     # Flush WAL to ensure consistent backup
                     async with get_db_ctx(DB_PATH) as conn:
-                        await conn.execute("PRAGMA wal_checkpoint(FULL)")
+                        await conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 
                     def _create_zip():
                         with zipfile.ZipFile(backup_path, 'w', zipfile.ZIP_DEFLATED) as zf:
@@ -410,7 +454,7 @@ async def instellingen_page():
 
                     # Clean up ZIP after download starts
                     async def _cleanup():
-                        await asyncio.sleep(10)
+                        await asyncio.sleep(120)
                         try:
                             backup_path.unlink(missing_ok=True)
                         except OSError:
