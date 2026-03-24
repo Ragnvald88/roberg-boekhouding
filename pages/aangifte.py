@@ -282,6 +282,13 @@ async def aangifte_page():
                     _invulhulp_line(
                         f'Winst > Kosten > {cat}', cat, r['totaal'])
 
+                # Km-vergoeding (separate from expense categories)
+                km_verg = data.get('km_vergoeding', 0)
+                if km_verg > 0:
+                    _invulhulp_line(
+                        'Winst > Kosten > Vervoerskosten > Kilometervergoeding',
+                        'Km-vergoeding (zakelijke ritten)', km_verg)
+
                 ui.separator().classes('my-1')
                 _invulhulp_line(BD['kosten_totaal'],
                                 'Totaal bedrijfslasten', f.kosten, bold=True)
@@ -549,6 +556,13 @@ async def aangifte_page():
                 ui.label('Nodig voor berekening AHK partner').classes(
                     'text-caption text-grey-6')
 
+                # Show calculated partner AHK if available
+                if f.partner_ahk > 0:
+                    ui.separator().classes('my-1')
+                    with ui.row().classes('w-full justify-between items-center q-py-xs'):
+                        ui.label('Berekende AHK partner').classes('text-caption text-grey-7')
+                        ui.label(format_euro(f.partner_ahk)).classes('text-bold')
+
             # Auto-save on blur/change for all inputs
             async def save_prive():
                 aov_val = float(aov_input.value or 0)
@@ -793,6 +807,8 @@ async def aangifte_page():
 
                 _line('- Algemene heffingskorting', f.ahk)
                 _line('- Arbeidskorting', f.arbeidskorting)
+                if f.partner_ahk > 0:
+                    _line('  AHK partner (informatie)', f.partner_ahk)
                 ui.separator().classes('my-1')
                 _invulhulp_line(BD['netto_ib'], 'Netto IB', f.netto_ib, bold=True)
 
