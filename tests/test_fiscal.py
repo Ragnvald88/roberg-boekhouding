@@ -1295,6 +1295,16 @@ class TestBox3:
         assert result.belasting == 0
         assert result.grondslag == 0
 
+    def test_box3_negative_netto_vermogen(self):
+        """Box 3 with schulden > bezittingen should not divide by zero."""
+        from fiscal.berekeningen import bereken_box3
+        params = FISCALE_PARAMS[2024].copy()
+        params['box3_bank_saldo'] = 0
+        params['box3_overige_bezittingen'] = 0
+        params['box3_schulden'] = 5000
+        result = bereken_box3(params, fiscaal_partner=True)
+        assert result.belasting == 0
+
     def test_box3_below_heffingsvrij(self):
         """Assets below heffingsvrij vermogen = no tax."""
         from fiscal.berekeningen import bereken_box3

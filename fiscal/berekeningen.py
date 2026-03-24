@@ -154,8 +154,9 @@ def bereken_box3(params: dict, fiscaal_partner: bool = True) -> Box3Resultaat:
     grondslag = max(0, totaal_bezittingen - schulden - heffingsvrij)
 
     # Grondslag can't exceed total rendement proportion
-    if totaal_bezittingen - schulden > 0:
-        rendement_ratio = totaal_rendement / (totaal_bezittingen - schulden) if (totaal_bezittingen - schulden) > 0 else 0
+    netto_vermogen = totaal_bezittingen - schulden
+    if netto_vermogen > 0 and grondslag > 0:
+        rendement_ratio = totaal_rendement / netto_vermogen
         voordeel = grondslag * rendement_ratio
     else:
         voordeel = 0
