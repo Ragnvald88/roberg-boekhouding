@@ -108,6 +108,32 @@ async def werkdagen_page():
             ui.button('Urenregistratie', icon='schedule',
                       on_click=export_uren_overzicht).props('outline size=sm')
 
+            async def export_km_logboek():
+                """Export km-logboek as CSV for Belastingdienst documentation."""
+                rows = await get_werkdagen(DB_PATH, jaar=jaar_select.value)
+                klanten_dict = {k.id: k for k in await get_klanten(DB_PATH)}
+                km_rows = [w for w in rows if w.km and w.km > 0]
+                headers = ['Datum', 'Klant', 'Locatie', 'Vertrek', 'Bestemming',
+                           'Retour km', 'Doel']
+                csv_rows = []
+                for w in km_rows:
+                    klant = klanten_dict.get(w.klant_id)
+                    bestemming = w.locatie or (klant.naam if klant else '')
+                    csv_rows.append([
+                        format_datum(w.datum), w.klant_naam, w.locatie or '',
+                        'Thuisadres', bestemming, str(w.km),
+                        'Waarneming huisartspraktijk',
+                    ])
+                totaal = sum(w.km for w in km_rows)
+                csv_rows.append(['', '', '', '', 'TOTAAL', str(totaal), ''])
+                csv_data = generate_csv(headers, csv_rows)
+                ui.download(
+                    csv_data.encode('utf-8-sig'),
+                    f'km_logboek_{jaar_select.value}.csv')
+
+            ui.button('Km-logboek', icon='directions_car',
+                      on_click=export_km_logboek).props('outline size=sm')
+
         # Bulk action toolbar (hidden when nothing selected)
         bulk_bar = ui.row().classes('w-full items-center gap-4')
         bulk_bar.set_visibility(False)
