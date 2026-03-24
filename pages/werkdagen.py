@@ -2,7 +2,7 @@
 
 from nicegui import app, ui
 from components.layout import create_layout, page_title
-from components.utils import format_euro, generate_csv
+from components.utils import format_euro, format_datum, generate_csv
 from components.werkdag_form import open_werkdag_dialog
 from database import (
     get_werkdagen, get_klanten, delete_werkdag, DB_PATH,
@@ -90,6 +90,23 @@ async def werkdagen_page():
                       on_click=export_csv) \
                 .props('flat round color=secondary size=sm') \
                 .tooltip('Exporteer CSV')
+
+            async def export_uren_overzicht():
+                """Export uren-overzicht as CSV for urencriterium documentation."""
+                rows = await get_werkdagen(DB_PATH, jaar=jaar_select.value)
+                uren_rows = [w for w in rows if w.urennorm == 1]
+                headers = ['Datum', 'Klant', 'Locatie', 'Uren', 'Activiteit']
+                csv_rows = [[format_datum(w.datum), w.klant_naam, w.locatie or '',
+                              str(w.uren), w.activiteit] for w in uren_rows]
+                totaal = sum(w.uren for w in uren_rows)
+                csv_rows.append(['', '', 'TOTAAL', str(totaal), ''])
+                csv_data = generate_csv(headers, csv_rows)
+                ui.download(
+                    csv_data.encode('utf-8-sig'),
+                    f'urenregistratie_{jaar_select.value}.csv')
+
+            ui.button('Urenregistratie', icon='schedule',
+                      on_click=export_uren_overzicht).props('outline size=sm')
 
         # Bulk action toolbar (hidden when nothing selected)
         bulk_bar = ui.row().classes('w-full items-center gap-4')
