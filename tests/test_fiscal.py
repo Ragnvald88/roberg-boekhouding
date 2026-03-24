@@ -2038,3 +2038,14 @@ class TestPartnerAHK:
             uren=1300, params=params, partner_inkomen=120000,
         )
         assert result.partner_ahk == 0.0
+
+
+class TestMissingParamsValidation:
+    """Validation of required fiscal params."""
+
+    def test_missing_params_raises_valueerror(self):
+        """Missing required params should raise ValueError, not KeyError."""
+        with pytest.raises(ValueError, match='incompleet'):
+            bereken_volledig(omzet=100000, kosten=10000, afschrijvingen=0,
+                             representatie=0, investeringen_totaal=0,
+                             uren=1400, params={'jaar': 2024})

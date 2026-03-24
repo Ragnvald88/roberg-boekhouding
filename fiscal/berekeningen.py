@@ -210,6 +210,18 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
     r = FiscaalResultaat(jaar=params.get('jaar', 0))
     w: list[str] = []
 
+    # Validate required fiscal params
+    required_keys = ['kia_ondergrens', 'kia_bovengrens', 'kia_pct',
+                     'zelfstandigenaftrek', 'mkb_vrijstelling_pct',
+                     'schijf1_grens', 'schijf1_pct', 'schijf2_grens',
+                     'schijf2_pct', 'schijf3_pct',
+                     'zvw_max_grondslag', 'zvw_pct']
+    missing = [k for k in required_keys if k not in params]
+    if missing:
+        raise ValueError(
+            f"Fiscale parameters incompleet voor {params.get('jaar', '?')}: "
+            f"ontbrekend: {', '.join(missing)}")
+
     # Convert all inputs to Decimal for calculation precision
     d_omzet = D(omzet)
     d_kosten = D(kosten)
