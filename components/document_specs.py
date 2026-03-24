@@ -24,7 +24,7 @@ AANGIFTE_DOCS = [
     DocSpec('box3', 'beleggingsoverzicht', 'Beleggingsoverzicht', True, False),
     DocSpec('voorlopige_aanslag', 'va_ib_beschikking', 'VA IB beschikking', False, False),
     DocSpec('voorlopige_aanslag', 'va_zvw_beschikking', 'VA ZVW beschikking', False, False),
-    DocSpec('definitieve_aangifte', 'ingediende_aangifte', 'Ingediende aangifte (Boekhouder)', False, False),
+    DocSpec('definitieve_aangifte', 'ingediende_aangifte', 'Ingediende aangifte', False, False),
 ]
 
 AUTO_TYPES = {'jaaroverzicht_uren_km', 'winst_verlies'}
