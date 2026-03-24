@@ -102,6 +102,7 @@ async def aangifte_page():
             voorlopige_aanslag=data['voorlopige_aanslag'],
             voorlopige_aanslag_zvw=data['voorlopige_aanslag_zvw'],
             ew_naar_partner=data['ew_naar_partner'],
+            partner_inkomen=data['params'].partner_bruto_loon or 0,
         )
         _cache.update(jaar=jaar, data=data, fiscaal=f)
         return data, f
@@ -145,15 +146,18 @@ async def aangifte_page():
 
     # --- Main layout ---
     with ui.column().classes('w-full p-6 max-w-7xl mx-auto gap-4'):
-        with ui.row().classes('w-full items-center justify-between'):
-            with ui.column().classes('gap-0'):
-                page_title('Aangifte Invulhulp')
-                ui.label('Kopieer waarden naar MijnBelastingdienst.nl').classes(
-                    'text-caption text-grey-7')
+        # Header row
+        with ui.row().classes('w-full items-end'):
+            page_title('Aangifte Invulhulp')
+            ui.label('Kopieer waarden naar MijnBelastingdienst.nl').classes(
+                'text-caption text-grey-7 q-ml-md q-mb-xs')
+
+        # Filter bar
+        with ui.element('div').classes('page-toolbar w-full'):
             jaar_select = ui.select(
                 {j: str(j) for j in jaren}, value=vorig_jaar, label='Aangiftejaar',
                 on_change=lambda e: on_jaar_change(e.value),
-            ).classes('w-36')
+            ).classes('w-32')
 
         # Warnings container (missing data, jaarafsluiting status)
         warnings_container = ui.column().classes('w-full gap-2')

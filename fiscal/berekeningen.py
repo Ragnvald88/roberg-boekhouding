@@ -89,6 +89,7 @@ class FiscaalResultaat:
     pvv_wlz: float = 0.0  # Wlz component (9.65%)
     ahk: float = 0.0
     arbeidskorting: float = 0.0
+    partner_ahk: float = 0.0
     netto_ib: float = 0.0
     zvw: float = 0.0
     # Resultaat
@@ -183,7 +184,8 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
                      woz: float = 0, hypotheekrente: float = 0,
                      voorlopige_aanslag: float = 0,
                      voorlopige_aanslag_zvw: float = 0,
-                     ew_naar_partner: bool = False) -> FiscaalResultaat:
+                     ew_naar_partner: bool = False,
+                     partner_inkomen: float = 0) -> FiscaalResultaat:
     """Complete fiscal waterfall using Decimal precision.
 
     Args:
@@ -385,6 +387,13 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
     # AHK: afbouw op basis van verzamelinkomen (sinds 2025; voor Box-1-only maakt het niet uit)
     ahk = bereken_algemene_heffingskorting(r.verzamelinkomen, jaar, params)
     r.ahk = ahk
+
+    # Partner AHK: calculate if partner income provided
+    if partner_inkomen > 0:
+        r.partner_ahk = bereken_algemene_heffingskorting(
+            partner_inkomen, jaar, params)
+    else:
+        r.partner_ahk = 0.0
 
     # Arbeidskorting: op basis van arbeidsinkomen = fiscale winst
     # (= winst uit onderneming VÓÓR zelfstandigenaftrek, startersaftrek en MKB-vrijstelling)

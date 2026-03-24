@@ -1973,3 +1973,51 @@ class TestPersonalDataFallback:
         result, fallbacks = get_personal_data_with_fallback(current, None)
         assert result['woz']['value'] == 0
         assert result['woz']['source'] == 'none'
+
+
+# ============================================================
+# Partner AHK
+# ============================================================
+
+class TestPartnerAHK:
+    """Tests for partner algemene heffingskorting calculation."""
+
+    def test_partner_ahk_2024(self):
+        """Partner with loon=39965: AHK calculated via bereken_algemene_heffingskorting.
+
+        2024 params: ahk_max=3362, ahk_drempel=24812, ahk_afbouw_pct=6.63
+        afbouw = 0.0663 * (39965 - 24812) = 1004.64
+        AHK = 3362 - 1004.64 = 2357.36
+        """
+        params = FISCALE_PARAMS[2024]
+        expected_ahk = bereken_algemene_heffingskorting(39965, 2024, params)
+        result = bereken_volledig(
+            omzet=120000, kosten=25000, afschrijvingen=500,
+            representatie=0, investeringen_totaal=0,
+            uren=1300, params=params, partner_inkomen=39965,
+        )
+        assert result.partner_ahk == expected_ahk
+        assert abs(result.partner_ahk - 2357.36) < 1
+
+    def test_partner_ahk_zero_when_no_partner(self):
+        """Without partner_inkomen, partner_ahk should be 0."""
+        params = FISCALE_PARAMS[2024]
+        result = bereken_volledig(
+            omzet=120000, kosten=25000, afschrijvingen=500,
+            representatie=0, investeringen_totaal=0,
+            uren=1300, params=params,
+        )
+        assert result.partner_ahk == 0.0
+
+    def test_partner_ahk_high_income_zero(self):
+        """Partner with very high income gets AHK = 0 (fully phased out).
+
+        2024: afbouw = 0.0663 * (120000 - 24812) = 6310.96 > ahk_max 3362 -> 0
+        """
+        params = FISCALE_PARAMS[2024]
+        result = bereken_volledig(
+            omzet=120000, kosten=25000, afschrijvingen=500,
+            representatie=0, investeringen_totaal=0,
+            uren=1300, params=params, partner_inkomen=120000,
+        )
+        assert result.partner_ahk == 0.0
