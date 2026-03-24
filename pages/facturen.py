@@ -436,7 +436,12 @@ async def facturen_page():
                     ui.button('Annuleren', on_click=dialog.close).props('flat')
 
                     async def do_delete():
-                        await delete_factuur(DB_PATH, factuur_id=row['id'])
+                        try:
+                            await delete_factuur(DB_PATH, factuur_id=row['id'])
+                        except ValueError as exc:
+                            dialog.close()
+                            ui.notify(str(exc), type='negative')
+                            return
                         dialog.close()
                         ui.notify(f"Factuur {row['nummer']} verwijderd",
                                   type='positive')
@@ -463,11 +468,24 @@ async def facturen_page():
                     ui.button('Annuleren', on_click=dialog.close).props('flat')
 
                     async def do_bulk():
+                        skipped = []
+                        deleted = 0
                         for r in selected:
-                            await delete_factuur(DB_PATH, factuur_id=r['id'])
+                            try:
+                                await delete_factuur(DB_PATH, factuur_id=r['id'])
+                                deleted += 1
+                            except ValueError:
+                                skipped.append(r['nummer'])
                         dialog.close()
-                        ui.notify(f'{len(selected)} facturen verwijderd',
-                                  type='positive')
+                        if deleted:
+                            ui.notify(f'{deleted} facturen verwijderd',
+                                      type='positive')
+                        if skipped:
+                            ui.notify(
+                                f"{', '.join(skipped)}: kan niet verwijderd "
+                                f"worden (status is niet concept)",
+                                type='negative',
+                            )
                         await refresh_table()
 
                     ui.button('Verwijderen', on_click=do_bulk) \

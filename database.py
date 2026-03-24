@@ -838,17 +838,30 @@ async def update_factuur(db_path: Path = DB_PATH, factuur_id: int = 0,
 
 
 async def delete_factuur(db_path: Path = DB_PATH, factuur_id: int = 0) -> None:
-    """Delete a factuur: unlink werkdagen, remove PDF, delete record."""
+    """Delete a factuur: unlink werkdagen, remove PDF, delete record.
+
+    Only concept facturen can be deleted. Raises ValueError for
+    verstuurd or betaald facturen to prevent data loss.
+    """
     async with get_db_ctx(db_path) as conn:
-        # Get factuur nummer and pdf_pad
+        # Get factuur nummer, pdf_pad, and status
         cursor = await conn.execute(
-            "SELECT nummer, pdf_pad FROM facturen WHERE id = ?", (factuur_id,)
+            "SELECT nummer, pdf_pad, status FROM facturen WHERE id = ?",
+            (factuur_id,)
         )
         row = await cursor.fetchone()
         if not row:
             return
         nummer = row['nummer']
         pdf_pad = row['pdf_pad']
+        status = row['status']
+
+        if status in ('verstuurd', 'betaald'):
+            raise ValueError(
+                f"Factuur {nummer} heeft status '{status}' en kan niet "
+                f"verwijderd worden. Alleen concept-facturen mogen verwijderd "
+                f"worden."
+            )
 
         # Unlink werkdagen
         await conn.execute(
