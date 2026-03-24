@@ -157,11 +157,16 @@ async def test_uitgaven_per_categorie(db):
 
 
 @pytest.mark.asyncio
-async def test_check_constraint_uren_positive(db):
+async def test_check_constraint_uren_non_negative(db):
     kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=44)
+    # uren=0 is allowed (non-patient business km)
+    wd_id = await add_werkdag(db, datum="2026-02-23", klant_id=kid,
+                               uren=0, tarief=80)
+    assert wd_id > 0
+    # uren < 0 must still be rejected
     with pytest.raises(Exception):
-        await add_werkdag(db, datum="2026-02-23", klant_id=kid,
-                          uren=0, tarief=80)  # uren must be > 0
+        await add_werkdag(db, datum="2026-02-24", klant_id=kid,
+                          uren=-1, tarief=80)  # uren must be >= 0
 
 
 @pytest.mark.asyncio

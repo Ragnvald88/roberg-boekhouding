@@ -96,3 +96,43 @@ async def test_delete_verstuurd_factuur_raises(db):
     fid, _wid = await _create_factuur(db, status='verstuurd')
     with pytest.raises(ValueError, match='verstuurd'):
         await delete_factuur(db, factuur_id=fid)
+
+
+# --- Status transition validation ---
+
+@pytest.mark.asyncio
+async def test_invalid_status_transition_raises(db):
+    """Cannot go from betaald back to concept."""
+    klant_id = await add_klant(db, naam='Test', tarief_uur=100)
+    f_id = await add_factuur(db, nummer='2025-099', klant_id=klant_id,
+                              datum='2025-01-31', totaal_bedrag=800)
+    await update_factuur_status(db, f_id, 'betaald', '2025-02-15')
+    with pytest.raises(ValueError, match='niet toegestaan'):
+        await update_factuur_status(db, f_id, 'concept')
+
+
+@pytest.mark.asyncio
+async def test_valid_status_transitions(db):
+    """Valid transitions should work: concept->verstuurd->betaald."""
+    klant_id = await add_klant(db, naam='Test', tarief_uur=100)
+    f_id = await add_factuur(db, nummer='2025-098', klant_id=klant_id,
+                              datum='2025-01-31', totaal_bedrag=800)
+    await update_factuur_status(db, f_id, 'verstuurd')
+    await update_factuur_status(db, f_id, 'betaald', '2025-02-15')
+    # Should not raise
+
+
+# --- Non-werkdag business km (uren=0) ---
+
+@pytest.mark.asyncio
+async def test_add_werkdag_zero_uren_succeeds(db):
+    """Werkdag with uren=0 for non-patient business km should work."""
+    klant_id = await add_klant(db, naam='Test', tarief_uur=100)
+    wd_id = await add_werkdag(db, datum='2025-03-15', klant_id=klant_id,
+                               uren=0, km=30, tarief=0, km_tarief=0.23,
+                               urennorm=0, activiteit='Congres KNMG')
+    rows = await get_werkdagen(db)
+    assert len(rows) == 1
+    assert rows[0].uren == 0
+    assert rows[0].km == 30
+    assert rows[0].urennorm == 0

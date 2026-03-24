@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS werkdagen (
     code TEXT DEFAULT '',
     activiteit TEXT DEFAULT 'Waarneming dagpraktijk',
     locatie TEXT DEFAULT '',
-    uren REAL NOT NULL CHECK (uren > 0),
+    uren REAL NOT NULL CHECK (uren >= 0),
     km REAL DEFAULT 0 CHECK (km >= 0),
     tarief REAL NOT NULL CHECK (tarief >= 0),
     km_tarief REAL DEFAULT 0.23,
@@ -342,6 +342,7 @@ MIGRATIONS = [
         "ALTER TABLE klanten ADD COLUMN postcode TEXT DEFAULT ''",
         "ALTER TABLE klanten ADD COLUMN plaats TEXT DEFAULT ''",
     ]),
+    (18, "relax_werkdagen_uren_check_gte_zero", None),  # handled by callable
 ]
 
 
@@ -388,7 +389,41 @@ async def _run_migration_8(conn):
                     (b3['drempel_schulden'], jaar))
 
 
-_MIGRATION_CALLABLES = {7: _run_migration_7, 8: _run_migration_8}
+async def _run_migration_18(conn):
+    """Recreate werkdagen table with CHECK (uren >= 0) instead of CHECK (uren > 0).
+
+    This allows non-patient business km entries (congresses, opleiding, etc.)
+    with uren=0.
+    """
+    await conn.executescript("""
+        CREATE TABLE werkdagen_new (
+            id INTEGER PRIMARY KEY,
+            datum TEXT NOT NULL,
+            klant_id INTEGER NOT NULL REFERENCES klanten(id),
+            code TEXT DEFAULT '',
+            activiteit TEXT DEFAULT 'Waarneming dagpraktijk',
+            locatie TEXT DEFAULT '',
+            uren REAL NOT NULL CHECK (uren >= 0),
+            km REAL DEFAULT 0 CHECK (km >= 0),
+            tarief REAL NOT NULL CHECK (tarief >= 0),
+            km_tarief REAL DEFAULT 0.23,
+            status TEXT DEFAULT 'ongefactureerd'
+                CHECK (status IN ('ongefactureerd', 'gefactureerd', 'betaald')),
+            factuurnummer TEXT DEFAULT '',
+            opmerking TEXT DEFAULT '',
+            urennorm INTEGER DEFAULT 1 CHECK (urennorm IN (0, 1)),
+            locatie_id INTEGER REFERENCES klant_locaties(id) ON DELETE SET NULL
+        );
+        INSERT INTO werkdagen_new SELECT * FROM werkdagen;
+        DROP TABLE werkdagen;
+        ALTER TABLE werkdagen_new RENAME TO werkdagen;
+        CREATE INDEX IF NOT EXISTS idx_werkdagen_datum ON werkdagen(datum);
+        CREATE INDEX IF NOT EXISTS idx_werkdagen_klant ON werkdagen(klant_id);
+        CREATE INDEX IF NOT EXISTS idx_werkdagen_status ON werkdagen(status);
+    """)
+
+
+_MIGRATION_CALLABLES = {7: _run_migration_7, 8: _run_migration_8, 18: _run_migration_18}
 
 
 async def init_db(db_path: Path = DB_PATH) -> None:
@@ -787,9 +822,22 @@ async def update_factuur_status(db_path: Path = DB_PATH, factuur_id: int = 0,
     Werkdagen cascade: 'betaald' -> werkdagen status 'betaald',
                        others -> werkdagen status 'gefactureerd'
     """
+    VALID_TRANSITIONS = {
+        'concept': {'verstuurd', 'betaald'},
+        'verstuurd': {'betaald', 'concept'},
+        'betaald': {'verstuurd'},
+    }
     if betaald_datum:
         _validate_datum(betaald_datum)
     async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            "SELECT status FROM facturen WHERE id = ?", (factuur_id,))
+        current_row = await cur.fetchone()
+        if current_row:
+            current = current_row['status']
+            if status != current and status not in VALID_TRANSITIONS.get(current, set()):
+                raise ValueError(
+                    f"Status overgang '{current}' → '{status}' niet toegestaan")
         await conn.execute(
             "UPDATE facturen SET status = ?, betaald_datum = ? WHERE id = ?",
             (status, betaald_datum, factuur_id))

@@ -20,7 +20,13 @@ CODES = {
     'ANW_AVOND': 'ANW avonddienst',
     'ANW_NACHT': 'ANW nachtdienst',
     'ANW_WEEKEND': 'ANW weekenddienst',
+    'CONGRES': 'Congres/nascholing',
+    'OPLEIDING': 'Opleiding/cursus',
+    'OVERIG_ZAK': 'Overig zakelijk (geen patiëntenzorg)',
 }
+
+# Codes where uren=0 is expected (non-patient business trips)
+_ZERO_UREN_CODES = {'CONGRES', 'OPLEIDING', 'OVERIG_ZAK'}
 
 
 async def open_werkdag_dialog(on_save=None, werkdag=None):
@@ -104,7 +110,7 @@ async def open_werkdag_dialog(on_save=None, werkdag=None):
 
             uren_input = ui.number(
                 'Uren', value=werkdag.uren if is_edit else 8,
-                min=0.5, max=24, step=0.5,
+                min=0, max=24, step=0.5,
             ).classes('w-24')
 
         # Row 3: Tarief + Km (editable, auto-fill from klant)
@@ -201,12 +207,17 @@ async def open_werkdag_dialog(on_save=None, werkdag=None):
         km_input.on_value_change(lambda _: update_totaal())
         km_tarief_input.on_value_change(lambda _: update_totaal())
 
-        # Auto-toggle urennorm for ACHTERWACHT
+        # Auto-toggle urennorm for ACHTERWACHT and non-patient codes
         def on_code_change(e):
-            if e.value == 'ACHTERWACHT':
+            if e.value == 'ACHTERWACHT' or e.value in _ZERO_UREN_CODES:
                 urennorm_check.value = False
             else:
                 urennorm_check.value = True
+            # Pre-fill uren=0 and tarief=0 for non-patient business trips
+            if e.value in _ZERO_UREN_CODES:
+                uren_input.value = 0
+                tarief_input.value = 0
+            update_totaal()
 
         code_select.on_value_change(on_code_change)
 
@@ -231,7 +242,7 @@ async def open_werkdag_dialog(on_save=None, werkdag=None):
             if not kid:
                 ui.notify('Selecteer een klant', type='warning')
                 return
-            if not uren_input.value or uren_input.value <= 0:
+            if uren_input.value is None or uren_input.value < 0:
                 ui.notify('Vul het aantal uren in', type='warning')
                 return
             if tarief_input.value is None or tarief_input.value < 0:
