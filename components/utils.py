@@ -10,6 +10,8 @@ KOSTEN_CATEGORIEEN = [
     'Kleine aankopen',
     'Scholingskosten',
     'Bankkosten',
+    'Automatisering',
+    'Overige kosten',
     'Investeringen',
 ]
 
