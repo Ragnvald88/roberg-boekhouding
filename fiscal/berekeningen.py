@@ -440,6 +440,13 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
     if (d_za + d_sa) > d_fiscale_winst and d_fiscale_winst > 0:
         w.append("ZA + SA hoger dan fiscale winst: aftrek deels verloren")
 
+    if lijfrente > 0:
+        max_reasonable = r.fiscale_winst * 0.30 if r.fiscale_winst > 0 else 15000
+        if lijfrente > max_reasonable:
+            w.append(f"Lijfrentepremie (€{lijfrente:,.0f}) lijkt hoog — "
+                     "controleer of dit binnen uw jaarruimte valt via de "
+                     "Belastingdienst jaarruimte rekenhulp.")
+
     r.waarschuwingen = w
     return r
 
