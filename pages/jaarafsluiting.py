@@ -41,14 +41,6 @@ def _balans_line(label: str, value: float, bold: bool = False, indent: bool = Fa
 
 async def _load_year_data(jaar: int):
     """Load all business data for a year. Returns (data, balans, winst, vorig_jaar_balans) or None."""
-    # Auto-match open facturen to bank payments for accurate year-end receivables
-    matches = await find_factuur_matches(DB_PATH)
-    if matches:
-        await apply_factuur_matches(DB_PATH, matches)
-        ui.notify(
-            f'{len(matches)} facturen automatisch als betaald gemarkeerd',
-            type='info',
-        )
     data = await fetch_fiscal_data(DB_PATH, jaar)
     if data is None:
         return None
@@ -98,24 +90,24 @@ async def jaarafsluiting_page():
 
     # --- Containers ---
     with ui.column().classes('w-full max-w-7xl mx-auto p-6 gap-4'):
-        # Top bar: year selector + status badge + actions
-        with ui.row().classes('w-full items-center gap-3'):
+        # Header row: title + actions
+        with ui.row().classes('w-full items-center'):
             page_title('Jaarafsluiting')
+            ui.space()
+            edit_btn = ui.button('Bewerken', icon='edit',
+                                 on_click=lambda: toggle_edit()) \
+                .props('flat color=secondary dense')
+            status_btn = ui.button('Markeer als definitief', icon='check_circle',
+                                   on_click=lambda: set_definitief())
+
+        # Filter bar
+        with ui.element('div').classes('page-toolbar w-full'):
             jaar_select = ui.select(
                 options=year_options(descending=False),
                 value=vorig_jaar,
                 label='Boekjaar',
-            ).classes('w-32')
-
-            status_badge = ui.badge('Concept', color='warning').classes('text-sm q-ml-sm')
-
-            ui.space()
-
-            edit_btn = ui.button('Bewerken', icon='edit',
-                                 on_click=lambda: toggle_edit()) \
-                .props('outline').classes('q-mr-sm')
-            status_btn = ui.button('Markeer als definitief', icon='check_circle',
-                                   on_click=lambda: set_definitief())
+            ).classes('w-28')
+            status_badge = ui.badge('Concept', color='warning').classes('text-sm')
 
         # KPI strip placeholder
         kpi_container = ui.row().classes('w-full')
@@ -793,6 +785,37 @@ async def jaarafsluiting_page():
 
     # Initial render
     await render_all()
+
+    # Check for factuur-bank matches and show review dialog (not auto-applied)
+    matches = await find_factuur_matches(DB_PATH)
+    if matches:
+        async def apply_reviewed_matches():
+            await apply_factuur_matches(DB_PATH, matches)
+            ui.notify(
+                f'{len(matches)} facturen als betaald gemarkeerd',
+                type='positive')
+            match_dialog.close()
+            await render_all()
+
+        with ui.dialog() as match_dialog, ui.card().classes('w-96'):
+            ui.label('Factuur-betalingen gevonden').classes('text-h6')
+            ui.label(f'{len(matches)} facturen matchen met bankbetalingen:')
+            with ui.column().classes('w-full gap-1 q-my-sm'):
+                for m in matches[:10]:
+                    ui.label(
+                        f"\u2022 {m['factuur_nummer']} \u2014 "
+                        f"{format_euro(m['factuur_bedrag'])} "
+                        f"\u2192 {m['bank_datum']}"
+                    ).classes('text-caption')
+                if len(matches) > 10:
+                    ui.label(f"... en {len(matches) - 10} meer").classes(
+                        'text-caption text-grey')
+            with ui.row().classes('w-full justify-end'):
+                ui.button('Annuleren', on_click=match_dialog.close).props(
+                    'flat')
+                ui.button('Toepassen', on_click=apply_reviewed_matches).props(
+                    'color=positive')
+        match_dialog.open()
 
 
 # === PDF Template Rendering ===
