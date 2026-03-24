@@ -332,6 +332,16 @@ MIGRATIONS = [
     (15, "add_klant_email", [
         "ALTER TABLE klanten ADD COLUMN email TEXT DEFAULT ''",
     ]),
+    (16, "add_bedrijf_telefoon_email", [
+        "ALTER TABLE bedrijfsgegevens ADD COLUMN telefoon TEXT DEFAULT ''",
+        "ALTER TABLE bedrijfsgegevens ADD COLUMN email TEXT DEFAULT ''",
+        "UPDATE bedrijfsgegevens SET telefoon = '06 0000 0000', email = 'info@testbedrijf.nl' WHERE id = 1",
+    ]),
+    (17, "add_klant_address_fields", [
+        "ALTER TABLE klanten ADD COLUMN contactpersoon TEXT DEFAULT ''",
+        "ALTER TABLE klanten ADD COLUMN postcode TEXT DEFAULT ''",
+        "ALTER TABLE klanten ADD COLUMN plaats TEXT DEFAULT ''",
+    ]),
 ]
 
 
@@ -488,6 +498,8 @@ async def get_bedrijfsgegevens(db_path: Path = DB_PATH) -> Bedrijfsgegevens | No
             functie=r['functie'], adres=r['adres'],
             postcode_plaats=r['postcode_plaats'], kvk=r['kvk'],
             iban=r['iban'], thuisplaats=r['thuisplaats'],
+            telefoon=r['telefoon'] if 'telefoon' in r.keys() else '',
+            email=r['email'] if 'email' in r.keys() else '',
         )
 
 
@@ -495,12 +507,14 @@ async def upsert_bedrijfsgegevens(db_path: Path = DB_PATH, **kwargs) -> None:
     async with get_db_ctx(db_path) as conn:
         await conn.execute(
             """INSERT OR REPLACE INTO bedrijfsgegevens
-               (id, bedrijfsnaam, naam, functie, adres, postcode_plaats, kvk, iban, thuisplaats)
-               VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               (id, bedrijfsnaam, naam, functie, adres, postcode_plaats,
+                kvk, iban, thuisplaats, telefoon, email)
+               VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (kwargs.get('bedrijfsnaam', ''), kwargs.get('naam', ''),
              kwargs.get('functie', ''), kwargs.get('adres', ''),
              kwargs.get('postcode_plaats', ''), kwargs.get('kvk', ''),
-             kwargs.get('iban', ''), kwargs.get('thuisplaats', ''))
+             kwargs.get('iban', ''), kwargs.get('thuisplaats', ''),
+             kwargs.get('telefoon', ''), kwargs.get('email', ''))
         )
         await conn.commit()
 
@@ -515,21 +529,31 @@ async def get_klanten(db_path: Path = DB_PATH, alleen_actief: bool = False) -> l
         sql += " ORDER BY naam"
         cursor = await conn.execute(sql)
         rows = await cursor.fetchall()
+        def _safe(r, key, default=''):
+            keys = r.keys() if hasattr(r, 'keys') else []
+            return (r[key] or default) if key in keys else default
+
         return [Klant(
             id=r['id'], naam=r['naam'], tarief_uur=r['tarief_uur'],
             retour_km=r['retour_km'], adres=r['adres'] or '',
             kvk=r['kvk'] or '', actief=bool(r['actief']),
-            email=(r['email'] or '') if 'email' in (r.keys() if hasattr(r, 'keys') else []) else ''
+            email=_safe(r, 'email'),
+            contactpersoon=_safe(r, 'contactpersoon'),
+            postcode=_safe(r, 'postcode'),
+            plaats=_safe(r, 'plaats'),
         ) for r in rows]
 
 
 async def add_klant(db_path: Path = DB_PATH, **kwargs) -> int:
     async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
-            "INSERT INTO klanten (naam, tarief_uur, retour_km, adres, kvk, actief) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO klanten (naam, tarief_uur, retour_km, adres, kvk, actief, "
+            "email, contactpersoon, postcode, plaats) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (kwargs['naam'], kwargs.get('tarief_uur', 0), kwargs.get('retour_km', 0),
-             kwargs.get('adres', ''), kwargs.get('kvk', ''), kwargs.get('actief', 1))
+             kwargs.get('adres', ''), kwargs.get('kvk', ''), kwargs.get('actief', 1),
+             kwargs.get('email', ''), kwargs.get('contactpersoon', ''),
+             kwargs.get('postcode', ''), kwargs.get('plaats', ''))
         )
         await conn.commit()
         return cursor.lastrowid
@@ -539,7 +563,8 @@ async def update_klant(db_path: Path = DB_PATH, klant_id: int = 0, **kwargs) -> 
     async with get_db_ctx(db_path) as conn:
         fields = []
         values = []
-        for key in ('naam', 'tarief_uur', 'retour_km', 'adres', 'kvk', 'actief'):
+        for key in ('naam', 'tarief_uur', 'retour_km', 'adres', 'kvk', 'actief',
+                    'email', 'contactpersoon', 'postcode', 'plaats'):
             if key in kwargs:
                 fields.append(f"{key} = ?")
                 values.append(kwargs[key])
@@ -678,6 +703,14 @@ async def update_werkdag(db_path: Path = DB_PATH, werkdag_id: int = 0, **kwargs)
 
 async def delete_werkdag(db_path: Path = DB_PATH, werkdag_id: int = 0) -> None:
     async with get_db_ctx(db_path) as conn:
+        cursor = await conn.execute(
+            "SELECT status FROM werkdagen WHERE id = ?", (werkdag_id,)
+        )
+        row = await cursor.fetchone()
+        if row and row[0] != 'ongefactureerd':
+            raise ValueError(
+                f"Werkdag kan niet verwijderd worden: status is '{row[0]}'"
+            )
         await conn.execute("DELETE FROM werkdagen WHERE id = ?", (werkdag_id,))
         await conn.commit()
 

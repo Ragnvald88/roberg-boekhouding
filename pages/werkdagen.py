@@ -29,24 +29,29 @@ async def werkdagen_page():
     summary_container = {'ref': None}
 
     with ui.column().classes('w-full p-6 max-w-7xl mx-auto gap-6'):
-        # Header row
-        with ui.row().classes('w-full items-center gap-4'):
+        # Header row: title + primary action
+        with ui.row().classes('w-full items-center'):
             page_title('Werkdagen')
+            ui.space()
+            ui.button(
+                'Nieuwe werkdag', icon='add',
+                on_click=lambda: open_werkdag_dialog(on_save=refresh_table),
+            ).props('color=primary')
 
-        # Filter + action row
-        with ui.row().classes('w-full items-end gap-4'):
+        # Filter bar
+        with ui.element('div').classes('page-toolbar w-full'):
             jaar_select = ui.select(
                 year_options(include_next=True, as_dict=True, descending=False),
                 value=current_year, label='Jaar',
-            ).classes('w-32')
+            ).classes('w-28')
 
             maand_select = ui.select(
                 MAANDEN, value=0, label='Maand',
-            ).classes('w-32')
+            ).classes('w-28')
 
             klant_sel = ui.select(
                 klant_options, value=0, label='Klant',
-            ).classes('w-48')
+            ).classes('w-44')
 
             STATUS_OPTIONS = {
                 '': 'Alle',
@@ -56,7 +61,7 @@ async def werkdagen_page():
             }
             status_sel = ui.select(
                 STATUS_OPTIONS, value='', label='Status',
-            ).classes('w-40')
+            ).classes('w-36')
 
             ui.space()
 
@@ -81,15 +86,10 @@ async def werkdagen_page():
                 ui.download.content(csv_str.encode('utf-8-sig'),
                                     f'werkdagen_{year}.csv')
 
-            ui.button(
-                'Exporteer CSV', icon='download',
-                on_click=export_csv,
-            ).props('outline color=primary')
-
-            ui.button(
-                'Nieuwe werkdag', icon='add',
-                on_click=lambda: open_werkdag_dialog(on_save=refresh_table),
-            ).props('color=primary')
+            ui.button(icon='download',
+                      on_click=export_csv) \
+                .props('flat round color=secondary size=sm') \
+                .tooltip('Exporteer CSV')
 
         # Bulk action toolbar (hidden when nothing selected)
         bulk_bar = ui.row().classes('w-full items-center gap-4')
@@ -118,10 +118,22 @@ async def werkdagen_page():
                 ids = [r['id'] for r in selected]
 
                 async def confirm_bulk_delete():
+                    deleted = 0
+                    skipped = 0
                     for wid in ids:
-                        await delete_werkdag(DB_PATH, werkdag_id=wid)
+                        try:
+                            await delete_werkdag(DB_PATH, werkdag_id=wid)
+                            deleted += 1
+                        except ValueError:
+                            skipped += 1
                     dlg.close()
-                    ui.notify(f'{len(ids)} werkdag(en) verwijderd', type='positive')
+                    if deleted:
+                        ui.notify(f'{deleted} werkdag(en) verwijderd', type='positive')
+                    if skipped:
+                        ui.notify(
+                            f'{skipped} werkdag(en) overgeslagen (gefactureerd/betaald)',
+                            type='warning',
+                        )
                     await refresh_table()
 
                 with ui.dialog() as dlg, ui.card():
