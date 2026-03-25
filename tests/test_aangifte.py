@@ -405,8 +405,7 @@ async def test_bereken_balans_with_uninvoiced_werkdagen(db):
     await upsert_fiscale_params(db, **FISCALE_PARAMS[2024])
     kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=44)
     await add_werkdag(db, datum="2024-06-10", klant_id=kid,
-                      uren=8, tarief=80, km=44, km_tarief=0.23,
-                      status='ongefactureerd')
+                      uren=8, tarief=80, km=44, km_tarief=0.23)
     # Expected: 8*80 + 44*0.23 = 640 + 10.12 = 650.12
     result = await bereken_balans(db, jaar=2024, activastaat=[])
     assert abs(result['nog_te_factureren'] - 650.12) < 0.01
@@ -476,7 +475,7 @@ async def test_fetch_to_bereken_pipeline(db):
     for day in range(1, 11):
         await add_werkdag(db, datum=f"2024-03-{day:02d}", klant_id=kid,
                           uren=8.5, tarief=77.50, km=52, km_tarief=0.23,
-                          status='gefactureerd')
+                          factuurnummer='2024-001')
     # Add a factuur
     await add_factuur(db, nummer="2024-001", klant_id=kid,
                       datum="2024-03-15", totaal_bedrag=6800, status='betaald')

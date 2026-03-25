@@ -2,45 +2,36 @@
 
 import pytest
 from database import (
-    add_klant, add_werkdag, update_werkdag, delete_werkdag,
+    add_klant, add_werkdag, delete_werkdag,
     add_factuur, delete_factuur, update_factuur_status,
     link_werkdagen_to_factuur, get_werkdagen,
 )
 
 
-async def _create_werkdag(db, status='ongefactureerd'):
-    """Helper: maak een klant + werkdag met opgegeven status."""
+async def _create_werkdag(db, linked=False):
+    """Helper: maak een klant + werkdag, optioneel gekoppeld aan factuur."""
     kid = await add_klant(db, naam="Testpraktijk", tarief_uur=80, retour_km=30)
+    factuurnummer = '2025-999' if linked else ''
     wid = await add_werkdag(
         db, datum='2025-01-15', klant_id=kid, uren=8, km=0,
-        tarief=100, km_tarief=0,
+        tarief=100, km_tarief=0, factuurnummer=factuurnummer,
     )
-    if status != 'ongefactureerd':
-        await update_werkdag(db, werkdag_id=wid, status=status)
     return wid
 
 
 @pytest.mark.asyncio
 async def test_delete_ongefactureerd_werkdag_succeeds(db):
     """Ongefactureerde werkdagen mogen gewoon verwijderd worden."""
-    wid = await _create_werkdag(db, status='ongefactureerd')
+    wid = await _create_werkdag(db, linked=False)
     # Should not raise
     await delete_werkdag(db, werkdag_id=wid)
 
 
 @pytest.mark.asyncio
-async def test_delete_gefactureerd_werkdag_raises(db):
-    """Gefactureerde werkdagen mogen NIET verwijderd worden."""
-    wid = await _create_werkdag(db, status='gefactureerd')
-    with pytest.raises(ValueError, match='gefactureerd'):
-        await delete_werkdag(db, werkdag_id=wid)
-
-
-@pytest.mark.asyncio
-async def test_delete_betaald_werkdag_raises(db):
-    """Betaalde werkdagen mogen NIET verwijderd worden."""
-    wid = await _create_werkdag(db, status='betaald')
-    with pytest.raises(ValueError, match='betaald'):
+async def test_delete_linked_werkdag_raises(db):
+    """Aan factuur gekoppelde werkdagen mogen NIET verwijderd worden."""
+    wid = await _create_werkdag(db, linked=True)
+    with pytest.raises(ValueError, match='factuur'):
         await delete_werkdag(db, werkdag_id=wid)
 
 

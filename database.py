@@ -48,7 +48,6 @@ CREATE TABLE IF NOT EXISTS werkdagen (
     km REAL DEFAULT 0 CHECK (km >= 0),
     tarief REAL NOT NULL CHECK (tarief >= 0),
     km_tarief REAL DEFAULT 0.23,
-    status TEXT DEFAULT 'ongefactureerd' CHECK (status IN ('ongefactureerd', 'gefactureerd', 'betaald')),
     factuurnummer TEXT DEFAULT '',
     opmerking TEXT DEFAULT '',
     urennorm INTEGER DEFAULT 1 CHECK (urennorm IN (0, 1)),
@@ -58,7 +57,7 @@ CREATE TABLE IF NOT EXISTS werkdagen (
 
 CREATE INDEX IF NOT EXISTS idx_werkdagen_datum ON werkdagen(datum);
 CREATE INDEX IF NOT EXISTS idx_werkdagen_klant ON werkdagen(klant_id);
-CREATE INDEX IF NOT EXISTS idx_werkdagen_status ON werkdagen(status);
+CREATE INDEX IF NOT EXISTS idx_werkdagen_factuurnummer ON werkdagen(factuurnummer);
 
 CREATE TABLE IF NOT EXISTS facturen (
     id INTEGER PRIMARY KEY,
@@ -351,6 +350,7 @@ MIGRATIONS = [
         # ANW facturen are always received from external (imported)
         "UPDATE facturen SET bron = 'import' WHERE type = 'anw'",
     ]),
+    (20, "drop_werkdagen_status_column", None),  # handled by callable
 ]
 
 
@@ -403,7 +403,18 @@ async def _run_migration_18(conn):
     This allows non-patient business km entries (congresses, opleiding, etc.)
     with uren=0.
     """
-    await conn.executescript("""
+    # Check if status column exists (won't on fresh DBs after migration 20 schema)
+    cur = await conn.execute("PRAGMA table_info(werkdagen)")
+    columns = [row[1] for row in await cur.fetchall()]
+    has_status = 'status' in columns
+
+    if has_status:
+        select_cols = ("id, datum, klant_id, code, activiteit, locatie, uren, km, "
+                       "tarief, km_tarief, factuurnummer, opmerking, urennorm, locatie_id")
+    else:
+        select_cols = "*"
+
+    await conn.execute("""
         CREATE TABLE werkdagen_new (
             id INTEGER PRIMARY KEY,
             datum TEXT NOT NULL,
@@ -415,23 +426,56 @@ async def _run_migration_18(conn):
             km REAL DEFAULT 0 CHECK (km >= 0),
             tarief REAL NOT NULL CHECK (tarief >= 0),
             km_tarief REAL DEFAULT 0.23,
-            status TEXT DEFAULT 'ongefactureerd'
-                CHECK (status IN ('ongefactureerd', 'gefactureerd', 'betaald')),
             factuurnummer TEXT DEFAULT '',
             opmerking TEXT DEFAULT '',
             urennorm INTEGER DEFAULT 1 CHECK (urennorm IN (0, 1)),
             locatie_id INTEGER REFERENCES klant_locaties(id) ON DELETE SET NULL
-        );
-        INSERT INTO werkdagen_new SELECT * FROM werkdagen;
-        DROP TABLE werkdagen;
-        ALTER TABLE werkdagen_new RENAME TO werkdagen;
-        CREATE INDEX IF NOT EXISTS idx_werkdagen_datum ON werkdagen(datum);
-        CREATE INDEX IF NOT EXISTS idx_werkdagen_klant ON werkdagen(klant_id);
-        CREATE INDEX IF NOT EXISTS idx_werkdagen_status ON werkdagen(status);
-    """)
+        )""")
+    await conn.execute(f"INSERT INTO werkdagen_new SELECT {select_cols} FROM werkdagen")
+    await conn.execute("DROP TABLE werkdagen")
+    await conn.execute("ALTER TABLE werkdagen_new RENAME TO werkdagen")
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_werkdagen_datum ON werkdagen(datum)")
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_werkdagen_klant ON werkdagen(klant_id)")
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_werkdagen_factuurnummer ON werkdagen(factuurnummer)")
 
 
-_MIGRATION_CALLABLES = {7: _run_migration_7, 8: _run_migration_8, 18: _run_migration_18}
+async def _run_migration_20(conn):
+    """Drop werkdagen.status column — status is now derived from factuurnummer + facturen.status."""
+    cur = await conn.execute("PRAGMA table_info(werkdagen)")
+    columns = [row[1] for row in await cur.fetchall()]
+    if 'status' not in columns:
+        return  # Already without status (fresh DB or migration 18 handled it)
+
+    await conn.execute("""
+        CREATE TABLE werkdagen_new (
+            id INTEGER PRIMARY KEY,
+            datum TEXT NOT NULL,
+            klant_id INTEGER NOT NULL REFERENCES klanten(id),
+            code TEXT DEFAULT '',
+            activiteit TEXT DEFAULT 'Waarneming dagpraktijk',
+            locatie TEXT DEFAULT '',
+            uren REAL NOT NULL CHECK (uren >= 0),
+            km REAL DEFAULT 0 CHECK (km >= 0),
+            tarief REAL NOT NULL CHECK (tarief >= 0),
+            km_tarief REAL DEFAULT 0.23,
+            factuurnummer TEXT DEFAULT '',
+            opmerking TEXT DEFAULT '',
+            urennorm INTEGER DEFAULT 1 CHECK (urennorm IN (0, 1)),
+            locatie_id INTEGER REFERENCES klant_locaties(id) ON DELETE SET NULL
+        )""")
+    await conn.execute(
+        "INSERT INTO werkdagen_new "
+        "SELECT id, datum, klant_id, code, activiteit, locatie, uren, km, "
+        "       tarief, km_tarief, factuurnummer, opmerking, urennorm, locatie_id "
+        "FROM werkdagen")
+    await conn.execute("DROP TABLE werkdagen")
+    await conn.execute("ALTER TABLE werkdagen_new RENAME TO werkdagen")
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_werkdagen_datum ON werkdagen(datum)")
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_werkdagen_klant ON werkdagen(klant_id)")
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_werkdagen_factuurnummer ON werkdagen(factuurnummer)")
+
+
+_MIGRATION_CALLABLES = {7: _run_migration_7, 8: _run_migration_8, 18: _run_migration_18, 20: _run_migration_20}
 
 
 async def init_db(db_path: Path = DB_PATH) -> None:
@@ -636,15 +680,24 @@ async def delete_klant(db_path: Path = DB_PATH, klant_id: int = 0) -> None:
 # === Row-to-model helpers (DRY) ===
 
 def _row_to_werkdag(r) -> Werkdag:
-    """Convert a joined werkdagen+klanten row to a Werkdag dataclass."""
+    """Convert a joined werkdagen+klanten(+facturen) row to a Werkdag dataclass."""
+    fn = r['factuurnummer'] or ''
+    # Derive status: if computed_status column is present (from JOIN), use it;
+    # otherwise derive from factuurnummer presence.
+    if 'computed_status' in r.keys():
+        status = r['computed_status']
+    elif fn:
+        status = 'gefactureerd'
+    else:
+        status = 'ongefactureerd'
     return Werkdag(
         id=r['id'], datum=r['datum'], klant_id=r['klant_id'],
         klant_naam=r['klant_naam'], code=r['code'] or '',
         activiteit=r['activiteit'] or 'Waarneming dagpraktijk',
         locatie=r['locatie'] or '', uren=r['uren'], km=r['km'] or 0,
         tarief=r['tarief'], km_tarief=r['km_tarief'] or 0.23,
-        status=r['status'] or 'ongefactureerd',
-        factuurnummer=r['factuurnummer'] or '',
+        factuurnummer=fn,
+        status=status,
         opmerking=r['opmerking'] or '',
         urennorm=bool(r['urennorm']),
         locatie_id=r['locatie_id'],
@@ -684,8 +737,15 @@ def _row_to_uitgave(r) -> Uitgave:
 async def get_werkdagen(db_path: Path = DB_PATH, jaar: int = None,
                         maand: int = None, klant_id: int = None) -> list[Werkdag]:
     async with get_db_ctx(db_path) as conn:
-        sql = """SELECT w.*, k.naam as klant_naam
-                 FROM werkdagen w JOIN klanten k ON w.klant_id = k.id
+        sql = """SELECT w.*, k.naam as klant_naam,
+                        CASE
+                            WHEN w.factuurnummer = '' OR w.factuurnummer IS NULL THEN 'ongefactureerd'
+                            WHEN f.status = 'betaald' THEN 'betaald'
+                            ELSE 'gefactureerd'
+                        END as computed_status
+                 FROM werkdagen w
+                 JOIN klanten k ON w.klant_id = k.id
+                 LEFT JOIN facturen f ON w.factuurnummer = f.nummer
                  WHERE 1=1"""
         params = []
         if jaar:
@@ -709,14 +769,14 @@ async def add_werkdag(db_path: Path = DB_PATH, **kwargs) -> int:
         cursor = await conn.execute(
             """INSERT INTO werkdagen
                (datum, klant_id, code, activiteit, locatie, uren, km,
-                tarief, km_tarief, status, factuurnummer, opmerking, urennorm,
+                tarief, km_tarief, factuurnummer, opmerking, urennorm,
                 locatie_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (kwargs['datum'], kwargs['klant_id'],
              kwargs.get('code', ''), kwargs.get('activiteit', 'Waarneming dagpraktijk'),
              kwargs.get('locatie', ''), kwargs['uren'], kwargs.get('km', 0),
              kwargs['tarief'], kwargs.get('km_tarief', 0.23),
-             kwargs.get('status', 'ongefactureerd'), kwargs.get('factuurnummer', ''),
+             kwargs.get('factuurnummer', ''),
              kwargs.get('opmerking', ''), kwargs.get('urennorm', 1),
              kwargs.get('locatie_id'))
         )
@@ -731,7 +791,7 @@ async def update_werkdag(db_path: Path = DB_PATH, werkdag_id: int = 0, **kwargs)
         fields = []
         values = []
         allowed = ('datum', 'klant_id', 'code', 'activiteit', 'locatie', 'uren',
-                    'km', 'tarief', 'km_tarief', 'status', 'factuurnummer',
+                    'km', 'tarief', 'km_tarief', 'factuurnummer',
                     'opmerking', 'urennorm', 'locatie_id')
         for key in allowed:
             if key in kwargs:
@@ -748,12 +808,12 @@ async def update_werkdag(db_path: Path = DB_PATH, werkdag_id: int = 0, **kwargs)
 async def delete_werkdag(db_path: Path = DB_PATH, werkdag_id: int = 0) -> None:
     async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
-            "SELECT status FROM werkdagen WHERE id = ?", (werkdag_id,)
+            "SELECT factuurnummer FROM werkdagen WHERE id = ?", (werkdag_id,)
         )
         row = await cursor.fetchone()
-        if row and row[0] != 'ongefactureerd':
+        if row and row[0]:
             raise ValueError(
-                f"Werkdag kan niet verwijderd worden: status is '{row[0]}'"
+                f"Werkdag kan niet verwijderd worden: gekoppeld aan factuur '{row[0]}'"
             )
         await conn.execute("DELETE FROM werkdagen WHERE id = ?", (werkdag_id,))
         await conn.commit()
@@ -764,7 +824,7 @@ async def get_werkdagen_ongefactureerd(db_path: Path = DB_PATH,
     async with get_db_ctx(db_path) as conn:
         sql = """SELECT w.*, k.naam as klant_naam
                  FROM werkdagen w JOIN klanten k ON w.klant_id = k.id
-                 WHERE w.status = 'ongefactureerd'"""
+                 WHERE (w.factuurnummer = '' OR w.factuurnummer IS NULL)"""
         params = []
         if klant_id:
             sql += " AND w.klant_id = ?"
@@ -825,11 +885,9 @@ async def get_next_factuurnummer(db_path: Path = DB_PATH, jaar: int = 2026) -> s
 async def update_factuur_status(db_path: Path = DB_PATH, factuur_id: int = 0,
                                  status: str = 'verstuurd',
                                  betaald_datum: str = '') -> None:
-    """Update factuur status and cascade to linked werkdagen.
+    """Update factuur status.
 
     Status: 'concept', 'verstuurd', 'betaald'
-    Werkdagen cascade: 'betaald' -> werkdagen status 'betaald',
-                       others -> werkdagen status 'gefactureerd'
     """
     VALID_TRANSITIONS = {
         'concept': {'verstuurd', 'betaald'},
@@ -850,16 +908,6 @@ async def update_factuur_status(db_path: Path = DB_PATH, factuur_id: int = 0,
         await conn.execute(
             "UPDATE facturen SET status = ?, betaald_datum = ? WHERE id = ?",
             (status, betaald_datum, factuur_id))
-
-        # Cascade to werkdagen
-        cur = await conn.execute(
-            "SELECT nummer FROM facturen WHERE id = ?", (factuur_id,))
-        row = await cur.fetchone()
-        if row and row['nummer']:
-            new_wd_status = 'betaald' if status == 'betaald' else 'gefactureerd'
-            await conn.execute(
-                "UPDATE werkdagen SET status = ? WHERE factuurnummer = ?",
-                (new_wd_status, row['nummer']))
         await conn.commit()
 
 
@@ -922,7 +970,7 @@ async def delete_factuur(db_path: Path = DB_PATH, factuur_id: int = 0) -> None:
 
         # Unlink werkdagen
         await conn.execute(
-            "UPDATE werkdagen SET status = 'ongefactureerd', factuurnummer = '' "
+            "UPDATE werkdagen SET factuurnummer = '' "
             "WHERE factuurnummer = ?", (nummer,)
         )
 
@@ -944,9 +992,9 @@ async def link_werkdagen_to_factuur(db_path: Path = DB_PATH,
         if werkdag_ids:
             placeholders = ','.join('?' for _ in werkdag_ids)
             await conn.execute(
-                f"UPDATE werkdagen SET status = 'gefactureerd', factuurnummer = ? "
+                f"UPDATE werkdagen SET factuurnummer = ? "
                 f"WHERE id IN ({placeholders}) "
-                f"AND (status = 'ongefactureerd' OR factuurnummer = '' OR factuurnummer IS NULL)",
+                f"AND (factuurnummer = '' OR factuurnummer IS NULL)",
                 [factuurnummer] + werkdag_ids
             )
             await conn.commit()
@@ -1719,7 +1767,7 @@ async def get_werkdagen_ongefactureerd_summary(
             """SELECT COUNT(*) as aantal,
                       COALESCE(SUM(uren * tarief + km * km_tarief), 0) as bedrag
                FROM werkdagen
-               WHERE status = 'ongefactureerd'
+               WHERE (factuurnummer = '' OR factuurnummer IS NULL)
                  AND substr(datum, 1, 4) = ?""",
             (str(jaar),))
         r = await cur.fetchone()
@@ -1979,8 +2027,8 @@ async def apply_factuur_matches(db_path: Path = DB_PATH,
                                  matches: list[dict] = None) -> int:
     """Apply confirmed factuur-bank matches.
 
-    For each match: marks factuur as betaald, links bank transaction,
-    updates werkdagen status. Returns count of applied matches.
+    For each match: marks factuur as betaald and links bank transaction.
+    Returns count of applied matches.
     """
     if not matches:
         return 0
@@ -1994,10 +2042,6 @@ async def apply_factuur_matches(db_path: Path = DB_PATH,
                 "UPDATE banktransacties SET koppeling_type = 'factuur', "
                 "koppeling_id = ? WHERE id = ?",
                 (m['factuur_id'], m['bank_id']))
-            await conn.execute(
-                "UPDATE werkdagen SET status = 'betaald' "
-                "WHERE factuurnummer = ?",
-                (m['factuur_nummer'],))
         await conn.commit()
     return len(matches)
 
@@ -2011,7 +2055,7 @@ async def get_nog_te_factureren(db_path: Path = DB_PATH, jaar: int = 0) -> float
     async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
             "SELECT COALESCE(SUM(uren * tarief + km * km_tarief), 0.0) FROM werkdagen "
-            "WHERE status = 'ongefactureerd' AND substr(datum, 1, 4) = ? "
+            "WHERE (factuurnummer = '' OR factuurnummer IS NULL) AND substr(datum, 1, 4) = ? "
             "AND tarief > 0",
             (str(jaar),))
         row = await cursor.fetchone()

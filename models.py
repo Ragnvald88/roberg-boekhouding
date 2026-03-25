@@ -55,8 +55,8 @@ class Werkdag:
     km: float = 0.0
     tarief: float = 0.0
     km_tarief: float = 0.23
-    status: str = 'ongefactureerd'
     factuurnummer: str = ''
+    status: str = ''  # computed: derived from factuurnummer + facturen.status
     opmerking: str = ''
     urennorm: bool = True
     locatie_id: int | None = None

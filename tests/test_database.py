@@ -110,7 +110,7 @@ async def test_werkdagen_ongefactureerd(db):
     kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=44)
     wid1 = await add_werkdag(db, datum="2026-02-01", klant_id=kid, uren=8, tarief=80)
     wid2 = await add_werkdag(db, datum="2026-02-02", klant_id=kid, uren=9, tarief=80,
-                              status='gefactureerd')
+                              factuurnummer='2026-001')
     ongefact = await get_werkdagen_ongefactureerd(db)
     assert len(ongefact) == 1
     assert ongefact[0].id == wid1

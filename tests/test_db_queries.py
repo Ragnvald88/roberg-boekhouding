@@ -96,11 +96,10 @@ async def test_get_nog_te_factureren_only_ongefactureerd(db):
     """Only ongefactureerde werkdagen are counted."""
     kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=44)
     await add_werkdag(db, datum="2026-01-10", klant_id=kid,
-                      uren=8, tarief=80, km=44, km_tarief=0.23,
-                      status='ongefactureerd')
+                      uren=8, tarief=80, km=44, km_tarief=0.23)
     await add_werkdag(db, datum="2026-01-11", klant_id=kid,
                       uren=9, tarief=80, km=44, km_tarief=0.23,
-                      status='gefactureerd')
+                      factuurnummer='2026-099')
     # Expected: 8*80 + 44*0.23 = 640 + 10.12 = 650.12
     result = await get_nog_te_factureren(db, jaar=2026)
     assert abs(result - 650.12) < 0.01
@@ -416,7 +415,7 @@ async def test_apply_matches(db):
                              totaal_bedrag=640.00, status='verstuurd')
     await add_werkdag(db, datum='2026-03-01', klant_id=kid,
                        uren=8, tarief=80, km=0, km_tarief=0.23,
-                       status='gefactureerd', factuurnummer='2026-030')
+                       factuurnummer='2026-030')
     await add_banktransacties(db, [
         {'datum': '2026-03-10', 'bedrag': 640.00, 'tegenpartij': 'Test',
          'omschrijving': '2026-030', 'categorie': ''},
@@ -440,8 +439,11 @@ async def test_apply_matches(db):
         assert row['koppeling_type'] == 'factuur'
         assert row['koppeling_id'] == fid
 
+        # Werkdag status is now derived — verify the linked factuur is betaald
         cur = await conn.execute(
-            "SELECT status FROM werkdagen WHERE factuurnummer='2026-030'")
+            "SELECT f.status FROM werkdagen w "
+            "JOIN facturen f ON w.factuurnummer = f.nummer "
+            "WHERE w.factuurnummer='2026-030'")
         row = await cur.fetchone()
         assert row['status'] == 'betaald'
 

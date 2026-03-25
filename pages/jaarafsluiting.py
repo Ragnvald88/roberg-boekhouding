@@ -524,7 +524,8 @@ async def jaarafsluiting_page():
                 # 1. Ongefactureerde werkdagen
                 cur = await conn.execute(
                     "SELECT COUNT(*) FROM werkdagen "
-                    "WHERE substr(datum,1,4)=? AND status='ongefactureerd' "
+                    "WHERE substr(datum,1,4)=? "
+                    "AND (factuurnummer = '' OR factuurnummer IS NULL) "
                     "AND tarief > 0", (str(jaar),))
                 ongefact = (await cur.fetchone())[0]
                 if ongefact > 0:

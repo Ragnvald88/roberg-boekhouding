@@ -89,11 +89,11 @@ async def test_ongefactureerd_filter(seeded_db):
     kid = klanten[0].id
 
     await add_werkdag(seeded_db, datum='2026-02-01', klant_id=kid,
-                      uren=8, tarief=77.50, status='ongefactureerd')
+                      uren=8, tarief=77.50)
     await add_werkdag(seeded_db, datum='2026-02-02', klant_id=kid,
-                      uren=9, tarief=77.50, status='gefactureerd')
+                      uren=9, tarief=77.50, factuurnummer='2026-099')
     await add_werkdag(seeded_db, datum='2026-02-03', klant_id=kid,
-                      uren=8, tarief=77.50, status='betaald')
+                      uren=8, tarief=77.50, factuurnummer='2026-100')
 
     ongefact = await get_werkdagen_ongefactureerd(seeded_db, klant_id=kid)
     assert len(ongefact) == 1
@@ -103,7 +103,7 @@ async def test_ongefactureerd_filter(seeded_db):
 @pytest.mark.asyncio
 async def test_link_werkdagen_to_factuur(seeded_db):
     """Werkdagen koppelen aan factuur."""
-    from database import get_klanten
+    from database import get_klanten, add_factuur
     klanten = await get_klanten(seeded_db)
     kid = klanten[0].id
 
@@ -111,6 +111,11 @@ async def test_link_werkdagen_to_factuur(seeded_db):
                               uren=8, tarief=77.50)
     wid2 = await add_werkdag(seeded_db, datum='2026-02-02', klant_id=kid,
                               uren=9, tarief=77.50)
+
+    # Create factuur so the JOIN can derive status
+    await add_factuur(seeded_db, nummer='2026-001', klant_id=kid,
+                      datum='2026-02-02', totaal_bedrag=1317.50,
+                      status='verstuurd')
 
     await link_werkdagen_to_factuur(
         seeded_db, werkdag_ids=[wid1, wid2], factuurnummer='2026-001'
