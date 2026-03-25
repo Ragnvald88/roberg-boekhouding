@@ -71,7 +71,8 @@ CREATE TABLE IF NOT EXISTS facturen (
     pdf_pad TEXT DEFAULT '',
     betaald INTEGER DEFAULT 0 CHECK (betaald IN (0, 1)),
     betaald_datum TEXT DEFAULT '',
-    type TEXT DEFAULT 'factuur'
+    type TEXT DEFAULT 'factuur',
+    bron TEXT DEFAULT 'app'
 );
 
 CREATE INDEX IF NOT EXISTS idx_facturen_klant ON facturen(klant_id);
@@ -343,6 +344,13 @@ MIGRATIONS = [
         "ALTER TABLE klanten ADD COLUMN plaats TEXT DEFAULT ''",
     ]),
     (18, "relax_werkdagen_uren_check_gte_zero", None),  # handled by callable
+    (19, "add_factuur_bron_column", [
+        "ALTER TABLE facturen ADD COLUMN bron TEXT DEFAULT 'app'",
+        # All 2023-2024 facturen were imported from existing Yuki data
+        "UPDATE facturen SET bron = 'import' WHERE substr(nummer, 1, 4) IN ('2023', '2024')",
+        # ANW facturen are always received from external (imported)
+        "UPDATE facturen SET bron = 'import' WHERE type = 'anw'",
+    ]),
 ]
 
 
@@ -654,6 +662,7 @@ def _row_to_factuur(r) -> Factuur:
         pdf_pad=r['pdf_pad'] or '', status=r['status'] or 'concept',
         betaald_datum=r['betaald_datum'] or '',
         type=r['type'] or 'factuur',
+        bron=r['bron'] if 'bron' in r.keys() else 'app',
     )
 
 
@@ -789,13 +798,13 @@ async def add_factuur(db_path: Path = DB_PATH, **kwargs) -> int:
         cursor = await conn.execute(
             """INSERT INTO facturen
                (nummer, klant_id, datum, totaal_uren, totaal_km,
-                totaal_bedrag, pdf_pad, status, betaald_datum, type)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                totaal_bedrag, pdf_pad, status, betaald_datum, type, bron)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (kwargs['nummer'], kwargs['klant_id'], kwargs['datum'],
              kwargs.get('totaal_uren', 0), kwargs.get('totaal_km', 0),
              kwargs['totaal_bedrag'], kwargs.get('pdf_pad', ''),
              kwargs.get('status', 'concept'), kwargs.get('betaald_datum', ''),
-             kwargs.get('type', 'factuur'))
+             kwargs.get('type', 'factuur'), kwargs.get('bron', 'app'))
         )
         await conn.commit()
         return cursor.lastrowid

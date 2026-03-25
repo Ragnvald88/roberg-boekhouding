@@ -15,6 +15,8 @@ class Bedrijfsgegevens:
     kvk: str = ''
     iban: str = ''
     thuisplaats: str = ''
+    telefoon: str = ''
+    email: str = ''
 
 
 @dataclass
@@ -27,6 +29,9 @@ class Klant:
     kvk: str = ''
     actief: bool = True
     email: str = ''
+    contactpersoon: str = ''
+    postcode: str = ''
+    plaats: str = ''
 
 
 @dataclass
@@ -71,6 +76,7 @@ class Factuur:
     status: str = 'concept'
     betaald_datum: str = ''
     type: str = 'factuur'
+    bron: str = 'app'
 
 
 @dataclass

@@ -52,14 +52,24 @@ async def facturen_page():
     filter_klant = {'value': None}  # None = alle klanten
 
     with ui.column().classes('w-full p-6 max-w-7xl mx-auto gap-6'):
-        # Header + filter
-        with ui.row().classes('w-full items-center gap-4'):
+        # Header row: title + primary action
+        with ui.row().classes('w-full items-center'):
             page_title('Facturen')
             ui.space()
+            ui.button('Importeer', icon='upload_file',
+                      on_click=lambda: open_import_dialog()) \
+                .props('flat color=secondary dense')
+            ui.button('Nieuwe factuur', icon='add',
+                      on_click=lambda: open_invoice_builder(
+                          on_save=refresh_table)) \
+                .props('color=primary')
+
+        # Filter bar
+        with ui.element('div').classes('page-toolbar w-full'):
             jaar_select = ui.select(
                 year_options(include_next=True, as_dict=True, descending=False),
                 value=current_year, label='Jaar',
-            ).classes('w-32')
+            ).classes('w-28')
 
             # Klant filter
             klanten = await get_klanten(DB_PATH)
@@ -71,7 +81,7 @@ async def facturen_page():
                 await refresh_table()
 
             ui.select(klant_opties, value=None, label='Klant',
-                      on_change=on_klant_filter).props('clearable').classes('w-48')
+                      on_change=on_klant_filter).props('clearable').classes('w-44')
 
             # Status filter
             status_options = {'': 'Alle', 'concept': 'Concept', 'verstuurd': 'Verstuurd',
@@ -83,13 +93,26 @@ async def facturen_page():
                 await refresh_table()
 
             ui.select(status_options, value='', label='Status',
-                      on_change=on_status_filter).classes('w-40')
+                      on_change=on_status_filter).classes('w-36')
+
+            ui.space()
 
             async def export_csv():
                 facturen = await get_facturen(DB_PATH, jaar=jaar_select.value)
                 if filter_klant['value']:
                     facturen = [f for f in facturen
                                 if f.klant_naam == filter_klant['value']]
+                status_val = filter_status['value']
+                if status_val == 'concept':
+                    facturen = [f for f in facturen if f.status == 'concept']
+                elif status_val == 'verstuurd':
+                    facturen = [f for f in facturen
+                                if f.status == 'verstuurd' and not _is_verlopen(f.datum)]
+                elif status_val == 'verlopen':
+                    facturen = [f for f in facturen
+                                if f.status == 'verstuurd' and _is_verlopen(f.datum)]
+                elif status_val == 'betaald':
+                    facturen = [f for f in facturen if f.status == 'betaald']
                 headers = ['Nummer', 'Datum', 'Klant', 'Uren', 'Km',
                            'Bedrag', 'Status']
                 status_labels = {'concept': 'Concept', 'verstuurd': 'Verstuurd',
@@ -103,15 +126,10 @@ async def facturen_page():
                     csv_str.encode('utf-8-sig'),
                     f'facturen_{jaar_select.value}.csv')
 
-            ui.button('CSV', icon='download',
-                      on_click=export_csv).props('outline color=primary')
-            ui.button('Importeer PDF', icon='upload_file',
-                      on_click=lambda: open_import_dialog()) \
-                .props('outline color=primary')
-            ui.button('Nieuwe factuur', icon='add',
-                      on_click=lambda: open_invoice_builder(
-                          on_save=refresh_table)) \
-                .props('color=primary')
+            ui.button(icon='download',
+                      on_click=export_csv) \
+                .props('flat round color=secondary size=sm') \
+                .tooltip('Exporteer CSV')
 
         # KPI summary strip
         kpi_strip_container = ui.row().classes('w-full gap-4')
@@ -133,13 +151,13 @@ async def facturen_page():
         columns = [
             {'name': 'nummer', 'label': 'Nummer', 'field': 'nummer',
              'sortable': True, 'align': 'left'},
-            {'name': 'datum', 'label': 'Datum', 'field': 'datum_fmt',
+            {'name': 'datum', 'label': 'Datum', 'field': 'datum',
              'sortable': True, 'align': 'left'},
             {'name': 'klant', 'label': 'Klant', 'field': 'klant_naam',
              'sortable': True, 'align': 'left'},
             {'name': 'uren', 'label': 'Uren', 'field': 'totaal_uren',
              'align': 'right'},
-            {'name': 'bedrag', 'label': 'Bedrag', 'field': 'bedrag_fmt',
+            {'name': 'bedrag', 'label': 'Bedrag', 'field': 'totaal_bedrag',
              'sortable': True, 'align': 'right'},
             {'name': 'status', 'label': 'Status', 'field': 'status',
              'sortable': True, 'align': 'center'},
@@ -153,6 +171,42 @@ async def facturen_page():
                         'rowsPerPageOptions': [10, 20, 50, 0]},
         ).classes('w-full')
         table_ref['ref'] = table
+
+        table.add_slot('body-cell-nummer', '''
+            <q-td :props="props">
+                <div class="row items-center no-wrap gap-1">
+                    <q-icon
+                        v-if="props.row.bron === 'import'"
+                        name="upload_file"
+                        size="xs"
+                        color="grey-6"
+                    >
+                        <q-tooltip>Geïmporteerd</q-tooltip>
+                    </q-icon>
+                    <q-icon
+                        v-else
+                        name="edit_note"
+                        size="xs"
+                        color="teal"
+                    >
+                        <q-tooltip>Aangemaakt in app</q-tooltip>
+                    </q-icon>
+                    {{ props.row.nummer }}
+                </div>
+            </q-td>
+        ''')
+
+        table.add_slot('body-cell-datum', '''
+            <q-td :props="props">
+                {{ props.row.datum_fmt }}
+            </q-td>
+        ''')
+
+        table.add_slot('body-cell-bedrag', '''
+            <q-td :props="props" class="text-right">
+                {{ props.row.bedrag_fmt }}
+            </q-td>
+        ''')
 
         table.add_slot('body-cell-status', '''
             <q-td :props="props">
@@ -183,7 +237,7 @@ async def facturen_page():
                                 </q-item-section>
                                 <q-item-section>Bewerken</q-item-section>
                             </q-item>
-                            <q-item v-if="props.row.pdf_pad && props.row.status !== 'concept'" clickable
+                            <q-item v-if="props.row.pdf_pad" clickable
                                 @click="() => $parent.$emit('preview', props.row)">
                                 <q-item-section side>
                                     <q-icon name="visibility" size="xs"
@@ -334,6 +388,7 @@ async def facturen_page():
                     'betaald_datum': f.betaald_datum,
                     'pdf_pad': f.pdf_pad,
                     'type': f.type,
+                    'bron': f.bron,
                 })
                 totaal += f.totaal_bedrag
                 if f.status != 'betaald' and f.status != 'concept':
@@ -504,12 +559,21 @@ async def facturen_page():
 
                     async def do_bulk_betaald():
                         today = date.today().isoformat()
+                        skipped = 0
                         for row in selected:
+                            if row.get('status') == 'concept':
+                                skipped += 1
+                                continue
                             if row.get('status') != 'betaald':
                                 await update_factuur_status(
                                     DB_PATH, factuur_id=row['id'],
                                     status='betaald',
                                     betaald_datum=today)
+                        if skipped:
+                            ui.notify(
+                                f'{skipped} concept-facturen overgeslagen '
+                                f'(verstuur eerst)',
+                                type='info')
                         dialog.close()
                         ui.notify(f'{n} facturen gemarkeerd als betaald',
                                   type='positive')
@@ -562,7 +626,8 @@ async def facturen_page():
                 ui.html(
                     f'<iframe src="{url}" '
                     f'style="width:100%;height:calc(85vh - 56px);'
-                    f'border:none"></iframe>'
+                    f'border:none"></iframe>',
+                    sanitize=False,
                 )
             dlg.open()
 
@@ -621,7 +686,7 @@ async def facturen_page():
                          'betaald': 'Betaald'},
                         label='Status', value=row['status'],
                     ).classes('w-40')
-                    edit_betaald_datum = ui.input(
+                    edit_betaald_datum = date_input(
                         'Betaaldatum',
                         value=row.get('betaald_datum', ''),
                     ).classes('w-40')
@@ -751,11 +816,24 @@ async def facturen_page():
 
         async def on_mark_verstuurd(e):
             row = e.args
-            await update_factuur_status(DB_PATH, factuur_id=row['id'],
-                                        status='verstuurd')
-            ui.notify(f"Factuur {row['nummer']} gemarkeerd als verstuurd",
-                      type='positive')
-            await refresh_table()
+            with ui.dialog() as dialog, ui.card():
+                ui.label(f"Factuur {row['nummer']} markeren als verstuurd?")
+                ui.label(f"{row['klant_naam']} — {row['bedrag_fmt']}").classes('text-grey')
+                with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
+                    ui.button('Annuleren', on_click=dialog.close).props('flat')
+
+                    async def do_mark():
+                        await update_factuur_status(
+                            DB_PATH, factuur_id=row['id'],
+                            status='verstuurd')
+                        dialog.close()
+                        ui.notify(
+                            f"Factuur {row['nummer']} gemarkeerd als verstuurd",
+                            type='positive')
+                        await refresh_table()
+
+                    ui.button('Ja, verstuurd', on_click=do_mark).props('color=info')
+            dialog.open()
 
         async def on_send_mail(e):
             """Send invoice via email using macOS Mail.app, then mark as verstuurd."""
@@ -779,9 +857,11 @@ async def facturen_page():
 
             nummer = row['nummer']
             bedrag = format_euro(row['totaal_bedrag'])
-            iban = bg.iban if bg else 'NL00 TEST 0000 0000 00'
-            bedrijfsnaam = bg.bedrijfsnaam if bg else 'TestBV huisartswaarnemer'
-            naam = bg.naam if bg else 'Test Gebruiker'
+            iban = bg.iban if bg else ''
+            bedrijfsnaam = bg.bedrijfsnaam if bg else ''
+            naam = bg.naam if bg else ''
+            telefoon = bg.telefoon if bg else ''
+            bg_email = bg.email if bg else ''
 
             subject = f'Factuur {nummer}'
             body = (
@@ -799,8 +879,8 @@ async def facturen_page():
                 f'{naam}\\n'
                 f'\\n'
                 f'{bedrijfsnaam}\\n'
-                f'Tel: 06 0000 0000\\n'
-                f'info@testbedrijf.nl'
+                f'{f"Tel: {telefoon}" if telefoon else ""}\\n'
+                f'{bg_email}'
             )
 
             # Escape for AppleScript (double backslash for quotes)
@@ -1171,6 +1251,7 @@ async def facturen_page():
                                 betaald_datum=(datum if opt_betaald['value']
                                               else ''),
                                 type=ftype,
+                                bron='import',
                             )
 
                             # Track for dedup
