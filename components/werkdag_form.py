@@ -182,8 +182,8 @@ async def open_werkdag_dialog(on_save=None, werkdag=None):
             update_totaal()
 
         # Auto-fill tarief/km when klant changes, load locations
-        async def on_klant_change(e):
-            kid = e.value
+        async def _load_klant_data(kid):
+            """Load location data and set defaults for a given klant_id."""
             if kid and kid in klant_data:
                 k = klant_data[kid]
                 tarief_input.value = k.tarief_uur
@@ -211,7 +211,7 @@ async def open_werkdag_dialog(on_save=None, werkdag=None):
                 locatie_select.value = None
             update_totaal()
 
-        klant_select.on_value_change(on_klant_change)
+        klant_select.on_value_change(lambda e: _load_klant_data(e.value))
         uren_input.on_value_change(lambda _: update_totaal())
         tarief_input.on_value_change(lambda _: update_totaal())
         km_input.on_value_change(lambda _: update_totaal())
@@ -233,7 +233,7 @@ async def open_werkdag_dialog(on_save=None, werkdag=None):
 
         # Edit mode: load locations for existing werkdag's klant
         if is_edit:
-            await on_klant_change(type('E', (), {'value': werkdag.klant_id})())
+            await _load_klant_data(werkdag.klant_id)
             # Try to match existing locatie by name
             if werkdag.locatie and klant_select.value in locatie_data:
                 for loc in locatie_data[klant_select.value]:

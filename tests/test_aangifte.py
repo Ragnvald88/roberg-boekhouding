@@ -13,13 +13,6 @@ from fiscal.berekeningen import bereken_volledig
 from import_.seed_data import FISCALE_PARAMS
 
 
-@pytest.fixture
-async def db(tmp_path):
-    db_path = tmp_path / "test.sqlite3"
-    await init_db(db_path)
-    return db_path
-
-
 @pytest.mark.asyncio
 async def test_add_aangifte_document(db):
     """Add a document, verify it's returned by get_aangifte_documenten."""

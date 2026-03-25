@@ -1,6 +1,10 @@
 """Two-panel invoice builder with live preview."""
 
 import asyncio
+import base64
+import inspect
+import shutil
+import tempfile
 from datetime import date
 from pathlib import Path
 
@@ -8,18 +12,89 @@ from nicegui import app, ui
 
 from components.invoice_generator import generate_invoice
 from components.invoice_preview import render_invoice_html
-from components.shared_ui import date_input
+from components.shared_ui import date_input, open_klant_dialog
 from components.utils import format_euro, format_datum
 from database import (
-    DB_PATH, add_factuur, get_bedrijfsgegevens, get_klanten,
+    DB_PATH, add_factuur, add_klant, get_bedrijfsgegevens, get_klanten,
     get_next_factuurnummer, get_werkdagen, get_werkdagen_ongefactureerd,
     link_werkdagen_to_factuur,
 )
 
 PDF_DIR = DB_PATH.parent / "facturen"
 QR_DIR = DB_PATH.parent / "qr"
+LOGO_DIR = DB_PATH.parent / "logo"
 QR_DIR.mkdir(parents=True, exist_ok=True)
+LOGO_DIR.mkdir(parents=True, exist_ok=True)
 app.add_static_files('/qr-files', str(QR_DIR))
+app.add_static_files('/logo-files', str(LOGO_DIR))
+
+
+def _werkdagen_to_line_items(werkdagen, thuisplaats: str = '') -> list[dict]:
+    """Convert werkdag objects/dicts to line_item dicts for the builder.
+
+    Each werkdag produces a waarneming line and optionally a reiskosten line.
+    Returns list of dicts with keys: datum, omschrijving, aantal, tarief,
+    werkdag_id, is_reiskosten.
+    """
+    items = []
+    for w in werkdagen:
+        # Support both objects (with attrs) and dicts
+        datum = w.datum if hasattr(w, 'datum') else w['datum']
+        activiteit = (w.activiteit if hasattr(w, 'activiteit')
+                      else w.get('activiteit', 'Waarneming dagpraktijk'))
+        uren = w.uren if hasattr(w, 'uren') else w['uren']
+        tarief = w.tarief if hasattr(w, 'tarief') else w['tarief']
+        km = (w.km if hasattr(w, 'km') else w.get('km', 0)) or 0
+        km_tarief = (w.km_tarief if hasattr(w, 'km_tarief')
+                     else w.get('km_tarief', 0))
+        locatie = (w.locatie if hasattr(w, 'locatie')
+                   else w.get('locatie', ''))
+        wid = w.id if hasattr(w, 'id') else w.get('id')
+
+        # Waarneming row
+        items.append({
+            'datum': datum,
+            'omschrijving': activiteit or 'Waarneming dagpraktijk',
+            'aantal': uren,
+            'tarief': tarief,
+            'werkdag_id': wid,
+            'is_reiskosten': False,
+        })
+
+        # Reiskosten row
+        if km > 0:
+            if locatie and thuisplaats:
+                omschr = f'Reiskosten (retour {thuisplaats} \u2013 {locatie})'
+            elif locatie:
+                omschr = f'Reiskosten (retour \u2013 {locatie})'
+            else:
+                omschr = 'Reiskosten'
+            items.append({
+                'datum': datum,
+                'omschrijving': omschr,
+                'aantal': km,
+                'tarief': km_tarief,
+                'werkdag_id': None,
+                'is_reiskosten': True,
+            })
+    return items
+
+
+def _build_regels(line_items: list[dict]) -> list[dict]:
+    """Convert line_items state into regels dicts for invoice rendering."""
+    regels = []
+    for li in line_items:
+        aantal = li.get('aantal', 0) or 0
+        tarief = li.get('tarief', 0) or 0
+        regels.append({
+            'datum': li.get('datum', ''),
+            'omschrijving': li.get('omschrijving', ''),
+            'aantal': aantal,
+            'tarief': tarief,
+            'bedrag': aantal * tarief,
+            'is_reiskosten': li.get('is_reiskosten', False),
+        })
+    return regels
 
 
 async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None):
@@ -40,6 +115,7 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None):
             'functie': bg.functie, 'adres': bg.adres,
             'postcode_plaats': bg.postcode_plaats, 'kvk': bg.kvk,
             'iban': bg.iban, 'thuisplaats': bg.thuisplaats,
+            'telefoon': bg.telefoon, 'email': bg.email,
         }
 
     jaar = date.today().year
@@ -47,10 +123,6 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None):
 
     # --- State ---
     line_items = []  # list of dicts: {datum, omschrijving, aantal, tarief, werkdag_id}
-    klant_info = {
-        'naam': '', 'contactpersoon': '', 'adres': '',
-        'postcode': '', 'plaats': '',
-    }
     matched_klant_id = {'value': None}
     preview_timer = {'handle': None}
 
@@ -58,21 +130,34 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None):
     qr_path = QR_DIR / 'betaal_qr.png'
     qr_url = '/qr-files/betaal_qr.png' if qr_path.exists() else ''
 
+    # Logo state — check for any image in logo dir
+    logo_files = list(LOGO_DIR.glob('logo.*'))
+    logo_url = ''
+    if logo_files:
+        logo_url = f'/logo-files/{logo_files[0].name}'
+
     # --- Dialog ---
     with ui.dialog().props('maximized') as dlg, \
             ui.card().classes('w-full h-full q-pa-none'):
 
         with ui.row().classes('w-full h-full no-wrap'):
             # ═══════════════ LEFT PANEL ═══════════════
-            with ui.column().classes('q-pa-lg').style(
-                'width: 440px; min-width: 440px; overflow-y: auto; '
-                'height: 100vh; border-right: 1px solid #e2e8f0;'
+            with ui.column().classes(
+                'q-pa-lg builder-panel-border'
+            ).style(
+                'width: 500px; min-width: 500px; overflow-y: auto; '
+                'height: 100vh;'
             ):
                 # Header
                 with ui.row().classes('w-full items-center'):
                     ui.label('Nieuwe factuur').classes(
                         'text-h5 text-weight-bold')
                     ui.space()
+                    ui.button(
+                        icon='settings', on_click=lambda: ui.navigate.to(
+                            '/instellingen', new_tab=True),
+                    ).props('flat round dense size=sm color=grey-6').tooltip(
+                        'Bedrijfsgegevens bewerken')
                     ui.badge('Live preview', color='positive').props(
                         'rounded')
 
@@ -92,13 +177,54 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None):
                     'text-subtitle2 text-grey-8 q-mt-md')
 
                 klant_options = {k.naam: k.naam for k in klanten}
-                bedrijf_input = ui.select(
-                    klant_options,
-                    label='Bedrijf / Praktijk',
-                    with_input=True,
-                    new_value_mode='add-unique',
-                ).props('outlined dense use-input input-debounce=0'
-                         ).classes('w-full')
+                with ui.row().classes('w-full items-end gap-1 no-wrap'):
+                    bedrijf_input = ui.select(
+                        klant_options,
+                        label='Bedrijf / Praktijk',
+                        with_input=True,
+                    ).props('outlined dense use-input input-debounce=0'
+                             ).classes('flex-grow')
+
+                    async def open_quick_add_klant():
+                        async def after_save(new_id, naam):
+                            new_klanten = await get_klanten(
+                                DB_PATH, alleen_actief=True)
+                            klant_by_name.clear()
+                            klant_by_name.update(
+                                {k.naam: k for k in new_klanten})
+                            bedrijf_input.options = {
+                                k.naam: k.naam
+                                for k in new_klanten}
+                            bedrijf_input.update()
+                            bedrijf_input.value = naam
+                            matched_klant_id['value'] = new_id
+                            # Pre-fill all address fields from new klant
+                            kl = klant_by_name.get(naam)
+                            if kl:
+                                if kl.adres:
+                                    adres_input.value = kl.adres
+                                if kl.contactpersoon:
+                                    contact_input.value = kl.contactpersoon
+                                if kl.postcode:
+                                    postcode_input.value = kl.postcode
+                                if kl.plaats:
+                                    plaats_input.value = kl.plaats
+                            unmatched_warning.set_visibility(False)
+                            schedule_preview_update()
+
+                        await open_klant_dialog(on_save=after_save)
+
+                    ui.button(
+                        icon='person_add',
+                        on_click=open_quick_add_klant,
+                    ).props(
+                        'flat round dense size=sm color=primary'
+                    ).tooltip('Nieuwe klant toevoegen')
+
+                unmatched_warning = ui.label(
+                    'Klantnaam niet gevonden — wordt aangemaakt bij opslaan'
+                ).classes('text-caption text-warning')
+                unmatched_warning.set_visibility(False)
 
                 contact_input = ui.input(
                     'Contactpersoon',
@@ -121,16 +247,38 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None):
                     name = bedrijf_input.value
                     if name in klant_by_name:
                         k = klant_by_name[name]
+                        prev_id = matched_klant_id['value']
                         matched_klant_id['value'] = k.id
-                        # Auto-fill address from klant
-                        if k.adres and not adres_input.value:
-                            adres_input.value = k.adres
+                        # Auto-fill address fields when klant actually changed
+                        if k.id != prev_id:
+                            if k.adres:
+                                adres_input.value = k.adres
+                            if k.contactpersoon:
+                                contact_input.value = k.contactpersoon
+                            if k.postcode:
+                                postcode_input.value = k.postcode
+                            if k.plaats:
+                                plaats_input.value = k.plaats
+                        unmatched_warning.set_visibility(False)
                     else:
                         matched_klant_id['value'] = None
+                        # Show warning if user typed something
+                        unmatched_warning.set_visibility(
+                            bool(name and len(name) >= 2))
                     schedule_preview_update()
 
                 bedrijf_input.on('blur', on_klant_match)
                 bedrijf_input.on('update:model-value', on_klant_match)
+
+                def _read_klant_fields() -> dict:
+                    """Read current klant fields from the form inputs."""
+                    return {
+                        'naam': bedrijf_input.value or '',
+                        'contactpersoon': contact_input.value or '',
+                        'adres': adres_input.value or '',
+                        'postcode': postcode_input.value or '',
+                        'plaats': plaats_input.value or '',
+                    }
 
                 # Wire klant fields to preview
                 for inp in [contact_input, adres_input,
@@ -138,10 +286,14 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None):
                     inp.on('blur', lambda _=None: schedule_preview_update())
 
                 # ── Factuurregels ──
-                ui.label('Factuurregels').classes(
-                    'text-subtitle2 text-grey-8 q-mt-md')
+                with ui.row().classes('w-full items-center q-mt-md'):
+                    ui.label('Factuurregels').classes(
+                        'text-subtitle2 text-grey-8')
+                    lines_count_badge = ui.badge('0').props(
+                        'rounded color=grey-5')
+                    lines_count_badge.set_visibility(False)
 
-                lines_container = ui.column().classes('w-full gap-1')
+                lines_container = ui.column().classes('w-full gap-2')
 
                 def render_line_items():
                     """Rebuild the line items UI from state."""
@@ -149,41 +301,66 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None):
                     with lines_container:
                         for idx, item in enumerate(line_items):
                             _render_line_row(idx, item)
+                    # Update count badge
+                    n = len(line_items)
+                    lines_count_badge.text = str(n)
+                    lines_count_badge.set_visibility(n > 0)
 
                 def _render_line_row(idx, item):
-                    """Render a single line item row."""
-                    with ui.row().classes(
-                        'w-full gap-1 items-end'
-                    ).style('min-height: 40px'):
-                        d_inp = ui.input(
-                            'Datum', value=item.get('datum', ''),
-                        ).props('outlined dense').classes('w-24')
+                    """Render a single line item as compact card."""
+                    with ui.card().classes(
+                        'w-full q-pa-sm builder-line-card'
+                    ):
+                        # Row 1: datum + omschrijving + delete
+                        with ui.row().classes(
+                            'w-full items-center gap-2 no-wrap'
+                        ):
+                            d_inp = date_input(
+                                'Datum', value=item.get('datum', ''),
+                            ).classes('w-32')
 
-                        o_inp = ui.input(
-                            'Omschrijving',
-                            value=item.get('omschrijving', ''),
-                        ).props('outlined dense').classes('flex-grow')
+                            o_inp = ui.input(
+                                'Omschrijving',
+                                value=item.get('omschrijving', ''),
+                            ).props('outlined dense').classes('flex-grow')
 
-                        a_inp = ui.number(
-                            'Aantal', value=item.get('aantal', 0),
-                            format='%.2f', min=0, step=0.5,
-                        ).props('outlined dense').classes('w-20')
+                            def make_remover(i):
+                                def remove():
+                                    line_items.pop(i)
+                                    render_line_items()
+                                    schedule_preview_update()
+                                return remove
 
-                        t_inp = ui.number(
-                            'Tarief', value=item.get('tarief', 0),
-                            format='%.2f', min=0, step=0.50,
-                        ).props('outlined dense').classes('w-24')
+                            ui.button(
+                                icon='close', on_click=make_remover(idx),
+                            ).props(
+                                'flat round dense size=sm color=negative')
 
-                        bedrag = (item.get('aantal', 0) or 0) * (
-                            item.get('tarief', 0) or 0)
-                        bedrag_label = ui.label(
-                            format_euro(bedrag),
-                        ).classes(
-                            'text-body2 text-weight-bold text-right'
-                        ).style(
-                            'min-width: 70px; line-height: 40px; '
-                            'font-variant-numeric: tabular-nums'
-                        )
+                        # Row 2: aantal + tarief + bedrag
+                        with ui.row().classes(
+                            'w-full items-center gap-2 no-wrap'
+                        ):
+                            a_inp = ui.number(
+                                'Aantal', value=item.get('aantal', 0),
+                                format='%.2f', min=0, step=0.5,
+                            ).props('outlined dense').classes('w-24')
+
+                            t_inp = ui.number(
+                                'Tarief', value=item.get('tarief', 0),
+                                format='%.2f', min=0, step=0.50,
+                            ).props('outlined dense').classes('w-28')
+
+                            ui.space()
+
+                            bedrag = (item.get('aantal', 0) or 0) * (
+                                item.get('tarief', 0) or 0)
+                            bedrag_label = ui.label(
+                                format_euro(bedrag),
+                            ).classes(
+                                'text-body1 text-weight-bold text-right'
+                            ).style(
+                                'font-variant-numeric: tabular-nums'
+                            )
 
                         def make_updater(i, d_ref, o_ref, a_ref, t_ref,
                                          b_ref):
@@ -203,30 +380,22 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None):
 
                         updater = make_updater(
                             idx, d_inp, o_inp, a_inp, t_inp, bedrag_label)
-                        d_inp.on('blur', updater)
+                        d_inp.on(
+                            'update:model-value',
+                            lambda _=None, u=updater: u())
                         o_inp.on('blur', updater)
                         a_inp.on_value_change(updater)
                         t_inp.on_value_change(updater)
-
-                        def make_remover(i):
-                            def remove():
-                                line_items.pop(i)
-                                render_line_items()
-                                schedule_preview_update()
-                            return remove
-
-                        ui.button(
-                            icon='close', on_click=make_remover(idx),
-                        ).props(
-                            'flat round dense size=sm color=negative')
 
                 # Buttons: add free line + import werkdagen
                 with ui.row().classes('w-full gap-2 q-mt-xs'):
                     def add_free_line():
                         line_items.append({
-                            'datum': '', 'omschrijving': '',
+                            'datum': date.today().isoformat(),
+                            'omschrijving': '',
                             'aantal': 0, 'tarief': 0,
                             'werkdag_id': None,
+                            'is_reiskosten': False,
                         })
                         render_line_items()
                         schedule_preview_update()
@@ -262,11 +431,13 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None):
                             for w in werkdagen:
                                 bedrag = (w.uren * w.tarief
                                           + w.km * w.km_tarief)
+                                km_part = (f' + {w.km} km'
+                                           if w.km else '')
                                 cb = ui.checkbox(
                                     f'{format_datum(w.datum)} — '
                                     f'{w.activiteit} — '
                                     f'{w.uren}u x {format_euro(w.tarief)}'
-                                    f' + {w.km} km = '
+                                    f'{km_part} = '
                                     f'{format_euro(bedrag)}',
                                     value=True,
                                 )
@@ -282,42 +453,12 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None):
                                 def do_add_werkdagen():
                                     thuisplaats = bg_dict.get(
                                         'thuisplaats', '')
-                                    for wid, (cb, w) in checks.items():
-                                        if not cb.value:
-                                            continue
-                                        # Waarneming row
-                                        line_items.append({
-                                            'datum': w.datum,
-                                            'omschrijving': (
-                                                w.activiteit
-                                                or 'Waarneming dagpraktijk'
-                                            ),
-                                            'aantal': w.uren,
-                                            'tarief': w.tarief,
-                                            'werkdag_id': w.id,
-                                        })
-                                        # Reiskosten row
-                                        km = w.km or 0
-                                        if km > 0:
-                                            loc = w.locatie or ''
-                                            if loc and thuisplaats:
-                                                omschr = (
-                                                    f'Reiskosten retour '
-                                                    f'{thuisplaats} \u2013 '
-                                                    f'{loc}')
-                                            elif loc:
-                                                omschr = (
-                                                    f'Reiskosten retour '
-                                                    f'\u2013 {loc}')
-                                            else:
-                                                omschr = 'Reiskosten'
-                                            line_items.append({
-                                                'datum': w.datum,
-                                                'omschrijving': omschr,
-                                                'aantal': km,
-                                                'tarief': w.km_tarief,
-                                                'werkdag_id': None,
-                                            })
+                                    selected_wds = [
+                                        w for _, (cb, w) in checks.items()
+                                        if cb.value]
+                                    line_items.extend(
+                                        _werkdagen_to_line_items(
+                                            selected_wds, thuisplaats))
                                     wd_dlg.close()
                                     render_line_items()
                                     schedule_preview_update()
@@ -339,36 +480,67 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None):
                         on_click=open_werkdagen_import,
                     ).props('flat dense color=primary no-caps')
 
-                # ── QR upload ──
-                ui.label('Betaal QR-code').classes(
-                    'text-subtitle2 text-grey-8 q-mt-md')
+                # ── QR code ──
+                has_qr = qr_path.exists()
+                qr_container = ui.column().classes('w-full q-mt-md gap-0')
 
-                if qr_path.exists():
-                    with ui.row().classes('items-center gap-2'):
-                        ui.icon('qr_code_2', color='positive')
-                        ui.label('QR-code aanwezig').classes(
-                            'text-body2 text-positive')
+                # Hidden upload element — triggered by clicking the card
+                _qr_upload = ui.upload(
+                    label='', auto_upload=True,
+                    max_file_size=2_000_000,
+                ).props('flat accept=".png,.jpg,.jpeg"')
+                _qr_upload.classes('hidden')
+
+                def _pick_qr():
+                    _qr_upload.run_method('pickFiles')
 
                 async def handle_qr_upload(e):
                     nonlocal qr_url
                     content = e.content.read()
                     await asyncio.to_thread(qr_path.write_bytes, content)
                     qr_url = '/qr-files/betaal_qr.png'
+                    _render_qr_card(True)
                     ui.notify('QR-code opgeslagen', type='positive')
                     schedule_preview_update()
 
-                ui.upload(
-                    label='Upload QR-code', auto_upload=True,
-                    on_upload=handle_qr_upload,
-                    max_file_size=2_000_000,
-                ).props(
-                    'flat bordered accept=".png,.jpg,.jpeg"'
-                ).classes('w-full')
+                _qr_upload.on('upload', handle_qr_upload)
+
+                def _render_qr_card(exists: bool):
+                    qr_container.clear()
+                    with qr_container:
+                        if exists:
+                            with ui.row().classes('w-full items-center gap-3') \
+                                    .style('padding: 10px 14px; background: #F0FDF4; '
+                                           'border: 1px solid #BBF7D0; border-radius: 10px'):
+                                ui.image(f'/qr-files/betaal_qr.png?t={id(qr_container)}') \
+                                    .classes('rounded').style(
+                                    'width: 48px; height: 48px; object-fit: contain')
+                                with ui.column().classes('gap-0 flex-grow'):
+                                    ui.label('Betaal QR-code').classes(
+                                        'text-body2 text-weight-medium')
+                                    ui.label('Wordt getoond op factuur').classes(
+                                        'text-caption text-grey-6')
+                                ui.button('Vervangen', icon='swap_horiz',
+                                          on_click=_pick_qr) \
+                                    .props('flat dense color=primary size=sm')
+                        else:
+                            with ui.element('div').classes('w-full') \
+                                    .style('padding: 16px; border: 2px dashed #CBD5E1; '
+                                           'border-radius: 10px; text-align: center; '
+                                           'cursor: pointer') \
+                                    .on('click', _pick_qr):
+                                ui.icon('qr_code_2', size='28px').classes('text-grey-4')
+                                ui.label('Betaal QR-code toevoegen').classes(
+                                    'text-body2 text-grey-5 q-mt-xs')
+
+                _render_qr_card(has_qr)
 
                 # ── Totaal bar ──
                 ui.separator().classes('q-mt-md')
+                subtotaal_container = ui.column().classes(
+                    'w-full items-end gap-0 q-mt-xs')
                 totaal_label = ui.label('Totaal: \u20ac 0,00').classes(
-                    'text-h6 text-weight-bold text-right w-full q-mt-sm',
+                    'text-h6 text-weight-bold text-right w-full',
                 ).style('font-variant-numeric: tabular-nums')
 
                 # ── Action buttons ──
@@ -376,6 +548,47 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None):
                     ui.button(
                         'Annuleren', on_click=dlg.close,
                     ).props('flat')
+
+                    async def download_preview():
+                        """Generate a preview PDF and trigger download."""
+                        if not line_items:
+                            ui.notify(
+                                'Voeg eerst factuurregels toe',
+                                type='warning')
+                            return
+                        klant_dict = _read_klant_fields()
+                        regels = _build_regels(line_items)
+                        tmp_dir = None
+                        try:
+                            tmp_dir = Path(tempfile.mkdtemp())
+                            pdf_path = await asyncio.to_thread(
+                                generate_invoice,
+                                nummer_input.value or 'preview',
+                                klant_dict, [], tmp_dir,
+                                factuur_datum=(
+                                    datum_input.value
+                                    or date.today().isoformat()),
+                                bedrijfsgegevens=bg_dict,
+                                pre_regels=regels,
+                            )
+                            # Read bytes before cleanup — ui.download is
+                            # async and the file must not be deleted yet
+                            pdf_bytes = await asyncio.to_thread(
+                                pdf_path.read_bytes)
+                            ui.download.content(
+                                pdf_bytes, filename=pdf_path.name)
+                        except Exception as ex:
+                            ui.notify(
+                                f'PDF preview mislukt: {ex}',
+                                type='negative')
+                        finally:
+                            if tmp_dir and tmp_dir.exists():
+                                shutil.rmtree(tmp_dir, ignore_errors=True)
+
+                    ui.button(
+                        'Download PDF', icon='download',
+                        on_click=download_preview,
+                    ).props('outline color=primary')
 
                     async def genereer_factuur():
                         # Validate
@@ -402,38 +615,71 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None):
                             if naam in klant_by_name:
                                 kid = klant_by_name[naam].id
                             else:
-                                # Fall back to first klant
-                                kid = klanten[0].id if klanten else 1
+                                # Unknown klant — auto-create with
+                                # confirmation
+                                with ui.dialog() as cd, \
+                                        ui.card().classes('q-pa-md'):
+                                    ui.label('Klant niet gevonden'
+                                             ).classes('text-h6')
+                                    ui.label(
+                                        f'"{naam}" bestaat niet. '
+                                        f'Klant aanmaken en factuur '
+                                        f'genereren?'
+                                    ).classes('text-body2 q-my-sm')
+                                    with ui.row().classes(
+                                        'w-full justify-end gap-2 q-mt-md'
+                                    ):
+                                        ui.button(
+                                            'Annuleren',
+                                            on_click=cd.close,
+                                        ).props('flat')
 
-                        # Build klant dict for PDF
-                        klant_dict = {
-                            'naam': naam,
-                            'contactpersoon': contact_input.value or '',
-                            'adres': adres_input.value or '',
-                            'postcode': postcode_input.value or '',
-                            'plaats': plaats_input.value or '',
-                        }
+                                        async def do_create_and_save():
+                                            new_id = await add_klant(
+                                                DB_PATH, naam=naam)
+                                            new_kl = await get_klanten(
+                                                DB_PATH,
+                                                alleen_actief=True)
+                                            klant_by_name.clear()
+                                            klant_by_name.update(
+                                                {k.naam: k
+                                                 for k in new_kl})
+                                            bedrijf_input.options = {
+                                                k.naam: k.naam
+                                                for k in new_kl}
+                                            bedrijf_input.update()
+                                            matched_klant_id['value'] = (
+                                                new_id)
+                                            unmatched_warning \
+                                                .set_visibility(False)
+                                            cd.close()
+                                            ui.notify(
+                                                f'Klant "{naam}" '
+                                                f'aangemaakt',
+                                                type='positive')
+                                            # Re-trigger save
+                                            await genereer_factuur()
 
-                        # Build werkdagen-style dicts for generator
-                        wd_dicts = []
-                        for li in line_items:
-                            wd_dicts.append({
-                                'datum': li.get('datum', ''),
-                                'activiteit': li.get('omschrijving', ''),
-                                'locatie': '',
-                                'uren': li.get('aantal', 0),
-                                'tarief': li.get('tarief', 0),
-                                'km': 0,
-                                'km_tarief': 0,
-                            })
+                                        ui.button(
+                                            'Aanmaken & factureren',
+                                            icon='person_add',
+                                            on_click=do_create_and_save,
+                                        ).props('color=primary')
+                                cd.open()
+                                return
+
+                        # Build klant dict and regels for PDF
+                        klant_dict = _read_klant_fields()
+                        regels = _build_regels(line_items)
 
                         # Generate PDF
                         try:
                             pdf_path = await asyncio.to_thread(
                                 generate_invoice,
-                                nummer, klant_dict, wd_dicts, PDF_DIR,
+                                nummer, klant_dict, [], PDF_DIR,
                                 factuur_datum=factuur_datum,
                                 bedrijfsgegevens=bg_dict,
+                                pre_regels=regels,
                             )
                         except Exception as ex:
                             ui.notify(
@@ -444,12 +690,10 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None):
                         # Calculate totals
                         totaal_uren = sum(
                             li.get('aantal', 0) for li in line_items
-                            if 'Reiskosten' not in li.get(
-                                'omschrijving', ''))
+                            if not li.get('is_reiskosten'))
                         totaal_km = sum(
                             li.get('aantal', 0) for li in line_items
-                            if 'Reiskosten' in li.get(
-                                'omschrijving', ''))
+                            if li.get('is_reiskosten'))
                         totaal_bedrag = sum(
                             (li.get('aantal', 0) or 0)
                             * (li.get('tarief', 0) or 0)
@@ -486,7 +730,7 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None):
 
                         if on_save:
                             result = on_save()
-                            if hasattr(result, '__await__'):
+                            if inspect.iscoroutine(result):
                                 await result
 
                     ui.button(
@@ -495,14 +739,14 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None):
                     ).props('color=primary')
 
             # ═══════════════ RIGHT PANEL (preview) ═══════════════
-            with ui.element('div').style(
-                'flex: 1; background: #E2E8F0; overflow-y: auto; '
+            with ui.element('div').classes('builder-preview-bg').style(
+                'flex: 1; overflow-y: auto; '
                 'display: flex; justify-content: center; '
                 'padding: 24px 0; height: 100vh;'
             ):
                 # Use iframe for CSS isolation — template styles
                 # won't conflict with NiceGUI's Quasar CSS
-                preview_iframe = ui.html('').style(
+                preview_iframe = ui.html('', sanitize=False).style(
                     'width: 100%; max-width: 620px; height: calc(100vh - 48px); '
                 )
 
@@ -511,46 +755,47 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None):
             """Debounced preview update (avoids re-render on every keystroke)."""
             if preview_timer['handle']:
                 preview_timer['handle'].cancel()
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             preview_timer['handle'] = loop.call_later(
                 0.3, lambda: asyncio.ensure_future(update_preview()))
 
         async def update_preview():
             """Render the invoice HTML and update the preview panel."""
-            regels = []
-            for li in line_items:
-                aantal = li.get('aantal', 0) or 0
-                tarief = li.get('tarief', 0) or 0
-                regels.append({
-                    'datum': li.get('datum', ''),
-                    'omschrijving': li.get('omschrijving', ''),
-                    'aantal': aantal,
-                    'tarief': tarief,
-                    'bedrag': aantal * tarief,
-                })
+            regels = _build_regels(line_items)
 
-            totaal = sum(r['bedrag'] for r in regels)
+            subtotaal_werk = sum(
+                r['bedrag'] for r in regels
+                if not r.get('is_reiskosten'))
+            subtotaal_km = sum(
+                r['bedrag'] for r in regels
+                if r.get('is_reiskosten'))
+            totaal = subtotaal_werk + subtotaal_km
+
+            # Update subtotaal breakdown
+            subtotaal_container.clear()
+            if subtotaal_werk and subtotaal_km:
+                with subtotaal_container:
+                    ui.label(
+                        f'Waarnemingen: {format_euro(subtotaal_werk)}'
+                    ).classes('text-caption text-grey-7').style(
+                        'font-variant-numeric: tabular-nums')
+                    ui.label(
+                        f'Reiskosten: {format_euro(subtotaal_km)}'
+                    ).classes('text-caption text-grey-7').style(
+                        'font-variant-numeric: tabular-nums')
             totaal_label.text = f'Totaal: {format_euro(totaal)}'
-
-            klant = {
-                'naam': bedrijf_input.value or '',
-                'contactpersoon': contact_input.value or '',
-                'adres': adres_input.value or '',
-                'postcode': postcode_input.value or '',
-                'plaats': plaats_input.value or '',
-            }
 
             invoice_html = render_invoice_html(
                 nummer=nummer_input.value or '',
-                klant=klant,
+                klant=_read_klant_fields(),
                 regels=regels,
                 factuur_datum=datum_input.value or '',
                 bedrijfsgegevens=bg_dict,
                 qr_url=qr_url,
+                logo_url=logo_url,
             )
             # Render in isolated iframe via base64 data URI
             # This prevents NiceGUI/Quasar CSS from interfering
-            import base64
             b64 = base64.b64encode(invoice_html.encode('utf-8')).decode('ascii')
             preview_iframe.content = (
                 f'<iframe src="data:text/html;base64,{b64}" '
@@ -583,35 +828,8 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None):
                         adres_input.value = klant_obj.adres
 
                 thuisplaats = bg_dict.get('thuisplaats', '')
-                for w in pre_wds:
-                    # Waarneming row
-                    line_items.append({
-                        'datum': w.datum,
-                        'omschrijving': (
-                            w.activiteit or 'Waarneming dagpraktijk'),
-                        'aantal': w.uren,
-                        'tarief': w.tarief,
-                        'werkdag_id': w.id,
-                    })
-                    # Reiskosten row
-                    km = w.km or 0
-                    if km > 0:
-                        loc = w.locatie or ''
-                        if loc and thuisplaats:
-                            omschr = (
-                                f'Reiskosten retour {thuisplaats} '
-                                f'\u2013 {loc}')
-                        elif loc:
-                            omschr = f'Reiskosten retour \u2013 {loc}'
-                        else:
-                            omschr = 'Reiskosten'
-                        line_items.append({
-                            'datum': w.datum,
-                            'omschrijving': omschr,
-                            'aantal': km,
-                            'tarief': w.km_tarief,
-                            'werkdag_id': None,
-                        })
+                line_items.extend(
+                    _werkdagen_to_line_items(pre_wds, thuisplaats))
 
                 # Set datum to last werkdag date
                 dates = [li['datum'] for li in line_items if li['datum']]

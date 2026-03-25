@@ -3,19 +3,13 @@
 import pytest
 from pathlib import Path
 from database import (
-    init_db, add_klant, add_werkdag, add_factuur, update_factuur,
+    add_klant, add_werkdag, add_factuur, update_factuur,
     get_facturen, get_next_factuurnummer, mark_betaald,
     link_werkdagen_to_factuur, get_werkdagen, delete_factuur,
 )
 from import_.seed_data import seed_all
-from components.invoice_generator import generate_invoice, format_euro, format_datum
-
-
-@pytest.fixture
-async def db(tmp_path):
-    db_path = tmp_path / "test.sqlite3"
-    await init_db(db_path)
-    return db_path
+from components.invoice_generator import generate_invoice
+from components.utils import format_euro, format_datum
 
 
 @pytest.fixture

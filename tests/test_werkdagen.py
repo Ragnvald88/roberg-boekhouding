@@ -2,18 +2,11 @@
 
 import pytest
 from database import (
-    init_db, add_klant, add_werkdag, get_werkdagen,
+    add_klant, add_werkdag, get_werkdagen,
     get_werkdagen_ongefactureerd, update_werkdag,
     link_werkdagen_to_factuur, get_uren_totaal,
 )
 from import_.seed_data import seed_all
-
-
-@pytest.fixture
-async def db(tmp_path):
-    db_path = tmp_path / "test.sqlite3"
-    await init_db(db_path)
-    return db_path
 
 
 @pytest.fixture

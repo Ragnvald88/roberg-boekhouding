@@ -2,17 +2,10 @@
 
 import pytest
 from database import (
-    init_db, add_klant, add_werkdag, update_werkdag, delete_werkdag,
+    add_klant, add_werkdag, update_werkdag, delete_werkdag,
     add_factuur, delete_factuur, update_factuur_status,
     link_werkdagen_to_factuur, get_werkdagen,
 )
-
-
-@pytest.fixture
-async def db(tmp_path):
-    db_path = tmp_path / "test.sqlite3"
-    await init_db(db_path)
-    return db_path
 
 
 async def _create_werkdag(db, status='ongefactureerd'):

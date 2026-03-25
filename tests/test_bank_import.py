@@ -1,15 +1,8 @@
 """Tests voor Rabobank CSV parser en bank import."""
 
 import pytest
-from database import init_db, add_banktransacties, get_banktransacties, backfill_betalingskenmerken
+from database import add_banktransacties, get_banktransacties, backfill_betalingskenmerken
 from import_.rabobank_csv import parse_rabobank_csv
-
-
-@pytest.fixture
-async def db(tmp_path):
-    db_path = tmp_path / "test.sqlite3"
-    await init_db(db_path)
-    return db_path
 
 
 # --- CSV Parser tests ---

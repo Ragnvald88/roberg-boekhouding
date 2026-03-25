@@ -2,16 +2,9 @@
 
 import pytest
 from database import (
-    init_db, add_klant, get_klant_locaties,
+    add_klant, get_klant_locaties,
     add_klant_locatie, delete_klant_locatie,
 )
-
-
-@pytest.fixture
-async def db(tmp_path):
-    db_path = tmp_path / "test.sqlite3"
-    await init_db(db_path)
-    return db_path
 
 
 @pytest.mark.asyncio

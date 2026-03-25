@@ -2,7 +2,7 @@
 
 import pytest
 from database import (
-    init_db, add_klant, add_werkdag, add_factuur, add_uitgave,
+    add_klant, add_werkdag, add_factuur, add_uitgave,
     add_banktransacties, mark_betaald,
     get_omzet_totaal, get_representatie_totaal,
     get_debiteuren_op_peildatum,
@@ -12,13 +12,6 @@ from database import (
     set_afschrijving_override, delete_afschrijving_override,
     get_db_ctx, get_va_betalingen,
 )
-
-
-@pytest.fixture
-async def db(tmp_path):
-    db_path = tmp_path / "test.sqlite3"
-    await init_db(db_path)
-    return db_path
 
 
 # ============================================================

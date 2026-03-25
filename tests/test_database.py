@@ -11,13 +11,6 @@ from database import (
 )
 
 
-@pytest.fixture
-async def db(tmp_path):
-    db_path = tmp_path / "test.sqlite3"
-    await init_db(db_path)
-    return db_path
-
-
 @pytest.mark.asyncio
 async def test_init_creates_tables(db):
     async with aiosqlite.connect(db) as conn:

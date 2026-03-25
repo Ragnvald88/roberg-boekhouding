@@ -2,17 +2,19 @@
 
 from pathlib import Path
 from datetime import datetime, timedelta
-from jinja2 import Environment, FileSystemLoader
 from weasyprint import HTML
 
-from components.utils import format_euro, format_datum
+from components.template_env import TEMPLATE_DIR, _env
+from components.utils import format_datum
+from database import DB_PATH
 
-TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates"
+DATA_DIR = DB_PATH.parent
 
 
 def generate_invoice(factuur_nummer: str, klant: dict, werkdagen: list[dict],
                      output_dir: Path, factuur_datum: str = None,
-                     bedrijfsgegevens: dict = None, qr_path: str = '') -> Path:
+                     bedrijfsgegevens: dict = None, qr_path: str = '',
+                     pre_regels: list[dict] = None) -> Path:
     """Render Jinja2 HTML template to PDF via WeasyPrint.
 
     Args:
@@ -23,15 +25,13 @@ def generate_invoice(factuur_nummer: str, klant: dict, werkdagen: list[dict],
         factuur_datum: ISO date string, defaults to today
         bedrijfsgegevens: dict with bedrijfsnaam, naam, functie, adres, postcode_plaats, kvk, iban, thuisplaats
         qr_path: path to QR code image; auto-detects from data/qr/betaal_qr.png if empty
+        pre_regels: pre-built line items (skips werkdagen→regels conversion if provided)
 
     Returns: Path to generated PDF
     """
     if bedrijfsgegevens is None:
         bedrijfsgegevens = {}
-    env = Environment(loader=FileSystemLoader(TEMPLATE_DIR))
-    env.filters['format_euro'] = format_euro
-    env.filters['format_datum'] = format_datum
-    template = env.get_template('factuur.html')
+    template = _env.get_template('factuur.html')
 
     if factuur_datum:
         datum = datetime.strptime(factuur_datum, '%Y-%m-%d')
@@ -39,54 +39,76 @@ def generate_invoice(factuur_nummer: str, klant: dict, werkdagen: list[dict],
         datum = datetime.now()
     vervaldatum = datum + timedelta(days=14)
 
-    # Build line items
-    regels = []
-    subtotaal_werk = 0.0
-    subtotaal_km = 0.0
-
-    for wd in werkdagen:
-        bedrag = wd['uren'] * wd['tarief']
-        regels.append({
-            'datum': wd['datum'],
-            'omschrijving': wd.get('activiteit', 'Waarneming dagpraktijk'),
-            'aantal': wd['uren'],
-            'tarief': wd['tarief'],
-            'bedrag': bedrag,
-        })
-        subtotaal_werk += bedrag
-
-        km = wd.get('km', 0) or 0
-        km_tarief = wd.get('km_tarief', 0.23) or 0.23
-        if km > 0:
-            km_bedrag = km * km_tarief
-            locatie = wd.get('locatie', '')
-            thuisplaats = bedrijfsgegevens.get('thuisplaats', '')
-            if locatie and thuisplaats:
-                omschr = f"Reiskosten retour {thuisplaats} – {locatie}"
-            elif locatie:
-                omschr = f"Reiskosten retour – {locatie}"
-            else:
-                omschr = "Reiskosten"
+    # Build line items — use pre_regels if provided (from invoice builder)
+    if pre_regels is not None:
+        regels = pre_regels
+        for r in regels:
+            if 'bedrag' not in r:
+                r['bedrag'] = (r.get('aantal', 0) or 0) * (
+                    r.get('tarief', 0) or 0)
+        subtotaal_werk = sum(r['bedrag'] for r in regels
+                             if not r.get('is_reiskosten'))
+        subtotaal_km = sum(r['bedrag'] for r in regels
+                           if r.get('is_reiskosten'))
+    else:
+        regels = []
+        subtotaal_werk = 0.0
+        subtotaal_km = 0.0
+        for wd in werkdagen:
+            bedrag = wd['uren'] * wd['tarief']
             regels.append({
                 'datum': wd['datum'],
-                'omschrijving': omschr,
-                'aantal': km,
-                'tarief': km_tarief,
-                'bedrag': km_bedrag,
+                'omschrijving': wd.get('activiteit',
+                                       'Waarneming dagpraktijk'),
+                'aantal': wd['uren'],
+                'tarief': wd['tarief'],
+                'bedrag': bedrag,
+                'is_reiskosten': False,
             })
-            subtotaal_km += km_bedrag
+            subtotaal_werk += bedrag
+
+            km = wd.get('km', 0) or 0
+            km_tarief = wd.get('km_tarief', 0.23)
+            if km > 0:
+                km_bedrag = km * km_tarief
+                locatie = wd.get('locatie', '')
+                thuisplaats = bedrijfsgegevens.get('thuisplaats', '')
+                if locatie and thuisplaats:
+                    omschr = (f"Reiskosten (retour {thuisplaats}"
+                              f" – {locatie})")
+                elif locatie:
+                    omschr = f"Reiskosten (retour – {locatie})"
+                else:
+                    omschr = "Reiskosten"
+                regels.append({
+                    'datum': wd['datum'],
+                    'omschrijving': omschr,
+                    'aantal': km,
+                    'tarief': km_tarief,
+                    'bedrag': km_bedrag,
+                    'is_reiskosten': True,
+                })
+                subtotaal_km += km_bedrag
 
     totaal = subtotaal_werk + subtotaal_km
 
     # Auto-detect QR code from default location
     if not qr_path:
-        default_qr = output_dir.parent / 'qr' / 'betaal_qr.png'
+        default_qr = DATA_DIR / 'qr' / 'betaal_qr.png'
         if default_qr.exists():
             qr_path = str(default_qr)
 
     qr_uri = ''
     if qr_path and Path(qr_path).exists():
         qr_uri = Path(qr_path).resolve().as_uri()
+
+    # Auto-detect logo from default location
+    logo_uri = ''
+    default_logo_dir = DATA_DIR / 'logo'
+    if default_logo_dir.exists():
+        logo_files = list(default_logo_dir.glob('logo.*'))
+        if logo_files:
+            logo_uri = logo_files[0].resolve().as_uri()
 
     # Normalize klant for backward compatibility with structured fields
     klant_full = {
@@ -97,7 +119,7 @@ def generate_invoice(factuur_nummer: str, klant: dict, werkdagen: list[dict],
         'plaats': klant.get('plaats', ''),
     }
 
-    html_content = template.render(
+    tpl_vars = dict(
         nummer=factuur_nummer,
         datum=format_datum(datum.strftime('%Y-%m-%d')),
         vervaldatum=format_datum(vervaldatum.strftime('%Y-%m-%d')),
@@ -108,12 +130,26 @@ def generate_invoice(factuur_nummer: str, klant: dict, werkdagen: list[dict],
         subtotaal_km=subtotaal_km,
         totaal=totaal,
         qr_path=qr_uri,
+        logo_path=logo_uri,
     )
+
+    # Two-pass render: first plain flow to check page count, then pin
+    # betaal to page bottom via position:fixed if it fits on 1 page.
+    html_plain = template.render(**tpl_vars, pin_betaal=False)
+    doc_plain = HTML(string=html_plain, base_url=str(TEMPLATE_DIR)).render()
+
+    if len(doc_plain.pages) == 1:
+        # Content + betaal fits — pin betaal to bottom of page
+        html_pinned = template.render(**tpl_vars, pin_betaal=True)
+        doc = HTML(string=html_pinned, base_url=str(TEMPLATE_DIR)).render()
+    else:
+        # Multi-page — keep betaal in normal flow after content
+        doc = doc_plain
 
     # Sanitize filename
     klant_naam = klant.get('naam', 'Onbekend').replace(' ', '_').replace("'", '')
     output_path = output_dir / f"{factuur_nummer}_{klant_naam}.pdf"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    HTML(string=html_content, base_url=str(TEMPLATE_DIR)).write_pdf(str(output_path))
+    doc.write_pdf(str(output_path))
     return output_path
