@@ -58,44 +58,51 @@ async def open_werkdag_dialog(on_save=None, werkdag=None):
     fp = await get_fiscale_params(DB_PATH, jaar=date.today().year)
     default_km_tarief = fp.km_tarief if fp else _KM_TARIEF_FALLBACK
 
-    with ui.dialog() as dialog, ui.card().classes('w-full max-w-lg q-pa-md'):
+    with ui.dialog() as dialog, ui.card().classes('w-full max-w-xl q-pa-lg'):
         ui.label(
             'Werkdag bewerken' if is_edit else 'Werkdag toevoegen'
         ).classes('text-h6 q-mb-md')
 
-        # Row 1: Datum + Klant
-        with ui.row().classes('w-full gap-4 items-end'):
-            datum_input = ui.input(
-                'Datum',
-                value=werkdag.datum if is_edit else date.today().isoformat(),
-            ).classes('w-40')
-            with datum_input:
-                with ui.menu().props('no-parent-event') as menu:
-                    with ui.date(
-                        value=werkdag.datum if is_edit else date.today().isoformat(),
-                    ).bind_value(datum_input) as date_picker:
-                        date_picker.on('update:model-value', lambda: menu.close())
-                with datum_input.add_slot('append'):
-                    ui.icon('edit_calendar').on('click', menu.open) \
-                        .classes('cursor-pointer')
+        # --- Section 1: Datum, Klant, Locatie ---
 
-            klant_select = ui.select(
-                klant_options,
-                value=werkdag.klant_id if is_edit else None,
-                label='Klant',
-            ).classes('w-48')
+        # Row 1: Datum (full width)
+        datum_input = ui.input(
+            'Datum',
+            value=werkdag.datum if is_edit else date.today().isoformat(),
+        ).classes('w-full')
+        with datum_input:
+            with ui.menu().props('no-parent-event') as menu:
+                with ui.date(
+                    value=werkdag.datum if is_edit else date.today().isoformat(),
+                ).bind_value(datum_input) as date_picker:
+                    date_picker.on('update:model-value', lambda: menu.close())
+            with datum_input.add_slot('append'):
+                ui.icon('edit_calendar').on('click', menu.open) \
+                    .classes('cursor-pointer')
 
-        # Location row (hidden by default, shown when klant has locations)
-        locatie_row = ui.row().classes('w-full gap-4')
+        # Row 2: Klant (full width, searchable)
+        klant_select = ui.select(
+            klant_options,
+            value=werkdag.klant_id if is_edit else None,
+            label='Klant',
+            with_input=True,
+        ).classes('w-full')
+
+        # Row 3: Locatie (full width, visible when klant has locations)
+        locatie_row = ui.row().classes('w-full')
         locatie_row.set_visibility(False)
         with locatie_row:
             locatie_select = ui.select(
                 {}, label='Locatie', value=None,
                 on_change=lambda e: on_locatie_change(e.value),
-            ).classes('flex-grow')
+            ).classes('w-full')
 
-        # Row 2: Code + Uren
-        code_options = {k: k for k in CODES.keys()}
+        ui.separator().classes('q-my-sm')
+
+        # --- Section 2: Activiteit + Uren ---
+
+        # Code options: show human-readable descriptions as labels
+        code_options = dict(CODES)  # {code: description}
         if is_edit and werkdag.code and werkdag.code not in code_options:
             # Legacy/imported code not in standard list — include it
             code_options[werkdag.code] = werkdag.code
@@ -105,21 +112,24 @@ async def open_werkdag_dialog(on_save=None, werkdag=None):
             code_select = ui.select(
                 code_options,
                 value=initial_code,
-                label='Code',
-            ).classes('w-40')
+                label='Activiteit',
+            ).classes('flex-grow')
 
             uren_input = ui.number(
                 'Uren', value=werkdag.uren if is_edit else 8,
                 min=0, max=24, step=0.5,
             ).classes('w-24')
 
-        # Row 3: Tarief + Km (editable, auto-fill from klant)
+        ui.separator().classes('q-my-sm')
+
+        # --- Section 3: Tarief + Km ---
+
         with ui.row().classes('w-full gap-4 items-end'):
             tarief_input = ui.number(
                 'Tarief (\u20ac/uur)',
                 value=werkdag.tarief if is_edit else 0,
                 format='%.2f', min=0, step=0.50,
-            ).classes('w-36')
+            ).classes('flex-grow')
 
             km_input = ui.number(
                 'Km (retour)',
