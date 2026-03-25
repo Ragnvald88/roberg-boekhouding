@@ -44,7 +44,7 @@ DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib .venv/bin/python -m pytest tests/ -
 - **Invoice generator**: `components/invoice_generator.py` (WeasyPrint PDF with QR support)
 - **Invoice preview**: `components/invoice_preview.py` (Jinja2 HTML for iframe preview)
 - **Charts**: `components/charts.py` (revenue_bar_chart, cost_donut_chart)
-- **KPI strip**: `components/kpi_card.py` (kpi_strip for jaarafsluiting only)
+- **KPI strip**: `components/kpi_card.py` (kpi_strip for jaarafsluiting + facturen)
 - **Fiscal utils**: `components/fiscal_utils.py` (fetch_fiscal_data, extrapoleer_jaaromzet)
 - **Fiscal engine**: `fiscal/berekeningen.py` (bereken_volledig waterfall + bereken_box3)
 
