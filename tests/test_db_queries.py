@@ -10,7 +10,7 @@ from database import (
     get_nog_te_factureren, get_kpis, get_data_counts,
     get_afschrijving_overrides, get_afschrijving_overrides_batch,
     set_afschrijving_override, delete_afschrijving_override,
-    get_db_ctx, get_va_betalingen,
+    get_db_ctx, get_va_betalingen, get_openstaande_facturen,
 )
 
 
@@ -628,5 +628,100 @@ async def test_get_va_betalingen_no_kenmerk_fallback(db):
     assert result['totaal_betaald'] == pytest.approx(1900.0)
     assert result['ib_termijnen'] == 0
     assert result['zvw_termijnen'] == 0
+
+
+# ============================================================
+# Vergoeding classification + get_openstaande_facturen
+# ============================================================
+
+CLASSIFY_VERGOEDING_SQL = """
+    UPDATE facturen SET type = 'vergoeding'
+    WHERE type = 'factuur'
+    AND NOT EXISTS (SELECT 1 FROM werkdagen w WHERE w.factuurnummer = facturen.nummer)
+    AND status != 'concept'
+"""
+
+
+@pytest.mark.asyncio
+async def test_classify_orphan_facturen_as_vergoeding(db):
+    """Orphan facturen (no werkdagen) are classified as vergoeding,
+    but concept facturen and werkdag-backed facturen stay as 'factuur'."""
+    kid = await add_klant(db, naam="Test", tarief_uur=80)
+
+    # Orphan factuur (verstuurd, no werkdagen) → should become vergoeding
+    await add_factuur(db, nummer="2026-V01", klant_id=kid,
+                      datum="2026-01-15", totaal_bedrag=500,
+                      status='verstuurd', type='factuur')
+
+    # Orphan factuur (betaald, no werkdagen) → should become vergoeding
+    await add_factuur(db, nummer="2026-V02", klant_id=kid,
+                      datum="2026-02-15", totaal_bedrag=300,
+                      status='betaald', type='factuur')
+
+    # Concept factuur (no werkdagen) → should stay 'factuur'
+    await add_factuur(db, nummer="2026-C01", klant_id=kid,
+                      datum="2026-03-01", totaal_bedrag=200,
+                      status='concept', type='factuur')
+
+    # Werkdag-backed factuur → should stay 'factuur'
+    await add_factuur(db, nummer="2026-F01", klant_id=kid,
+                      datum="2026-01-20", totaal_bedrag=640,
+                      status='verstuurd', type='factuur')
+    await add_werkdag(db, datum="2026-01-20", klant_id=kid,
+                      uren=8, tarief=80, factuurnummer='2026-F01')
+
+    # ANW factuur (no werkdagen) → already type='anw', should not change
+    await add_factuur(db, nummer="2026-A01", klant_id=kid,
+                      datum="2026-01-25", totaal_bedrag=400,
+                      status='verstuurd', type='anw')
+
+    # Run the classification SQL directly (migration runs before test data)
+    async with get_db_ctx(db) as conn:
+        await conn.execute(CLASSIFY_VERGOEDING_SQL)
+        await conn.commit()
+
+        # Verify results
+        cur = await conn.execute(
+            "SELECT nummer, type FROM facturen ORDER BY nummer")
+        rows = {r['nummer']: r['type'] for r in await cur.fetchall()}
+
+    assert rows['2026-V01'] == 'vergoeding'  # orphan verstuurd → vergoeding
+    assert rows['2026-V02'] == 'vergoeding'  # orphan betaald → vergoeding
+    assert rows['2026-C01'] == 'factuur'     # concept → stays factuur
+    assert rows['2026-F01'] == 'factuur'     # has werkdagen → stays factuur
+    assert rows['2026-A01'] == 'anw'         # anw → unchanged
+
+
+@pytest.mark.asyncio
+async def test_openstaande_facturen_includes_vergoedingen(db):
+    """Verstuurd vergoedingen appear in openstaande facturen."""
+    kid = await add_klant(db, naam="Test", tarief_uur=80)
+
+    # Regular verstuurd factuur
+    await add_factuur(db, nummer="2026-001", klant_id=kid,
+                      datum="2026-01-15", totaal_bedrag=1000,
+                      status='verstuurd', type='factuur')
+
+    # Verstuurd vergoeding
+    await add_factuur(db, nummer="2026-099", klant_id=kid,
+                      datum="2026-02-15", totaal_bedrag=500,
+                      status='verstuurd', type='vergoeding')
+
+    # Betaald vergoeding → should NOT appear
+    await add_factuur(db, nummer="2026-100", klant_id=kid,
+                      datum="2026-03-15", totaal_bedrag=200,
+                      status='betaald', type='vergoeding')
+
+    # Verstuurd ANW → should also appear
+    await add_factuur(db, nummer="2026-A01", klant_id=kid,
+                      datum="2026-04-15", totaal_bedrag=300,
+                      status='verstuurd', type='anw')
+
+    openstaand = await get_openstaande_facturen(db)
+    nummers = [f.nummer for f in openstaand]
+    assert "2026-001" in nummers   # regular factuur
+    assert "2026-099" in nummers   # vergoeding
+    assert "2026-A01" in nummers   # anw
+    assert "2026-100" not in nummers  # betaald excluded
 
 

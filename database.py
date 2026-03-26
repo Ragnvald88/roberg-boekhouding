@@ -351,6 +351,7 @@ MIGRATIONS = [
         "UPDATE facturen SET bron = 'import' WHERE type = 'anw'",
     ]),
     (20, "drop_werkdagen_status_column", None),  # handled by callable
+    (21, "classify_vergoeding_type", None),  # handled by callable
 ]
 
 
@@ -475,7 +476,28 @@ async def _run_migration_20(conn):
     await conn.execute("CREATE INDEX IF NOT EXISTS idx_werkdagen_factuurnummer ON werkdagen(factuurnummer)")
 
 
-_MIGRATION_CALLABLES = {7: _run_migration_7, 8: _run_migration_8, 18: _run_migration_18, 20: _run_migration_20}
+async def _run_migration_21(conn):
+    """Link 2025 orphan werkdagen to their facturen, then classify orphan facturen as vergoeding."""
+    # Step A: Link 2025 orphan werkdagen to their correct facturen
+    werkdag_links = [
+        (392, '2025-002'), (397, '2025-002'), (400, '2025-002'),
+        (492, '2025-025'), (493, '2025-026'), (495, '2025-027'), (496, '2025-028'),
+    ]
+    for wd_id, factuurnummer in werkdag_links:
+        await conn.execute(
+            "UPDATE werkdagen SET factuurnummer = ? WHERE id = ? AND factuurnummer = ''",
+            (factuurnummer, wd_id))
+
+    # Step B: Classify all orphan facturen (no werkdagen, not concept) as vergoeding
+    await conn.execute("""
+        UPDATE facturen SET type = 'vergoeding'
+        WHERE type = 'factuur'
+        AND NOT EXISTS (SELECT 1 FROM werkdagen w WHERE w.factuurnummer = facturen.nummer)
+        AND status != 'concept'
+    """)
+
+
+_MIGRATION_CALLABLES = {7: _run_migration_7, 8: _run_migration_8, 18: _run_migration_18, 20: _run_migration_20, 21: _run_migration_21}
 
 
 async def init_db(db_path: Path = DB_PATH) -> None:
@@ -1694,7 +1716,7 @@ async def get_openstaande_facturen(db_path: Path = DB_PATH,
     async with get_db_ctx(db_path) as conn:
         sql = """SELECT f.*, k.naam as klant_naam
                  FROM facturen f JOIN klanten k ON f.klant_id = k.id
-                 WHERE f.status = 'verstuurd' AND f.type = 'factuur'"""
+                 WHERE f.status = 'verstuurd'"""
         params = []
         if jaar:
             sql += " AND substr(f.datum, 1, 4) = ?"
