@@ -324,3 +324,36 @@ async def test_delete_factuur_unlinks_werkdagen(seeded_db):
 async def test_delete_factuur_nonexistent_no_error(db):
     """Deleting a nonexistent factuur does not raise."""
     await delete_factuur(db, factuur_id=99999)  # should not raise
+
+
+# ============================================================
+# Factuur type round-trip tests
+# ============================================================
+
+@pytest.mark.asyncio
+async def test_factuur_type_vergoeding_round_trip(seeded_db):
+    """Factuur with type='vergoeding' persists and reads back correctly."""
+    from database import get_klanten
+    klanten = await get_klanten(seeded_db)
+    kid = klanten[0].id
+
+    await add_factuur(seeded_db, nummer="2026-050", klant_id=kid,
+                      datum="2026-03-01", totaal_bedrag=500.00,
+                      type='vergoeding')
+    facturen = await get_facturen(seeded_db, jaar=2026)
+    f = next(f for f in facturen if f.nummer == '2026-050')
+    assert f.type == 'vergoeding'
+
+
+@pytest.mark.asyncio
+async def test_factuur_type_defaults_to_factuur(seeded_db):
+    """Factuur without explicit type defaults to 'factuur'."""
+    from database import get_klanten
+    klanten = await get_klanten(seeded_db)
+    kid = klanten[0].id
+
+    await add_factuur(seeded_db, nummer="2026-051", klant_id=kid,
+                      datum="2026-03-01", totaal_bedrag=700.00)
+    facturen = await get_facturen(seeded_db, jaar=2026)
+    f = next(f for f in facturen if f.nummer == '2026-051')
+    assert f.type == 'factuur'

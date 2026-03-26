@@ -699,6 +699,10 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None):
                             * (li.get('tarief', 0) or 0)
                             for li in line_items)
 
+                        # Auto-detect type: werkdag-linked = factuur, free-form = vergoeding
+                        has_werkdagen = any(li.get('werkdag_id') for li in line_items)
+                        factuur_type = 'factuur' if has_werkdagen else 'vergoeding'
+
                         # Save factuur record
                         await add_factuur(
                             DB_PATH,
@@ -709,6 +713,7 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None):
                             totaal_km=totaal_km,
                             totaal_bedrag=totaal_bedrag,
                             pdf_pad=str(pdf_path),
+                            type=factuur_type,
                         )
 
                         # Link werkdagen
