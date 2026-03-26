@@ -95,6 +95,18 @@ async def facturen_page():
             ui.select(status_options, value='', label='Status',
                       on_change=on_status_filter).classes('w-36')
 
+            # Type filter
+            type_options = {'': 'Alle types', 'factuur': 'Werkdag',
+                            'anw': 'ANW/Dienst', 'vergoeding': 'Vergoeding'}
+            filter_type = {'value': ''}
+
+            async def on_type_filter(e):
+                filter_type['value'] = e.value
+                await refresh_table()
+
+            ui.select(type_options, value='', label='Type',
+                      on_change=on_type_filter).classes('w-36')
+
             ui.space()
 
             async def export_csv():
@@ -113,12 +125,18 @@ async def facturen_page():
                                 if f.status == 'verstuurd' and _is_verlopen(f.datum)]
                 elif status_val == 'betaald':
                     facturen = [f for f in facturen if f.status == 'betaald']
-                headers = ['Nummer', 'Datum', 'Klant', 'Uren', 'Km',
+                if filter_type['value']:
+                    facturen = [f for f in facturen
+                                if f.type == filter_type['value']]
+                headers = ['Nummer', 'Datum', 'Klant', 'Type', 'Uren', 'Km',
                            'Bedrag', 'Status']
+                type_labels_csv = {'factuur': 'Werkdag', 'anw': 'ANW',
+                                   'vergoeding': 'Vergoeding'}
                 status_labels = {'concept': 'Concept', 'verstuurd': 'Verstuurd',
                                  'betaald': 'Betaald'}
-                rows = [[f.nummer, f.datum, f.klant_naam, f.totaal_uren,
-                         f.totaal_km, f.totaal_bedrag,
+                rows = [[f.nummer, f.datum, f.klant_naam,
+                         type_labels_csv.get(f.type, f.type),
+                         f.totaal_uren, f.totaal_km, f.totaal_bedrag,
                          status_labels.get(f.status, f.status.capitalize())]
                         for f in facturen]
                 csv_str = generate_csv(headers, rows)
@@ -176,7 +194,15 @@ async def facturen_page():
             <q-td :props="props">
                 <div class="row items-center no-wrap gap-1">
                     <q-icon
-                        v-if="props.row.bron === 'import'"
+                        v-if="props.row.type === 'vergoeding'"
+                        name="receipt_long"
+                        size="xs"
+                        color="amber-8"
+                    >
+                        <q-tooltip>Vergoeding</q-tooltip>
+                    </q-icon>
+                    <q-icon
+                        v-else-if="props.row.bron === 'import'"
                         name="upload_file"
                         size="xs"
                         color="grey-6"
@@ -357,6 +383,11 @@ async def facturen_page():
                             if f.status == 'verstuurd' and _is_verlopen(f.datum)]
             elif status_val == 'betaald':
                 facturen = [f for f in facturen if f.status == 'betaald']
+
+            # Type filter
+            if filter_type['value']:
+                facturen = [f for f in facturen
+                            if f.type == filter_type['value']]
 
             rows = []
             totaal = 0
@@ -650,9 +681,13 @@ async def facturen_page():
                     ui.label('Factuurnummer:').classes(
                         'text-subtitle2 text-grey-8')
                     ui.label(row['nummer']).classes('text-subtitle2')
-                    type_label = ('ANW' if row.get('type') == 'anw'
-                                  else 'Dagpraktijk')
-                    ui.badge(type_label, color='info').classes('q-ml-sm')
+                    type_labels = {'factuur': 'Werkdag', 'anw': 'ANW',
+                                   'vergoeding': 'Vergoeding'}
+                    type_colors = {'factuur': 'teal', 'anw': 'info',
+                                   'vergoeding': 'amber-8'}
+                    type_val = row.get('type', 'factuur')
+                    ui.badge(type_labels.get(type_val, type_val),
+                             color=type_colors.get(type_val, 'grey')).classes('q-ml-sm')
 
                 ui.separator().classes('q-my-sm')
 
@@ -670,12 +705,6 @@ async def facturen_page():
                 edit_bedrag = ui.number(
                     'Totaalbedrag (€)', value=row['totaal_bedrag'],
                     format='%.2f',
-                ).classes('w-full')
-
-                # Type
-                edit_type = ui.select(
-                    {'factuur': 'Dagpraktijk', 'anw': 'ANW'},
-                    label='Type', value=row.get('type', 'factuur'),
                 ).classes('w-full')
 
                 # Status
@@ -755,7 +784,6 @@ async def facturen_page():
                             'klant_id': edit_klant.value,
                             'totaal_bedrag': float(
                                 edit_bedrag.value or 0),
-                            'type': edit_type.value,
                         }
                         await update_factuur(
                             DB_PATH, factuur_id=row['id'], **kwargs)
