@@ -10,7 +10,7 @@ from components.utils import format_euro, format_datum, generate_csv, BANK_CATEG
 from database import (
     get_banktransacties, add_banktransacties, update_banktransactie,
     delete_banktransacties, find_factuur_matches, apply_factuur_matches,
-    get_db_ctx, DB_PATH,
+    DB_PATH,
 )
 from components.shared_ui import year_options
 from import_.rabobank_csv import parse_rabobank_csv
@@ -138,98 +138,13 @@ async def bank_page():
 
         ui.notify(f"{count} transacties geimporteerd uit {filename}", type='positive')
 
-        # Find matches between incoming payments and open facturen
+        # Auto-match incoming payments to open facturen
         matches = await find_factuur_matches(DB_PATH)
-
-        # Query remaining open facturen (not matched)
-        matched_ids = {m['factuur_id'] for m in matches}
-        async with get_db_ctx(DB_PATH) as conn:
-            cur = await conn.execute(
-                "SELECT f.nummer, f.datum, f.totaal_bedrag, k.naam "
-                "FROM facturen f JOIN klanten k ON f.klant_id = k.id "
-                "WHERE f.status IN ('verstuurd', 'concept') ORDER BY f.datum")
-            all_open = await cur.fetchall()
-        remaining_open = [r for r in all_open if r['nummer'] not in
-                          {m['factuur_nummer'] for m in matches}]
-
-        if matches or remaining_open:
-            # Show confirmation dialog
-            with ui.dialog() as match_dlg, \
-                    ui.card().classes('w-full max-w-2xl q-pa-md'):
-
-                if matches:
-                    ui.label(f'{len(matches)} betalingen gevonden '
-                             f'voor open facturen') \
-                        .classes('text-h6')
-
-                    # Checkboxes per match
-                    checks = {}
-                    for m in matches:
-                        with ui.row().classes(
-                                'w-full items-center gap-3 q-py-xs'):
-                            cb = ui.checkbox('', value=True)
-                            checks[m['factuur_id']] = (cb, m)
-                            ui.label(m['factuur_nummer']) \
-                                .classes('text-weight-bold') \
-                                .style('min-width: 100px')
-                            ui.label(format_euro(m['factuur_bedrag'])) \
-                                .style('min-width: 90px; text-align: right; '
-                                       'font-variant-numeric: tabular-nums')
-                            ui.icon('arrow_back', size='sm') \
-                                .classes('text-grey-5')
-                            ui.label(m['bank_tegenpartij'][:25]) \
-                                .classes('text-grey-7')
-                            ui.label(format_datum(m['bank_datum'])) \
-                                .classes('text-caption text-grey-6')
-
-                if remaining_open:
-                    if matches:
-                        ui.separator().classes('q-my-sm')
-                    with ui.row().classes('items-center gap-2'):
-                        ui.icon('info_outline', color='grey-6')
-                        ui.label(f'{len(remaining_open)} facturen '
-                                 f'nog openstaand') \
-                            .classes('text-subtitle2 text-grey-7')
-                    for r in remaining_open:
-                        with ui.row().classes(
-                                'w-full items-center gap-3 q-py-xs '
-                                'q-pl-md'):
-                            ui.icon('radio_button_unchecked',
-                                    size='sm', color='grey-5')
-                            ui.label(r['nummer']) \
-                                .style('min-width: 100px') \
-                                .classes('text-grey-6')
-                            ui.label(format_euro(r['totaal_bedrag'])) \
-                                .classes('text-grey-6') \
-                                .style('min-width: 90px; text-align: right')
-                            ui.label(r['naam'][:25]) \
-                                .classes('text-grey-6')
-
-                with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
-                    ui.button('Annuleren',
-                              on_click=match_dlg.close).props('flat')
-                    if matches:
-                        async def confirm_matches():
-                            selected = [m for fid, (cb, m) in
-                                        checks.items() if cb.value]
-                            if selected:
-                                n = await apply_factuur_matches(
-                                    DB_PATH, selected)
-                                ui.notify(
-                                    f'{n} facturen als betaald gemarkeerd',
-                                    type='positive')
-                            match_dlg.close()
-                            await refresh_table()
-
-                        ui.button('Bevestig', icon='check',
-                                  on_click=confirm_matches) \
-                            .props('color=primary')
-
-            match_dlg.open()
-        else:
-            await refresh_table()
-            await refresh_csv_list()
-            return
+        if matches:
+            n = await apply_factuur_matches(DB_PATH, matches)
+            nummers = ', '.join(m['factuur_nummer'] for m in matches)
+            ui.notify(f'{n} facturen als betaald gemarkeerd: {nummers}',
+                      type='positive')
 
         await refresh_table()
         await refresh_csv_list()
@@ -292,10 +207,19 @@ async def bank_page():
 
     # --- Page layout ---
     with ui.column().classes('w-full p-6 max-w-7xl mx-auto gap-6'):
-        page_title('Bank')
+        # Header row: title + primary action
+        with ui.row().classes('w-full items-center'):
+            page_title('Bank')
+            ui.space()
+            # CSV upload button
+            ui.upload(
+                label='Importeer CSV',
+                on_upload=handle_upload,
+                auto_upload=True,
+            ).props('accept=".csv" flat color=primary').classes('w-44')
 
-        # Top bar: filters + upload
-        with ui.row().classes('w-full items-center gap-4 q-mb-md'):
+        # Filter bar
+        with ui.element('div').classes('page-toolbar w-full'):
             # Year selector
             jaren = year_options(descending=False)
             ui.select(
@@ -303,7 +227,7 @@ async def bank_page():
                 options=jaren,
                 value=current_year,
                 on_change=lambda e: handle_jaar_change(e.value),
-            ).classes('w-32')
+            ).classes('w-28')
 
             # Month selector
             nl_maanden = {
@@ -316,7 +240,7 @@ async def bank_page():
                 options=nl_maanden,
                 value=0,
                 on_change=lambda e: handle_maand_change(e.value),
-            ).classes('w-40')
+            ).classes('w-36')
 
             # Search filter
             async def handle_zoek(new_val):
@@ -325,7 +249,7 @@ async def bank_page():
 
             ui.input(label='Zoeken', placeholder='Tegenpartij / omschrijving',
                      on_change=lambda e: handle_zoek(e.value)
-                     ).props('clearable').classes('w-56')
+                     ).props('clearable').classes('w-52')
 
             ui.space()
 
@@ -342,15 +266,10 @@ async def bank_page():
                     csv_str.encode('utf-8-sig'),
                     f'bank_{selected_jaar["value"]}.csv')
 
-            ui.button('CSV', icon='download',
-                      on_click=export_csv_bank).props('outline color=primary')
-
-            # CSV upload button
-            ui.upload(
-                label='Importeer CSV',
-                on_upload=handle_upload,
-                auto_upload=True,
-            ).props('accept=".csv" flat color=primary').classes('w-48')
+            ui.button(icon='download',
+                      on_click=export_csv_bank) \
+                .props('flat round color=secondary size=sm') \
+                .tooltip('Exporteer CSV')
 
         # Bulk action toolbar
         bulk_bar = ui.row().classes('w-full items-center gap-4')

@@ -787,36 +787,14 @@ async def jaarafsluiting_page():
     # Initial render
     await render_all()
 
-    # Check for factuur-bank matches and show review dialog (not auto-applied)
+    # Auto-match open facturen to bank payments
     matches = await find_factuur_matches(DB_PATH)
     if matches:
-        async def apply_reviewed_matches():
-            await apply_factuur_matches(DB_PATH, matches)
-            ui.notify(
-                f'{len(matches)} facturen als betaald gemarkeerd',
-                type='positive')
-            match_dialog.close()
-            await render_all()
-
-        with ui.dialog() as match_dialog, ui.card().classes('w-96'):
-            ui.label('Factuur-betalingen gevonden').classes('text-h6')
-            ui.label(f'{len(matches)} facturen matchen met bankbetalingen:')
-            with ui.column().classes('w-full gap-1 q-my-sm'):
-                for m in matches[:10]:
-                    ui.label(
-                        f"\u2022 {m['factuur_nummer']} \u2014 "
-                        f"{format_euro(m['factuur_bedrag'])} "
-                        f"\u2192 {m['bank_datum']}"
-                    ).classes('text-caption')
-                if len(matches) > 10:
-                    ui.label(f"... en {len(matches) - 10} meer").classes(
-                        'text-caption text-grey')
-            with ui.row().classes('w-full justify-end'):
-                ui.button('Annuleren', on_click=match_dialog.close).props(
-                    'flat')
-                ui.button('Toepassen', on_click=apply_reviewed_matches).props(
-                    'color=positive')
-        match_dialog.open()
+        n = await apply_factuur_matches(DB_PATH, matches)
+        nummers = ', '.join(m['factuur_nummer'] for m in matches)
+        ui.notify(f'{n} facturen als betaald gemarkeerd: {nummers}',
+                  type='positive')
+        await render_all()
 
 
 # === PDF Template Rendering ===
