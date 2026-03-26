@@ -32,24 +32,22 @@ async def dashboard_page():
 
     with ui.column().classes('w-full p-6 max-w-7xl mx-auto gap-6'):
 
-        # Header row: title + quick actions + year selector
+        # Header row: title + shortcuts
         with ui.row().classes('w-full items-center'):
             page_title('Overzicht')
             ui.space()
-            with ui.row().classes('gap-2 items-center'):
-                ui.button('Werkdag', icon='add',
-                          on_click=lambda: ui.navigate.to('/werkdagen')) \
-                    .props('flat dense').classes('text-caption') \
-                    .style('background: white; border: 1px solid #E2E8F0; '
-                           'border-radius: 8px; color: #475569')
-                ui.button('Factuur', icon='add',
-                          on_click=lambda: ui.navigate.to('/facturen')) \
-                    .props('flat dense').classes('text-caption') \
-                    .style('background: white; border: 1px solid #E2E8F0; '
-                           'border-radius: 8px; color: #475569')
-                jaar_select = ui.select(
-                    jaren, value=huidig_jaar, label='Jaar',
-                ).classes('w-28')
+            ui.button('Werkdag', icon='add',
+                      on_click=lambda: ui.navigate.to('/werkdagen')) \
+                .props('flat color=secondary dense')
+            ui.button('Factuur', icon='add',
+                      on_click=lambda: ui.navigate.to('/facturen')) \
+                .props('flat color=secondary dense')
+
+        # Filter bar
+        with ui.element('div').classes('page-toolbar w-full'):
+            jaar_select = ui.select(
+                jaren, value=huidig_jaar, label='Jaar',
+            ).classes('w-28')
 
         # Content container (filled by refresh_dashboard)
         content_container = {'ref': None}
@@ -385,25 +383,20 @@ async def dashboard_page():
             with ui.row().classes('w-full gap-3'):
                 # Uren
                 uren = kpis.get('uren', 0)
-                uren_pct = round(
-                    uren / uren_criterium * 100) if uren_criterium else 0
                 with ui.card().classes('flex-1 q-pa-sm').style(
                         'border-radius: 10px; border: 1px solid #E2E8F0; '
                         'display: flex; align-items: center; gap: 10px; '
                         'flex-direction: row'):
-                    ui.icon('schedule', size='20px').style('color: #D97706')
-                    with ui.column().classes('flex-1 gap-0'):
-                        with ui.row().classes(
-                                'w-full justify-between items-baseline'):
-                            ui.label(
-                                f'{uren:,.0f} / {uren_criterium:,} uur'
-                                .replace(',', '.')
-                            ).classes('strip-value')
-                            ui.label(f'{uren_pct}%').classes('strip-pct')
-                        ui.linear_progress(
-                            value=min(uren_pct / 100, 1.0), size='3px',
-                            color='positive' if uren_pct >= 100 else 'warning',
-                        ).style('margin-top: 6px')
+                    ui.icon('schedule', size='20px').style('color: #0F766E')
+                    with ui.row().classes('items-baseline gap-1'):
+                        ui.label(
+                            f'{uren:,.0f} uur'.replace(',', '.')
+                        ).classes('strip-value')
+                        with ui.element('span').classes(
+                                'text-caption text-grey-6'):
+                            ui.label('(urencriterium)')
+                            ui.tooltip(
+                                'Exclusief achterwacht (urennorm=0)')
 
                 # Km (only if > 0)
                 km = km_data.get('km', 0) if km_data else 0
