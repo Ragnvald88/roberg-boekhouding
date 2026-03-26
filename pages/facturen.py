@@ -202,12 +202,12 @@ async def facturen_page():
                         <q-tooltip>Vergoeding</q-tooltip>
                     </q-icon>
                     <q-icon
-                        v-else-if="props.row.bron === 'import'"
+                        v-else-if="props.row.type === 'anw'"
                         name="upload_file"
                         size="xs"
                         color="grey-6"
                     >
-                        <q-tooltip>Geïmporteerd</q-tooltip>
+                        <q-tooltip>ANW/Dienst</q-tooltip>
                     </q-icon>
                     <q-icon
                         v-else
