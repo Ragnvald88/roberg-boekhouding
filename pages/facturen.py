@@ -197,17 +197,17 @@ async def facturen_page():
                         v-if="props.row.type === 'vergoeding'"
                         name="receipt_long"
                         size="xs"
-                        color="amber-8"
+                        color="grey-6"
                     >
                         <q-tooltip>Vergoeding</q-tooltip>
                     </q-icon>
                     <q-icon
-                        v-else-if="props.row.type === 'anw'"
+                        v-else-if="props.row.bron === 'import'"
                         name="upload_file"
                         size="xs"
                         color="grey-6"
                     >
-                        <q-tooltip>ANW/Dienst</q-tooltip>
+                        <q-tooltip>Geïmporteerd</q-tooltip>
                     </q-icon>
                     <q-icon
                         v-else
