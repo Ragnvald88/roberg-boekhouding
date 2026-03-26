@@ -3,99 +3,130 @@
 <head>
 <meta charset="UTF-8">
 <style>
-  @page { size: A4; margin: 20mm 20mm 25mm 20mm; }
+  @page { size: A4; margin: 25mm 25mm 20mm 25mm; }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
-         font-size: 9.5pt; line-height: 1.45; color: #2c3e50;
-         display: flex; flex-direction: column; min-height: 100%; }
+         font-size: 10pt; line-height: 1.5; color: #2c3e50; }
+
+  /* ── Layout modes (controlled by pin_betaal template variable) ──
+       pin_betaal=true:  position:fixed pins betaal to page bottom (PDF, short invoices)
+       pin_betaal=false: plain block flow, betaal follows content (PDF, long invoices)
+       pin_betaal unset: flex+spacer pushes betaal to bottom (browser preview)
+  ── */
+  {% if pin_betaal is defined and pin_betaal %}
+  /* PDF pinned: spacer reserves space, betaal absolute at page bottom */
+  .page { position: relative; height: 252mm; overflow: visible; }
+  .spacer { height: 38mm; }
+  .betaal { position: absolute; bottom: 0; left: 0; right: 0; }
+  {% elif pin_betaal is defined %}
+  /* PDF flow: normal block layout, no spacer */
+  .spacer { display: none; }
+  {% else %}
+  /* Browser preview: flex pushes betaal to bottom */
+  .page { display: flex; flex-direction: column; min-height: 252mm; }
+  .spacer { flex: 1; }
+  {% endif %}
+
+  /* ── Logo ─────────────────────────────────── */
+  .logo { margin-bottom: 2mm; }
+  .logo img { max-height: 28mm; max-width: 60mm; object-fit: contain; }
 
   /* ── Header ────────────────────────────────── */
   .header { display: flex; justify-content: space-between;
-            margin-bottom: 15mm; }
+            margin-bottom: 6mm; }
 
-  .sender h1 { font-size: 16pt; font-weight: bold; color: #1a3c5e;
-               margin-bottom: 2mm; }
-  .sender .contact { font-size: 9pt; color: #555; }
-  .sender .details { font-size: 8.5pt; color: #555; margin-top: 2mm; }
+  .sender h1 { font-size: 14.5pt; font-weight: bold; color: #2c3e50;
+               margin-bottom: 0.5mm; }
+  .sender .address { font-size: 10pt; color: #2c3e50; line-height: 1.4; }
+  .sender .details { font-size: 9pt; color: #555; margin-top: 3mm;
+                     line-height: 1.5; }
 
   .meta { text-align: right; }
-  .meta h2 { font-size: 27pt; font-weight: 800; color: #1a3c5e;
-             letter-spacing: 2px; margin: 0; }
-  .meta .nummer { font-size: 12.5pt; color: #1a3c5e; margin-top: 1mm; }
-  .meta .dates { font-size: 9pt; color: #555; }
+  .meta h2 { font-size: 28pt; font-weight: 800; color: #2c3e50;
+             margin: 0; border-bottom: 1pt solid #2c3e50;
+             padding-bottom: 1.5mm; letter-spacing: 1px; }
+  .meta .nummer { font-size: 12pt; color: #2c3e50; margin-top: 2mm; }
+  .meta .dates { font-size: 9.5pt; color: #555; margin-top: 5mm;
+                 line-height: 1.7; }
 
   /* ── Divider ───────────────────────────────── */
-  .divider { width: 50px; height: 2px; background: #1a3c5e;
-             margin: 5mm 0; }
+  .divider { width: 40px; height: 2px; background: #2c3e50;
+             margin: 8mm 0 4mm 0; }
 
   /* ── Client ────────────────────────────────── */
-  .client { margin-bottom: 8mm; }
-  .client .label { font-size: 10pt; font-weight: bold; margin-bottom: 1mm; }
-  .client .info { font-size: 9pt; line-height: 1.5; }
+  .client { margin-bottom: 6mm; }
+  .client .label { font-size: 10pt; font-weight: bold; margin-bottom: 2mm; }
+  .client .info { font-size: 10pt; line-height: 1.5; }
 
   /* ── Line items table ──────────────────────── */
-  table.lines { width: 100%; border-collapse: collapse; margin-bottom: 8mm; }
-  table.lines th { background: #1a3c5e; color: #fff; padding: 3mm 3mm;
-                   font-size: 8pt; font-weight: 600; text-align: left; }
-  table.lines td { padding: 2.5mm 3mm; border-bottom: 0.5pt solid #eee;
-                   font-size: 9pt; }
-  table.lines tr:nth-child(even) td { background: #f9f9f9; }
+  table.lines { width: 100%; border-collapse: collapse; margin-bottom: 4mm; }
+  table.lines th { background: #3c4f5f; color: #fff; padding: 2.5mm 3mm;
+                   font-size: 9.5pt; font-weight: 600; text-align: left;
+                   border: 0.5pt solid #3c4f5f; }
+  table.lines td { padding: 1.5mm 3mm; border: 0.5pt solid #bbb;
+                   font-size: 10pt; vertical-align: top; }
   .r { text-align: right; }
+  .bold { font-weight: bold; }
 
   /* ── Totaal section ────────────────────────── */
-  .totaal-section { text-align: right; margin-bottom: 6mm; }
-  .totaal-section .subtotaal { font-size: 9pt; color: #555; margin-bottom: 1mm; }
+  .totaal-section { text-align: right; margin-top: 6mm; margin-bottom: 2mm; }
+  .totaal-section .subtotaal { font-size: 9.5pt; color: #555; margin-bottom: 1mm; }
   .totaal-section .totaal-row { display: inline-block; }
-  .totaal-section .totaal-label { font-size: 13pt; font-weight: bold;
-                                   color: #1a3c5e; }
-  .totaal-section .totaal-amount { font-size: 16pt; font-weight: 800;
-                                    color: #1a3c5e; margin-left: 4mm; }
-  .vat-notice { font-size: 8pt; font-style: italic; color: #999;
-                text-align: right; margin-top: 1mm; margin-bottom: 8mm; }
+  .totaal-section .totaal-label { font-size: 14pt; font-weight: bold;
+                                   color: #2c3e50; }
+  .totaal-section .totaal-amount { font-size: 15pt; font-weight: bold;
+                                    color: #2c3e50; margin-left: 4mm; }
+  .vat-notice { font-size: 9pt; font-style: italic; color: #888;
+                text-align: right; margin-top: 2mm; }
 
   /* ── Betaalinformatie ──────────────────────── */
-  .betaal { margin-top: auto; }
+  .betaal { break-inside: avoid; }
   .betaal-tbl { width: 100%; border-collapse: collapse;
-                border: 0.5pt solid #ddd; font-size: 8.5pt;
-                table-layout: fixed; }
-  .betaal-tbl thead th { background: #1a3c5e; color: #fff; font-size: 9.5pt;
+                border: 0.5pt solid #999; font-size: 9.5pt; }
+  .betaal-tbl thead th { background: #3c4f5f; color: #fff; font-size: 10pt;
                          font-weight: 700; letter-spacing: 0.5px;
                          padding: 2mm 3mm; text-align: left; }
-  .betaal-tbl td.bl { width: 30%; padding: 1.5mm 3mm; color: #666;
-                      background: #f5f7fa; border-right: 0.5pt solid #eee;
-                      border-bottom: 0.5pt solid #eee; }
-  .betaal-tbl td.bv { padding: 1.5mm 3mm; font-weight: 600; color: #2c3e50;
-                      border-bottom: 0.5pt solid #eee; }
-  .betaal-tbl td.bq { width: 25mm; border-left: 0.5pt solid #ddd;
+  .betaal-tbl td.bl { padding: 2mm 3mm; color: #555;
+                      border-bottom: 0.5pt solid #ddd;
+                      white-space: nowrap; }
+  .betaal-tbl td.bv { padding: 2mm 3mm; font-weight: 600; color: #2c3e50;
+                      border-bottom: 0.5pt solid #ddd;
+                      white-space: nowrap; }
+  .betaal-tbl td.bq { width: 28mm; border-left: 0.5pt solid #999;
                       text-align: center; vertical-align: middle;
                       padding: 2mm; }
-  .betaal-tbl td.bq img { width: 2.5cm; height: 2.5cm; object-fit: contain; }
+  .betaal-tbl td.bq img { width: 24mm; height: 24mm; object-fit: contain; }
   .betaal-tbl tbody tr:last-child td.bl,
   .betaal-tbl tbody tr:last-child td.bv { border-bottom: none; }
-
-  /* ── Footer ────────────────────────────────── */
-  .footer { position: fixed; bottom: 0; left: 0; right: 0;
-            padding: 3mm 20mm; font-size: 7pt; color: #999;
-            border-top: 0.5pt solid #ddd; text-align: center; }
 </style>
 </head>
 <body>
+<div class="page">
+
+{% if logo_path|default('') %}
+<div class="logo">
+  <img src="{{ logo_path }}" alt="Logo">
+</div>
+{% endif %}
 
 <div class="header">
   <div class="sender">
     <h1>{{ bedrijf.bedrijfsnaam }}</h1>
-    <p class="contact">
+    <div class="address">
       {{ bedrijf.naam }}<br>
       {{ bedrijf.adres }}<br>
       {{ bedrijf.postcode_plaats }}
-    </p>
-    <p class="details">
-      KvK: {{ bedrijf.kvk }} — IBAN: {{ bedrijf.iban }}
-    </p>
+    </div>
+    <div class="details">
+      {% if bedrijf.telefoon|default('') %}Tel: {{ bedrijf.telefoon }}<br>{% endif %}
+      {% if bedrijf.email|default('') %}{{ bedrijf.email }}<br>{% endif %}
+      {% if bedrijf.kvk|default('') %}KvK: {{ bedrijf.kvk }}<br>{% endif %}
+      {% if bedrijf.iban|default('') %}IBAN: {{ bedrijf.iban }}{% endif %}
+    </div>
   </div>
   <div class="meta">
     <h2>FACTUUR</h2>
-    <div class="nummer">Nummer: {{ nummer }}</div>
+    <div class="nummer">Nummer:&nbsp;&nbsp;{{ nummer }}</div>
     <div class="dates">
       Factuurdatum: {{ datum }}<br>
       Vervaldatum: {{ vervaldatum }}
@@ -108,7 +139,7 @@
 <div class="client">
   <div class="label">Factuur aan:</div>
   <div class="info">
-    {{ klant.naam }}
+    {% if klant.naam|default('') %}{{ klant.naam }}{% endif %}
     {% if klant.contactpersoon|default('') %}<br>{{ klant.contactpersoon }}{% endif %}
     {% if klant.adres|default('') %}<br>{{ klant.adres }}{% endif %}
     {% set pc = klant.postcode|default('') %}
@@ -123,18 +154,18 @@
       <th style="width:15%">Datum</th>
       <th>Omschrijving</th>
       <th class="r" style="width:10%">Aantal</th>
-      <th class="r" style="width:14%">Tarief</th>
+      <th class="r" style="width:12%">Tarief</th>
       <th class="r" style="width:14%">Totaal</th>
     </tr>
   </thead>
   <tbody>
     {% for regel in regels %}
     <tr>
-      <td>{{ regel.datum | format_datum }}</td>
+      <td>{% if not regel.is_reiskosten|default(false) %}{{ regel.datum | format_datum }}{% endif %}</td>
       <td>{{ regel.omschrijving }}</td>
-      <td class="r">{{ "%.2f"|format(regel.aantal) }}</td>
+      <td class="r">{{ "%.0f"|format(regel.aantal) if regel.aantal == regel.aantal|int else "%.2f"|format(regel.aantal) }}</td>
       <td class="r">{{ regel.tarief | format_euro }}</td>
-      <td class="r">{{ regel.bedrag | format_euro }}</td>
+      <td class="r bold">{{ regel.bedrag | format_euro }}</td>
     </tr>
     {% endfor %}
   </tbody>
@@ -150,21 +181,25 @@
     <span class="totaal-amount">{{ totaal | format_euro }}</span>
   </div>
 </div>
-<p class="vat-notice">* Vrijgesteld van BTW op grond van artikel 11, lid 1, sub g, Wet op de omzetbelasting 1968.</p>
+<p class="vat-notice">* Vrijgesteld van BTW op grond van art. 11 lid 1 onderdeel g Wet OB 1968</p>
+
+<div class="spacer"></div>
 
 <div class="betaal">
   <table class="betaal-tbl">
     <thead>
-      <tr><th colspan="3">BETAALINFORMATIE</th></tr>
+      <tr><th colspan="{{ 3 if qr_path|default('') else 2 }}">BETAALINFORMATIE</th></tr>
     </thead>
     <tbody>
+      {% if bedrijf.iban|default('') %}
       <tr>
         <td class="bl">IBAN:</td>
         <td class="bv">{{ bedrijf.iban }}</td>
-        <td class="bq" rowspan="5">
-          {% if qr_path|default('') %}<img src="{{ qr_path }}" alt="QR">{% endif %}
-        </td>
+        {% if qr_path|default('') %}
+        <td class="bq" rowspan="5"><img src="{{ qr_path }}" alt="QR"></td>
+        {% endif %}
       </tr>
+      {% endif %}
       <tr><td class="bl">Ten name van:</td><td class="bv">{{ bedrijf.bedrijfsnaam }}</td></tr>
       <tr><td class="bl">Onder vermelding van:</td><td class="bv">{{ nummer }}</td></tr>
       <tr><td class="bl">Te betalen bedrag:</td><td class="bv">{{ totaal | format_euro }}</td></tr>
@@ -173,9 +208,6 @@
   </table>
 </div>
 
-<div class="footer">
-  {{ bedrijf.bedrijfsnaam }} — {{ bedrijf.naam }} — KvK {{ bedrijf.kvk }} — IBAN {{ bedrijf.iban }}
-</div>
-
+</div><!-- .page -->
 </body>
 </html>

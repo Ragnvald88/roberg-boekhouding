@@ -381,13 +381,12 @@ async def aangifte_page():
                         on_change=lambda: _on_za_sa_change(),
                     )
 
-                # Urencriterium badge
-                gehaald = f.uren_criterium_gehaald
+                # Urencriterium — only warn if not met
                 with ui.row().classes('items-center gap-2'):
-                    ui.label(f'Urencriterium: {f.uren_criterium:.0f} uur')
-                    if gehaald:
-                        ui.badge('gehaald', color='positive').classes('text-xs')
-                    else:
+                    ui.label(
+                        f'Urencriterium: {f.uren_criterium:.0f} / 1.225 uur'
+                    ).classes('text-caption text-grey-7')
+                    if not f.uren_criterium_gehaald:
                         ui.badge('NIET gehaald', color='negative').classes('text-xs')
 
                 _invulhulp_line(BD['za'], '- Zelfstandigenaftrek', f.zelfstandigenaftrek)

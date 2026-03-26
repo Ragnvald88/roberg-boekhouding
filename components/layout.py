@@ -27,6 +27,48 @@ ui.add_css('''
         background-color: #F8FAFC;
     }
 
+    /* Page toolbar — tinted bar with pill-shaped filters */
+    .page-toolbar {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 14px;
+        background: #EDF2F7;
+        border-radius: 12px;
+    }
+    .page-toolbar .q-field { min-height: unset; }
+
+    /* White pill selects inside toolbar */
+    .page-toolbar .q-field--outlined .q-field__control {
+        background: white !important;
+        border-color: transparent !important;
+        border-radius: 20px !important;
+        min-height: 36px !important;
+        transition: box-shadow 0.15s ease;
+    }
+    .page-toolbar .q-field--outlined .q-field__control:hover {
+        box-shadow: 0 2px 8px rgba(0,0,0,0.07);
+    }
+    .page-toolbar .q-field--outlined.q-field--focused .q-field__control {
+        border-color: var(--q-primary) !important;
+        box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.12);
+    }
+    .page-toolbar .q-field__label {
+        font-size: 11px !important;
+    }
+
+    .toolbar-divider {
+        width: 1px;
+        height: 24px;
+        background: #CBD5E1;
+        flex-shrink: 0;
+    }
+
+    /* Invoice builder panel styling */
+    .builder-panel-border { border-right: 1px solid var(--q-separator-color, #e2e8f0); }
+    .builder-line-card { border: 1px solid var(--q-separator-color, #e2e8f0); box-shadow: none; }
+    .builder-preview-bg { background: var(--q-separator-color, #e2e8f0); }
+
     /* KPI card hover */
     .kpi-card {
         transition: box-shadow 0.2s ease;

@@ -26,15 +26,17 @@ async def documenten_page():
     huidig_jaar = date.today().year
 
     with ui.column().classes('w-full p-6 max-w-7xl mx-auto gap-6'):
-        # Header: title + year + progress badge
-        with ui.row().classes('w-full items-center gap-4'):
+        # Header row
+        with ui.row().classes('w-full items-center'):
             page_title('Documenten')
-            progress_badge = ui.badge('0/0', color='primary').classes('text-sm')
-            ui.space()
+            progress_badge = ui.badge('0/0', color='primary').classes('text-sm q-ml-md')
+
+        # Filter bar
+        with ui.element('div').classes('page-toolbar w-full'):
             jaar_select = ui.select(
                 year_options(as_dict=True),
                 value=huidig_jaar, label='Jaar',
-            ).classes('w-32')
+            ).classes('w-28')
 
         # Upload drop zone
         with ui.card().classes('w-full'):
@@ -157,7 +159,9 @@ async def documenten_page():
                 ui.html(
                     f'<iframe src="{url}" '
                     f'style="width:100%;height:70vh;border:none;'
-                    f'border-radius:8px;"></iframe>')
+                    f'border-radius:8px;"></iframe>',
+                    sanitize=False,
+                )
             elif ext in ('.jpg', '.jpeg', '.png', '.gif'):
                 ui.image(url).classes('w-full')
             else:

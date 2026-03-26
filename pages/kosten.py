@@ -913,14 +913,33 @@ async def kosten_page():
 
     with ui.column().classes('w-full p-6 max-w-7xl mx-auto gap-6'):
 
-        # --- Header + filter row ---
-        with ui.row().classes('w-full items-center gap-4'):
+        # Header row: title + primary action
+        with ui.row().classes('w-full items-center'):
             page_title('Kosten')
             ui.space()
+            ui.button(
+                'Importeer', icon='folder_open',
+                on_click=lambda: open_import_dialog(),
+            ).props('flat color=secondary dense')
+            ui.button(
+                'Nieuwe uitgave', icon='add',
+                on_click=lambda: open_add_uitgave_dialog(),
+            ).props('color=primary')
+
+        # Filter bar
+        with ui.element('div').classes('page-toolbar w-full'):
             jaar_select = ui.select(
                 {j: str(j) for j in jaren},
                 label='Jaar', value=huidig_jaar,
-            ).classes('w-32')
+            ).classes('w-28')
+
+            cat_opties = {'': 'Alle'}
+            cat_opties.update({c: c for c in CATEGORIEEN})
+            cat_select = ui.select(
+                cat_opties, label='Categorie', value='',
+            ).classes('w-44')
+
+            ui.space()
 
             async def export_csv_kosten():
                 uitgaven = await get_uitgaven(
@@ -936,24 +955,10 @@ async def kosten_page():
                     csv_str.encode('utf-8-sig'),
                     f'kosten_{filter_jaar["value"]}.csv')
 
-            ui.button('CSV', icon='download',
-                      on_click=export_csv_kosten).props('outline color=primary')
-
-            cat_opties = {'': 'Alle'}
-            cat_opties.update({c: c for c in CATEGORIEEN})
-            cat_select = ui.select(
-                cat_opties, label='Categorie', value='',
-            ).classes('w-48')
-
-            ui.button(
-                'Importeer uitgaven', icon='folder_open',
-                on_click=lambda: open_import_dialog(),
-            ).props('outline color=primary')
-
-            ui.button(
-                'Nieuwe uitgave', icon='add',
-                on_click=lambda: open_add_uitgave_dialog(),
-            ).props('color=primary')
+            ui.button(icon='download',
+                      on_click=export_csv_kosten) \
+                .props('flat round color=secondary size=sm') \
+                .tooltip('Exporteer CSV')
 
             async def on_filter_change():
                 filter_jaar['value'] = jaar_select.value

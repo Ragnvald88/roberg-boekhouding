@@ -21,14 +21,16 @@ async def omzet_detail_page():
 
     with ui.column().classes('w-full p-6 max-w-7xl mx-auto gap-6'):
 
-        with ui.row().classes('w-full items-center gap-4'):
+        page_title('Omzet per klant')
+
+        # Unified toolbar
+        with ui.element('div').classes('page-toolbar w-full'):
             ui.button(icon='arrow_back',
-                      on_click=lambda: ui.navigate.to('/')).props('flat round')
-            page_title('Omzet per klant')
-            ui.space()
+                      on_click=lambda: ui.navigate.to('/')) \
+                .props('flat round color=secondary')
             jaar_select = ui.select(
                 jaren, value=huidig_jaar, label='Jaar',
-            ).classes('w-32')
+            ).classes('w-28')
 
         content_container['ref'] = ui.column().classes('w-full gap-4')
 
