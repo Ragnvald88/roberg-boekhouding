@@ -28,6 +28,7 @@ DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib .venv/bin/python -m pytest tests/ -
 - **Connection pattern**: `async with get_db_ctx(db_path) as conn:`
 - `werkdagen.status` CHECK: `('ongefactureerd', 'gefactureerd', 'betaald')`
 - `facturen.status` TEXT: `'concept'`, `'verstuurd'`, `'betaald'` (migration 14)
+- `facturen.type` TEXT: `'factuur'` (werkdag-backed), `'anw'` (imported ANW), `'vergoeding'` (ad-hoc, no werkdagen) (migration 21)
 - `klanten.email` TEXT (migration 15)
 - `banktransacties.betalingskenmerk` TEXT (migration 13)
 - SQLite op lokaal filesystem, NIET via SMB (WAL faalt)
