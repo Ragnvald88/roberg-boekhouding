@@ -185,7 +185,7 @@ async def facturen_page():
         table = ui.table(
             columns=columns, rows=[], row_key='id',
             selection='multiple',
-            pagination={'rowsPerPage': 20, 'sortBy': 'nummer', 'descending': True,
+            pagination={'rowsPerPage': 20, 'sortBy': 'datum', 'descending': True,
                         'rowsPerPageOptions': [10, 20, 50, 0]},
         ).classes('w-full')
         table_ref['ref'] = table
