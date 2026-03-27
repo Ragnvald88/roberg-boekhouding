@@ -2,7 +2,10 @@
 
 import csv
 import io
+import logging
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 
 def parse_rabobank_csv(file_content: bytes) -> list[dict]:
@@ -33,11 +36,14 @@ def parse_rabobank_csv(file_content: bytes) -> list[dict]:
 
     reader = csv.DictReader(io.StringIO(text), delimiter=sep)
     transactions = []
+    skipped = 0
 
     for row in reader:
         # Parse date (YYYY-MM-DD or DD-MM-YYYY)
         datum_str = row.get('Datum', '').strip().strip('"')
         if not datum_str:
+            skipped += 1
+            logger.warning("Rij overgeslagen: lege datum")
             continue
 
         datum = None
@@ -49,6 +55,8 @@ def parse_rabobank_csv(file_content: bytes) -> list[dict]:
                 continue
 
         if datum is None:
+            skipped += 1
+            logger.warning("Rij overgeslagen: ongeldig datumformaat %r", datum_str)
             continue
 
         # Amount: Dutch formatting uses dot for thousands, comma for decimal
@@ -58,6 +66,8 @@ def parse_rabobank_csv(file_content: bytes) -> list[dict]:
         try:
             bedrag = float(bedrag_str)
         except ValueError:
+            skipped += 1
+            logger.warning("Rij overgeslagen: ongeldig bedrag %r op datum %s", row.get('Bedrag', ''), datum_str)
             continue
 
         # Merge description fields (Rabobank splits over 3 columns)
@@ -87,5 +97,8 @@ def parse_rabobank_csv(file_content: bytes) -> list[dict]:
             'omschrijving': omschrijving,
             'betalingskenmerk': betalingskenmerk,
         })
+
+    if skipped > 0:
+        logger.warning("%d rijen overgeslagen bij import", skipped)
 
     return transactions

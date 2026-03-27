@@ -207,16 +207,16 @@ KLANT_LOCATIES = {
     'HAP MiddenLand': [
         ('Assen', 60), ('Hoogeveen', 128), ('Emmen', 102),
     ],
-    'Praktijk K2': [('Vlagtwedde', 108)],
+    'Klant2': [('Vlagtwedde', 108)],
     "Praktijk K6": [('Marum', 54)],
     'K. Klant7': [('Marum', 54)],
-    'Praktijk K14': [('Winsum', 44)],
+    'HAP K14': [('Winsum', 44)],
     'Praktijk K10': [('Smilde', 78)],
     'Praktijk K11': [('Marum', 40)],
     'Praktijk K12': [('Marum', 54)],
     'Praktijk K13': [('De Wilp', 46)],
     'Praktijk K9': [('Sellingen', 92)],
-    'Klant8': [('Marum', 54)],
+    'K. Klant8': [('Marum', 54)],
 }
 
 

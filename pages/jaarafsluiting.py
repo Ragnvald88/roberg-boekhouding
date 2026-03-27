@@ -4,7 +4,7 @@ import asyncio
 from datetime import date
 from pathlib import Path
 
-from jinja2 import Environment, FileSystemLoader
+from jinja2 import Environment, FileSystemLoader, select_autoescape
 from nicegui import ui
 
 from components.fiscal_utils import bereken_balans, fetch_fiscal_data
@@ -804,7 +804,7 @@ def _render_pdf_html(jaar, data, balans, winst, vorig_jaar_balans,
     """Render the jaarcijfers PDF HTML — pure business report."""
     env = Environment(
         loader=FileSystemLoader(str(Path(__file__).parent.parent / 'templates')),
-        autoescape=False
+        autoescape=select_autoescape(['html']),
     )
 
     def euro_filter(value):
