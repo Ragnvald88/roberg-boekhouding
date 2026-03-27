@@ -725,3 +725,59 @@ async def test_openstaande_facturen_includes_vergoedingen(db):
     assert "2026-100" not in nummers  # betaald excluded
 
 
+# ============================================================
+# Task 1: Concept facturen exclusion
+# ============================================================
+
+@pytest.mark.asyncio
+async def test_debiteuren_peildatum_excludes_concept(db):
+    """Concept facturen should NOT appear in debiteuren (receivables)."""
+    kid = await add_klant(db, naam="Test", tarief_uur=80)
+    # Verstuurd → IS a receivable
+    await add_factuur(db, nummer="2026-D01", klant_id=kid,
+                      datum="2026-11-15", totaal_bedrag=1000, status='verstuurd')
+    # Concept → should NOT be a receivable
+    await add_factuur(db, nummer="2026-D02", klant_id=kid,
+                      datum="2026-12-01", totaal_bedrag=500, status='concept')
+    result = await get_debiteuren_op_peildatum(db, peildatum='2026-12-31')
+    assert result == 1000.0  # only the verstuurd one
+
+
+@pytest.mark.asyncio
+async def test_find_matches_excludes_concept(db):
+    """Concept facturen should NOT be candidates for bank matching."""
+    kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=0)
+    # Concept factuur — should NOT be matched
+    await add_factuur(db, nummer='2026-C01', klant_id=kid,
+                       datum='2026-01-15', totaal_uren=8, totaal_km=0,
+                       totaal_bedrag=640.00, status='concept')
+    # Verstuurd factuur — should be matched
+    await add_factuur(db, nummer='2026-S01', klant_id=kid,
+                       datum='2026-01-15', totaal_uren=8, totaal_km=0,
+                       totaal_bedrag=640.00, status='verstuurd')
+    await add_banktransacties(db, [
+        {'datum': '2026-01-20', 'bedrag': 640.00, 'tegenpartij': 'Test BV',
+         'omschrijving': '2026-C01 payment', 'categorie': ''},
+        {'datum': '2026-01-21', 'bedrag': 640.00, 'tegenpartij': 'Test BV',
+         'omschrijving': '2026-S01 payment', 'categorie': ''},
+    ], csv_bestand='test.csv')
+
+    matches = await find_factuur_matches(db)
+    # Only verstuurd should match, not concept
+    assert len(matches) == 1
+    assert matches[0]['factuur_nummer'] == '2026-S01'
+
+
+@pytest.mark.asyncio
+async def test_omzet_excludes_concept_regression(db):
+    """Regression: get_omzet_totaal must exclude concept facturen."""
+    kid = await add_klant(db, naam="Test", tarief_uur=80)
+    await add_factuur(db, nummer="2026-R01", klant_id=kid,
+                      datum="2026-01-15", totaal_bedrag=1000, status='verstuurd')
+    await add_factuur(db, nummer="2026-R02", klant_id=kid,
+                      datum="2026-02-15", totaal_bedrag=500, status='concept')
+    assert await get_omzet_totaal(db, jaar=2026) == 1000  # concept excluded
+
+
+
+

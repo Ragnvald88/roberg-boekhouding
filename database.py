@@ -1945,6 +1945,7 @@ async def get_debiteuren_op_peildatum(db_path: Path = DB_PATH,
         cursor = await conn.execute(
             """SELECT COALESCE(SUM(totaal_bedrag), 0) FROM facturen
                WHERE datum <= ?
+                 AND status != 'concept'
                  AND (
                      status != 'betaald'
                      OR (status = 'betaald' AND betaald_datum != '' AND betaald_datum > ?)
@@ -1969,7 +1970,7 @@ async def find_factuur_matches(db_path: Path = DB_PATH) -> list[dict]:
     async with get_db_ctx(db_path) as conn:
         cur = await conn.execute(
             """SELECT id, nummer, datum, totaal_bedrag FROM facturen
-               WHERE status IN ('verstuurd', 'concept') ORDER BY datum""")
+               WHERE status = 'verstuurd' ORDER BY datum""")
         open_facturen = await cur.fetchall()
         if not open_facturen:
             return []
