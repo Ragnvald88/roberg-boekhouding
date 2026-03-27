@@ -2044,7 +2044,7 @@ class TestIBBracketBoundary:
     """Test IB calculation at exact bracket boundaries."""
 
     def test_income_exactly_at_schijf1_grens_2024(self):
-        """Income exactly at schijf1_grens should have zero schijf3 tax.
+        """Income exactly at schijf1_grens should have zero schijf2 tax.
 
         With omzet=75518 (= schijf1_grens for 2024), after ZA + MKB deductions
         the belastbare_winst (and thus verzamelinkomen) will be well below 75518.

@@ -28,6 +28,9 @@ def extract_pdf_text(pdf_path: Path) -> str:
         raise RuntimeError(
             'pdftotext niet gevonden — installeer poppler '
             '(brew install poppler)')
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(
+            'pdftotext timeout na 30 seconden — bestand mogelijk corrupt')
     if result.returncode != 0:
         stderr = result.stderr.strip()
         raise RuntimeError(f'pdftotext fout: {stderr or "onbekend"}')
