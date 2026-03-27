@@ -626,8 +626,11 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None):
                 _qr_upload.style(
                     'visibility: hidden; height: 0; overflow: hidden')
 
-                def _pick_qr():
-                    _qr_upload.run_method('pickFiles')
+                # Use JS handler to preserve user gesture context
+                # (Python round-trip loses it → browser blocks file dialog)
+                _pick_qr_js = (
+                    f'() => getElement({_qr_upload.id})'
+                    f'.$refs.qRef.pickFiles()')
 
                 def _render_qr_card(exists: bool):
                     qr_container.clear()
@@ -644,15 +647,15 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None):
                                         'text-body2 text-weight-medium')
                                     ui.label('Wordt getoond op factuur').classes(
                                         'text-caption text-grey-6')
-                                ui.button('Vervangen', icon='swap_horiz',
-                                          on_click=_pick_qr) \
+                                ui.button('Vervangen', icon='swap_horiz') \
+                                    .on('click', js_handler=_pick_qr_js) \
                                     .props('flat dense color=primary size=sm')
                         else:
                             with ui.element('div').classes('w-full') \
                                     .style('padding: 16px; border: 2px dashed #CBD5E1; '
                                            'border-radius: 10px; text-align: center; '
                                            'cursor: pointer') \
-                                    .on('click', _pick_qr):
+                                    .on('click', js_handler=_pick_qr_js):
                                 ui.icon('qr_code_2', size='28px').classes('text-grey-4')
                                 ui.label('Betaal QR-code toevoegen').classes(
                                     'text-body2 text-grey-5 q-mt-xs')
