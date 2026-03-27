@@ -827,3 +827,37 @@ async def test_apply_matches_only_verstuurd(db):
         assert (await cur.fetchone())['status'] == 'betaald'  # changed!
 
 
+# ============================================================
+# get_kpis — concept exclusion
+# ============================================================
+
+@pytest.mark.asyncio
+async def test_kpis_omzet_excludes_concept(db):
+    """KPI omzet must exclude concept invoices."""
+    klant_id = await add_klant(db, naam='Test Klant')
+    await add_factuur(db, nummer='2024-001', klant_id=klant_id,
+                      datum='2024-03-01', totaal_bedrag=5000.00,
+                      status='verstuurd')
+    await add_factuur(db, nummer='2024-002', klant_id=klant_id,
+                      datum='2024-04-01', totaal_bedrag=1000.00,
+                      status='concept')
+    kpis = await get_kpis(db, jaar=2024)
+    assert kpis['omzet'] == 5000.00, f"Concept should be excluded from KPI omzet, got {kpis['omzet']}"
+
+
+# ============================================================
+# Duplicate factuurnummer rejection
+# ============================================================
+
+@pytest.mark.asyncio
+async def test_duplicate_factuurnummer_rejected(db):
+    """Inserting a duplicate factuurnummer should raise an error."""
+    import sqlite3
+    klant_id = await add_klant(db, naam='Test Klant')
+    await add_factuur(db, nummer='2024-001', klant_id=klant_id,
+                      datum='2024-01-01', totaal_bedrag=100.00)
+    with pytest.raises(sqlite3.IntegrityError):
+        await add_factuur(db, nummer='2024-001', klant_id=klant_id,
+                          datum='2024-02-01', totaal_bedrag=200.00)
+
+

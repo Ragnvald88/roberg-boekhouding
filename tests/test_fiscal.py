@@ -2040,6 +2040,36 @@ class TestPartnerAHK:
         assert result.partner_ahk == 0.0
 
 
+class TestIBBracketBoundary:
+    """Test IB calculation at exact bracket boundaries."""
+
+    def test_income_exactly_at_schijf1_grens_2024(self):
+        """Income exactly at schijf1_grens should have zero schijf3 tax.
+
+        With omzet=75518 (= schijf1_grens for 2024), after ZA + MKB deductions
+        the belastbare_winst (and thus verzamelinkomen) will be well below 75518.
+        All income stays in schijf1, so bruto_ib = verzamelinkomen * schijf1_pct/100
+        plus tariefsaanpassing (which should be 0 since fiscale_winst < grens).
+        """
+        params = FISCALE_PARAMS[2024]
+        # 2024 schijf1_grens = schijf2_grens = 75518
+        result = bereken_volledig(
+            omzet=75518, kosten=0, afschrijvingen=0,
+            representatie=0, investeringen_totaal=0,
+            uren=1400, params=params,
+        )
+        # After ZA (~5030) + MKB (~13.31%), belastbare_winst should be well under 75518
+        assert result.belastbare_winst < params['schijf1_grens'], \
+            f"belastbare_winst {result.belastbare_winst} should be under schijf1_grens {params['schijf1_grens']}"
+        # verzamelinkomen is under grens, so all in schijf1
+        assert result.verzamelinkomen < params['schijf1_grens']
+        # tariefsaanpassing should be 0 (no income in top bracket to adjust)
+        assert result.tariefsaanpassing == 0
+        # bruto_ib should equal verzamelinkomen * schijf1_pct / 100
+        expected_ib = round(result.verzamelinkomen * params['schijf1_pct'] / 100, 2)
+        assert abs(result.bruto_ib - expected_ib) < 1
+
+
 class TestMissingParamsValidation:
     """Validation of required fiscal params."""
 
