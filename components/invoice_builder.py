@@ -95,7 +95,7 @@ def _build_regels(line_items: list[dict]) -> list[dict]:
         # Split km into separate reiskosten regel for PDF
         km = li.get('km', 0) or 0
         km_tarief = li.get('km_tarief', 0) or 0
-        if km > 0:
+        if km > 0 and km_tarief > 0:
             regels.append({
                 'datum': li.get('datum', ''),
                 'omschrijving': li.get('km_omschrijving', 'Reiskosten'),
@@ -322,7 +322,7 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None):
                                 continue
                             n = len(wds)
                             bedrag = sum(
-                                w.uren * w.tarief + w.km * w.km_tarief
+                                (w.uren or 0) * (w.tarief or 0) + (w.km or 0) * (w.km_tarief or 0)
                                 for w in wds)
                             label = (f'1 dag' if n == 1
                                      else f'{n} dagen')

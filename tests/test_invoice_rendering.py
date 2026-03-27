@@ -322,6 +322,22 @@ def test_subtotal_missing_flag_defaults_to_werk():
     assert subtotaal_km == 0
 
 
+def test_no_reiskosten_line_when_km_tarief_zero():
+    """ANW diensten have km tracked but km_tarief=0 — no reiskosten line."""
+    line_items = [{
+        'datum': '2024-01-15',
+        'omschrijving': 'ANW dienst',
+        'aantal': 8.0,
+        'tarief': 65.0,
+        'km': 50,
+        'km_tarief': 0,
+        'km_omschrijving': 'Reiskosten',
+    }]
+    regels = _build_regels(line_items)
+    assert len(regels) == 1, f"Expected 1 regel (no km line), got {len(regels)}"
+    assert regels[0]['bedrag'] == 520.00
+
+
 def test_werkdagen_to_items_subtotal_integration():
     """End-to-end: werkdagen → line_items → _build_regels → correct subtotals."""
     wds = [

@@ -69,7 +69,7 @@ def generate_invoice(factuur_nummer: str, klant: dict, werkdagen: list[dict],
 
             km = wd.get('km', 0) or 0
             km_tarief = wd.get('km_tarief', 0.23)
-            if km > 0:
+            if km > 0 and km_tarief > 0:
                 km_bedrag = km * km_tarief
                 locatie = wd.get('locatie', '')
                 thuisplaats = bedrijfsgegevens.get('thuisplaats', '')
