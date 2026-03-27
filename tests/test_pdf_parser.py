@@ -29,6 +29,18 @@ class TestParseDutchAmount:
     def test_whitespace(self):
         assert parse_dutch_amount('  1.278,48  ') == 1278.48
 
+    def test_empty_string(self):
+        assert parse_dutch_amount('') == 0.0
+
+    def test_dot_only(self):
+        assert parse_dutch_amount('.') == 0.0
+
+    def test_comma_only(self):
+        assert parse_dutch_amount(',') == 0.0
+
+    def test_garbage(self):
+        assert parse_dutch_amount('abc') == 0.0
+
 
 # ── Date parsing ────────────────────────────────────────────────────
 

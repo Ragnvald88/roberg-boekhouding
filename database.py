@@ -1264,7 +1264,7 @@ async def get_va_betalingen(db_path: Path = DB_PATH, jaar: int = 0) -> dict:
     unmatched = 0.0
 
     for amount, kenmerk in rows:
-        if kenmerk and len(kenmerk) >= 12:
+        if kenmerk and len(kenmerk) >= 12 and kenmerk[10:12].isdigit():
             year_type_digits = int(kenmerk[10:12])
             if year_type_digits >= 50:
                 zvw_betaald += amount

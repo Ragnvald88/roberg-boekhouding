@@ -22,7 +22,7 @@ def extract_pdf_text(pdf_path: Path) -> str:
     try:
         result = subprocess.run(
             ['pdftotext', '-layout', str(pdf_path), '-'],
-            capture_output=True, text=True,
+            capture_output=True, text=True, timeout=30,
         )
     except FileNotFoundError:
         raise RuntimeError(
@@ -40,6 +40,8 @@ def parse_dutch_amount(s: str) -> float:
     Examples: '1.234,56' → 1234.56, '639,24' → 639.24, '9.24' → 9.24
     """
     s = s.strip()
+    if not s:
+        return 0.0
     # Remove thousands separators (dots followed by 3 digits)
     # But keep decimal separator (comma)
     # Pattern: dots that are thousands separators have 3 digits after them
@@ -52,7 +54,10 @@ def parse_dutch_amount(s: str) -> float:
         # e.g., '1.234' = 1234, but '9.24' = 9.24 (decimal)
         if re.match(r'^\d{1,3}(\.\d{3})+$', s):
             s = s.replace('.', '')
-    return float(s)
+    try:
+        return float(s)
+    except (ValueError, TypeError):
+        return 0.0
 
 
 def parse_dutch_date(s: str) -> str:
