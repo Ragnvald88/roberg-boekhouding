@@ -1,21 +1,23 @@
-"""Dashboard pagina — KPIs, omzetgrafiek en kostenverdeling."""
+"""Dashboard pagina — hero KPIs, sparklines, contextual alerts."""
 
+import asyncio
 from datetime import date, datetime
 
 from nicegui import ui
 
 from components.charts import cost_donut_chart, revenue_bar_chart
-from components.kpi_card import kpi_card
-from components.layout import create_layout
-from components.utils import format_euro, format_datum
+from components.layout import create_layout, page_title
+from components.utils import format_euro
 from database import (
-    get_kpis, get_omzet_per_maand, get_uitgaven_per_categorie,
-    get_recente_facturen, get_openstaande_facturen, get_factuur_count,
+    get_kpis, get_kpis_tot_datum, get_omzet_per_maand,
+    get_uitgaven_per_categorie, get_openstaande_facturen,
     get_werkdagen_ongefactureerd_summary, get_km_totaal,
-    get_fiscale_params,
-    DB_PATH,
+    get_fiscale_params, get_aangifte_documenten,
+    get_va_betalingen, DB_PATH,
 )
-from components.fiscal_utils import fetch_fiscal_data
+from components.document_specs import AANGIFTE_DOCS
+from components.fiscal_utils import fetch_fiscal_data, extrapoleer_jaaromzet
+from components.shared_ui import year_options
 from fiscal.berekeningen import bereken_volledig
 
 URENCRITERIUM_DEFAULT = 1225
@@ -26,273 +28,583 @@ async def dashboard_page():
     create_layout('Dashboard', '/')
 
     huidig_jaar = date.today().year
-    jaren = {y: str(y) for y in range(huidig_jaar + 1, 2022, -1)}
-
-    kpi_container = {'ref': None}
-    chart_container = {'ref': None}
+    jaren = year_options(as_dict=True)
 
     with ui.column().classes('w-full p-6 max-w-7xl mx-auto gap-6'):
 
-        # Year selector
-        with ui.row().classes('w-full items-center gap-4'):
-            ui.label('Overzicht').classes('text-h5') \
-                .style('color: #0F172A; font-weight: 700')
+        # Header row: title + shortcuts
+        with ui.row().classes('w-full items-center'):
+            page_title('Overzicht')
             ui.space()
+            ui.button('Werkdag', icon='add',
+                      on_click=lambda: ui.navigate.to('/werkdagen')) \
+                .props('flat color=secondary dense')
+            ui.button('Factuur', icon='add',
+                      on_click=lambda: ui.navigate.to('/facturen')) \
+                .props('flat color=secondary dense')
+
+        # Filter bar
+        with ui.element('div').classes('page-toolbar w-full'):
             jaar_select = ui.select(
                 jaren, value=huidig_jaar, label='Jaar',
-            ).classes('w-32')
+            ).classes('w-28')
 
-        # KPI cards
-        kpi_container['ref'] = ui.column().classes('w-full gap-4')
-
-        # Charts
-        chart_container['ref'] = ui.column().classes('w-full gap-4')
-
-        # Quick actions
-        with ui.row().classes('w-full gap-3'):
-            ui.button(
-                'Werkdag toevoegen', icon='add_circle',
-                on_click=lambda: ui.navigate.to('/werkdagen'),
-            ).props('outline color=primary')
-            ui.button(
-                'Nieuwe factuur', icon='receipt_long',
-                on_click=lambda: ui.navigate.to('/facturen'),
-            ).props('outline color=primary')
+        # Content container (filled by refresh_dashboard)
+        content_container = {'ref': None}
+        content_container['ref'] = ui.column().classes('w-full gap-5')
 
     def _yoy_delta(current: float, previous: float) -> float | None:
         """Calculate YoY delta percentage. Returns None if no previous data."""
-        if previous and previous > 0:
+        if previous is not None and previous != 0:
             return (current - previous) / previous * 100
         return None
 
-    async def _compute_ib_estimate(jaar: int) -> float | None:
-        """Compute estimated IB resultaat using shared fiscal data fetcher."""
+    async def _compute_ib_estimate(jaar: int) -> dict | None:
+        """Compute IB estimate based on BUSINESS data only.
+
+        Dashboard = business performance. Personal deductions (hypotheek, WOZ,
+        AOV, lijfrente) belong on the Aangifte page. The VA beschikking from BD
+        already includes those deductions, so the bij/terug comparison still works.
+        """
         data = await fetch_fiscal_data(DB_PATH, jaar)
         if data is None:
             return None
-        f = bereken_volledig(
-            omzet=data['omzet'], kosten=data['kosten_excl_inv'],
-            afschrijvingen=data['totaal_afschrijvingen'],
-            representatie=data['representatie'],
-            investeringen_totaal=data['inv_totaal_dit_jaar'],
-            uren=data['uren'], params=data['params_dict'],
-            aov=data['aov'], lijfrente=data.get('lijfrente', 0),
-            woz=data['woz'],
-            hypotheekrente=data['hypotheekrente'],
-            voorlopige_aanslag=data['voorlopige_aanslag'],
-            voorlopige_aanslag_zvw=data['voorlopige_aanslag_zvw'],
-            ew_naar_partner=data['ew_naar_partner'],
-        )
-        return f.resultaat
+
+        try:
+            huidig_jaar = date.today().year
+            annual_va_ib = data['voorlopige_aanslag']
+            annual_va_zvw = data['voorlopige_aanslag_zvw']
+
+            if jaar == huidig_jaar:
+                month = date.today().month
+
+                # Extrapolate income
+                projection = await extrapoleer_jaaromzet(DB_PATH, jaar)
+                complete_months = projection['basis_maanden'] or 1
+                kosten_factor = 12 / complete_months
+
+                omzet = projection['extrapolated_omzet']
+                kosten = data['kosten_excl_inv'] * kosten_factor
+                repr_ = data['representatie'] * kosten_factor
+                uren = data['uren'] * kosten_factor
+
+                # Prorate VA for "how much have I paid so far"
+                va_ib_ytd = round(annual_va_ib * month / 12, 2)
+                va_zvw_ytd = round(annual_va_zvw * month / 12, 2)
+            else:
+                omzet = data['omzet']
+                kosten = data['kosten_excl_inv']
+                repr_ = data['representatie']
+                uren = data['uren']
+                va_ib_ytd = annual_va_ib
+                va_zvw_ytd = annual_va_zvw
+                month = 12
+                projection = {
+                    'confidence': 'high',
+                    'basis_maanden': 12,
+                    'extrapolated_omzet': omzet,
+                    'ytd_omzet': omzet,
+                }
+
+            # Business-only calculation — NO personal deductions
+            f = bereken_volledig(
+                omzet=omzet, kosten=kosten,
+                afschrijvingen=data['totaal_afschrijvingen'],
+                representatie=repr_,
+                investeringen_totaal=data['inv_totaal_dit_jaar'],
+                uren=uren, params=data['params_dict'],
+                aov=0, lijfrente=0,       # personal -> Aangifte
+                woz=0, hypotheekrente=0,  # personal -> Aangifte
+                voorlopige_aanslag=annual_va_ib,
+                voorlopige_aanslag_zvw=annual_va_zvw,
+                ew_naar_partner=True,
+            )
+
+            ytd_winst = (data['omzet'] - data['kosten_excl_inv']
+                         - data['totaal_afschrijvingen'])
+
+            return {
+                'resultaat': f.resultaat,
+                'netto_ib': f.netto_ib,
+                'zvw': f.zvw,
+                'winst': f.winst,
+                'ytd_winst': ytd_winst,
+                'va_ib_betaald': va_ib_ytd,
+                'va_zvw_betaald': va_zvw_ytd,
+                'prorated': jaar == huidig_jaar,
+                'month': month,
+                'confidence': projection['confidence'],
+                'basis_maanden': projection['basis_maanden'],
+            }
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            return None
+
+    def _render_delta_badge(delta_pct: float):
+        """Render YoY delta pill badge."""
+        color = '#059669' if delta_pct >= 0 else '#DC2626'
+        bg = '#ECFDF5' if delta_pct >= 0 else '#FEF2F2'
+        arrow = '\u2191' if delta_pct >= 0 else '\u2193'
+        sign = '+' if delta_pct > 0 else ''
+        ui.label(f'{arrow} {sign}{delta_pct:.0f}%').style(
+            f'font-size: 12px; font-weight: 600; color: {color}; '
+            f'background: {bg}; padding: 2px 8px; border-radius: 10px')
+
+    def _render_sparkline(monthly_data: list[float], color: str):
+        """Render an ECharts mini sparkline inside a KPI card."""
+        months = ['J', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D']
+        ui.echart({
+            'grid': {'top': 0, 'bottom': 0, 'left': 0, 'right': 0},
+            'xAxis': {'show': False, 'type': 'category', 'data': months},
+            'yAxis': {'show': False, 'type': 'value', 'min': 0},
+            'series': [{
+                'type': 'line', 'data': monthly_data, 'smooth': True,
+                'symbol': 'none',
+                'lineStyle': {'width': 2, 'color': color},
+                'areaStyle': {
+                    'color': {
+                        'type': 'linear', 'x': 0, 'y': 0, 'x2': 0, 'y2': 1,
+                        'colorStops': [
+                            {'offset': 0, 'color': f'{color}20'},
+                            {'offset': 1, 'color': f'{color}00'},
+                        ],
+                    },
+                },
+            }],
+            'tooltip': {'show': False},
+        }).style('height: 36px; width: 100%; margin-top: 14px')
 
     async def refresh_dashboard():
         jaar = jaar_select.value
-        kpis = await get_kpis(DB_PATH, jaar=jaar)
-        kpis_vorig = await get_kpis(DB_PATH, jaar=jaar - 1)
-        omzet_huidig = await get_omzet_per_maand(DB_PATH, jaar=jaar)
-        omzet_vorig = await get_omzet_per_maand(DB_PATH, jaar=jaar - 1)
-        kosten_per_cat = await get_uitgaven_per_categorie(DB_PATH, jaar=jaar)
-        recente = await get_recente_facturen(DB_PATH, limit=5)
-        openstaande = await get_openstaande_facturen(DB_PATH, jaar=jaar)
-        factuur_count = await get_factuur_count(DB_PATH, jaar=jaar)
-        ongefact = await get_werkdagen_ongefactureerd_summary(DB_PATH, jaar=jaar)
-        km_data = await get_km_totaal(DB_PATH, jaar=jaar)
-        ib_resultaat = await _compute_ib_estimate(jaar)
 
-        # Read urencriterium from DB (fall back to default)
-        fp = await get_fiscale_params(DB_PATH, jaar)
+        # Run all independent DB calls concurrently
+        (kpis, kpis_vorig, omzet_huidig, omzet_vorig, kosten_per_cat,
+         openstaande, ongefact, km_data,
+         ib_resultaat, fp, va_data) = await asyncio.gather(
+            get_kpis(DB_PATH, jaar=jaar),
+            get_kpis(DB_PATH, jaar=jaar - 1),
+            get_omzet_per_maand(DB_PATH, jaar=jaar),
+            get_omzet_per_maand(DB_PATH, jaar=jaar - 1),
+            get_uitgaven_per_categorie(DB_PATH, jaar=jaar),
+            get_openstaande_facturen(DB_PATH, jaar=jaar),
+            get_werkdagen_ongefactureerd_summary(DB_PATH, jaar=jaar),
+            get_km_totaal(DB_PATH, jaar=jaar),
+            _compute_ib_estimate(jaar),
+            get_fiscale_params(DB_PATH, jaar),
+            get_va_betalingen(DB_PATH, jaar),
+        )
+
         uren_criterium = int(fp.urencriterium) if fp else URENCRITERIUM_DEFAULT
 
-        # KPI cards
-        kpi_row = kpi_container['ref']
-        kpi_row.clear()
-        with kpi_row:
-            # Row 1: Revenue KPIs
-            with ui.row().classes('w-full gap-4 flex-wrap'):
-                kpi_card('Bruto omzet', format_euro(kpis['omzet']),
-                         'trending_up', '#0F766E',
-                         on_click=lambda: ui.navigate.to('/werkdagen'),
-                         delta_pct=_yoy_delta(kpis['omzet'],
-                                              kpis_vorig['omzet']))
+        # For YoY delta: compare exact same calendar period
+        huidig_jaar = date.today().year
+        if jaar == huidig_jaar:
+            # Compare up to today's date in previous year (day-precise)
+            vandaag = date.today().isoformat()
+            vorig_datum = f'{jaar - 1}-{vandaag[5:]}'  # same MM-DD
+            vorig_ytd = await get_kpis_tot_datum(
+                DB_PATH, jaar=jaar - 1, max_datum=vorig_datum)
+            vorig_ytd_omzet = vorig_ytd['omzet']
+            vorig_ytd_kosten = vorig_ytd['kosten']
+        else:
+            vorig_ytd_omzet = kpis_vorig['omzet']
+            vorig_ytd_kosten = kpis_vorig['kosten']
 
-                openstaand_count = len(openstaande)
-                openstaand_label = (f"{openstaand_count} ({format_euro(kpis['openstaand'])})"
-                                    if openstaand_count > 0 else "0")
-                kpi_card('Openstaand', openstaand_label,
-                         'pending',
-                         '#D97706' if openstaand_count > 0 else '#059669',
-                         on_click=lambda: ui.navigate.to('/facturen'))
+        # Render into content container
+        container = content_container['ref']
+        container.clear()
+        with container:
 
-                resultaat = kpis['winst']
-                kpi_card('Resultaat', format_euro(resultaat),
-                         'account_balance',
-                         '#059669' if resultaat >= 0 else '#DC2626',
-                         delta_pct=_yoy_delta(kpis['winst'],
-                                              kpis_vorig['winst']))
+            # === HERO KPI CARDS ===
+            with ui.element('div').style(
+                    'display: grid; grid-template-columns: repeat(3, 1fr); '
+                    'gap: 20px; align-items: stretch'):
 
-            # Row 2: Operations KPIs
-            with ui.row().classes('w-full gap-4 flex-wrap'):
-                kpi_card('Bedrijfslasten', format_euro(kpis['kosten']),
-                         'payments', '#D97706',
-                         on_click=lambda: ui.navigate.to('/kosten'),
-                         delta_pct=_yoy_delta(kpis['kosten'],
-                                              kpis_vorig['kosten']))
+                # Card 1: Bruto omzet
+                with ui.card().classes('q-pa-lg card-hero') \
+                        .style('cursor: pointer') \
+                        .on('click', lambda: ui.navigate.to('/werkdagen')):
+                    with ui.row().classes('w-full justify-between items-center'):
+                        ui.label('Bruto omzet').classes('hero-label')
+                        delta = _yoy_delta(kpis['omzet'], vorig_ytd_omzet)
+                        if delta is not None:
+                            _render_delta_badge(delta)
+                    ui.label(format_euro(kpis['omzet'], decimals=0)).classes(
+                        'hero-value')
+                    if vorig_ytd_omzet > 0:
+                        ui.label(
+                            f'vs {format_euro(vorig_ytd_omzet, decimals=0)} '
+                            f'vorig jaar'
+                        ).classes('context-text')
+                    # Sparkline
+                    if any(v > 0 for v in omzet_huidig):
+                        _render_sparkline(omzet_huidig, '#0F766E')
 
-                # Urencriterium with progress
-                uren = kpis['uren']
-                uren_voldaan = uren >= uren_criterium
-                uren_hex = '#059669' if uren_voldaan else '#D97706'
-                uren_pct = min(uren / uren_criterium, 1.0) if uren_criterium > 0 else 0
+                # Card 2: Bedrijfswinst
+                ytd_winst = ib_resultaat['ytd_winst'] if ib_resultaat else (
+                    kpis['omzet'] - kpis['kosten'])
+                vorig_winst = vorig_ytd_omzet - vorig_ytd_kosten
 
-                def uren_extra():
-                    ui.linear_progress(
-                        value=uren_pct,
-                        color='positive' if uren_voldaan else 'warning',
-                    ).classes('w-full q-mt-sm').props('rounded size=8px')
+                with ui.card().classes('q-pa-lg card-hero'):
+                    with ui.row().classes('w-full justify-between items-center'):
+                        ui.label('Bedrijfswinst').classes('hero-label')
+                        delta = _yoy_delta(ytd_winst, vorig_winst) \
+                            if vorig_winst else None
+                        if delta is not None:
+                            _render_delta_badge(delta)
+                    ui.label(format_euro(ytd_winst, decimals=0)).classes(
+                        'hero-value-positive' if ytd_winst >= 0
+                        else 'hero-value-negative')
+                    if vorig_winst and vorig_winst > 0:
+                        ui.label(
+                            f'vs {format_euro(vorig_winst, decimals=0)} vorig jaar'
+                        ).classes('context-text')
+                    # Sparkline (revenue as proxy for profit trend)
+                    if any(v > 0 for v in omzet_huidig):
+                        _render_sparkline(omzet_huidig, '#059669')
 
-                kpi_card('Urencriterium',
-                         f"{uren:.0f} / {uren_criterium:,} uur".replace(",", "."),
-                         'schedule', uren_hex, uren_extra)
+                # Card 3: Belasting prognose
+                with ui.card().classes('q-pa-lg card-hero') \
+                        .style('cursor: pointer') \
+                        .on('click', lambda: ui.navigate.to('/aangifte')):
 
-                kpi_card('Facturen', f"{factuur_count} facturen",
-                         'receipt', '#0F766E',
-                         on_click=lambda: ui.navigate.to('/facturen'))
+                    if ib_resultaat is not None:
+                        has_va = (
+                            (fp and (fp.voorlopige_aanslag_betaald or 0) > 0)
+                            or va_data['has_bank_data']
+                        )
+                        resultaat = ib_resultaat['resultaat']
+                        confidence = ib_resultaat.get('confidence', 'low')
 
-            # Row 3: IB + Km
-            with ui.row().classes('w-full gap-4 flex-wrap'):
-                if ib_resultaat is not None:
-                    if ib_resultaat < 0:
-                        ib_label = f'Terug: {format_euro(abs(ib_resultaat))}'
-                        ib_color = '#059669'
-                    elif ib_resultaat > 0:
-                        ib_label = f'Bij: {format_euro(ib_resultaat)}'
-                        ib_color = '#DC2626'
-                    else:
-                        ib_label = format_euro(0)
-                        ib_color = '#0F766E'
-                    kpi_card('Geschatte IB', ib_label,
-                             'calculate', ib_color,
-                             on_click=lambda: ui.navigate.to('/aangifte'))
+                        # Header with confidence badge
+                        with ui.row().classes(
+                                'w-full justify-between items-center'):
+                            ui.label('Belasting prognose').classes(
+                                'hero-label')
+                            conf_map = {
+                                'low': ('Schatting', '#D97706', '#FEF3C7'),
+                                'medium': ('Prognose', '#0369A1', '#F0F9FF'),
+                                'high': ('Betrouwbaar', '#059669', '#ECFDF5'),
+                            }
+                            c_label, c_color, c_bg = conf_map.get(
+                                confidence, conf_map['low'])
+                            ui.label(c_label).style(
+                                f'font-size: 11px; font-weight: 500; '
+                                f'color: {c_color}; background: {c_bg}; '
+                                f'padding: 2px 8px; border-radius: 10px')
 
-                if km_data['km'] > 0:
-                    km_label = f"{km_data['km']:.0f} km ({format_euro(km_data['vergoeding'])})"
-                    kpi_card('Km-vergoeding', km_label,
-                             'directions_car', '#0F766E')
-
-        # Charts + tables
-        chart_row = chart_container['ref']
-        chart_row.clear()
-        with chart_row:
-            with ui.row().classes('w-full gap-4 flex-wrap'):
-                with ui.card().classes('flex-1 min-w-80 q-pa-lg'):
-                    ui.label('Omzet per maand').classes('text-subtitle1') \
-                        .style('color: #0F172A; font-weight: 600')
-                    ui.label(f'{jaar} vs {jaar - 1}').classes('text-body2') \
-                        .style('color: #64748B')
-                    revenue_bar_chart(omzet_huidig, omzet_vorig, jaar)
-
-                with ui.card().classes('flex-1 min-w-80 q-pa-lg'):
-                    ui.label('Kostenverdeling').classes('text-subtitle1') \
-                        .style('color: #0F172A; font-weight: 600')
-                    ui.label(str(jaar)).classes('text-body2') \
-                        .style('color: #64748B')
-                    if kosten_per_cat:
-                        cost_donut_chart(kosten_per_cat)
-                    else:
-                        ui.label('Geen uitgaven gevonden.') \
-                            .classes('q-pa-md').style('color: #94A3B8')
-
-            # Ongefactureerde werkdagen alert
-            if ongefact['aantal'] > 0:
-                with ui.card().classes('w-full q-pa-md') \
-                        .style('background-color: #FFF7ED; border-color: #FDBA74'):
-                    with ui.row().classes('items-center justify-between w-full'):
-                        with ui.row().classes('items-center gap-2'):
-                            ui.icon('assignment_late', size='1.2rem') \
-                                .style('color: #D97706')
+                        if has_va:
+                            # Bij/terug display
+                            if resultaat >= 0:
+                                val_text = f'Bij: {format_euro(resultaat, decimals=0)}'
+                            else:
+                                val_text = f'Terug: {format_euro(abs(resultaat), decimals=0)}'
+                            ui.label(val_text).classes(
+                                'hero-value-negative' if resultaat >= 0
+                                else 'hero-value-positive')
                             ui.label(
-                                f"{ongefact['aantal']} ongefactureerde werkdagen "
-                                f"({format_euro(ongefact['bedrag'])})"
-                            ).style('color: #92400E; font-weight: 600')
-                        ui.button('Bekijk', icon='arrow_forward',
-                                  on_click=lambda: ui.navigate.to('/werkdagen')
-                                  ).props('flat dense color=warning')
+                                f'o.b.v. {ib_resultaat["basis_maanden"]} '
+                                f'maanden'
+                            ).classes('context-text').style(
+                                    'margin-bottom: 16px')
 
-            # Openstaande facturen detail list
-            if openstaande:
-                with ui.card().classes('w-full q-pa-md') \
-                        .style('background-color: #FFFBEB; border-color: #FCD34D'):
-                    with ui.row().classes('items-center gap-2 q-mb-sm'):
-                        ui.icon('warning_amber', size='1.2rem') \
-                            .style('color: #D97706')
-                        ui.label('Openstaande facturen') \
-                            .style('color: #92400E; font-weight: 600')
+                            # Progress bar: berekend vs VA betaald
+                            berekend = (ib_resultaat['netto_ib']
+                                        + ib_resultaat['zvw'])
+                            if va_data['has_bank_data']:
+                                va_betaald = va_data['totaal_betaald']
+                                va_label_text = 'VA betaald'
+                            else:
+                                va_betaald = (ib_resultaat['va_ib_betaald']
+                                              + ib_resultaat['va_zvw_betaald'])
+                                va_label_text = 'VA geschat'
 
-                    columns = [
-                        {'name': 'nummer', 'label': 'Nummer', 'field': 'nummer',
-                         'align': 'left'},
-                        {'name': 'klant', 'label': 'Klant', 'field': 'klant_naam',
-                         'align': 'left'},
-                        {'name': 'datum', 'label': 'Datum', 'field': 'datum_fmt',
-                         'align': 'left'},
-                        {'name': 'bedrag', 'label': 'Bedrag', 'field': 'bedrag_fmt',
-                         'align': 'right'},
-                        {'name': 'dagen', 'label': 'Dagen open', 'field': 'dagen_open',
-                         'align': 'right'},
-                    ]
-                    rows = []
-                    for f in openstaande:
-                        try:
-                            dagen = (date.today() - datetime.strptime(f.datum, '%Y-%m-%d').date()).days
-                        except (ValueError, TypeError):
-                            dagen = 0
-                        rows.append({
-                            'nummer': f.nummer,
-                            'klant_naam': f.klant_naam,
-                            'datum_fmt': format_datum(f.datum),
-                            'bedrag_fmt': format_euro(f.totaal_bedrag),
-                            'dagen_open': dagen,
-                        })
-                    ui.table(
-                        columns=columns, rows=rows, row_key='nummer',
-                    ).classes('w-full').props('dense flat')
+                            with ui.row().classes(
+                                    'w-full justify-between').style(
+                                    'font-size: 11px; color: #64748B; '
+                                    'margin-bottom: 8px'):
+                                ui.label(
+                                    f'Berekend '
+                                    f'{format_euro(berekend, decimals=0)}')
+                                ui.label(
+                                    f'{va_label_text} '
+                                    f'{format_euro(va_betaald, decimals=0)}')
 
-            # Recente facturen
-            if recente:
-                with ui.card().classes('w-full q-pa-lg'):
-                    ui.label('Recente facturen').classes('text-subtitle1') \
-                        .style('color: #0F172A; font-weight: 600')
-                    columns = [
-                        {'name': 'nummer', 'label': 'Nummer', 'field': 'nummer',
-                         'align': 'left'},
-                        {'name': 'datum', 'label': 'Datum', 'field': 'datum_fmt',
-                         'align': 'left'},
-                        {'name': 'klant', 'label': 'Klant', 'field': 'klant_naam',
-                         'align': 'left'},
-                        {'name': 'bedrag', 'label': 'Bedrag', 'field': 'bedrag_fmt',
-                         'align': 'right'},
-                        {'name': 'status', 'label': 'Status', 'field': 'status',
-                         'align': 'center'},
-                    ]
-                    rows = []
-                    for f in recente:
-                        rows.append({
-                            'nummer': f.nummer,
-                            'datum_fmt': format_datum(f.datum),
-                            'klant_naam': f.klant_naam,
-                            'bedrag_fmt': format_euro(f.totaal_bedrag),
-                            'status': 'Betaald' if f.betaald else 'Openstaand',
-                            'betaald': f.betaald,
-                        })
-                    t = ui.table(
-                        columns=columns, rows=rows, row_key='nummer',
-                    ).classes('w-full').props('dense flat')
-                    t.add_slot('body-cell-status', '''
-                        <q-td :props="props">
-                            <q-badge :color="props.row.betaald ? 'positive' : 'warning'"
-                                     :label="props.row.status" />
-                        </q-td>
-                    ''')
+                            # Simple HTML progress bar (avoids Quasar rendering quirks)
+                            pct = round(va_betaald / berekend * 100) \
+                                if berekend > 0 else 0
+                            ui.html(
+                                f'<div style="height:6px;background:#F1F5F9;'
+                                f'border-radius:3px;overflow:hidden;width:100%">'
+                                f'<div style="height:100%;width:{min(pct, 100)}%;'
+                                f'background:#059669;border-radius:3px">'
+                                f'</div></div>'
+                            )
+
+                            # Termijn info from real bank data
+                            if va_data['has_bank_data']:
+                                if (va_data['ib_termijnen'] > 0
+                                        or va_data['zvw_termijnen'] > 0):
+                                    parts = []
+                                    if va_data['ib_termijnen'] > 0:
+                                        parts.append(
+                                            f'{va_data["ib_termijnen"]} IB')
+                                    if va_data['zvw_termijnen'] > 0:
+                                        parts.append(
+                                            f'{va_data["zvw_termijnen"]} ZVW')
+                                    termijn_text = (
+                                        ' \u00b7 '.join(parts) + ' termijnen')
+                                else:
+                                    total_t = (va_data['ib_termijnen']
+                                               + va_data['zvw_termijnen'])
+                                    termijn_text = f'{total_t} betalingen'
+                                ui.label(termijn_text).style(
+                                    'font-size: 10px; color: #94A3B8; '
+                                    'margin-top: 6px; text-align: right')
+                        else:
+                            # No VA data — show estimated tax total
+                            total_tax = (ib_resultaat['netto_ib']
+                                         + ib_resultaat['zvw'])
+                            ui.label(format_euro(total_tax, decimals=0)).classes(
+                                'hero-value')
+                            ui.label('Geschatte belasting').classes(
+                                'context-text')
+                            ui.label('VA invoeren \u2192').style(
+                                'font-size: 12px; color: #0F766E; '
+                                'cursor: pointer; margin-top: 8px')
+                    else:
+                        # No fiscal data at all
+                        ui.label('Belasting prognose').classes('hero-label')
+                        ui.label('Geen gegevens').classes(
+                            'context-text').style('margin-top: 8px')
+
+            # === SECONDARY METRICS STRIP ===
+            with ui.row().classes('w-full gap-3'):
+                # Uren
+                uren = kpis.get('uren', 0)
+                with ui.card().classes('flex-1 q-pa-sm').style(
+                        'border-radius: 10px; border: 1px solid #E2E8F0; '
+                        'display: flex; align-items: center; gap: 10px; '
+                        'flex-direction: row'):
+                    ui.icon('schedule', size='20px').style('color: #0F766E')
+                    with ui.row().classes('items-baseline gap-1'):
+                        ui.label(
+                            f'{uren:,.0f} uur'.replace(',', '.')
+                        ).classes('strip-value')
+                        with ui.element('span').classes(
+                                'text-caption text-grey-6'):
+                            ui.label('(urencriterium)')
+                            ui.tooltip(
+                                'Exclusief achterwacht (urennorm=0)')
+
+                # Km (only if > 0)
+                km = km_data.get('km', 0) if km_data else 0
+                km_bedrag = km_data.get('vergoeding', 0) if km_data else 0
+                if km > 0:
+                    with ui.card().classes('flex-1 q-pa-sm').style(
+                            'border-radius: 10px; border: 1px solid #E2E8F0; '
+                            'display: flex; align-items: center; gap: 10px; '
+                            'flex-direction: row'):
+                        ui.icon('directions_car', size='20px').style(
+                            'color: #0F766E')
+                        with ui.row().classes('items-baseline gap-1'):
+                            ui.label(f'{km:,.0f} km'.replace(',', '.')).classes(
+                                'strip-value')
+                            ui.label(format_euro(km_bedrag)).classes(
+                                'context-text')
+
+                # Documenten
+                docs = await get_aangifte_documenten(DB_PATH, jaar)
+                docs_done = len({d.documenttype for d in docs})
+                docs_total = len(AANGIFTE_DOCS)
+                docs_pct = round(
+                    docs_done / docs_total * 100) if docs_total else 0
+                with ui.card().classes('flex-1 q-pa-sm').style(
+                        'border-radius: 10px; border: 1px solid #E2E8F0; '
+                        'display: flex; align-items: center; gap: 10px; '
+                        'flex-direction: row'):
+                    ui.icon('folder_open', size='20px').style(
+                        f'color: {"#059669" if docs_pct >= 100 else "#D97706"}')
+                    with ui.column().classes('flex-1 gap-0'):
+                        with ui.row().classes(
+                                'w-full justify-between items-baseline'):
+                            ui.label(
+                                f'{docs_done} / {docs_total} documenten'
+                            ).classes('strip-value')
+                            ui.label(f'{docs_pct}%').classes('strip-pct')
+                        ui.linear_progress(
+                            value=min(docs_pct / 100, 1.0), size='3px',
+                            color='positive' if docs_pct >= 100 else 'warning',
+                        ).style('margin-top: 6px')
+
+            # === CHARTS ===
+            maanden = ['Jan', 'Feb', 'Mrt', 'Apr', 'Mei', 'Jun',
+                       'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dec']
+            has_kosten = any(d['totaal'] > 0 for d in kosten_per_cat)
+
+            # Cumulative sums for line chart
+            cum_huidig, cum_vorig = [], []
+            rh, rv = 0, 0
+            for i in range(12):
+                rh += omzet_huidig[i]
+                rv += omzet_vorig[i]
+                cum_huidig.append(round(rh))
+                cum_vorig.append(round(rv))
+
+            # Chart 1: Revenue bar chart — FULL WIDTH
+            with ui.card().classes('w-full q-pa-lg card-hero'):
+                with ui.row().classes(
+                        'w-full justify-between items-baseline'):
+                    ui.label('Omzet per maand').classes('chart-title')
+                    ui.label(f'{jaar} vs {jaar - 1}').classes(
+                        'chart-subtitle')
+                revenue_bar_chart(omzet_huidig, omzet_vorig, jaar)
+
+            # Chart 2: Cumulative + Donut side by side (or just cumulative)
+            cum_chart_config = {
+                'tooltip': {'trigger': 'axis'},
+                'legend': {
+                    'data': [str(jaar), str(jaar - 1)],
+                    'right': 0, 'top': 0,
+                    'textStyle': {'color': '#94A3B8', 'fontSize': 11},
+                    'itemWidth': 16, 'itemHeight': 2},
+                'grid': {'left': '3%', 'right': '3%',
+                         'bottom': '3%', 'top': 36,
+                         'containLabel': True},
+                'xAxis': {
+                    'type': 'category', 'data': maanden,
+                    'axisLabel': {'color': '#94A3B8', 'fontSize': 11},
+                    'axisLine': {'show': False},
+                    'axisTick': {'show': False},
+                    'boundaryGap': False},
+                'yAxis': {
+                    'type': 'value',
+                    'axisLabel': {'formatter': '\u20ac {value}',
+                                  'color': '#94A3B8', 'fontSize': 11},
+                    'splitLine': {'lineStyle': {'color': '#F1F5F9'}},
+                    'axisLine': {'show': False},
+                    'axisTick': {'show': False}},
+                'series': [
+                    {'name': str(jaar), 'type': 'line',
+                     'data': cum_huidig, 'smooth': 0.3,
+                     'symbol': 'circle', 'symbolSize': 6,
+                     'lineStyle': {'width': 3, 'color': '#0F766E'},
+                     'itemStyle': {'color': '#0F766E',
+                                   'borderWidth': 2,
+                                   'borderColor': '#fff'},
+                     'areaStyle': {'color': {
+                         'type': 'linear', 'x': 0, 'y': 0,
+                         'x2': 0, 'y2': 1, 'colorStops': [
+                             {'offset': 0,
+                              'color': 'rgba(15,118,110,0.15)'},
+                             {'offset': 1,
+                              'color': 'rgba(15,118,110,0)'}]}}},
+                    {'name': str(jaar - 1), 'type': 'line',
+                     'data': cum_vorig, 'smooth': 0.3,
+                     'symbol': 'none',
+                     'lineStyle': {'width': 1.5,
+                                   'color': '#CBD5E1',
+                                   'type': 'dashed'}},
+                ],
+            }
+
+            if has_kosten:
+                # Side by side: cumulative + donut
+                with ui.element('div').style(
+                        'display: grid; grid-template-columns: 1fr 1fr;'
+                        ' gap: 20px'):
+                    with ui.card().classes('q-pa-lg card-hero'):
+                        with ui.row().classes(
+                                'w-full justify-between items-baseline'):
+                            ui.label('Cumulatieve omzet').classes(
+                                'chart-title')
+                            ui.label(f'{jaar} vs {jaar - 1}').classes(
+                                'chart-subtitle')
+                        ui.echart(cum_chart_config).style(
+                            'height: 300px; width: 100%')
+
+                    with ui.card().classes('q-pa-lg card-hero'):
+                        ui.label('Kostenverdeling').classes('chart-title')
+                        cost_donut_chart(kosten_per_cat)
+            else:
+                # No costs — full-width cumulative
+                with ui.card().classes('w-full q-pa-lg card-hero'):
+                    with ui.row().classes(
+                            'w-full justify-between items-baseline'):
+                        ui.label('Cumulatieve omzet').classes('chart-title')
+                        ui.label(f'{jaar} vs {jaar - 1}').classes(
+                            'chart-subtitle')
+                    ui.echart(cum_chart_config).style(
+                        'height: 300px; width: 100%')
+
+            # === AANDACHTSPUNTEN (only when relevant) ===
+            has_ongefact = ongefact and ongefact.get('aantal', 0) > 0
+            has_openstaand = len(openstaande) > 0
+            if has_ongefact or has_openstaand:
+                ui.label('AANDACHTSPUNTEN').classes('section-label')
+
+                if has_ongefact:
+                    with ui.element('div').style(
+                            'background: #FFFBEB; border-radius: 10px; '
+                            'padding: 14px 18px; '
+                            'border: 1px solid #FDE68A; display: flex; '
+                            'align-items: center; '
+                            'justify-content: space-between'):
+                        with ui.row().classes('items-center gap-2'):
+                            ui.icon('pending_actions', size='20px').style(
+                                'color: #D97706')
+                            ui.html(
+                                f'<span style="font-size:13px;font-weight:600;'
+                                f'color:#92400E">'
+                                f'{ongefact["aantal"]} werkdagen '
+                                f'ongefactureerd</span>'
+                                f'<span style="font-size:12px;color:#A16207;'
+                                f'margin-left:8px">'
+                                f'{format_euro(ongefact["bedrag"])}</span>')
+                        ui.button(
+                            'Bekijk',
+                            on_click=lambda: ui.navigate.to('/werkdagen'),
+                        ).props('flat dense size=sm') \
+                            .style('border: 1px solid #D97706; '
+                                   'border-radius: 6px; '
+                                   'color: #D97706; font-size: 12px')
+
+                if has_openstaand:
+                    totaal = sum(f.totaal_bedrag for f in openstaande)
+                    try:
+                        oudste = max(
+                            (date.today()
+                             - datetime.strptime(f.datum, '%Y-%m-%d').date()
+                             ).days
+                            for f in openstaande)
+                    except (ValueError, TypeError):
+                        oudste = 0
+                    with ui.element('div').style(
+                            'background: #FFF7ED; border-radius: 10px; '
+                            'padding: 14px 18px; '
+                            'border: 1px solid #FED7AA; display: flex; '
+                            'align-items: center; '
+                            'justify-content: space-between'):
+                        with ui.row().classes('items-center gap-2'):
+                            ui.icon('receipt_long', size='20px').style(
+                                'color: #EA580C')
+                            ui.html(
+                                f'<span style="font-size:13px;font-weight:600;'
+                                f'color:#9A3412">'
+                                f'{len(openstaande)} facturen openstaand'
+                                f'</span>'
+                                f'<span style="font-size:12px;color:#C2410C;'
+                                f'margin-left:8px">'
+                                f'{format_euro(totaal)} \u00b7 oudste '
+                                f'{oudste} dagen</span>')
+                        ui.button(
+                            'Bekijk',
+                            on_click=lambda: ui.navigate.to('/facturen'),
+                        ).props('flat dense size=sm') \
+                            .style('border: 1px solid #EA580C; '
+                                   'border-radius: 6px; '
+                                   'color: #EA580C; font-size: 12px')
 
     jaar_select.on_value_change(lambda _: refresh_dashboard())
     await refresh_dashboard()

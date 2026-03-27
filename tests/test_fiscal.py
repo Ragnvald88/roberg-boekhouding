@@ -17,82 +17,7 @@ from fiscal.berekeningen import (
 )
 
 
-# === Fiscale parameters per jaar (identiek aan seed_data.py) ===
-
-FISCALE_PARAMS = {
-    2023: {
-        "jaar": 2023,
-        "zelfstandigenaftrek": 5030, "startersaftrek": 2123,
-        "za_actief": True, "sa_actief": True,
-        "mkb_vrijstelling_pct": 14.0,
-        "kia_ondergrens": 2601, "kia_bovengrens": 69764, "kia_pct": 28,
-        "km_tarief": 0.21,
-        "schijf1_grens": 73031, "schijf1_pct": 36.93,
-        "schijf2_grens": 73031, "schijf2_pct": 36.93,  # same as schijf1 (2 brackets)
-        "schijf3_pct": 49.50,
-        "ahk_max": 3070, "ahk_afbouw_pct": 6.095, "ahk_drempel": 22660,
-        "ak_max": 5052,
-        "zvw_pct": 5.43, "zvw_max_grondslag": 66956,
-        "repr_aftrek_pct": 80,
-        "ew_forfait_pct": 0.35, "villataks_grens": 1_200_000,
-        "wet_hillen_pct": 83.333, "urencriterium": 1225,
-        "pvv_premiegrondslag": 37149,
-    },
-    2024: {
-        "jaar": 2024,
-        "zelfstandigenaftrek": 3750, "startersaftrek": 2123,
-        "za_actief": True, "sa_actief": True,
-        "mkb_vrijstelling_pct": 13.31,
-        "kia_ondergrens": 2801, "kia_bovengrens": 69764, "kia_pct": 28,
-        "km_tarief": 0.23,
-        "schijf1_grens": 75518, "schijf1_pct": 36.97,
-        "schijf2_grens": 75518, "schijf2_pct": 36.97,  # same as schijf1 (2 brackets)
-        "schijf3_pct": 49.50,
-        "ahk_max": 3362, "ahk_afbouw_pct": 6.63, "ahk_drempel": 24812,
-        "ak_max": 5532,
-        "zvw_pct": 5.32, "zvw_max_grondslag": 71624,
-        "repr_aftrek_pct": 80,
-        "ew_forfait_pct": 0.35, "villataks_grens": 1_310_000,
-        "wet_hillen_pct": 80.0, "urencriterium": 1225,
-        "pvv_premiegrondslag": 38098,
-    },
-    2025: {
-        "jaar": 2025,
-        "zelfstandigenaftrek": 2470, "startersaftrek": 2123,
-        "za_actief": True, "sa_actief": True,
-        "mkb_vrijstelling_pct": 12.70,
-        "kia_ondergrens": 2901, "kia_bovengrens": 70602, "kia_pct": 28,
-        "km_tarief": 0.23,
-        "schijf1_grens": 38441, "schijf1_pct": 35.82,
-        "schijf2_grens": 76817, "schijf2_pct": 37.48,
-        "schijf3_pct": 49.50,
-        "ahk_max": 3068, "ahk_afbouw_pct": 6.337, "ahk_drempel": 28406,
-        "ak_max": 5599,
-        "zvw_pct": 5.26, "zvw_max_grondslag": 75860,
-        "repr_aftrek_pct": 80,
-        "ew_forfait_pct": 0.35, "villataks_grens": 1_330_000,
-        "wet_hillen_pct": 76.667, "urencriterium": 1225,
-        "pvv_premiegrondslag": 38441,  # = schijf1_grens for 2025+
-    },
-    2026: {
-        "jaar": 2026,
-        "zelfstandigenaftrek": 1200, "startersaftrek": 2123,
-        "za_actief": True, "sa_actief": False,  # Year 4+: SA no longer active
-        "mkb_vrijstelling_pct": 12.70,
-        "kia_ondergrens": 2901, "kia_bovengrens": 70602, "kia_pct": 28,
-        "km_tarief": 0.23,
-        "schijf1_grens": 38883, "schijf1_pct": 35.75,
-        "schijf2_grens": 78426, "schijf2_pct": 37.56,
-        "schijf3_pct": 49.50,
-        "ahk_max": 3115, "ahk_afbouw_pct": 6.398, "ahk_drempel": 29736,
-        "ak_max": 5685,
-        "zvw_pct": 4.85, "zvw_max_grondslag": 79409,
-        "repr_aftrek_pct": 80,
-        "ew_forfait_pct": 0.35, "villataks_grens": 1_350_000,
-        "wet_hillen_pct": 71.867, "urencriterium": 1225,
-        "pvv_premiegrondslag": 38883,  # = schijf1_grens for 2025+
-    },
-}
+from import_.seed_data import FISCALE_PARAMS
 
 
 # ============================================================
@@ -119,15 +44,12 @@ class TestAfschrijvingen:
             levensduur=4, aanschaf_maand=12, aanschaf_jaar=2023,
             bereken_jaar=2024,
         )
-        # Afschrijving voor 2024 is een volledig jaar
-        assert abs(result['afschrijving'] - 611) < 5
-        # Boekwaarde eind 2024: na 1 maand (2023) + 12 maanden (2024)
-        # Pro-rata: 2023 = 611.55 * 1/12 = 50.96
-        # 2024 = 611.55
-        # Cum = 662.51, BW = 2714 - 662.51 = 2051.49
-        # NB: SKILL zegt BW=1492 (lijkt 2 volle jaren te rekenen)
-        assert result['boekwaarde'] > 1400  # Sanity check
-        assert result['per_jaar'] > 600
+        # afschrijfbaar = 2714 * 0.9 = 2442.6, per_jaar = 2442.6/4 = 610.65
+        # 2023 pro-rata: 610.65 * 1/12 = 50.89
+        # 2024 full year: 610.65, cum = 661.54, BW = 2714 - 661.54 = 2052.46
+        assert abs(result['afschrijving'] - 610.65) < 1
+        assert abs(result['boekwaarde'] - 2052.46) < 1
+        assert abs(result['per_jaar'] - 610.65) < 1
 
     def test_afschrijving_eerste_jaar_prorata(self):
         """Eerste jaar pro-rata: aanschaf in december = 1/12 van jaarbedrag."""
@@ -223,21 +145,21 @@ class TestHeffingskortingen:
     def test_arbeidskorting_2024_laag_inkomen(self):
         """2024: laag inkomen, eerste bracket."""
         ak = bereken_arbeidskorting(8000, 2024)
-        # bracket (0, 11491, 0.08425, 0): 0 + 0.08425 * 8000 = 674
+        # bracket (0, 11490, 0.08425, 0): 0 + 0.08425 * 8000 = 674
         assert abs(ak - 674) < 1
 
     def test_arbeidskorting_2024_midden_inkomen(self):
         """2024: midden inkomen, tweede bracket."""
         ak = bereken_arbeidskorting(20000, 2024)
-        # bracket (11491, 24821, 0.31433, 968): 968 + 0.31433 * (20000 - 11491) = 968 + 2674.85 = 3642.85
+        # bracket (11490, 24820, 0.31433, 968): 968 + 0.31433 * (20000 - 11490) = 968 + 2674.95 = 3642.95
         assert abs(ak - 3642.85) < 1
 
     def test_arbeidskorting_2024_hoog_inkomen(self):
         """2024: hoog inkomen, in afbouw-bracket."""
         ak = bereken_arbeidskorting(76163, 2024)
-        # bracket (39958, 124935, -0.06510, 5532)
-        # 5532 + (-0.0651) * (76163 - 39958) = 5532 - 2356.14 = 3175.86
-        assert abs(ak - 3175.86) < 2
+        # bracket (39957, 124934, -0.06510, 5532)
+        # 5532 + (-0.0651) * (76163 - 39957) = 5532 - 2357.01 = 3174.99
+        assert abs(ak - 3174.99) < 2
 
     def test_arbeidskorting_2024_boven_afbouw(self):
         """2024: boven afbouwgrens, korting = 0."""
@@ -300,7 +222,7 @@ class TestIB:
         # schijf2: (76817 - 38441) * 0.3748 = 38376 * 0.3748 = 14383.32
         # schijf3: (90000 - 76817) * 0.4950 = 13183 * 0.4950 = 6525.59
         # bruto = 34679.12
-        assert abs(result['bruto_ib'] - 34679) < 50
+        assert abs(result['bruto_ib'] - 34679) < 1
 
 
 # ============================================================
@@ -334,7 +256,7 @@ class TestFiscaleWinst:
         assert abs(result.zelfstandigenaftrek - 3750) < 1
         assert abs(result.startersaftrek - 2123) < 1
         # Belastbare winst: Boekhouder target ~76.776
-        assert abs(result.belastbare_winst - 76777) < 100
+        assert abs(result.belastbare_winst - 76777) < 1
 
     def test_fiscale_winst_2023(self):
         """Boekhouder 2023: winst EUR62.522 (fiscale winst, correcties baked-in).
@@ -353,9 +275,9 @@ class TestFiscaleWinst:
             uren=1400, params=params, aov=1816,
         )
         # Belastbare winst ~47617
-        assert abs(result.belastbare_winst - 47617) < 100
+        assert abs(result.belastbare_winst - 47617) < 1
         # Verzamelinkomen moet ~45801 zijn (belastbare_winst - aov)
-        assert abs(result.verzamelinkomen - 45801) < 100
+        assert abs(result.verzamelinkomen - 45801) < 1
 
 
 class TestVolledig:
@@ -379,21 +301,21 @@ class TestVolledig:
         )
 
         # Belastbare winst ~76777
-        assert abs(result.belastbare_winst - 76777) < 100
+        assert abs(result.belastbare_winst - 76777) < 1
 
         # Verzamelinkomen (EW still included, ew_naar_partner not yet)
-        assert abs(result.verzamelinkomen - 69120) < 200
+        assert abs(result.verzamelinkomen - 69120) < 1
 
         # Arbeidskorting now uses fiscale_winst (94437)
-        assert abs(result.arbeidskorting - 1985) < 10
+        assert abs(result.arbeidskorting - 1985) < 1
 
         # Tariefsaanpassing now included (EW still in income_without)
         # income_without = 94437 - 4659 - 2998 = 86780, excess = 86780 - 75518 = 11262
         # ta = 11262 * 12.53% = 1411
-        assert abs(result.tariefsaanpassing - 1411) < 50
+        assert abs(result.tariefsaanpassing - 1411) < 2
 
         # Resultaat (with tariefsaanpassing, EW in verzamelinkomen, VA=28544)
-        assert -500 < result.resultaat < 0
+        assert abs(result.resultaat - (-178)) < 5
 
         # Urencriterium check
         assert result.uren_criterium_gehaald is True
@@ -417,17 +339,17 @@ class TestVolledig:
         )
 
         # Verzamelinkomen ~45801
-        assert abs(result.verzamelinkomen - 45801) < 100
+        assert abs(result.verzamelinkomen - 45801) < 1
 
         # Belastbare winst
-        assert abs(result.belastbare_winst - 47617) < 100
+        assert abs(result.belastbare_winst - 47617) < 1
 
         # Arbeidskorting uses fiscale_winst (62522)
-        # AK = 5052 - 6.51% * (62522 - 37691) = 3434
-        assert abs(result.arbeidskorting - 3434) < 10
+        # AK = 5052 - 6.51% * (62522 - 37691) = 3435.5
+        assert abs(result.arbeidskorting - 3435.5) < 1
 
         # bruto_ib = 45801 * 36.93% = 16914
-        assert abs(result.bruto_ib - 16914) < 50
+        assert abs(result.bruto_ib - 16914) < 1
 
     def test_volledig_2024_urencriterium_warning(self):
         """Urencriterium niet gehaald: waarschuwing."""
@@ -653,10 +575,10 @@ class TestWetHillen:
             woz=655000, hypotheekrente=6951,
             voorlopige_aanslag=28544,
         )
-        assert abs(result.belastbare_winst - 76777) < 100
-        assert abs(result.verzamelinkomen - 69120) < 200
+        assert abs(result.belastbare_winst - 76777) < 1
+        assert abs(result.verzamelinkomen - 69120) < 1
         # AK now uses fiscale_winst
-        assert abs(result.arbeidskorting - 1985) < 10
+        assert abs(result.arbeidskorting - 1985) < 1
 
 
 # ============================================================
@@ -678,7 +600,7 @@ class TestEWNaarPartner:
             ew_naar_partner=True,
         )
         # Boekhouder: verzamelinkomen = 76776 - 2998 = 73778 (no EW saldo)
-        assert abs(result.verzamelinkomen - 73778) < 50
+        assert abs(result.verzamelinkomen - 73778) < 1
 
     def test_ew_niet_naar_partner_includes_in_verzamelinkomen(self):
         """When EW NOT allocated to partner, verzamelinkomen includes EW saldo."""
@@ -692,8 +614,8 @@ class TestEWNaarPartner:
             ew_naar_partner=False,
         )
         # EW saldo = 2292.5 - 6951 = -4658.5
-        # verzamelinkomen = 76776 - 4659 - 2998 = 69119
-        assert abs(result.verzamelinkomen - 69119) < 50
+        # verzamelinkomen = 76776.72 - 4658.5 - 2998 = 69120.22
+        assert abs(result.verzamelinkomen - 69120) < 2
 
     def test_ew_naar_partner_tariefsaanpassing_higher(self):
         """With EW to partner, tariefsaanpassing should be higher (more income above grens)."""
@@ -730,7 +652,7 @@ class TestEWNaarPartner:
             ew_naar_partner=True,
         )
         # Boekhouder: ZVW = 3810
-        assert abs(result.zvw - 3810) < 50
+        assert abs(result.zvw - 3810) < 1
 
     def test_default_ew_naar_partner_is_false(self):
         """Default behavior (no ew_naar_partner parameter) keeps EW in verzamelinkomen."""
@@ -742,7 +664,7 @@ class TestEWNaarPartner:
             aov=2998, woz=655000, hypotheekrente=6951,
         )
         # Default: EW included, verzamelinkomen = 69120
-        assert abs(result.verzamelinkomen - 69120) < 200
+        assert abs(result.verzamelinkomen - 69120) < 1
 
 
 class TestTariefsaanpassing:
@@ -767,7 +689,7 @@ class TestTariefsaanpassing:
             aov=2998,
         )
         # Boekhouder: tariefsaanpassing = 1994
-        assert abs(result.tariefsaanpassing - 1994) < 50
+        assert abs(result.tariefsaanpassing - 1995) < 1
 
     def test_tariefsaanpassing_income_below_schijf1_no_beperking(self):
         """If income without deductions stays within schijf 1, no tariefsaanpassing."""
@@ -810,7 +732,7 @@ class TestTariefsaanpassing:
         # deductions: ZA(2470) + SA(2123) + MKB ~11484 = ~16077
         # subject = min(16077, 18183) = 16077
         # ta = 16077 * 12.02% = 1932
-        assert result.tariefsaanpassing > 1500
+        assert abs(result.tariefsaanpassing - 1932) < 1
 
     def test_tariefsaanpassing_no_urencriterium_no_deductions(self):
         """Without urencriterium, no ZA/SA, only MKB. Still can have tariefsaanpassing."""
@@ -828,7 +750,7 @@ class TestTariefsaanpassing:
         # excess = 95000 - 75518 = 19482
         # subject = min(12645, 19482) = 12645
         # ta = 12645 * 12.53% = 1584
-        assert result.tariefsaanpassing > 1000
+        assert abs(result.tariefsaanpassing - 1584) < 1
 
 
 class TestArbeidskortingInput:
@@ -837,8 +759,8 @@ class TestArbeidskortingInput:
     def test_arbeidskorting_uses_fiscale_winst_2024(self):
         """Boekhouder 2024: AK = 1.986 with fiscale_winst = 94.437.
 
-        With fiscale_winst 94437: AK = 5532 - 6.51% * (94437 - 39958) = 1983.
-        With belastbare_winst 76776: AK = 5532 - 6.51% * (76776 - 39958) = 3136. (WRONG)
+        With fiscale_winst 94437: AK = 5532 - 6.51% * (94437 - 39957) = 1985.
+        With belastbare_winst 76776: AK = 5532 - 6.51% * (76776 - 39957) = 3135. (WRONG)
         """
         params = FISCALE_PARAMS[2024]
         result = bereken_volledig(
@@ -846,8 +768,8 @@ class TestArbeidskortingInput:
             representatie=550, investeringen_totaal=2919,
             uren=1400, params=params,
         )
-        # Fiscale winst = 94437, AK should be ~1983 (Boekhouder says 1986)
-        assert abs(result.arbeidskorting - 1986) < 10
+        # Fiscale winst = 94437.68, AK = 5532 - 6.51% * (94437.68 - 39957) = 1985.31
+        assert abs(result.arbeidskorting - 1985) < 1
         # NOT 3136 (which is what belastbare_winst would give)
         assert result.arbeidskorting < 2100
 
@@ -859,11 +781,11 @@ class TestDBDrivenArbeidskorting:
         """JSON brackets produce same result as Python constants."""
         import json
         brackets_json = json.dumps([
-            {"lower": 0, "upper": 11491, "rate": 0.08425, "base": 0},
-            {"lower": 11491, "upper": 24821, "rate": 0.31433, "base": 968},
-            {"lower": 24821, "upper": 39958, "rate": 0.02471, "base": 5158},
-            {"lower": 39958, "upper": 124935, "rate": -0.06510, "base": 5532},
-            {"lower": 124935, "upper": None, "rate": 0, "base": 0},
+            {"lower": 0, "upper": 11490, "rate": 0.08425, "base": 0},
+            {"lower": 11490, "upper": 24820, "rate": 0.31433, "base": 968},
+            {"lower": 24820, "upper": 39957, "rate": 0.02471, "base": 5158},
+            {"lower": 39957, "upper": 124934, "rate": -0.06510, "base": 5532},
+            {"lower": 124934, "upper": None, "rate": 0, "base": 0},
         ])
         # Compare JSON-driven vs Python-constant for several incomes
         for income in [5000, 15000, 30000, 50000, 80000, 130000]:
@@ -913,7 +835,8 @@ class TestIBPVVSplit:
             aov=2998, woz=655000, hypotheekrente=6951,
             ew_naar_partner=True,
         )
-        assert abs(result.ib_alleen - 18734) < 15
+        # delta ~3: rounding propagation through bruto_ib - pvv chain
+        assert abs(result.ib_alleen - 18734) < 5
 
     def test_pvv_components_2024(self):
         """PVV split: AOW 17.90%, Anw 0.10%, Wlz 9.65% over premiegrondslag."""
@@ -974,8 +897,8 @@ class TestIBPVVSplit:
             voorlopige_aanslag=30303,
             voorlopige_aanslag_zvw=2667,
         )
-        # Boekhouder: IB terug = -3137 (negative = teruggave)
-        assert abs(result.resultaat_ib - (-3137)) < 20
+        # Boekhouder: IB terug = -3137; delta ~4 from rounding in netto_ib chain
+        assert abs(result.resultaat_ib - (-3137)) < 5
 
     def test_resultaat_zvw_2024_boekhouder(self):
         """Boekhouder 2024: ZVW bij 1143 = zvw (3810) - VA_ZVW (2667)."""
@@ -990,7 +913,7 @@ class TestIBPVVSplit:
             voorlopige_aanslag_zvw=2667,
         )
         # Boekhouder: ZVW bij = 1143
-        assert abs(result.resultaat_zvw - 1143) < 10
+        assert abs(result.resultaat_zvw - 1143) < 1
 
     def test_resultaat_total_is_sum(self):
         """Total resultaat = resultaat_ib + resultaat_zvw."""
@@ -1022,6 +945,52 @@ class TestIBPVVSplit:
         assert abs(result.resultaat_zvw - result.zvw) < 1
         # resultaat_ib = netto_ib - 28544
         assert abs(result.resultaat_ib - (result.netto_ib - 28544)) < 1
+
+    def test_prorated_va_half_year(self):
+        """Prorated VA (6/12) gives higher result than full-year VA."""
+        params = FISCALE_PARAMS[2024]
+        annual_va_ib = 30303
+        annual_va_zvw = 2667
+        month = 6
+        va_ib_prorated = annual_va_ib * month / 12   # 15151.50
+        va_zvw_prorated = annual_va_zvw * month / 12  # 1333.50
+
+        f = bereken_volledig(
+            omzet=95145, kosten=0, afschrijvingen=0,
+            representatie=550, investeringen_totaal=2919,
+            uren=1400, params=params, aov=2998,
+            woz=655000, hypotheekrente=6951,
+            voorlopige_aanslag=va_ib_prorated,
+            voorlopige_aanslag_zvw=va_zvw_prorated,
+            ew_naar_partner=True,
+        )
+        # netto_ib unchanged by VA value (~27166)
+        # delta ~4: rounding in bruto_ib - pvv - heffingskortingen chain
+        assert abs(f.netto_ib - 27166) < 5
+        # resultaat_ib = netto_ib - prorated VA (higher than full-year)
+        assert abs(f.resultaat_ib - (f.netto_ib - va_ib_prorated)) < 1
+        assert abs(f.resultaat_zvw - (f.zvw - va_zvw_prorated)) < 1
+        # Less VA subtracted → result higher than full-year (-1994)
+        assert f.resultaat > -1994
+
+    def test_prorated_va_january(self):
+        """In January, only 1/12 of VA is paid — large positive result."""
+        params = FISCALE_PARAMS[2024]
+        va_ib = 30303 * 1 / 12   # 2525.25
+        va_zvw = 2667 * 1 / 12   # 222.25
+
+        f = bereken_volledig(
+            omzet=95145, kosten=0, afschrijvingen=0,
+            representatie=550, investeringen_totaal=2919,
+            uren=1400, params=params, aov=2998,
+            woz=655000, hypotheekrente=6951,
+            voorlopige_aanslag=va_ib,
+            voorlopige_aanslag_zvw=va_zvw,
+            ew_naar_partner=True,
+        )
+        # Almost no VA paid → large positive result
+        assert f.resultaat_ib > 20000
+        assert f.resultaat_zvw > 3000
 
 
 class TestBoekhouder2024Complete:
@@ -1058,7 +1027,7 @@ class TestBoekhouder2024Complete:
 
     def test_fiscale_winst(self, boekhouder):
         """Page 7: fiscale winst 94437."""
-        assert abs(boekhouder.fiscale_winst - 94438) < 5
+        assert abs(boekhouder.fiscale_winst - 94438) < 1
 
     def test_ondernemersaftrek(self, boekhouder):
         """Page 7: ZA 3750, SA 2123."""
@@ -1067,11 +1036,11 @@ class TestBoekhouder2024Complete:
 
     def test_mkb_vrijstelling(self, boekhouder):
         """Page 7: MKB ~11788."""
-        assert abs(boekhouder.mkb_vrijstelling - 11788) < 50
+        assert abs(boekhouder.mkb_vrijstelling - 11788) < 1
 
     def test_belastbare_winst(self, boekhouder):
         """Page 2: belastbare winst Box 1 = 76776."""
-        assert abs(boekhouder.belastbare_winst - 76777) < 10
+        assert abs(boekhouder.belastbare_winst - 76777) < 1
 
     def test_eigen_woning(self, boekhouder):
         """Page 8: EW forfait 2293, hyp 6951, saldo -4659 (to partner)."""
@@ -1080,19 +1049,21 @@ class TestBoekhouder2024Complete:
 
     def test_verzamelinkomen(self, boekhouder):
         """Page 2: belastbaar Box1 = 76776 - 2998 = 73778 (EW to partner)."""
-        assert abs(boekhouder.verzamelinkomen - 73778) < 10
+        assert abs(boekhouder.verzamelinkomen - 73778) < 1
 
     def test_tariefsaanpassing(self, boekhouder):
         """Page 2: tariefsaanpassing = 1994."""
-        assert abs(boekhouder.tariefsaanpassing - 1994) < 10
+        assert abs(boekhouder.tariefsaanpassing - 1995) < 1
 
     def test_bruto_ib_pvv(self, boekhouder):
         """Page 2: IB + PVV = 29268."""
-        assert abs(boekhouder.bruto_ib - 29268) < 10
+        # delta ~3: rounding in IB bracket boundaries
+        assert abs(boekhouder.bruto_ib - 29268) < 5
 
     def test_ib_alleen(self, boekhouder):
         """Page 2: IB (incl tariefsaanpassing) = 18734."""
-        assert abs(boekhouder.ib_alleen - 18734) < 10
+        # delta ~3: rounding propagation through bruto_ib - pvv chain
+        assert abs(boekhouder.ib_alleen - 18734) < 5
 
     def test_pvv_total(self, boekhouder):
         """Page 2: PVV = 27.65% × 38098 = 10534."""
@@ -1110,11 +1081,12 @@ class TestBoekhouder2024Complete:
 
     def test_arbeidskorting(self, boekhouder):
         """Page 4: AK = 1986 (based on fiscale_winst 94437)."""
-        assert abs(boekhouder.arbeidskorting - 1986) < 5
+        assert abs(boekhouder.arbeidskorting - 1985) < 1
 
     def test_netto_ib(self, boekhouder):
         """Page 4: verschuldigd = 29268 - 116 - 1986 = 27166."""
-        assert abs(boekhouder.netto_ib - 27166) < 10
+        # delta ~4: rounding in bruto_ib - pvv - heffingskortingen chain
+        assert abs(boekhouder.netto_ib - 27166) < 5
 
     def test_zvw(self, boekhouder):
         """Page 5: ZVW = 5.32% × min(76776, 71628) = 3810."""
@@ -1122,7 +1094,8 @@ class TestBoekhouder2024Complete:
 
     def test_resultaat_ib(self, boekhouder):
         """Page 1: IB terug = 27166 - 30303 = -3137."""
-        assert abs(boekhouder.resultaat_ib - (-3137)) < 10
+        # delta ~4: rounding in netto_ib chain (actual -3132.84 vs Boekhouder -3137)
+        assert abs(boekhouder.resultaat_ib - (-3137)) < 5
 
     def test_resultaat_zvw(self, boekhouder):
         """Page 5: ZVW bij = 3810 - 2667 = 1143."""
@@ -1130,7 +1103,8 @@ class TestBoekhouder2024Complete:
 
     def test_resultaat_total(self, boekhouder):
         """Page 1: total = IB terug + ZVW bij = -3137 + 1143 = -1994."""
-        assert abs(boekhouder.resultaat - (-1994)) < 15
+        # delta ~5: rounding in netto_ib chain (actual -1989.23 vs Boekhouder -1994)
+        assert abs(boekhouder.resultaat - (-1994)) < 5
 
     def test_urencriterium(self, boekhouder):
         """1400 > 1225: urencriterium gehaald."""
@@ -1219,6 +1193,79 @@ class TestAfschrijvingValidation:
         assert result['afschrijving'] == 0
 
 
+class TestAfschrijvingOverrides:
+    """Test manual override of per-year depreciation amounts."""
+
+    def test_override_replaces_auto_value(self):
+        """Override for a specific year should replace the auto-calculated value."""
+        # Camera: 2713.70, 10% rest, 5yr, month 12, year 2023
+        # Auto 2024 = full year = (2713.70 - 271.37) / 5 = 488.47
+        auto = bereken_afschrijving(2713.70, 10, 5, 12, 2023, 2024)
+        assert auto['afschrijving'] == 488.47
+        assert not auto['has_override']
+
+        # Override 2024 to 500
+        result = bereken_afschrijving(2713.70, 10, 5, 12, 2023, 2024,
+                                       overrides={2024: 500.00})
+        assert result['afschrijving'] == 500.00
+        assert result['has_override']
+
+    def test_override_affects_subsequent_boekwaarde(self):
+        """Override in year 1 should cascade to book value in year 2."""
+        # Without override: 2023 = pro-rata 1/12 * 488.466 = 40.71
+        # Book value end 2023 = 2713.70 - 40.71 = 2672.99
+        auto_2024 = bereken_afschrijving(2713.70, 10, 5, 12, 2023, 2024)
+
+        # Override 2023 to 100 (higher than pro-rata 40.71)
+        with_ov = bereken_afschrijving(2713.70, 10, 5, 12, 2023, 2024,
+                                        overrides={2023: 100.00})
+        # More depreciated in 2023, so book value should be lower
+        assert with_ov['boekwaarde'] < auto_2024['boekwaarde']
+        # 2024 itself uses auto value (488.47), so afschrijving same
+        assert with_ov['afschrijving'] == auto_2024['afschrijving']
+
+    def test_override_zero_means_no_depreciation(self):
+        """Setting override to 0 means zero depreciation for that year."""
+        result = bereken_afschrijving(1000, 10, 5, 1, 2024, 2024,
+                                       overrides={2024: 0})
+        assert result['afschrijving'] == 0
+        assert result['boekwaarde'] == 1000  # nothing depreciated
+
+    def test_override_capped_by_restwaarde(self):
+        """Override can't depreciate below residual value."""
+        # 1000, 10% rest = 100 restwaarde, 900 afschrijfbaar
+        # Override year 1 to 900 (entire depreciable amount)
+        r1 = bereken_afschrijving(1000, 10, 5, 1, 2024, 2024,
+                                   overrides={2024: 900})
+        assert r1['afschrijving'] == 900
+        assert r1['boekwaarde'] == 100  # restwaarde
+
+        # Year 2 should have 0 depreciation (fully depreciated)
+        r2 = bereken_afschrijving(1000, 10, 5, 1, 2024, 2025,
+                                   overrides={2024: 900})
+        assert r2['afschrijving'] == 0
+        assert r2['boekwaarde'] == 100
+
+    def test_no_override_flag_when_no_overrides(self):
+        """has_override should be False when no overrides provided."""
+        result = bereken_afschrijving(1000, 10, 5, 1, 2024, 2024)
+        assert not result['has_override']
+
+    def test_no_override_flag_for_non_matching_year(self):
+        """has_override False when override exists but not for the bereken_jaar."""
+        result = bereken_afschrijving(1000, 10, 5, 1, 2024, 2024,
+                                       overrides={2025: 200})
+        assert not result['has_override']
+
+    def test_empty_overrides_dict_same_as_none(self):
+        """Empty dict should behave same as None."""
+        auto = bereken_afschrijving(1000, 10, 5, 6, 2024, 2024)
+        with_empty = bereken_afschrijving(1000, 10, 5, 6, 2024, 2024,
+                                           overrides={})
+        assert auto['afschrijving'] == with_empty['afschrijving']
+        assert auto['boekwaarde'] == with_empty['boekwaarde']
+
+
 class TestDBDrivenPVV:
     """PVV rates should be configurable via params."""
 
@@ -1233,8 +1280,8 @@ class TestDBDrivenPVV:
             representatie=533.55, investeringen_totaal=0,
             uren=1400, params=params,
         )
-        # Should match the Boekhouder reference
-        assert abs(result.pvv - 10526) < 20
+        # PVV = 27.65% × 38098 = 10534.10 (capped at premiegrondslag)
+        assert abs(result.pvv - 10534) < 1
 
 
 class TestBox3:
@@ -1247,6 +1294,16 @@ class TestBox3:
         result = bereken_box3(params)
         assert result.belasting == 0
         assert result.grondslag == 0
+
+    def test_box3_negative_netto_vermogen(self):
+        """Box 3 with schulden > bezittingen should not divide by zero."""
+        from fiscal.berekeningen import bereken_box3
+        params = FISCALE_PARAMS[2024].copy()
+        params['box3_bank_saldo'] = 0
+        params['box3_overige_bezittingen'] = 0
+        params['box3_schulden'] = 5000
+        result = bereken_box3(params, fiscaal_partner=True)
+        assert result.belasting == 0
 
     def test_box3_below_heffingsvrij(self):
         """Assets below heffingsvrij vermogen = no tax."""
@@ -1443,12 +1500,12 @@ class TestBoekhouder2023Winst:
 
     def test_fiscale_winst(self, boekhouder):
         # 62522 + 91.6 - 759.64 = 61854
-        assert abs(boekhouder.fiscale_winst - 61854) < 5
+        assert abs(boekhouder.fiscale_winst - 61854) < 1
 
     def test_belastbare_winst(self, boekhouder):
         # Boekhouder rapport shows 45801 but includes employment income not modeled here.
         # Our onderneming-only calculation: ~47043.
-        assert abs(boekhouder.belastbare_winst - 47043) < 15
+        assert abs(boekhouder.belastbare_winst - 47043) < 1
 
     def test_verzamelinkomen(self, boekhouder):
         # EW to partner → vi = belastbare_winst - aov
@@ -1590,3 +1647,435 @@ class TestLijfrente:
         )
         assert abs(r_without.verzamelinkomen - r_with.verzamelinkomen - 3000) < 1
         assert r_with.lijfrente == 3000
+
+    def test_lijfrente_reduces_netto_ib(self):
+        """Lijfrente should reduce the net IB amount (tax savings)."""
+        params = FISCALE_PARAMS[2024].copy()
+        r_without = bereken_volledig(
+            omzet=90000, kosten=0, afschrijvingen=0,
+            representatie=0, investeringen_totaal=0,
+            uren=1400, params=params,
+            ew_naar_partner=True,
+        )
+        r_with = bereken_volledig(
+            omzet=90000, kosten=0, afschrijvingen=0,
+            representatie=0, investeringen_totaal=0,
+            uren=1400, params=params,
+            lijfrente=5000,
+            ew_naar_partner=True,
+        )
+        # More lijfrente → lower verzamelinkomen → lower IB
+        assert r_with.netto_ib < r_without.netto_ib
+
+    def test_lijfrente_affects_tariefsaanpassing(self):
+        """Lijfrente reduces d_income_without, affecting tariefsaanpassing."""
+        params = FISCALE_PARAMS[2024].copy()
+        r_without = bereken_volledig(
+            omzet=100000, kosten=0, afschrijvingen=0,
+            representatie=0, investeringen_totaal=0,
+            uren=1400, params=params,
+            ew_naar_partner=True,
+        )
+        r_with = bereken_volledig(
+            omzet=100000, kosten=0, afschrijvingen=0,
+            representatie=0, investeringen_totaal=0,
+            uren=1400, params=params,
+            lijfrente=10000,
+            ew_naar_partner=True,
+        )
+        # Higher lijfrente → lower income → different tariefsaanpassing
+        assert r_with.tariefsaanpassing != r_without.tariefsaanpassing
+
+    def test_lijfrente_exceeds_income_floors_at_zero(self):
+        """If lijfrente exceeds income, verzamelinkomen floors at 0."""
+        params = FISCALE_PARAMS[2024].copy()
+        result = bereken_volledig(
+            omzet=5000, kosten=0, afschrijvingen=0,
+            representatie=0, investeringen_totaal=0,
+            uren=1400, params=params,
+            lijfrente=999999,  # far exceeds income
+            ew_naar_partner=True,
+        )
+        assert result.verzamelinkomen == 0
+
+
+# ============================================================
+# Edge case tests — negative, zero, boundary, high income
+# ============================================================
+
+class TestEdgeCaseNegativeWinst:
+    """When kosten > omzet, belastbare_winst should floor at 0."""
+
+    def test_loss_scenario(self):
+        """Negative winst (loss): belastbare_winst = 0."""
+        params = FISCALE_PARAMS[2024]
+        result = bereken_volledig(
+            omzet=20000, kosten=30000, afschrijvingen=0,
+            representatie=0, investeringen_totaal=0,
+            uren=1400, params=params,
+        )
+        assert result.winst == -10000
+        assert result.belastbare_winst == 0
+        assert result.bruto_ib == 0
+        assert result.netto_ib <= 0  # only heffingskortingen
+        assert result.zelfstandigenaftrek == 3750  # ZA still granted
+
+    def test_zero_income(self):
+        """Zero omzet, zero kosten: everything should be 0."""
+        params = FISCALE_PARAMS[2024]
+        result = bereken_volledig(
+            omzet=0, kosten=0, afschrijvingen=0,
+            representatie=0, investeringen_totaal=0,
+            uren=0, params=params,
+        )
+        assert result.winst == 0
+        assert result.belastbare_winst == 0
+        assert result.bruto_ib == 0
+        assert result.uren_criterium_gehaald is False
+
+
+class TestEdgeCaseArbeidskortingZero:
+    """Arbeidskorting and AHK with zero/negative income."""
+
+    def test_arbeidskorting_zero(self):
+        assert bereken_arbeidskorting(0, 2024) == 0
+
+    def test_arbeidskorting_negative(self):
+        """Negative income should return 0 (floor)."""
+        assert bereken_arbeidskorting(-1000, 2024) == 0
+
+    def test_ahk_zero_income(self):
+        """Zero income returns maximum AHK."""
+        params = FISCALE_PARAMS[2024]
+        ahk = bereken_algemene_heffingskorting(0, 2024, params)
+        assert ahk == params['ahk_max']
+
+
+class TestEdgeCaseBracketBoundaries2024:
+    """Test exact bracket boundaries for 2024 arbeidskorting (BD verified)."""
+
+    def test_at_bracket1_upper(self):
+        """Income exactly at bracket 1 upper bound (11490)."""
+        ak = bereken_arbeidskorting(11490, 2024)
+        expected = 0.08425 * 11490
+        assert abs(ak - expected) < 0.01
+
+    def test_at_bracket2_start(self):
+        """Income at start of bracket 2 (11491)."""
+        ak = bereken_arbeidskorting(11491, 2024)
+        expected = 968 + 0.31433 * (11491 - 11490)
+        assert abs(ak - expected) < 0.01
+
+    def test_at_bracket2_upper(self):
+        """Income exactly at bracket 2 upper bound (24820)."""
+        ak = bereken_arbeidskorting(24820, 2024)
+        expected = 968 + 0.31433 * (24820 - 11490)
+        assert abs(ak - expected) < 0.01
+
+    def test_at_bracket3_start(self):
+        """Income at start of bracket 3 (24821)."""
+        ak = bereken_arbeidskorting(24821, 2024)
+        expected = 5158 + 0.02471 * (24821 - 24820)
+        assert abs(ak - expected) < 0.01
+
+    def test_at_bracket4_upper(self):
+        """Income at bracket 4 upper bound (124934)."""
+        ak = bereken_arbeidskorting(124934, 2024)
+        expected = 5532 + (-0.06510) * (124934 - 39957)
+        assert abs(ak - max(0, expected)) < 0.01
+
+    def test_above_afbouw(self):
+        """Income above afbouwgrens = 0."""
+        ak = bereken_arbeidskorting(124935, 2024)
+        assert ak == 0
+
+
+class TestEdgeCaseVeryHighIncome:
+    """Very high income through full waterfall with 3-bracket system (2025)."""
+
+    def test_income_200k(self):
+        """Income 200k exercises all three brackets."""
+        params = FISCALE_PARAMS[2025]
+        result = bereken_volledig(
+            omzet=200000, kosten=0, afschrijvingen=0,
+            representatie=0, investeringen_totaal=0,
+            uren=1400, params=params,
+        )
+        assert result.belastbare_winst > 0
+        # Should hit all 3 brackets
+        assert result.bruto_ib > 50000
+        # Arbeidskorting should be near 0 (fully phased out)
+        assert result.arbeidskorting < 100
+        # AHK should be 0 (high income)
+        assert result.ahk == 0
+        # Tariefsaanpassing should be significant
+        assert result.tariefsaanpassing > 500
+
+
+class TestEdgeCaseBox3NegativeRendement:
+    """Box 3 with high schulden rendement relative to bank."""
+
+    def test_negative_rendement_yields_zero(self):
+        """When schulden outweigh bezittingen, Box 3 belasting = 0."""
+        from fiscal.berekeningen import bereken_box3
+        params = {
+            'box3_bank_saldo': 1000,
+            'box3_overige_bezittingen': 0,
+            'box3_schulden': 50000,
+            'box3_heffingsvrij_vermogen': 57000,
+            'box3_rendement_bank_pct': 1.44,
+            'box3_rendement_overig_pct': 6.04,
+            'box3_rendement_schuld_pct': 2.61,
+            'box3_tarief_pct': 36,
+            'box3_drempel_schulden': 3700,
+        }
+        result = bereken_box3(params, fiscaal_partner=False)
+        assert result.belasting == 0
+        assert result.grondslag == 0
+
+    def test_box3_only_bank_no_schulden(self):
+        """Simple Box 3: only bank above heffingsvrij."""
+        from fiscal.berekeningen import bereken_box3
+        params = {
+            'box3_bank_saldo': 100000,
+            'box3_overige_bezittingen': 0,
+            'box3_schulden': 0,
+            'box3_heffingsvrij_vermogen': 57000,
+            'box3_rendement_bank_pct': 1.44,
+            'box3_rendement_overig_pct': 6.04,
+            'box3_rendement_schuld_pct': 2.61,
+            'box3_tarief_pct': 36,
+            'box3_drempel_schulden': 3700,
+        }
+        result = bereken_box3(params, fiscaal_partner=False)
+        # grondslag = 100000 - 0 - 57000 = 43000
+        assert result.grondslag == 43000
+        # rendement = 100000 * 1.44% = 1440
+        # ratio = 1440 / 100000 = 0.0144
+        # voordeel = 43000 * 0.0144 = 619.20
+        # belasting = 619.20 * 36% = 222.91
+        assert abs(result.belasting - 222.91) < 1
+
+
+# ============================================================
+# Income extrapolation and personal data fallback tests
+# ============================================================
+
+class TestExtrapoleerJaaromzet:
+    """Tests for annual income extrapolation."""
+
+    @pytest.fixture
+    def db_path(self, tmp_path):
+        """Create temp DB with test data."""
+        import asyncio
+        from database import init_db, add_klant
+        db = tmp_path / 'test.db'
+        asyncio.run(init_db(db))
+        asyncio.run(add_klant(db, naam='Test', tarief_uur=80, retour_km=0))
+        return db
+
+    def test_past_year_returns_actual(self, db_path):
+        """Past year: no extrapolation, use actual totals."""
+        import asyncio
+        from database import add_factuur
+        from components.fiscal_utils import extrapoleer_jaaromzet
+        asyncio.run(add_factuur(db_path, nummer='2024-001', klant_id=1,
+                                 datum='2024-06-15', totaal_uren=8,
+                                 totaal_km=0, totaal_bedrag=10000,
+                                 status='verstuurd'))
+        result = asyncio.run(extrapoleer_jaaromzet(db_path, 2024))
+        assert result['method'] == 'actual'
+        assert result['extrapolated_omzet'] == 10000
+        assert result['confidence'] == 'high'
+
+    def test_extrapolation_linear(self, db_path):
+        """Current year: linear extrapolation from YTD."""
+        import asyncio
+        from datetime import date
+        from database import add_factuur
+        from components.fiscal_utils import extrapoleer_jaaromzet
+        # Add 3 months of revenue (Jan-Mar)
+        for m in range(1, 4):
+            asyncio.run(add_factuur(db_path, nummer=f'2026-{m:03d}', klant_id=1,
+                                     datum=f'2026-{m:02d}-15', totaal_uren=80,
+                                     totaal_km=0, totaal_bedrag=10000,
+                                     status='verstuurd'))
+        result = asyncio.run(extrapoleer_jaaromzet(db_path, date.today().year))
+        # 30000 YTD in ~3 months → ~120000 annual
+        assert result['ytd_omzet'] == 30000
+        assert 100000 < result['extrapolated_omzet'] < 140000
+        assert result['confidence'] in ('low', 'medium')
+
+    def test_zero_revenue_returns_zero(self, db_path):
+        """No revenue: returns zero with low confidence."""
+        import asyncio
+        from datetime import date
+        from components.fiscal_utils import extrapoleer_jaaromzet
+        result = asyncio.run(extrapoleer_jaaromzet(db_path, date.today().year))
+        assert result['extrapolated_omzet'] == 0
+        assert result['confidence'] == 'low'
+
+    def test_january_early_month_no_crash(self, db_path):
+        """Jan 1-14: complete_months=max(0,1)=1, should not divide by zero."""
+        import asyncio
+        import datetime
+        from database import add_factuur
+        from components.fiscal_utils import extrapoleer_jaaromzet
+
+        # Add a small amount of revenue for January
+        asyncio.run(add_factuur(db_path, nummer='2026-JAN', klant_id=1,
+                                 datum='2026-01-03', totaal_uren=4,
+                                 totaal_km=0, totaal_bedrag=500,
+                                 status='verstuurd'))
+
+        # Mock datetime.date so that date.today() returns Jan 5
+        original_date = datetime.date
+
+        class MockDate(datetime.date):
+            @classmethod
+            def today(cls):
+                return original_date(2026, 1, 5)
+
+        datetime.date = MockDate
+        try:
+            result = asyncio.run(extrapoleer_jaaromzet(db_path, 2026))
+        finally:
+            datetime.date = original_date
+
+        assert result['confidence'] == 'low'
+        assert result['basis_maanden'] == 1  # max(month-1, 1) = max(0, 1) = 1
+        assert result['extrapolated_omzet'] > 0
+        assert result['extrapolated_omzet'] == 500 * 12  # 500/1month * 12
+
+
+class TestPersonalDataFallback:
+    """Tests for prior-year personal data fallback."""
+
+    def test_current_year_values_preferred(self):
+        from components.fiscal_utils import get_personal_data_with_fallback
+        current = type('P', (), {'woz_waarde': 700000, 'hypotheekrente': 7000,
+                                  'aov_premie': 3500, 'partner_bruto_loon': 0,
+                                  'partner_loonheffing': 0, 'box3_bank_saldo': 0,
+                                  'box3_overige_bezittingen': 0, 'box3_schulden': 0})()
+        prior = type('P', (), {'woz_waarde': 650000, 'hypotheekrente': 7200,
+                                'aov_premie': 3000, 'partner_bruto_loon': 40000,
+                                'partner_loonheffing': 7000, 'box3_bank_saldo': 25000,
+                                'box3_overige_bezittingen': 0, 'box3_schulden': 35000})()
+        result, fallbacks = get_personal_data_with_fallback(current, prior)
+        assert result['woz']['value'] == 700000
+        assert result['woz']['source'] == 'current'
+        assert 'woz_waarde' not in fallbacks
+
+    def test_fallback_to_prior_year(self):
+        from components.fiscal_utils import get_personal_data_with_fallback
+        current = type('P', (), {'woz_waarde': 0, 'hypotheekrente': 0,
+                                  'aov_premie': 0, 'partner_bruto_loon': 0,
+                                  'partner_loonheffing': 0, 'box3_bank_saldo': 0,
+                                  'box3_overige_bezittingen': 0, 'box3_schulden': 0})()
+        prior = type('P', (), {'woz_waarde': 650000, 'hypotheekrente': 7200,
+                                'aov_premie': 3000, 'partner_bruto_loon': 40000,
+                                'partner_loonheffing': 7000, 'box3_bank_saldo': 25000,
+                                'box3_overige_bezittingen': 0, 'box3_schulden': 35000})()
+        result, fallbacks = get_personal_data_with_fallback(current, prior)
+        assert result['woz']['value'] == 650000
+        assert result['woz']['source'] == 'prior'
+        assert 'woz_waarde' in fallbacks
+
+    def test_no_prior_returns_zero(self):
+        from components.fiscal_utils import get_personal_data_with_fallback
+        current = type('P', (), {'woz_waarde': 0, 'hypotheekrente': 0,
+                                  'aov_premie': 0, 'partner_bruto_loon': 0,
+                                  'partner_loonheffing': 0, 'box3_bank_saldo': 0,
+                                  'box3_overige_bezittingen': 0, 'box3_schulden': 0})()
+        result, fallbacks = get_personal_data_with_fallback(current, None)
+        assert result['woz']['value'] == 0
+        assert result['woz']['source'] == 'none'
+
+
+# ============================================================
+# Partner AHK
+# ============================================================
+
+class TestPartnerAHK:
+    """Tests for partner algemene heffingskorting calculation."""
+
+    def test_partner_ahk_2024(self):
+        """Partner with loon=39965: AHK calculated via bereken_algemene_heffingskorting.
+
+        2024 params: ahk_max=3362, ahk_drempel=24812, ahk_afbouw_pct=6.63
+        afbouw = 0.0663 * (39965 - 24812) = 1004.64
+        AHK = 3362 - 1004.64 = 2357.36
+        """
+        params = FISCALE_PARAMS[2024]
+        expected_ahk = bereken_algemene_heffingskorting(39965, 2024, params)
+        result = bereken_volledig(
+            omzet=120000, kosten=25000, afschrijvingen=500,
+            representatie=0, investeringen_totaal=0,
+            uren=1300, params=params, partner_inkomen=39965,
+        )
+        assert result.partner_ahk == expected_ahk
+        assert abs(result.partner_ahk - 2357.36) < 1
+
+    def test_partner_ahk_zero_when_no_partner(self):
+        """Without partner_inkomen, partner_ahk should be 0."""
+        params = FISCALE_PARAMS[2024]
+        result = bereken_volledig(
+            omzet=120000, kosten=25000, afschrijvingen=500,
+            representatie=0, investeringen_totaal=0,
+            uren=1300, params=params,
+        )
+        assert result.partner_ahk == 0.0
+
+    def test_partner_ahk_high_income_zero(self):
+        """Partner with very high income gets AHK = 0 (fully phased out).
+
+        2024: afbouw = 0.0663 * (120000 - 24812) = 6310.96 > ahk_max 3362 -> 0
+        """
+        params = FISCALE_PARAMS[2024]
+        result = bereken_volledig(
+            omzet=120000, kosten=25000, afschrijvingen=500,
+            representatie=0, investeringen_totaal=0,
+            uren=1300, params=params, partner_inkomen=120000,
+        )
+        assert result.partner_ahk == 0.0
+
+
+class TestIBBracketBoundary:
+    """Test IB calculation at exact bracket boundaries."""
+
+    def test_income_exactly_at_schijf1_grens_2024(self):
+        """Income exactly at schijf1_grens should have zero schijf2 tax.
+
+        With omzet=75518 (= schijf1_grens for 2024), after ZA + MKB deductions
+        the belastbare_winst (and thus verzamelinkomen) will be well below 75518.
+        All income stays in schijf1, so bruto_ib = verzamelinkomen * schijf1_pct/100
+        plus tariefsaanpassing (which should be 0 since fiscale_winst < grens).
+        """
+        params = FISCALE_PARAMS[2024]
+        # 2024 schijf1_grens = schijf2_grens = 75518
+        result = bereken_volledig(
+            omzet=75518, kosten=0, afschrijvingen=0,
+            representatie=0, investeringen_totaal=0,
+            uren=1400, params=params,
+        )
+        # After ZA (~5030) + MKB (~13.31%), belastbare_winst should be well under 75518
+        assert result.belastbare_winst < params['schijf1_grens'], \
+            f"belastbare_winst {result.belastbare_winst} should be under schijf1_grens {params['schijf1_grens']}"
+        # verzamelinkomen is under grens, so all in schijf1
+        assert result.verzamelinkomen < params['schijf1_grens']
+        # tariefsaanpassing should be 0 (no income in top bracket to adjust)
+        assert result.tariefsaanpassing == 0
+        # bruto_ib should equal verzamelinkomen * schijf1_pct / 100
+        expected_ib = round(result.verzamelinkomen * params['schijf1_pct'] / 100, 2)
+        assert abs(result.bruto_ib - expected_ib) < 1
+
+
+class TestMissingParamsValidation:
+    """Validation of required fiscal params."""
+
+    def test_missing_params_raises_valueerror(self):
+        """Missing required params should raise ValueError, not KeyError."""
+        with pytest.raises(ValueError, match='incompleet'):
+            bereken_volledig(omzet=100000, kosten=10000, afschrijvingen=0,
+                             representatie=0, investeringen_totaal=0,
+                             uren=1400, params={'jaar': 2024})

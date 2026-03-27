@@ -1,15 +1,8 @@
 """Tests voor seed data: fiscale parameters."""
 
 import pytest
-from database import init_db, get_klanten, get_fiscale_params, get_all_fiscale_params
+from database import get_klanten, get_fiscale_params, get_all_fiscale_params
 from import_.seed_data import seed_fiscale_params, seed_all
-
-
-@pytest.fixture
-async def db(tmp_path):
-    db_path = tmp_path / "test.sqlite3"
-    await init_db(db_path)
-    return db_path
 
 
 @pytest.mark.asyncio

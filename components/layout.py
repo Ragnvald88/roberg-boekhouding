@@ -27,6 +27,48 @@ ui.add_css('''
         background-color: #F8FAFC;
     }
 
+    /* Page toolbar — tinted bar with pill-shaped filters */
+    .page-toolbar {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 14px;
+        background: #EDF2F7;
+        border-radius: 12px;
+    }
+    .page-toolbar .q-field { min-height: unset; }
+
+    /* White pill selects inside toolbar */
+    .page-toolbar .q-field--outlined .q-field__control {
+        background: white !important;
+        border-color: transparent !important;
+        border-radius: 20px !important;
+        min-height: 36px !important;
+        transition: box-shadow 0.15s ease;
+    }
+    .page-toolbar .q-field--outlined .q-field__control:hover {
+        box-shadow: 0 2px 8px rgba(0,0,0,0.07);
+    }
+    .page-toolbar .q-field--outlined.q-field--focused .q-field__control {
+        border-color: var(--q-primary) !important;
+        box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.12);
+    }
+    .page-toolbar .q-field__label {
+        font-size: 11px !important;
+    }
+
+    .toolbar-divider {
+        width: 1px;
+        height: 24px;
+        background: #CBD5E1;
+        flex-shrink: 0;
+    }
+
+    /* Invoice builder panel styling */
+    .builder-panel-border { border-right: 1px solid var(--q-separator-color, #e2e8f0); }
+    .builder-line-card { border: 1px solid var(--q-separator-color, #e2e8f0); box-shadow: none; }
+    .builder-preview-bg { background: var(--q-separator-color, #e2e8f0); }
+
     /* KPI card hover */
     .kpi-card {
         transition: box-shadow 0.2s ease;
@@ -35,32 +77,74 @@ ui.add_css('''
         box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08) !important;
     }
 
-    /* Sidebar nav button active state */
-    .nav-active {
-        background-color: rgba(20, 184, 166, 0.15) !important;
-        color: #14B8A6 !important;
-        font-weight: 600;
+    /* Sidebar nav — clean minimal style */
+    .nav-item {
+        display: flex; align-items: center; gap: 10px;
+        padding: 7px 14px; margin: 1px 8px;
+        border-radius: 6px; cursor: pointer;
+        color: #94A3B8; font-size: 13px; font-weight: 400;
+        transition: all 0.15s;
+        text-decoration: none; border: none; background: none;
+        width: calc(100% - 16px);
+    }
+    .nav-item:hover { background: rgba(255,255,255,0.06); color: #E2E8F0; }
+    .nav-item .nav-icon { font-size: 18px; width: 20px; text-align: center; }
+
+    .nav-item.active {
+        color: #5EEAD4;
+        background: rgba(94,234,212,0.08);
+        font-weight: 500;
+        border-left: 3px solid #14B8A6;
+        margin-left: 5px;
+        padding-left: 11px;
     }
 
-    /* Sidebar nav button hover */
-    .nav-btn:hover {
-        background-color: rgba(255, 255, 255, 0.05) !important;
-    }
+    .nav-gap { height: 12px; }
+    .nav-divider { height: 1px; background: #1E293B; margin: 8px 16px; }
+
+    /* Dashboard design tokens */
+    .hero-label { font-size: 13px; color: #64748B; font-weight: 500; }
+    .hero-value { font-size: 30px; font-weight: 700; color: #0F172A;
+                  font-variant-numeric: tabular-nums; margin: 6px 0 2px; }
+    .hero-value-positive { font-size: 30px; font-weight: 700; color: var(--q-positive);
+                           font-variant-numeric: tabular-nums; margin: 6px 0 2px; }
+    .hero-value-negative { font-size: 30px; font-weight: 700; color: var(--q-negative);
+                           font-variant-numeric: tabular-nums; margin: 6px 0 2px; }
+    .context-text { font-size: 12px; color: #94A3B8; }
+    .section-label { font-size: 13px; font-weight: 600; color: #64748B;
+                     text-transform: uppercase; letter-spacing: 0.05em; }
+    .chart-title { font-size: 15px; font-weight: 600; color: #0F172A; }
+    .chart-subtitle { font-size: 12px; color: #94A3B8; }
+    .strip-value { font-size: 14px; font-weight: 600; color: #0F172A; }
+    .strip-pct { font-size: 11px; color: #94A3B8; }
+    .card-hero { border-radius: 14px; border: 1px solid #E2E8F0; }
 }
 ''', shared=True)
+
+
+def page_title(text: str):
+    """Render a consistent page title label."""
+    return ui.label(text).classes('text-h5') \
+        .style('color: #0F172A; font-weight: 700')
 
 
 def create_layout(title: str, active_page: str = ''):
     """Shared layout: teal header, dark sidebar, off-white content."""
 
-    PAGES = [
-        ('Dashboard', 'dashboard', '/'),
-        ('Werkdagen', 'schedule', '/werkdagen'),
-        ('Facturen', 'receipt', '/facturen'),
-        ('Kosten', 'payments', '/kosten'),
-        ('Bank', 'account_balance', '/bank'),
-        ('Jaarafsluiting', 'bar_chart', '/jaarafsluiting'),
-        ('Aangifte', 'fact_check', '/aangifte'),
+    # Navigation groups (separated by whitespace, no headers)
+    NAV_GROUPS = [
+        [('Dashboard', 'space_dashboard', '/'),
+         ('Werkdagen', 'event_note', '/werkdagen')],
+        [('Facturen', 'receipt_long', '/facturen'),
+         ('Kosten', 'shopping_bag', '/kosten'),
+         ('Bank', 'account_balance_wallet', '/bank')],
+        [('Documenten', 'folder_open', '/documenten'),
+         ('Jaarafsluiting', 'assessment', '/jaarafsluiting'),
+         ('Aangifte', 'assignment', '/aangifte')],
+    ]
+    SETUP_PAGES = [
+        ('Klanten', 'people_outline', '/klanten'),
+        ('Instellingen', 'tune', '/instellingen'),
     ]
 
     # Brand colors
@@ -84,41 +168,33 @@ def create_layout(title: str, active_page: str = ''):
             .props('flat color=white round dense')
         ui.label('Boekhouding').classes('text-h6 text-white q-ml-sm')
         ui.space()
-        ui.label(title).classes('text-subtitle1').style('color: #94A3B8')
+        ui.label(title).classes('text-subtitle1').style('color: #CBD5E1')
 
     # === Dark sidebar ===
     drawer = ui.left_drawer(value=True, bordered=False) \
         .style('background-color: #0F172A') \
-        .props('width=240')
+        .props('width=180')
+
+    def _nav_item(label, icon, target):
+        """Render a single nav item with active state."""
+        is_active = (target == active_page
+                     or target.split('?')[0] == active_page)
+        cls = 'nav-item active' if is_active else 'nav-item'
+        with ui.element('div').classes(cls) \
+                .on('click', lambda t=target: ui.navigate.to(t)):
+            ui.icon(icon).classes('nav-icon')
+            ui.label(label)
 
     with drawer:
-        # Section label
-        ui.label('NAVIGATIE') \
-            .classes('text-xs q-mt-lg q-mb-sm q-ml-md') \
-            .style('color: #64748B; letter-spacing: 0.1em')
+        ui.element('div').style('height: 12px')  # top spacing
 
-        for label, icon, target in PAGES:
-            is_active = (target == active_page)
-            btn = ui.button(
-                label, icon=icon,
-                on_click=lambda t=target: ui.navigate.to(t)
-            )
-            btn.props('flat align=left no-caps')
-            btn.classes('w-full rounded-lg q-mb-xs')
-            if is_active:
-                btn.classes('nav-active')
-            else:
-                btn.classes('nav-btn').style('color: #CBD5E1')
+        for i, group in enumerate(NAV_GROUPS):
+            if i > 0:
+                ui.element('div').classes('nav-gap')
+            for label, icon, target in group:
+                _nav_item(label, icon, target)
 
-        # Separator + settings
-        ui.separator().classes('q-my-md').style('background-color: #1E293B')
+        ui.element('div').classes('nav-divider')
 
-        settings_active = active_page == '/instellingen'
-        settings_btn = ui.button(
-            'Instellingen', icon='settings',
-            on_click=lambda: ui.navigate.to('/instellingen')
-        ).props('flat align=left no-caps').classes('w-full rounded-lg')
-        if settings_active:
-            settings_btn.classes('nav-active')
-        else:
-            settings_btn.classes('nav-btn').style('color: #CBD5E1')
+        for label, icon, target in SETUP_PAGES:
+            _nav_item(label, icon, target)

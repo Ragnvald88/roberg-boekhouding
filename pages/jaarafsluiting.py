@@ -1,34 +1,30 @@
 """Jaarafsluiting pagina — pure business annual report (Balans + W&V + Toelichting)."""
 
+import asyncio
 from datetime import date
 from pathlib import Path
 
-from jinja2 import Environment, FileSystemLoader
+from jinja2 import Environment, FileSystemLoader, select_autoescape
 from nicegui import ui
 
 from components.fiscal_utils import bereken_balans, fetch_fiscal_data
+from components.shared_ui import year_options
 from components.kpi_card import kpi_strip
-from components.layout import create_layout
+from components.layout import create_layout, page_title
 from components.utils import format_euro
 from database import (
+    find_factuur_matches, apply_factuur_matches,
     update_balans_inputs,
     update_jaarafsluiting_status,
     get_bedrijfsgegevens,
     get_fiscale_params,
+    get_aangifte_documenten,
+    get_db_ctx,
     DB_PATH,
 )
 
 
 # === Shared helpers ===
-
-def _wv_line(label: str, value: float, prefix: str = '', bold: bool = False):
-    """Render a W&V line with label and euro value."""
-    css = 'text-bold' if bold else ''
-    with ui.row().classes('w-full justify-between'):
-        text = f'{prefix}  {label}' if prefix else label
-        ui.label(text).classes(css)
-        ui.label(format_euro(value)).classes(f'{css} text-right') \
-            .style('min-width: 120px; font-variant-numeric: tabular-nums')
 
 
 def _balans_line(label: str, value: float, bold: bool = False, indent: bool = False):
@@ -79,7 +75,8 @@ async def _load_year_data(jaar: int):
         DB_PATH, jaar, data['activastaat'],
         winst=winst, begin_vermogen=begin_vermogen)
 
-    return data, balans, winst, vorig_jaar_balans
+    vj_w = vj_winst if vorig_jaar_data else None
+    return data, balans, winst, vorig_jaar_balans, vorig_jaar_data, vj_w
 
 
 # === Page ===
@@ -92,24 +89,25 @@ async def jaarafsluiting_page():
     state = {'jaar': vorig_jaar, 'editing': False}
 
     # --- Containers ---
-    with ui.column().classes('w-full max-w-6xl mx-auto q-pa-md gap-4'):
-        # Top bar: year selector + status badge + actions
-        with ui.row().classes('w-full items-center gap-3'):
-            jaar_select = ui.select(
-                options=list(range(2023, date.today().year + 1)),
-                value=vorig_jaar,
-                label='Boekjaar',
-            ).classes('w-32')
-
-            status_badge = ui.badge('Concept', color='warning').classes('text-sm q-ml-sm')
-
+    with ui.column().classes('w-full max-w-7xl mx-auto p-6 gap-4'):
+        # Header row: title + actions
+        with ui.row().classes('w-full items-center'):
+            page_title('Jaarafsluiting')
             ui.space()
-
             edit_btn = ui.button('Bewerken', icon='edit',
                                  on_click=lambda: toggle_edit()) \
-                .props('outline').classes('q-mr-sm')
+                .props('flat color=secondary dense')
             status_btn = ui.button('Markeer als definitief', icon='check_circle',
                                    on_click=lambda: set_definitief())
+
+        # Filter bar
+        with ui.element('div').classes('page-toolbar w-full'):
+            jaar_select = ui.select(
+                options=year_options(descending=False),
+                value=vorig_jaar,
+                label='Boekjaar',
+            ).classes('w-28')
+            status_badge = ui.badge('Concept', color='warning').classes('text-sm')
 
         # KPI strip placeholder
         kpi_container = ui.row().classes('w-full')
@@ -141,20 +139,16 @@ async def jaarafsluiting_page():
         status = getattr(params, 'jaarafsluiting_status', 'concept') or 'concept'
         is_definitief = status == 'definitief'
         status_badge.set_text('Definitief' if is_definitief else 'Concept')
-        status_badge._props['color'] = 'positive' if is_definitief else 'warning'
-        status_badge.update()
+        status_badge.props(f"color={'positive' if is_definitief else 'warning'}")
 
         # Update button states
         edit_btn.set_visibility(not is_definitief)
         if is_definitief:
             status_btn.set_text('Heropenen')
-            status_btn._props['icon'] = 'lock_open'
-            status_btn._props['color'] = 'warning'
+            status_btn.props('icon=lock_open color=warning')
         else:
             status_btn.set_text('Markeer als definitief')
-            status_btn._props['icon'] = 'check_circle'
-            status_btn._props['color'] = 'primary'
-        status_btn.update()
+            status_btn.props('icon=check_circle color=primary')
 
         if result is None:
             for panel in [balans_panel, wv_panel, toelichting_panel,
@@ -166,7 +160,7 @@ async def jaarafsluiting_page():
             kpi_container.clear()
             return
 
-        data, balans, winst, vorig_jaar_balans = result
+        data, balans, winst, vorig_jaar_balans, vorig_jaar_data, vorig_winst = result
 
         # KPI strip
         kpi_container.clear()
@@ -179,9 +173,9 @@ async def jaarafsluiting_page():
             )
 
         render_balans(data, balans, vorig_jaar_balans)
-        render_wv(data, winst)
+        render_wv(data, winst, vorig_jaar_data, vorig_winst)
         render_toelichting(data)
-        render_controles(data, balans, winst)
+        await render_controles(data, balans, winst)
         await render_document(data, balans, winst, vorig_jaar_balans)
 
     def render_balans(data, balans, vorig_jaar_balans):
@@ -290,12 +284,22 @@ async def jaarafsluiting_page():
                     await render_all()
                     ui.notify('Balans opgeslagen', type='positive')
 
-                ui.button('Opslaan', icon='save',
-                          on_click=save_balans).props('color=positive').classes('q-mt-md')
+                async def cancel_edit():
+                    state['editing'] = False
+                    await render_all()
 
-    def render_wv(data, winst):
-        """Render W&V tab."""
+                with ui.row().classes('q-mt-md gap-2'):
+                    ui.button('Annuleren', icon='close',
+                              on_click=cancel_edit).props('flat')
+                    ui.button('Opslaan', icon='save',
+                              on_click=save_balans).props('color=primary')
+
+    def render_wv(data, winst, vorig_data=None, vorig_winst=None):
+        """Render W&V tab with optional year-over-year comparison."""
         wv_panel.clear()
+        jaar = state['jaar']
+        has_vorig = vorig_data is not None and vorig_data.get('omzet', 0) > 0
+
         with wv_panel:
             # Data source info
             n_f = data['n_facturen']
@@ -313,29 +317,96 @@ async def jaarafsluiting_page():
                         ui.label('Geen uitgaven gevonden voor dit jaar.') \
                             .classes('text-warning')
 
+            def _wv_vergelijk(label, bedrag, vorig_bedrag=None,
+                              bold=False, indent=False):
+                """W&V line with optional prior-year column and delta."""
+                css = 'text-bold' if bold else ''
+                ml = 'q-ml-md' if indent else ''
+                num_style = ('text-align: right; '
+                             'font-variant-numeric: tabular-nums')
+                with ui.row().classes(
+                        f'w-full items-center {ml}').style('min-height: 28px'):
+                    ui.label(label).classes(f'{css} flex-grow')
+                    ui.label(format_euro(bedrag)).classes(css) \
+                        .style(f'width: 110px; {num_style}')
+                    if has_vorig:
+                        vb = vorig_bedrag if vorig_bedrag is not None else 0
+                        ui.label(format_euro(vb)) \
+                            .classes('text-grey-6') \
+                            .style(f'width: 110px; {num_style}')
+                        if vb and bedrag:
+                            delta = (bedrag - vb) / abs(vb) * 100
+                            color = ('text-positive' if delta >= 0
+                                     else 'text-negative')
+                            ui.label(f'{delta:+.1f}%') \
+                                .classes(f'text-caption {color}') \
+                                .style(f'width: 60px; {num_style}')
+
             # W&V
-            ui.label('Winst- en verliesrekening').classes('text-h6 text-primary')
+            ui.label('Winst- en verliesrekening') \
+                .classes('text-h6 text-primary')
             with ui.card().classes('w-full q-pa-md'):
-                _wv_line('Netto-omzet', data['omzet'], bold=True)
+                # Column headers
+                if has_vorig:
+                    num_style = 'text-align: right'
+                    with ui.row().classes('w-full items-center') \
+                            .style('min-height: 24px'):
+                        ui.label('').classes('flex-grow')
+                        ui.label(str(jaar)) \
+                            .classes('text-caption text-bold') \
+                            .style(f'width: 110px; {num_style}')
+                        ui.label(str(jaar - 1)) \
+                            .classes('text-caption text-grey-6') \
+                            .style(f'width: 110px; {num_style}')
+                        ui.label('\u0394') \
+                            .classes('text-caption text-grey-6') \
+                            .style(f'width: 60px; {num_style}')
+
+                vorig_omzet = vorig_data['omzet'] if has_vorig else None
+                _wv_vergelijk('Netto-omzet', data['omzet'],
+                              vorig_omzet, bold=True)
                 ui.separator().classes('q-my-sm')
-                _wv_line('Bedrijfslasten (excl. investeringen)', data['kosten_excl_inv'])
-                _wv_line('Afschrijvingen', data['totaal_afschrijvingen'])
+
+                # Km-vergoeding as separate line
+                vorig_km = vorig_data.get('km_vergoeding', 0) \
+                    if has_vorig else None
+                _wv_vergelijk('Km-vergoeding', data['km_vergoeding'],
+                              vorig_km, indent=True)
+
+                # Overige bedrijfskosten
+                overige = data['kosten_excl_inv'] - data['km_vergoeding']
+                vorig_overige = (
+                    vorig_data['kosten_excl_inv']
+                    - vorig_data.get('km_vergoeding', 0)
+                ) if has_vorig else None
+                _wv_vergelijk('Overige bedrijfskosten', overige,
+                              vorig_overige, indent=True)
+
+                vorig_afschr = vorig_data['totaal_afschrijvingen'] \
+                    if has_vorig else None
+                _wv_vergelijk('Afschrijvingen',
+                              data['totaal_afschrijvingen'], vorig_afschr)
                 ui.separator().classes('q-my-sm')
-                _wv_line('Winst', winst, bold=True)
+                _wv_vergelijk('Winst', winst, vorig_winst, bold=True)
 
             # Kostenspecificatie
             if data['kosten_per_cat']:
-                ui.label('Kostenspecificatie').classes('text-subtitle1 text-primary q-mt-lg')
+                ui.label('Kostenspecificatie') \
+                    .classes('text-subtitle1 text-primary q-mt-lg')
                 columns = [
-                    {'name': 'cat', 'label': 'Categorie', 'field': 'categorie', 'align': 'left'},
-                    {'name': 'bedrag', 'label': 'Bedrag', 'field': 'bedrag', 'align': 'right'},
+                    {'name': 'cat', 'label': 'Categorie',
+                     'field': 'categorie', 'align': 'left'},
+                    {'name': 'bedrag', 'label': 'Bedrag',
+                     'field': 'bedrag', 'align': 'right'},
                 ]
                 rows = [{'categorie': k['categorie'],
                          'bedrag': format_euro(k['totaal'])}
                         for k in data['kosten_per_cat']]
                 rows.append({'categorie': 'Totaal',
-                             'bedrag': format_euro(data['totaal_kosten_alle'])})
-                ui.table(columns=columns, rows=rows).classes('w-full max-w-lg')
+                             'bedrag': format_euro(
+                                 data['totaal_kosten_alle'])})
+                ui.table(columns=columns, rows=rows) \
+                    .classes('w-full max-w-lg')
 
     def render_toelichting(data):
         """Render Toelichting tab (activastaat + grondslagen)."""
@@ -388,11 +459,14 @@ async def jaarafsluiting_page():
                 ui.label('Geen investeringen / afschrijvingen.') \
                     .classes('text-grey-6')
 
-    def render_controles(data, balans, _winst):
-        """Render Controles tab — business checks only."""
+    async def render_controles(data, balans, _winst):
+        """Render Controles tab — kengetallen + data integrity checks."""
         controles_panel.clear()
+        jaar = state['jaar']
+
         with controles_panel:
-            ui.label('Controles en kengetallen').classes('text-h6 text-primary')
+            # === Section 1: Kengetallen ===
+            ui.label('Kengetallen').classes('text-h6 text-primary')
 
             # Kosten/omzet ratio
             ratio = round(data['kosten_excl_inv'] / data['omzet'] * 100, 1) \
@@ -440,23 +514,167 @@ async def jaarafsluiting_page():
                     ui.label(f'Verschil: {format_euro(diff)}') \
                         .classes('text-caption text-negative q-mt-xs')
 
-            # Missing data warnings
-            warnings = []
-            if data['n_uitgaven'] == 0:
-                warnings.append('Geen uitgaven ingevoerd voor dit jaar.')
-            if data['n_facturen'] == 0:
-                warnings.append('Geen facturen gevonden voor dit jaar.')
-            if balans['bank_saldo'] == 0:
-                warnings.append('Bank saldo is €0 — vul in via Bewerken op de Balans tab.')
+            # === Section 2: Data-integriteit ===
+            ui.label('Data-integriteit').classes('text-h6 text-primary q-mt-lg')
 
-            if warnings:
-                with ui.card().classes('w-full q-pa-md bg-orange-1'):
+            issues = []
+            ok_checks = []
+
+            async with get_db_ctx(DB_PATH) as conn:
+                # 1. Ongefactureerde werkdagen
+                cur = await conn.execute(
+                    "SELECT COUNT(*) FROM werkdagen "
+                    "WHERE substr(datum,1,4)=? "
+                    "AND (factuurnummer = '' OR factuurnummer IS NULL) "
+                    "AND tarief > 0", (str(jaar),))
+                ongefact = (await cur.fetchone())[0]
+                if ongefact > 0:
+                    issues.append((
+                        'warning',
+                        f'{ongefact} ongefactureerde werkdagen met tarief > 0',
+                        '/werkdagen'))
+                else:
+                    ok_checks.append('Alle werkdagen gefactureerd')
+
+                # 2. Facturen zonder werkdagen
+                cur = await conn.execute(
+                    "SELECT nummer, totaal_bedrag FROM facturen "
+                    "WHERE substr(datum,1,4)=? AND type='factuur' "
+                    "AND NOT EXISTS ("
+                    "  SELECT 1 FROM werkdagen w "
+                    "  WHERE w.factuurnummer = facturen.nummer"
+                    ")", (str(jaar),))
+                orphans = await cur.fetchall()
+                if orphans:
+                    nrs = ', '.join(r[0] for r in orphans[:5])
+                    issues.append((
+                        'warning',
+                        f'{len(orphans)} facturen zonder werkdagen: {nrs}',
+                        '/facturen'))
+                else:
+                    ok_checks.append('Alle facturen gekoppeld aan werkdagen')
+
+                # 3. Betaalde facturen zonder betaald_datum
+                cur = await conn.execute(
+                    "SELECT COUNT(*) FROM facturen "
+                    "WHERE substr(datum,1,4)=? AND status = 'betaald' "
+                    "AND (betaald_datum IS NULL OR betaald_datum='')",
+                    (str(jaar),))
+                no_date = (await cur.fetchone())[0]
+                if no_date > 0:
+                    issues.append((
+                        'info',
+                        f'{no_date} betaalde facturen zonder betaaldatum',
+                        '/facturen'))
+                else:
+                    ok_checks.append('Alle betaalde facturen hebben betaaldatum')
+
+                # 4. Niet-gecategoriseerde banktransacties
+                cur = await conn.execute(
+                    "SELECT COUNT(*) FROM banktransacties "
+                    "WHERE substr(datum,1,4)=? "
+                    "AND (categorie IS NULL OR categorie='') "
+                    "AND koppeling_type IS NULL",
+                    (str(jaar),))
+                uncat = (await cur.fetchone())[0]
+                if uncat > 0:
+                    issues.append((
+                        'info',
+                        f'{uncat} banktransacties niet gecategoriseerd',
+                        '/bank'))
+
+            # 5. VA bedragen zonder beschikking PDF
+            params = data['params']
+            va_total = (params.voorlopige_aanslag_betaald or 0) + \
+                       (params.voorlopige_aanslag_zvw or 0)
+            docs = await get_aangifte_documenten(DB_PATH, jaar)
+            doc_types = {d.documenttype for d in docs}
+            has_va_docs = ('va_ib_beschikking' in doc_types or
+                           'va_zvw_beschikking' in doc_types)
+            if va_total > 0 and not has_va_docs:
+                issues.append((
+                    'warning',
+                    f'VA bedragen ingevuld ({format_euro(va_total)}) '
+                    f'maar geen beschikking PDF geüpload',
+                    '/documenten'))
+            elif va_total == 0:
+                issues.append((
+                    'warning',
+                    'Voorlopige aanslag niet ingevuld',
+                    '/aangifte'))
+            else:
+                ok_checks.append('VA bedragen + beschikking PDF aanwezig')
+
+            # 6. Persoonlijke gegevens
+            missing_personal = []
+            if (params.woz_waarde or 0) == 0:
+                missing_personal.append('WOZ-waarde')
+            if (params.hypotheekrente or 0) == 0:
+                missing_personal.append('Hypotheekrente')
+            if (params.aov_premie or 0) == 0:
+                missing_personal.append('AOV premie')
+            if missing_personal:
+                issues.append((
+                    'info',
+                    f'Persoonlijke gegevens ontbreken: '
+                    f'{", ".join(missing_personal)}',
+                    '/aangifte'))
+            else:
+                ok_checks.append('Persoonlijke gegevens compleet')
+
+            # 7. Document completeness
+            from components.document_specs import AANGIFTE_DOCS
+            total_docs = len(AANGIFTE_DOCS)
+            done_docs = len({d.documenttype for d in docs})
+            if done_docs < total_docs:
+                issues.append((
+                    'info',
+                    f'Documenten: {done_docs}/{total_docs} geüpload',
+                    '/documenten'))
+            else:
+                ok_checks.append(f'Alle {total_docs} documenten geüpload')
+
+            # 8. Missing data warnings (existing)
+            if data['n_uitgaven'] == 0:
+                issues.append(('warning', 'Geen uitgaven ingevoerd', '/kosten'))
+            if data['n_facturen'] == 0:
+                issues.append(('warning', 'Geen facturen gevonden', '/facturen'))
+            if balans['bank_saldo'] == 0:
+                issues.append((
+                    'info', 'Bank saldo is €0 — vul in via Balans tab', None))
+
+            # Render issues
+            if issues:
+                with ui.card().classes('w-full q-pa-md q-mb-md'):
                     with ui.row().classes('items-center gap-2 q-mb-sm'):
-                        ui.icon('warning', color='warning')
-                        ui.label('Ontbrekende gegevens').classes(
-                            'text-subtitle1 text-warning')
-                    for w in warnings:
-                        ui.label(f'• {w}').classes('text-body2 text-warning')
+                        ui.icon('report_problem', color='warning')
+                        ui.label(f'{len(issues)} aandachtspunten') \
+                            .classes('text-subtitle1 text-weight-bold')
+                    for severity, msg, link in issues:
+                        icon = ('warning' if severity == 'warning'
+                                else 'info_outline')
+                        color = ('text-warning' if severity == 'warning'
+                                 else 'text-grey-7')
+                        with ui.row().classes('w-full items-center gap-2'):
+                            ui.icon(icon, size='sm').classes(color)
+                            ui.label(msg).classes(f'flex-grow {color}')
+                            if link:
+                                ui.button(
+                                    icon='open_in_new',
+                                    on_click=lambda l=link: ui.navigate.to(l),
+                                ).props('flat dense round size=sm color=primary')
+
+            # Render OK checks
+            if ok_checks:
+                with ui.card().classes('w-full q-pa-md'):
+                    with ui.row().classes('items-center gap-2 q-mb-sm'):
+                        ui.icon('check_circle', color='positive')
+                        ui.label('Goedgekeurd').classes(
+                            'text-subtitle1 text-weight-bold text-positive')
+                    for msg in ok_checks:
+                        with ui.row().classes('items-center gap-2'):
+                            ui.icon('check', size='sm', color='positive')
+                            ui.label(msg).classes('text-grey-7')
 
     async def render_document(data, balans, winst, vorig_jaar_balans):
         """Render Document tab — inline HTML preview + PDF export."""
@@ -491,7 +709,8 @@ async def jaarafsluiting_page():
                 pdf_path = pdf_dir / f'Jaarcijfers_{jaar}.pdf'
                 try:
                     from weasyprint import HTML
-                    HTML(string=html).write_pdf(str(pdf_path))
+                    await asyncio.to_thread(
+                        lambda: HTML(string=html).write_pdf(str(pdf_path)))
                     ui.notify(f'PDF opgeslagen: {pdf_path.name}', type='positive')
                 except Exception as e:
                     ui.notify(f'PDF fout: {e}', type='negative')
@@ -568,6 +787,15 @@ async def jaarafsluiting_page():
     # Initial render
     await render_all()
 
+    # Auto-match open facturen to bank payments
+    matches = await find_factuur_matches(DB_PATH)
+    if matches:
+        n = await apply_factuur_matches(DB_PATH, matches)
+        nummers = ', '.join(m['factuur_nummer'] for m in matches)
+        ui.notify(f'{n} facturen als betaald gemarkeerd: {nummers}',
+                  type='positive')
+        await render_all()
+
 
 # === PDF Template Rendering ===
 
@@ -576,7 +804,7 @@ def _render_pdf_html(jaar, data, balans, winst, vorig_jaar_balans,
     """Render the jaarcijfers PDF HTML — pure business report."""
     env = Environment(
         loader=FileSystemLoader(str(Path(__file__).parent.parent / 'templates')),
-        autoescape=False
+        autoescape=select_autoescape(['html']),
     )
 
     def euro_filter(value):

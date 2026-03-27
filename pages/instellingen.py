@@ -1,19 +1,16 @@
-"""Instellingen pagina — klanten beheer, fiscale parameters, backup."""
+"""Instellingen pagina — bedrijfsgegevens, fiscale parameters, backup."""
 
+import asyncio
 from datetime import date
-import io
 import json
 import zipfile
 
 from nicegui import ui
 
-from components.layout import create_layout
-from components.utils import format_euro
+from components.layout import create_layout, page_title
 from database import (
-    get_klanten, add_klant, update_klant, delete_klant,
-    get_klant_locaties, add_klant_locatie, delete_klant_locatie,
     get_all_fiscale_params, upsert_fiscale_params,
-    get_bedrijfsgegevens, upsert_bedrijfsgegevens, DB_PATH,
+    get_bedrijfsgegevens, upsert_bedrijfsgegevens, get_db_ctx, DB_PATH,
 )
 
 
@@ -22,12 +19,10 @@ async def instellingen_page():
     create_layout('Instellingen', '/instellingen')
 
     with ui.column().classes('w-full p-6 max-w-7xl mx-auto gap-6'):
-        ui.label('Instellingen').classes('text-h5') \
-            .style('color: #0F172A; font-weight: 700')
+        page_title('Instellingen')
 
         with ui.tabs().classes('w-full') as tabs:
             tab_bedrijf = ui.tab('Bedrijfsgegevens')
-            tab_klanten = ui.tab('Klanten')
             tab_fiscaal = ui.tab('Fiscale parameters')
             tab_backup = ui.tab('Backup')
 
@@ -54,6 +49,8 @@ async def instellingen_page():
                                 ('Functie', 'functie'),
                                 ('Adres', 'adres'),
                                 ('Postcode + Plaats', 'postcode_plaats'),
+                                ('Telefoon', 'telefoon'),
+                                ('E-mail', 'email'),
                                 ('KvK-nummer', 'kvk'),
                                 ('IBAN', 'iban'),
                                 ('Thuisplaats (voor reiskosten)', 'thuisplaats'),
@@ -72,259 +69,49 @@ async def instellingen_page():
                                 'Opslaan', icon='save', on_click=save_bedrijf
                             ).props('color=primary').classes('q-mt-md')
 
+                        # Logo upload section
+                        with ui.card().classes('w-full q-mt-md'):
+                            ui.label('Bedrijfslogo').classes(
+                                'text-subtitle2 text-grey-8')
+                            ui.label(
+                                'Upload een logo dat op facturen wordt getoond.'
+                            ).classes('text-caption text-grey')
+
+                            logo_dir = DB_PATH.parent / 'logo'
+                            logo_dir.mkdir(parents=True, exist_ok=True)
+                            logo_files = list(logo_dir.glob('logo.*'))
+
+                            logo_preview = ui.column().classes('q-mt-sm')
+                            if logo_files:
+                                with logo_preview:
+                                    ui.image(
+                                        f'/logo-files/{logo_files[0].name}'
+                                    ).classes('w-48')
+
+                            async def handle_logo_upload(e):
+                                content = await e.file.read()
+                                ext = e.file.name.rsplit('.', 1)[-1].lower()
+                                # Remove any existing logo files
+                                for f in logo_dir.glob('logo.*'):
+                                    f.unlink()
+                                dest = logo_dir / f'logo.{ext}'
+                                await asyncio.to_thread(dest.write_bytes, content)
+                                logo_preview.clear()
+                                with logo_preview:
+                                    ui.image(
+                                        f'/logo-files/logo.{ext}'
+                                    ).classes('w-48')
+                                ui.notify('Logo opgeslagen', type='positive')
+
+                            ui.upload(
+                                label='Upload logo', auto_upload=True,
+                                on_upload=handle_logo_upload,
+                                max_file_size=5_000_000,
+                            ).props(
+                                'flat bordered accept=".png,.jpg,.jpeg,.svg"'
+                            ).classes('w-full q-mt-sm')
+
                 await refresh_bedrijf()
-
-            # === TAB: Klanten ===
-            with ui.tab_panel(tab_klanten):
-                klanten_container = ui.column().classes('w-full')
-
-                async def refresh_klanten():
-                    klanten_container.clear()
-                    klanten = await get_klanten(DB_PATH)
-
-                    with klanten_container:
-                        # Add form
-                        with ui.card().classes('w-full q-mb-md'):
-                            ui.label('Klant toevoegen').classes('text-subtitle1 text-bold')
-                            with ui.row().classes('w-full items-end gap-4 flex-wrap'):
-                                new_naam = ui.input('Naam').classes('w-48')
-                                new_tarief = ui.number('Tarief/uur (€)', value=0,
-                                                        min=0, step=0.50).classes('w-32')
-                                new_km = ui.number('Retour km', value=0,
-                                                    min=0).classes('w-24')
-                                new_adres = ui.input('Adres').classes('w-64')
-
-                                async def add_new():
-                                    if not new_naam.value:
-                                        ui.notify('Vul een naam in', type='warning')
-                                        return
-                                    await add_klant(DB_PATH, naam=new_naam.value,
-                                                    tarief_uur=new_tarief.value or 0,
-                                                    retour_km=new_km.value or 0,
-                                                    adres=new_adres.value or '')
-                                    ui.notify(f'Klant {new_naam.value} toegevoegd',
-                                              type='positive')
-                                    new_naam.value = ''
-                                    new_adres.value = ''
-                                    await refresh_klanten()
-
-                                ui.button('Toevoegen', icon='add',
-                                          on_click=add_new).props('color=primary')
-
-                        # Klanten table
-                        if not klanten:
-                            ui.label('Geen klanten gevonden.').classes('text-grey')
-                        else:
-                            columns = [
-                                {'name': 'naam', 'label': 'Naam', 'field': 'naam',
-                                 'align': 'left'},
-                                {'name': 'tarief', 'label': 'Tarief/uur',
-                                 'field': 'tarief_fmt', 'align': 'right'},
-                                {'name': 'km', 'label': 'Retour km', 'field': 'retour_km',
-                                 'align': 'right'},
-                                {'name': 'adres', 'label': 'Adres', 'field': 'adres',
-                                 'align': 'left'},
-                                {'name': 'actief', 'label': 'Actief', 'field': 'actief_txt',
-                                 'align': 'center'},
-                                {'name': 'actions', 'label': '', 'field': 'actions',
-                                 'align': 'center'},
-                            ]
-
-                            rows = [{
-                                'id': k.id,
-                                'naam': k.naam,
-                                'tarief_uur': k.tarief_uur,
-                                'tarief_fmt': format_euro(k.tarief_uur),
-                                'retour_km': k.retour_km,
-                                'adres': k.adres,
-                                'actief': k.actief,
-                                'actief_txt': 'Ja' if k.actief else 'Nee',
-                            } for k in klanten]
-
-                            table = ui.table(
-                                columns=columns, rows=rows, row_key='id',
-                            ).classes('w-full')
-
-                            table.add_slot('body-cell-actions', '''
-                                <q-td :props="props">
-                                    <q-btn icon="edit" flat dense round size="sm"
-                                        @click="() => $parent.$emit('edit', props.row)" />
-                                    <q-btn :icon="props.row.actief ? 'visibility_off' : 'visibility'"
-                                        flat dense round size="sm"
-                                        :color="props.row.actief ? 'orange' : 'green'"
-                                        @click="() => $parent.$emit('toggle', props.row)" />
-                                    <q-btn icon="delete" flat dense round size="sm"
-                                        color="negative"
-                                        @click="() => $parent.$emit('deleteklant', props.row)" />
-                                </q-td>
-                            ''')
-
-                            async def on_edit(e):
-                                row = e.args
-                                with ui.dialog() as dialog, ui.card().classes('w-96'):
-                                    ui.label('Klant bewerken').classes('text-h6')
-                                    ed_naam = ui.input('Naam', value=row['naam']).classes('w-full')
-                                    ed_tarief = ui.number('Tarief/uur (€)',
-                                                          value=row['tarief_uur']).classes('w-full')
-                                    ed_km = ui.number('Retour km',
-                                                      value=row['retour_km']).classes('w-full')
-                                    ed_adres = ui.input('Adres',
-                                                        value=row['adres']).classes('w-full')
-
-                                    # --- Locaties sub-section ---
-                                    ui.separator().classes('q-my-sm')
-                                    ui.label('Locaties').classes(
-                                        'text-subtitle2 text-weight-medium')
-                                    ui.label(
-                                        'Werklocaties met retourafstand (km). '
-                                        'Verschijnt als dropdown in het '
-                                        'werkdagformulier.'
-                                    ).classes('text-caption text-grey')
-
-                                    loc_container = ui.column().classes(
-                                        'w-full gap-1')
-
-                                    async def refresh_locaties():
-                                        loc_container.clear()
-                                        klant_id = row['id']
-                                        locaties = await get_klant_locaties(
-                                            DB_PATH, klant_id)
-                                        with loc_container:
-                                            for loc in locaties:
-                                                with ui.row().classes(
-                                                    'w-full items-center gap-2'
-                                                ):
-                                                    ui.label(loc.naam).classes(
-                                                        'flex-grow')
-                                                    ui.label(
-                                                        f'{loc.retour_km:.0f} km'
-                                                    ).classes(
-                                                        'text-caption text-grey')
-
-                                                    async def del_loc(
-                                                        lid=loc.id,
-                                                    ):
-                                                        await delete_klant_locatie(
-                                                            DB_PATH, lid)
-                                                        ui.notify(
-                                                            'Locatie verwijderd',
-                                                            type='info')
-                                                        await refresh_locaties()
-
-                                                    ui.button(
-                                                        icon='close',
-                                                        on_click=del_loc,
-                                                    ).props(
-                                                        'flat dense round '
-                                                        'size=sm color=negative'
-                                                    )
-
-                                            # Add new location row
-                                            with ui.row().classes(
-                                                'w-full items-end gap-2'
-                                            ):
-                                                new_loc_naam = ui.input(
-                                                    'Locatienaam',
-                                                ).classes(
-                                                    'flex-grow'
-                                                ).props('dense')
-                                                new_loc_km = ui.number(
-                                                    'Km retour', value=0,
-                                                    min=0,
-                                                ).classes('w-24').props('dense')
-
-                                                async def add_loc():
-                                                    naam = new_loc_naam.value
-                                                    km = new_loc_km.value or 0
-                                                    if not naam:
-                                                        ui.notify(
-                                                            'Vul een locatienaam'
-                                                            ' in',
-                                                            type='warning')
-                                                        return
-                                                    try:
-                                                        await add_klant_locatie(
-                                                            DB_PATH, row['id'],
-                                                            naam, km)
-                                                    except Exception:
-                                                        ui.notify(
-                                                            f'Locatie "{naam}" '
-                                                            f'bestaat al',
-                                                            type='warning')
-                                                        return
-                                                    ui.notify(
-                                                        f'Locatie "{naam}" '
-                                                        f'toegevoegd',
-                                                        type='positive')
-                                                    await refresh_locaties()
-
-                                                ui.button(
-                                                    icon='add',
-                                                    on_click=add_loc,
-                                                ).props(
-                                                    'flat dense round '
-                                                    'color=primary'
-                                                )
-
-                                    await refresh_locaties()
-
-                                    with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
-                                        ui.button('Annuleren', on_click=dialog.close).props('flat')
-
-                                        async def save_edit():
-                                            await update_klant(
-                                                DB_PATH, klant_id=row['id'],
-                                                naam=ed_naam.value,
-                                                tarief_uur=ed_tarief.value,
-                                                retour_km=ed_km.value,
-                                                adres=ed_adres.value,
-                                            )
-                                            dialog.close()
-                                            ui.notify('Klant bijgewerkt', type='positive')
-                                            await refresh_klanten()
-
-                                        ui.button('Opslaan', on_click=save_edit) \
-                                            .props('color=primary')
-                                dialog.open()
-
-                            async def on_toggle(e):
-                                row = e.args
-                                new_actief = 0 if row['actief'] else 1
-                                await update_klant(DB_PATH, klant_id=row['id'],
-                                                   actief=new_actief)
-                                status = 'geactiveerd' if new_actief else 'gedeactiveerd'
-                                ui.notify(f"{row['naam']} {status}", type='info')
-                                await refresh_klanten()
-
-                            async def on_delete_klant(e):
-                                row = e.args
-                                with ui.dialog() as dialog, ui.card():
-                                    ui.label(f"Klant '{row['naam']}' verwijderen?").classes('text-h6')
-                                    ui.label(
-                                        'Let op: werkdagen en facturen gekoppeld aan deze '
-                                        'klant worden NIET verwijderd.'
-                                    ).classes('text-body2 text-grey')
-                                    with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
-                                        ui.button('Annuleren', on_click=dialog.close).props('flat')
-
-                                        async def confirm_del(kid=row['id'], dlg=dialog):
-                                            try:
-                                                await delete_klant(DB_PATH, klant_id=kid)
-                                                dlg.close()
-                                                ui.notify('Klant verwijderd', type='positive')
-                                                await refresh_klanten()
-                                            except ValueError as e:
-                                                ui.notify(str(e), type='negative')
-
-                                        ui.button('Verwijderen', on_click=confirm_del) \
-                                            .props('color=negative')
-                                dialog.open()
-
-                            table.on('edit', on_edit)
-                            table.on('toggle', on_toggle)
-                            table.on('deleteklant', on_delete_klant)
-
-                await refresh_klanten()
 
             # === TAB: Fiscale parameters ===
             with ui.tab_panel(tab_fiscaal):
@@ -362,6 +149,7 @@ async def instellingen_page():
                                         'kia_ondergrens': latest.kia_ondergrens,
                                         'kia_bovengrens': latest.kia_bovengrens,
                                         'kia_pct': latest.kia_pct,
+                                        'kia_drempel_per_item': latest.kia_drempel_per_item,
                                         'km_tarief': latest.km_tarief,
                                         'schijf1_grens': latest.schijf1_grens,
                                         'schijf1_pct': latest.schijf1_pct,
@@ -397,7 +185,8 @@ async def instellingen_page():
                                     kwargs = {'jaar': jaar, 'zelfstandigenaftrek': 0,
                                               'mkb_vrijstelling_pct': 12.70,
                                               'kia_ondergrens': 2901, 'kia_bovengrens': 70602,
-                                              'kia_pct': 28, 'km_tarief': 0.23,
+                                              'kia_pct': 28, 'kia_drempel_per_item': 450,
+                                              'km_tarief': 0.23,
                                               'schijf1_grens': 38883, 'schijf1_pct': 35.75,
                                               'schijf2_grens': 78426, 'schijf2_pct': 37.56,
                                               'schijf3_pct': 49.50, 'ahk_max': 3115,
@@ -423,40 +212,62 @@ async def instellingen_page():
                                 icon='calendar_month',
                             ).classes('w-full'):
                                 with ui.grid(columns=2).classes('gap-2 w-full'):
-                                    fields = [
-                                        ('Zelfstandigenaftrek', 'zelfstandigenaftrek'),
-                                        ('Startersaftrek', 'startersaftrek'),
-                                        ('MKB-vrijstelling %', 'mkb_vrijstelling_pct'),
-                                        ('KIA ondergrens', 'kia_ondergrens'),
-                                        ('KIA bovengrens', 'kia_bovengrens'),
-                                        ('KIA %', 'kia_pct'),
-                                        ('Km-tarief', 'km_tarief'),
-                                        ('Representatie aftrek %', 'repr_aftrek_pct'),
-                                        ('Schijf 1 grens', 'schijf1_grens'),
-                                        ('Schijf 1 %', 'schijf1_pct'),
-                                        ('Schijf 2 grens', 'schijf2_grens'),
-                                        ('Schijf 2 %', 'schijf2_pct'),
-                                        ('Schijf 3 %', 'schijf3_pct'),
-                                        ('PVV premiegrondslag', 'pvv_premiegrondslag'),
-                                        ('AHK max', 'ahk_max'),
-                                        ('AHK afbouw %', 'ahk_afbouw_pct'),
-                                        ('AHK drempel', 'ahk_drempel'),
-                                        ('AK max', 'ak_max'),
-                                        ('ZVW %', 'zvw_pct'),
-                                        ('ZVW max grondslag', 'zvw_max_grondslag'),
-                                        ('EW forfait %', 'ew_forfait_pct'),
-                                        ('Villataks grens', 'villataks_grens'),
-                                        ('Wet Hillen %', 'wet_hillen_pct'),
-                                        ('Urencriterium', 'urencriterium'),
+                                    # Grouped fields with section headers
+                                    grouped_fields = [
+                                        ('IB Schijven', [
+                                            ('Schijf 1 grens', 'schijf1_grens'),
+                                            ('Schijf 1 %', 'schijf1_pct'),
+                                            ('Schijf 2 grens', 'schijf2_grens'),
+                                            ('Schijf 2 %', 'schijf2_pct'),
+                                            ('Schijf 3 %', 'schijf3_pct'),
+                                            ('PVV premiegrondslag', 'pvv_premiegrondslag'),
+                                        ]),
+                                        ('Ondernemersaftrek', [
+                                            ('Zelfstandigenaftrek', 'zelfstandigenaftrek'),
+                                            ('Startersaftrek', 'startersaftrek'),
+                                            ('MKB-vrijstelling %', 'mkb_vrijstelling_pct'),
+                                        ]),
+                                        ('Investeringsaftrek', [
+                                            ('KIA %', 'kia_pct'),
+                                            ('KIA ondergrens', 'kia_ondergrens'),
+                                            ('KIA bovengrens', 'kia_bovengrens'),
+                                            ('KIA drempel per item', 'kia_drempel_per_item'),
+                                        ]),
+                                        ('Heffingskortingen', [
+                                            ('AHK max', 'ahk_max'),
+                                            ('AHK afbouw %', 'ahk_afbouw_pct'),
+                                            ('AHK drempel', 'ahk_drempel'),
+                                        ]),
+                                        ('ZVW', [
+                                            ('ZVW %', 'zvw_pct'),
+                                            ('ZVW max grondslag', 'zvw_max_grondslag'),
+                                        ]),
+                                        ('Eigen woning', [
+                                            ('EW forfait %', 'ew_forfait_pct'),
+                                            ('Villataks grens', 'villataks_grens'),
+                                            ('Wet Hillen %', 'wet_hillen_pct'),
+                                        ]),
+                                        ('Overig', [
+                                            ('Km-tarief', 'km_tarief'),
+                                            ('Representatie aftrek %', 'repr_aftrek_pct'),
+                                            ('Urencriterium', 'urencriterium'),
+                                        ]),
                                     ]
+                                    # Flat list for save logic
+                                    fields = []
                                     inputs = {}
-                                    for label, key in fields:
-                                        val = getattr(params, key)
-                                        inp = ui.number(
-                                            label, value=val if val is not None else 0,
-                                            format='%.2f'
-                                        ).classes('w-full')
-                                        inputs[key] = inp
+                                    for section, section_fields in grouped_fields:
+                                        ui.label(section).classes(
+                                            'text-subtitle2 text-weight-bold '
+                                            'text-grey-7 col-span-2 q-mt-md')
+                                        for label, key in section_fields:
+                                            fields.append((label, key))
+                                            val = getattr(params, key)
+                                            inp = ui.number(
+                                                label, value=val if val is not None else 0,
+                                                format='%.2f'
+                                            ).classes('w-full')
+                                            inputs[key] = inp
 
                                 # --- ZA/SA toggles ---
                                 ui.label('Ondernemersaftrek toggles').classes(
@@ -622,20 +433,33 @@ async def instellingen_page():
                     backup_name = f"boekhouding_backup_{date.today().isoformat()}.zip"
                     backup_path = DB_PATH.parent / backup_name
 
-                    with zipfile.ZipFile(backup_path, 'w', zipfile.ZIP_DEFLATED) as zf:
-                        # Database
-                        if DB_PATH.exists():
-                            zf.write(DB_PATH, 'boekhouding.sqlite3')
-                        # Include all data subdirectories
-                        for subdir in ['facturen', 'uitgaven', 'jaarafsluiting', 'bank_csv', 'aangifte']:
-                            dir_path = DB_PATH.parent / subdir
-                            if dir_path.exists():
-                                for f in dir_path.rglob('*'):
-                                    if f.is_file():
-                                        zf.write(f, f"{subdir}/{f.relative_to(dir_path)}")
+                    # Flush WAL to ensure consistent backup
+                    async with get_db_ctx(DB_PATH) as conn:
+                        await conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 
+                    def _create_zip():
+                        with zipfile.ZipFile(backup_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+                            if DB_PATH.exists():
+                                zf.write(DB_PATH, 'boekhouding.sqlite3')
+                            for subdir in ['facturen', 'uitgaven', 'jaarafsluiting', 'bank_csv', 'aangifte']:
+                                dir_path = DB_PATH.parent / subdir
+                                if dir_path.exists():
+                                    for f in dir_path.rglob('*'):
+                                        if f.is_file():
+                                            zf.write(f, f"{subdir}/{f.relative_to(dir_path)}")
+
+                    await asyncio.to_thread(_create_zip)
                     ui.download(str(backup_path))
                     ui.notify(f'Backup {backup_name} aangemaakt', type='positive')
+
+                    # Clean up ZIP after download starts
+                    async def _cleanup():
+                        await asyncio.sleep(120)
+                        try:
+                            backup_path.unlink(missing_ok=True)
+                        except OSError:
+                            pass
+                    asyncio.create_task(_cleanup())
 
                 ui.button('Download backup', icon='download',
                           on_click=download_backup).props('color=primary')

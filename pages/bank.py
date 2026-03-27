@@ -1,15 +1,18 @@
 """Bank pagina — Rabobank CSV import + categoriseren."""
 
+import asyncio
 from datetime import datetime
 
 from nicegui import ui
 
-from components.layout import create_layout
-from components.utils import format_euro, BANK_CATEGORIEEN
+from components.layout import create_layout, page_title
+from components.utils import format_euro, format_datum, generate_csv, BANK_CATEGORIEEN
 from database import (
     get_banktransacties, add_banktransacties, update_banktransactie,
-    delete_banktransacties, DB_PATH,
+    delete_banktransacties, find_factuur_matches, apply_factuur_matches,
+    DB_PATH,
 )
+from components.shared_ui import year_options
 from import_.rabobank_csv import parse_rabobank_csv
 
 
@@ -21,6 +24,7 @@ async def bank_page():
     current_year = datetime.now().year
     selected_jaar = {'value': current_year}
     selected_maand = {'value': 0}  # 0 = alle maanden
+    zoek_tekst = {'value': ''}
 
     table_ref = {'table': None}
     csv_list_container = {'ref': None}
@@ -37,6 +41,11 @@ async def bank_page():
             maand_str = f"{selected_maand['value']:02d}"
             transacties = [t for t in transacties if t.datum[5:7] == maand_str]
 
+        if zoek_tekst['value']:
+            q = zoek_tekst['value'].lower()
+            transacties = [t for t in transacties
+                           if q in t.tegenpartij.lower() or q in t.omschrijving.lower()]
+
         rows = []
         for t in transacties:
             # Determine status for color coding
@@ -50,6 +59,7 @@ async def bank_page():
             rows.append({
                 'id': t.id,
                 'datum': t.datum,
+                'datum_fmt': format_datum(t.datum),
                 'bedrag': t.bedrag,
                 'bedrag_fmt': format_euro(t.bedrag),
                 'tegenpartij': t.tegenpartij,
@@ -96,8 +106,8 @@ async def bank_page():
 
     async def handle_upload(e):
         """Handle CSV file upload: parse, archive, insert."""
-        content = e.content.read()
-        filename = e.name
+        content = await e.file.read()
+        filename = e.file.name
 
         try:
             transacties = parse_rabobank_csv(content)
@@ -121,12 +131,21 @@ async def bank_page():
         csv_dir.mkdir(parents=True, exist_ok=True)
         archive_name = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{filename}"
         archive_path = csv_dir / archive_name
-        archive_path.write_bytes(content)
+        await asyncio.to_thread(archive_path.write_bytes, content)
 
         # Insert into database
         count = await add_banktransacties(DB_PATH, transacties, csv_bestand=archive_name)
 
         ui.notify(f"{count} transacties geimporteerd uit {filename}", type='positive')
+
+        # Auto-match incoming payments to open facturen
+        matches = await find_factuur_matches(DB_PATH)
+        if matches:
+            n = await apply_factuur_matches(DB_PATH, matches)
+            nummers = ', '.join(m['factuur_nummer'] for m in matches)
+            ui.notify(f'{n} facturen als betaald gemarkeerd: {nummers}',
+                      type='positive')
+
         await refresh_table()
         await refresh_csv_list()
 
@@ -150,7 +169,7 @@ async def bank_page():
             ui.label('Transactie verwijderen?').classes('text-h6')
             ui.label(f"{row['datum']} — {row['tegenpartij']} — "
                      f"{row['bedrag_fmt']}").classes('text-grey')
-            with ui.row().classes('w-full justify-end gap-2 mt-2'):
+            with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
                 ui.button('Annuleren', on_click=dialog.close).props('flat')
 
                 async def do_delete():
@@ -171,7 +190,7 @@ async def bank_page():
             return
         with ui.dialog() as dialog, ui.card():
             ui.label(f'{len(ids)} transacties verwijderen?').classes('text-h6')
-            with ui.row().classes('w-full justify-end gap-2 mt-2'):
+            with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
                 ui.button('Annuleren', on_click=dialog.close).props('flat')
 
                 async def do_bulk():
@@ -188,19 +207,27 @@ async def bank_page():
 
     # --- Page layout ---
     with ui.column().classes('w-full p-6 max-w-7xl mx-auto gap-6'):
-        ui.label('Banktransacties').classes('text-h5') \
-            .style('color: #0F172A; font-weight: 700')
+        # Header row: title + primary action
+        with ui.row().classes('w-full items-center'):
+            page_title('Bank')
+            ui.space()
+            # CSV upload button
+            ui.upload(
+                label='Importeer CSV',
+                on_upload=handle_upload,
+                auto_upload=True,
+            ).props('accept=".csv" flat color=primary').classes('w-44')
 
-        # Top bar: filters + upload
-        with ui.row().classes('w-full items-center gap-4 q-mb-md'):
+        # Filter bar
+        with ui.element('div').classes('page-toolbar w-full'):
             # Year selector
-            jaren = list(range(2023, current_year + 1))
+            jaren = year_options(descending=False)
             ui.select(
                 label='Jaar',
                 options=jaren,
                 value=current_year,
                 on_change=lambda e: handle_jaar_change(e.value),
-            ).classes('w-32')
+            ).classes('w-28')
 
             # Month selector
             nl_maanden = {
@@ -213,16 +240,36 @@ async def bank_page():
                 options=nl_maanden,
                 value=0,
                 on_change=lambda e: handle_maand_change(e.value),
-            ).classes('w-40')
+            ).classes('w-36')
+
+            # Search filter
+            async def handle_zoek(new_val):
+                zoek_tekst['value'] = new_val or ''
+                await refresh_table()
+
+            ui.input(label='Zoeken', placeholder='Tegenpartij / omschrijving',
+                     on_change=lambda e: handle_zoek(e.value)
+                     ).props('clearable').classes('w-52')
 
             ui.space()
 
-            # CSV upload button
-            ui.upload(
-                label='Importeer CSV',
-                on_upload=handle_upload,
-                auto_upload=True,
-            ).props('accept=".csv" flat color=primary').classes('w-48')
+            # CSV export
+            async def export_csv_bank():
+                rows_data = await load_transacties()
+                headers = ['Datum', 'Bedrag', 'Tegenpartij', 'Omschrijving',
+                           'Categorie', 'Koppeling']
+                rows_out = [[r['datum'], r['bedrag'], r['tegenpartij'],
+                             r['omschrijving_full'], r['categorie'], r['koppeling']]
+                            for r in rows_data]
+                csv_str = generate_csv(headers, rows_out)
+                ui.download.content(
+                    csv_str.encode('utf-8-sig'),
+                    f'bank_{selected_jaar["value"]}.csv')
+
+            ui.button(icon='download',
+                      on_click=export_csv_bank) \
+                .props('flat round color=secondary size=sm') \
+                .tooltip('Exporteer CSV')
 
         # Bulk action toolbar
         bulk_bar = ui.row().classes('w-full items-center gap-4')
@@ -234,6 +281,18 @@ async def bank_page():
             ui.button('Verwijder selectie', icon='delete',
                       on_click=lambda: on_bulk_delete()) \
                 .props('color=negative outline')
+
+        # Color legend
+        with ui.row().classes('gap-4 items-center q-mb-sm'):
+            for bg_class, label in [
+                ('bg-teal-1', 'Gekoppeld aan factuur'),
+                ('bg-amber-1', 'Gecategoriseerd'),
+                ('bg-red-1', 'Niet gekoppeld'),
+            ]:
+                with ui.row().classes('items-center gap-1'):
+                    ui.element('div').classes(f'{bg_class} rounded-sm') \
+                        .style('width: 14px; height: 14px')
+                    ui.label(label).classes('text-caption text-grey-7')
 
         # Transactions table
         columns = [
@@ -259,7 +318,8 @@ async def bank_page():
             rows=initial_rows,
             row_key='id',
             selection='multiple',
-            pagination={'rowsPerPage': 25, 'sortBy': 'datum', 'descending': True},
+            pagination={'rowsPerPage': 25, 'sortBy': 'datum', 'descending': True,
+                        'rowsPerPageOptions': [10, 20, 50, 0]},
         ).classes('w-full')
         table_ref['table'] = table
 
@@ -274,7 +334,7 @@ async def bank_page():
                 <q-td auto-width>
                     <q-checkbox v-model="props.selected" dense />
                 </q-td>
-                <q-td key="datum" :props="props">{{ props.row.datum }}</q-td>
+                <q-td key="datum" :props="props">{{ props.row.datum_fmt }}</q-td>
                 <q-td key="bedrag_fmt" :props="props"
                        :class="props.row.bedrag >= 0 ? 'text-teal-8 text-bold' : 'text-red-8 text-bold'"
                        style="text-align: right">

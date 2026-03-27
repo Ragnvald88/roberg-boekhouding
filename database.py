@@ -1,7 +1,9 @@
 """SQLite database: schema, connectie, en alle queries."""
 
 import re
-from datetime import date as _date
+import sqlite3
+from contextlib import asynccontextmanager
+from datetime import date as _date, timedelta as _timedelta
 
 import aiosqlite
 from pathlib import Path
@@ -42,19 +44,20 @@ CREATE TABLE IF NOT EXISTS werkdagen (
     code TEXT DEFAULT '',
     activiteit TEXT DEFAULT 'Waarneming dagpraktijk',
     locatie TEXT DEFAULT '',
-    uren REAL NOT NULL CHECK (uren > 0),
+    uren REAL NOT NULL CHECK (uren >= 0),
     km REAL DEFAULT 0 CHECK (km >= 0),
     tarief REAL NOT NULL CHECK (tarief >= 0),
     km_tarief REAL DEFAULT 0.23,
-    status TEXT DEFAULT 'ongefactureerd',
     factuurnummer TEXT DEFAULT '',
     opmerking TEXT DEFAULT '',
-    urennorm INTEGER DEFAULT 1 CHECK (urennorm IN (0, 1))
+    urennorm INTEGER DEFAULT 1 CHECK (urennorm IN (0, 1)),
+    -- Migration 6 column
+    locatie_id INTEGER REFERENCES klant_locaties(id) ON DELETE SET NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_werkdagen_datum ON werkdagen(datum);
 CREATE INDEX IF NOT EXISTS idx_werkdagen_klant ON werkdagen(klant_id);
-CREATE INDEX IF NOT EXISTS idx_werkdagen_status ON werkdagen(status);
+CREATE INDEX IF NOT EXISTS idx_werkdagen_factuurnummer ON werkdagen(factuurnummer);
 
 CREATE TABLE IF NOT EXISTS facturen (
     id INTEGER PRIMARY KEY,
@@ -67,10 +70,12 @@ CREATE TABLE IF NOT EXISTS facturen (
     pdf_pad TEXT DEFAULT '',
     betaald INTEGER DEFAULT 0 CHECK (betaald IN (0, 1)),
     betaald_datum TEXT DEFAULT '',
-    type TEXT DEFAULT 'factuur'
+    type TEXT DEFAULT 'factuur',
+    bron TEXT DEFAULT 'app'
 );
 
 CREATE INDEX IF NOT EXISTS idx_facturen_klant ON facturen(klant_id);
+CREATE INDEX IF NOT EXISTS idx_facturen_datum ON facturen(datum);
 
 CREATE TABLE IF NOT EXISTS uitgaven (
     id INTEGER PRIMARY KEY,
@@ -111,6 +116,7 @@ CREATE TABLE IF NOT EXISTS fiscale_params (
     kia_ondergrens REAL,
     kia_bovengrens REAL,
     kia_pct REAL,
+    kia_drempel_per_item REAL DEFAULT 450,
     km_tarief REAL,
     schijf1_grens REAL,
     schijf1_pct REAL,
@@ -124,14 +130,46 @@ CREATE TABLE IF NOT EXISTS fiscale_params (
     zvw_pct REAL,
     zvw_max_grondslag REAL,
     repr_aftrek_pct REAL DEFAULT 80,
+    -- Migration 1 columns
+    aov_premie REAL DEFAULT 0,
+    woz_waarde REAL DEFAULT 0,
+    hypotheekrente REAL DEFAULT 0,
+    voorlopige_aanslag_betaald REAL DEFAULT 0,
+    -- Migration 2 columns
     ew_forfait_pct REAL DEFAULT 0.35,
     villataks_grens REAL DEFAULT 1350000,
     wet_hillen_pct REAL DEFAULT 0,
     urencriterium REAL DEFAULT 1225,
-    aov_premie REAL DEFAULT 0,
-    woz_waarde REAL DEFAULT 0,
-    hypotheekrente REAL DEFAULT 0,
-    voorlopige_aanslag_betaald REAL DEFAULT 0
+    partner_bruto_loon REAL DEFAULT 0,
+    partner_loonheffing REAL DEFAULT 0,
+    pvv_premiegrondslag REAL DEFAULT 0,
+    ew_naar_partner REAL DEFAULT 1,
+    voorlopige_aanslag_zvw REAL DEFAULT 0,
+    -- Migration 3 columns
+    pvv_aow_pct REAL DEFAULT 17.90,
+    pvv_anw_pct REAL DEFAULT 0.10,
+    pvv_wlz_pct REAL DEFAULT 9.65,
+    box3_bank_saldo REAL DEFAULT 0,
+    box3_overige_bezittingen REAL DEFAULT 0,
+    box3_schulden REAL DEFAULT 0,
+    box3_heffingsvrij_vermogen REAL DEFAULT 57000,
+    box3_rendement_bank_pct REAL DEFAULT 1.03,
+    box3_rendement_overig_pct REAL DEFAULT 6.17,
+    box3_rendement_schuld_pct REAL DEFAULT 2.46,
+    box3_tarief_pct REAL DEFAULT 36,
+    -- Migration 4 columns
+    box3_drempel_schulden REAL DEFAULT 3700,
+    balans_bank_saldo REAL DEFAULT 0,
+    balans_crediteuren REAL DEFAULT 0,
+    balans_overige_vorderingen REAL DEFAULT 0,
+    balans_overige_schulden REAL DEFAULT 0,
+    za_actief REAL DEFAULT 1,
+    sa_actief REAL DEFAULT 0,
+    lijfrente_premie REAL DEFAULT 0,
+    box3_fiscaal_partner REAL DEFAULT 1,
+    -- Migration 5 columns
+    arbeidskorting_brackets TEXT DEFAULT '',
+    jaarafsluiting_status TEXT DEFAULT 'concept'
 );
 
 CREATE TABLE IF NOT EXISTS bedrijfsgegevens (
@@ -157,6 +195,20 @@ CREATE TABLE IF NOT EXISTS aangifte_documenten (
     notitie TEXT DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_aangifte_docs_jaar ON aangifte_documenten(jaar);
+
+CREATE TABLE IF NOT EXISTS afschrijving_overrides (
+    id INTEGER PRIMARY KEY,
+    uitgave_id INTEGER NOT NULL REFERENCES uitgaven(id) ON DELETE CASCADE,
+    jaar INTEGER NOT NULL,
+    bedrag REAL NOT NULL CHECK (bedrag >= 0),
+    UNIQUE(uitgave_id, jaar)
+);
+
+CREATE TABLE IF NOT EXISTS schema_version (
+    version INTEGER PRIMARY KEY,
+    description TEXT NOT NULL,
+    applied_at TEXT NOT NULL
+);
 """
 
 
@@ -172,134 +224,358 @@ async def get_db(db_path: Path = DB_PATH) -> aiosqlite.Connection:
     return conn
 
 
+@asynccontextmanager
+async def get_db_ctx(db_path: Path = DB_PATH):
+    """Async context manager for database connections."""
+    conn = await get_db(db_path)
+    try:
+        yield conn
+    finally:
+        await conn.close()
+
+
+async def _get_existing_columns(conn, table: str) -> set[str]:
+    """Get set of column names for a table via PRAGMA."""
+    cur = await conn.execute(f"PRAGMA table_info({table})")
+    rows = await cur.fetchall()
+    return {row[1] for row in rows}
+
+
+# --- Versioned migrations ---
+# Each tuple: (version, description, sql_list_or_None)
+# sql_list=None means a callable handles it (see MIGRATION_CALLABLES).
+MIGRATIONS = [
+    # Schema migrations — ADD COLUMN for fiscale_params REAL columns
+    (1, "add_aov_woz_hypotheek_va_columns", [
+        "ALTER TABLE fiscale_params ADD COLUMN aov_premie REAL DEFAULT 0",
+        "ALTER TABLE fiscale_params ADD COLUMN woz_waarde REAL DEFAULT 0",
+        "ALTER TABLE fiscale_params ADD COLUMN hypotheekrente REAL DEFAULT 0",
+        "ALTER TABLE fiscale_params ADD COLUMN voorlopige_aanslag_betaald REAL DEFAULT 0",
+    ]),
+    (2, "add_ew_uren_partner_pvv_columns", [
+        "ALTER TABLE fiscale_params ADD COLUMN ew_forfait_pct REAL DEFAULT 0.35",
+        "ALTER TABLE fiscale_params ADD COLUMN villataks_grens REAL DEFAULT 1350000",
+        "ALTER TABLE fiscale_params ADD COLUMN wet_hillen_pct REAL DEFAULT 0",
+        "ALTER TABLE fiscale_params ADD COLUMN urencriterium REAL DEFAULT 1225",
+        "ALTER TABLE fiscale_params ADD COLUMN partner_bruto_loon REAL DEFAULT 0",
+        "ALTER TABLE fiscale_params ADD COLUMN partner_loonheffing REAL DEFAULT 0",
+        "ALTER TABLE fiscale_params ADD COLUMN pvv_premiegrondslag REAL DEFAULT 0",
+        "ALTER TABLE fiscale_params ADD COLUMN ew_naar_partner REAL DEFAULT 1",
+        "ALTER TABLE fiscale_params ADD COLUMN voorlopige_aanslag_zvw REAL DEFAULT 0",
+    ]),
+    (3, "add_pvv_box3_columns", [
+        "ALTER TABLE fiscale_params ADD COLUMN pvv_aow_pct REAL DEFAULT 17.90",
+        "ALTER TABLE fiscale_params ADD COLUMN pvv_anw_pct REAL DEFAULT 0.10",
+        "ALTER TABLE fiscale_params ADD COLUMN pvv_wlz_pct REAL DEFAULT 9.65",
+        "ALTER TABLE fiscale_params ADD COLUMN box3_bank_saldo REAL DEFAULT 0",
+        "ALTER TABLE fiscale_params ADD COLUMN box3_overige_bezittingen REAL DEFAULT 0",
+        "ALTER TABLE fiscale_params ADD COLUMN box3_schulden REAL DEFAULT 0",
+        "ALTER TABLE fiscale_params ADD COLUMN box3_heffingsvrij_vermogen REAL DEFAULT 57000",
+        "ALTER TABLE fiscale_params ADD COLUMN box3_rendement_bank_pct REAL DEFAULT 1.03",
+        "ALTER TABLE fiscale_params ADD COLUMN box3_rendement_overig_pct REAL DEFAULT 6.17",
+        "ALTER TABLE fiscale_params ADD COLUMN box3_rendement_schuld_pct REAL DEFAULT 2.46",
+        "ALTER TABLE fiscale_params ADD COLUMN box3_tarief_pct REAL DEFAULT 36",
+    ]),
+    (4, "add_balans_za_sa_lijfrente_columns", [
+        "ALTER TABLE fiscale_params ADD COLUMN box3_drempel_schulden REAL DEFAULT 3700",
+        "ALTER TABLE fiscale_params ADD COLUMN balans_bank_saldo REAL DEFAULT 0",
+        "ALTER TABLE fiscale_params ADD COLUMN balans_crediteuren REAL DEFAULT 0",
+        "ALTER TABLE fiscale_params ADD COLUMN balans_overige_vorderingen REAL DEFAULT 0",
+        "ALTER TABLE fiscale_params ADD COLUMN balans_overige_schulden REAL DEFAULT 0",
+        "ALTER TABLE fiscale_params ADD COLUMN za_actief REAL DEFAULT 1",
+        "ALTER TABLE fiscale_params ADD COLUMN sa_actief REAL DEFAULT 0",
+        "ALTER TABLE fiscale_params ADD COLUMN lijfrente_premie REAL DEFAULT 0",
+        "ALTER TABLE fiscale_params ADD COLUMN box3_fiscaal_partner REAL DEFAULT 1",
+    ]),
+    (5, "add_text_columns", [
+        "ALTER TABLE fiscale_params ADD COLUMN arbeidskorting_brackets TEXT DEFAULT ''",
+        "ALTER TABLE fiscale_params ADD COLUMN jaarafsluiting_status TEXT DEFAULT 'concept'",
+    ]),
+    (6, "add_werkdagen_locatie_id", [
+        "ALTER TABLE werkdagen ADD COLUMN locatie_id INTEGER REFERENCES klant_locaties(id) ON DELETE SET NULL",
+    ]),
+    # Data migrations — all idempotent via WHERE guards
+    (7, "set_ew_uren_per_year", None),  # handled by callable
+    (8, "populate_ak_brackets_and_box3", None),  # handled by callable
+    (9, "fix_box3_2025_definitief", [
+        """UPDATE fiscale_params SET
+           box3_rendement_bank_pct = 1.37,
+           box3_rendement_overig_pct = 5.88,
+           box3_rendement_schuld_pct = 2.70
+           WHERE jaar = 2025 AND box3_rendement_bank_pct = 1.28""",
+    ]),
+    (10, "set_sa_actief_first_years", [
+        "UPDATE fiscale_params SET sa_actief = 1 WHERE jaar = 2023 AND sa_actief = 0",
+        "UPDATE fiscale_params SET sa_actief = 1 WHERE jaar = 2024 AND sa_actief = 0",
+        "UPDATE fiscale_params SET sa_actief = 1 WHERE jaar = 2025 AND sa_actief = 0",
+    ]),
+    (11, "fix_2026_box3_heffingsvrij", [
+        """UPDATE fiscale_params
+           SET box3_heffingsvrij_vermogen = 59357, box3_drempel_schulden = 3800
+           WHERE jaar = 2026 AND box3_heffingsvrij_vermogen = 57684""",
+    ]),
+    (12, "fix_date_format", [
+        """UPDATE uitgaven
+           SET datum = substr(datum,7,4) || '-' || substr(datum,4,2) || '-' || substr(datum,1,2)
+           WHERE datum GLOB '[0-3][0-9]-[0-1][0-9]-[0-9][0-9][0-9][0-9]'""",
+        """UPDATE werkdagen
+           SET datum = substr(datum,7,4) || '-' || substr(datum,4,2) || '-' || substr(datum,1,2)
+           WHERE datum GLOB '[0-3][0-9]-[0-1][0-9]-[0-9][0-9][0-9][0-9]'""",
+    ]),
+    (13, "add_betalingskenmerk_to_banktransacties", [
+        "ALTER TABLE banktransacties ADD COLUMN betalingskenmerk TEXT DEFAULT ''",
+    ]),
+    (14, "add_factuur_status_column", [
+        "ALTER TABLE facturen ADD COLUMN status TEXT DEFAULT 'concept'",
+        "UPDATE facturen SET status = CASE WHEN betaald = 1 THEN 'betaald' ELSE 'verstuurd' END",
+    ]),
+    (15, "add_klant_email", [
+        "ALTER TABLE klanten ADD COLUMN email TEXT DEFAULT ''",
+    ]),
+    (16, "add_bedrijf_telefoon_email", [
+        "ALTER TABLE bedrijfsgegevens ADD COLUMN telefoon TEXT DEFAULT ''",
+        "ALTER TABLE bedrijfsgegevens ADD COLUMN email TEXT DEFAULT ''",
+        "UPDATE bedrijfsgegevens SET telefoon = '06 0000 0000', email = 'info@testbedrijf.nl' WHERE id = 1",
+    ]),
+    (17, "add_klant_address_fields", [
+        "ALTER TABLE klanten ADD COLUMN contactpersoon TEXT DEFAULT ''",
+        "ALTER TABLE klanten ADD COLUMN postcode TEXT DEFAULT ''",
+        "ALTER TABLE klanten ADD COLUMN plaats TEXT DEFAULT ''",
+    ]),
+    (18, "relax_werkdagen_uren_check_gte_zero", None),  # handled by callable
+    (19, "add_factuur_bron_column", [
+        "ALTER TABLE facturen ADD COLUMN bron TEXT DEFAULT 'app'",
+        # All 2023-2024 facturen were imported from existing Yuki data
+        "UPDATE facturen SET bron = 'import' WHERE substr(nummer, 1, 4) IN ('2023', '2024')",
+        # ANW facturen are always received from external (imported)
+        "UPDATE facturen SET bron = 'import' WHERE type = 'anw'",
+    ]),
+    (20, "drop_werkdagen_status_column", None),  # handled by callable
+    (21, "classify_vergoeding_type", None),  # handled by callable
+]
+
+
+async def _run_migration_7(conn):
+    """Data migration: set correct per-year EW/uren values."""
+    year_data = {
+        2023: {'ew_forfait_pct': 0.35, 'villataks_grens': 1200000, 'wet_hillen_pct': 83.333, 'urencriterium': 1225},
+        2024: {'ew_forfait_pct': 0.35, 'villataks_grens': 1310000, 'wet_hillen_pct': 80.0, 'urencriterium': 1225},
+        2025: {'ew_forfait_pct': 0.35, 'villataks_grens': 1330000, 'wet_hillen_pct': 76.667, 'urencriterium': 1225},
+        2026: {'ew_forfait_pct': 0.35, 'villataks_grens': 1350000, 'wet_hillen_pct': 71.867, 'urencriterium': 1225},
+    }
+    for jaar, vals in year_data.items():
+        await conn.execute(
+            """UPDATE fiscale_params SET ew_forfait_pct = ?, villataks_grens = ?,
+               wet_hillen_pct = ?, urencriterium = ?
+               WHERE jaar = ? AND wet_hillen_pct = 0""",
+            (vals['ew_forfait_pct'], vals['villataks_grens'],
+             vals['wet_hillen_pct'], vals['urencriterium'], jaar))
+
+
+async def _run_migration_8(conn):
+    """Data migration: populate AK brackets and Box 3 defaults."""
+    from import_.seed_data import AK_BRACKETS, BOX3_DEFAULTS
+    import json as _json
+    for jaar in [2023, 2024, 2025, 2026]:
+        await conn.execute(
+            "UPDATE fiscale_params SET arbeidskorting_brackets = ? "
+            "WHERE jaar = ? AND (arbeidskorting_brackets IS NULL OR arbeidskorting_brackets = '')",
+            (_json.dumps(AK_BRACKETS.get(jaar, [])), jaar))
+        b3 = BOX3_DEFAULTS.get(jaar)
+        if b3:
+            await conn.execute(
+                "UPDATE fiscale_params SET "
+                "box3_heffingsvrij_vermogen = ?, box3_rendement_bank_pct = ?, "
+                "box3_rendement_overig_pct = ?, box3_rendement_schuld_pct = ?, "
+                "box3_tarief_pct = ? "
+                "WHERE jaar = ? AND box3_rendement_bank_pct = 1.03 "
+                "AND box3_heffingsvrij_vermogen = 57000",
+                (b3['heffingsvrij'], b3['bank'], b3['overig'], b3['schuld'], b3['tarief'], jaar))
+            if 'drempel_schulden' in b3:
+                await conn.execute(
+                    "UPDATE fiscale_params SET box3_drempel_schulden = ? "
+                    "WHERE jaar = ? AND box3_drempel_schulden = 3700",
+                    (b3['drempel_schulden'], jaar))
+
+
+async def _run_migration_18(conn):
+    """Recreate werkdagen table with CHECK (uren >= 0) instead of CHECK (uren > 0).
+
+    This allows non-patient business km entries (congresses, opleiding, etc.)
+    with uren=0.
+    """
+    # Check if status column exists (won't on fresh DBs after migration 20 schema)
+    cur = await conn.execute("PRAGMA table_info(werkdagen)")
+    columns = [row[1] for row in await cur.fetchall()]
+    has_status = 'status' in columns
+
+    if has_status:
+        select_cols = ("id, datum, klant_id, code, activiteit, locatie, uren, km, "
+                       "tarief, km_tarief, factuurnummer, opmerking, urennorm, locatie_id")
+    else:
+        select_cols = "*"
+
+    await conn.execute("""
+        CREATE TABLE werkdagen_new (
+            id INTEGER PRIMARY KEY,
+            datum TEXT NOT NULL,
+            klant_id INTEGER NOT NULL REFERENCES klanten(id),
+            code TEXT DEFAULT '',
+            activiteit TEXT DEFAULT 'Waarneming dagpraktijk',
+            locatie TEXT DEFAULT '',
+            uren REAL NOT NULL CHECK (uren >= 0),
+            km REAL DEFAULT 0 CHECK (km >= 0),
+            tarief REAL NOT NULL CHECK (tarief >= 0),
+            km_tarief REAL DEFAULT 0.23,
+            factuurnummer TEXT DEFAULT '',
+            opmerking TEXT DEFAULT '',
+            urennorm INTEGER DEFAULT 1 CHECK (urennorm IN (0, 1)),
+            locatie_id INTEGER REFERENCES klant_locaties(id) ON DELETE SET NULL
+        )""")
+    await conn.execute(f"INSERT INTO werkdagen_new SELECT {select_cols} FROM werkdagen")
+    await conn.execute("DROP TABLE werkdagen")
+    await conn.execute("ALTER TABLE werkdagen_new RENAME TO werkdagen")
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_werkdagen_datum ON werkdagen(datum)")
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_werkdagen_klant ON werkdagen(klant_id)")
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_werkdagen_factuurnummer ON werkdagen(factuurnummer)")
+
+
+async def _run_migration_20(conn):
+    """Drop werkdagen.status column — status is now derived from factuurnummer + facturen.status."""
+    cur = await conn.execute("PRAGMA table_info(werkdagen)")
+    columns = [row[1] for row in await cur.fetchall()]
+    if 'status' not in columns:
+        return  # Already without status (fresh DB or migration 18 handled it)
+
+    await conn.execute("""
+        CREATE TABLE werkdagen_new (
+            id INTEGER PRIMARY KEY,
+            datum TEXT NOT NULL,
+            klant_id INTEGER NOT NULL REFERENCES klanten(id),
+            code TEXT DEFAULT '',
+            activiteit TEXT DEFAULT 'Waarneming dagpraktijk',
+            locatie TEXT DEFAULT '',
+            uren REAL NOT NULL CHECK (uren >= 0),
+            km REAL DEFAULT 0 CHECK (km >= 0),
+            tarief REAL NOT NULL CHECK (tarief >= 0),
+            km_tarief REAL DEFAULT 0.23,
+            factuurnummer TEXT DEFAULT '',
+            opmerking TEXT DEFAULT '',
+            urennorm INTEGER DEFAULT 1 CHECK (urennorm IN (0, 1)),
+            locatie_id INTEGER REFERENCES klant_locaties(id) ON DELETE SET NULL
+        )""")
+    await conn.execute(
+        "INSERT INTO werkdagen_new "
+        "SELECT id, datum, klant_id, code, activiteit, locatie, uren, km, "
+        "       tarief, km_tarief, factuurnummer, opmerking, urennorm, locatie_id "
+        "FROM werkdagen")
+    await conn.execute("DROP TABLE werkdagen")
+    await conn.execute("ALTER TABLE werkdagen_new RENAME TO werkdagen")
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_werkdagen_datum ON werkdagen(datum)")
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_werkdagen_klant ON werkdagen(klant_id)")
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_werkdagen_factuurnummer ON werkdagen(factuurnummer)")
+
+
+async def _run_migration_21(conn):
+    """Link 2025 orphan werkdagen to their facturen, then classify orphan facturen as vergoeding."""
+    # Step A: Link 2025 orphan werkdagen to their correct facturen
+    werkdag_links = [
+        (392, '2025-002'), (397, '2025-002'), (400, '2025-002'),
+        (492, '2025-025'), (493, '2025-026'), (495, '2025-027'), (496, '2025-028'),
+    ]
+    for wd_id, factuurnummer in werkdag_links:
+        await conn.execute(
+            "UPDATE werkdagen SET factuurnummer = ? WHERE id = ? AND factuurnummer = ''",
+            (factuurnummer, wd_id))
+
+    # Step B: Classify all orphan facturen (no werkdagen, not concept) as vergoeding
+    await conn.execute("""
+        UPDATE facturen SET type = 'vergoeding'
+        WHERE type = 'factuur'
+        AND NOT EXISTS (SELECT 1 FROM werkdagen w WHERE w.factuurnummer = facturen.nummer)
+        AND status != 'concept'
+    """)
+
+
+_MIGRATION_CALLABLES = {7: _run_migration_7, 8: _run_migration_8, 18: _run_migration_18, 20: _run_migration_20, 21: _run_migration_21}
+
+
 async def init_db(db_path: Path = DB_PATH) -> None:
-    """Create all tables if they don't exist, then run migrations."""
+    """Create all tables if they don't exist, then run versioned migrations."""
     db_path.parent.mkdir(parents=True, exist_ok=True)
     async with aiosqlite.connect(db_path) as conn:
         await conn.executescript(SCHEMA_SQL)
         await conn.commit()
-        # Migrations: add columns to fiscale_params (idempotent)
-        for col, default in [
-            ('aov_premie', 0), ('woz_waarde', 0),
-            ('hypotheekrente', 0), ('voorlopige_aanslag_betaald', 0),
-            ('ew_forfait_pct', 0.35), ('villataks_grens', 1350000),
-            ('wet_hillen_pct', 0), ('urencriterium', 1225),
-            ('partner_bruto_loon', 0), ('partner_loonheffing', 0),
-            ('pvv_premiegrondslag', 0),
-            ('ew_naar_partner', 1), ('voorlopige_aanslag_zvw', 0),
-            # Phase: fiscal overhaul v2 — PVV rates + Box 3
-            ('pvv_aow_pct', 17.90), ('pvv_anw_pct', 0.10), ('pvv_wlz_pct', 9.65),
-            ('box3_bank_saldo', 0), ('box3_overige_bezittingen', 0), ('box3_schulden', 0),
-            ('box3_heffingsvrij_vermogen', 57000),
-            ('box3_rendement_bank_pct', 1.03), ('box3_rendement_overig_pct', 6.17),
-            ('box3_rendement_schuld_pct', 2.46), ('box3_tarief_pct', 36),
-            # Phase: jaarafsluiting enhancement — balance sheet + drempel schulden
-            ('box3_drempel_schulden', 3700),
-            ('balans_bank_saldo', 0), ('balans_crediteuren', 0),
-            ('balans_overige_vorderingen', 0), ('balans_overige_schulden', 0),
-            # Phase: jaarafsluiting redesign — ZA/SA toggles + lijfrente
-            ('za_actief', 1), ('sa_actief', 0), ('lijfrente_premie', 0),
-        ]:
-            try:
-                await conn.execute(
-                    f"ALTER TABLE fiscale_params ADD COLUMN {col} REAL DEFAULT {default}"
-                )
-            except Exception:
-                pass  # Column already exists
 
-        # TEXT column migration (separate because type differs)
-        for col, default in [
-            ('arbeidskorting_brackets', "''"),
-            ('jaarafsluiting_status', "'concept'"),
-        ]:
-            try:
-                await conn.execute(
-                    f"ALTER TABLE fiscale_params ADD COLUMN {col} TEXT DEFAULT {default}"
-                )
-            except Exception:
-                pass  # Column already exists
+        # Determine current schema version
+        cur = await conn.execute(
+            "SELECT MAX(version) FROM schema_version")
+        row = await cur.fetchone()
+        current_version = row[0] or 0
 
-        # Migration: add locatie_id to werkdagen
-        try:
-            await conn.execute(
-                "ALTER TABLE werkdagen ADD COLUMN locatie_id INTEGER "
-                "REFERENCES klant_locaties(id) ON DELETE SET NULL"
-            )
-        except Exception:
-            pass  # Column already exists
+        # First-run detection: if schema_version is empty but tables exist,
+        # introspect to find which migrations are already applied
+        if current_version == 0:
+            fp_cols = await _get_existing_columns(conn, 'fiscale_params')
+            wd_cols = await _get_existing_columns(conn, 'werkdagen')
 
-        # Data migration: set correct per-year values for newly added columns
-        year_data = {
-            2023: {'ew_forfait_pct': 0.35, 'villataks_grens': 1200000, 'wet_hillen_pct': 83.333, 'urencriterium': 1225},
-            2024: {'ew_forfait_pct': 0.35, 'villataks_grens': 1310000, 'wet_hillen_pct': 80.0, 'urencriterium': 1225},
-            2025: {'ew_forfait_pct': 0.35, 'villataks_grens': 1330000, 'wet_hillen_pct': 76.667, 'urencriterium': 1225},
-            2026: {'ew_forfait_pct': 0.35, 'villataks_grens': 1350000, 'wet_hillen_pct': 71.867, 'urencriterium': 1225},
-        }
-        for jaar, vals in year_data.items():
-            # Only update if wet_hillen_pct is still 0 (= not yet migrated)
-            await conn.execute(
-                """UPDATE fiscale_params SET ew_forfait_pct = ?, villataks_grens = ?,
-                   wet_hillen_pct = ?, urencriterium = ?
-                   WHERE jaar = ? AND wet_hillen_pct = 0""",
-                (vals['ew_forfait_pct'], vals['villataks_grens'],
-                 vals['wet_hillen_pct'], vals['urencriterium'], jaar))
-        # Data migration: populate AK brackets and Box 3 defaults for existing years
-        from import_.seed_data import AK_BRACKETS, BOX3_DEFAULTS
-        import json as _json
-        for jaar in [2023, 2024, 2025, 2026]:
-            await conn.execute(
-                "UPDATE fiscale_params SET arbeidskorting_brackets = ? "
-                "WHERE jaar = ? AND (arbeidskorting_brackets IS NULL OR arbeidskorting_brackets = '')",
-                (_json.dumps(AK_BRACKETS.get(jaar, [])), jaar))
-            b3 = BOX3_DEFAULTS.get(jaar)
-            if b3:
-                await conn.execute(
-                    "UPDATE fiscale_params SET "
-                    "box3_heffingsvrij_vermogen = ?, box3_rendement_bank_pct = ?, "
-                    "box3_rendement_overig_pct = ?, box3_rendement_schuld_pct = ?, "
-                    "box3_tarief_pct = ? "
-                    "WHERE jaar = ? AND box3_rendement_bank_pct = 1.03 "
-                    "AND box3_heffingsvrij_vermogen = 57000",
-                    (b3['heffingsvrij'], b3['bank'], b3['overig'], b3['schuld'], b3['tarief'], jaar))
-                # Set drempel_schulden for years that still have default 3700
-                if 'drempel_schulden' in b3:
+            # Check marker columns for each schema migration group
+            if ('locatie_id' in wd_cols
+                    and 'jaarafsluiting_status' in fp_cols
+                    and 'box3_fiscaal_partner' in fp_cols):
+                current_version = 6
+            elif 'jaarafsluiting_status' in fp_cols:
+                current_version = 5
+            elif 'box3_fiscaal_partner' in fp_cols:
+                current_version = 4
+            elif 'pvv_aow_pct' in fp_cols:
+                current_version = 3
+            elif 'ew_forfait_pct' in fp_cols:
+                current_version = 2
+            elif 'aov_premie' in fp_cols:
+                current_version = 1
+
+            # Record detected version
+            if current_version > 0:
+                from datetime import datetime as _dt
+                now = _dt.now().isoformat()
+                for v in range(1, current_version + 1):
+                    desc = next(
+                        (d for ver, d, _ in MIGRATIONS if ver == v),
+                        f'migration_{v}')
                     await conn.execute(
-                        "UPDATE fiscale_params SET box3_drempel_schulden = ? "
-                        "WHERE jaar = ? AND box3_drempel_schulden = 3700",
-                        (b3['drempel_schulden'], jaar))
+                        "INSERT OR IGNORE INTO schema_version "
+                        "(version, description, applied_at) VALUES (?, ?, ?)",
+                        (v, desc, now))
+                await conn.commit()
 
-        # Data migration: fix Box 3 2025 voorlopig → definitief rendementen
-        await conn.execute(
-            "UPDATE fiscale_params SET "
-            "box3_rendement_bank_pct = 1.37, "
-            "box3_rendement_overig_pct = 5.88, "
-            "box3_rendement_schuld_pct = 2.70 "
-            "WHERE jaar = 2025 AND box3_rendement_bank_pct = 1.28"
-        )
+        # Apply pending migrations
+        for version, description, sql_list in MIGRATIONS:
+            if version <= current_version:
+                continue
+            try:
+                if sql_list is not None:
+                    for sql in sql_list:
+                        try:
+                            await conn.execute(sql)
+                        except sqlite3.OperationalError as e:
+                            if 'duplicate column' not in str(e).lower():
+                                raise
+                elif version in _MIGRATION_CALLABLES:
+                    await _MIGRATION_CALLABLES[version](conn)
 
-        # Data migration: set sa_actief=1 for first 3 years (2023-2025) on existing DBs
-        for jaar in [2023, 2024, 2025]:
-            await conn.execute(
-                "UPDATE fiscale_params SET sa_actief = 1 "
-                "WHERE jaar = ? AND sa_actief = 0",
-                (jaar,))
+                from datetime import datetime as _dt
+                await conn.execute(
+                    "INSERT INTO schema_version "
+                    "(version, description, applied_at) VALUES (?, ?, ?)",
+                    (version, description, _dt.now().isoformat()))
+                await conn.commit()
+            except Exception:
+                await conn.rollback()
+                raise
 
-        # Data migration: fix 2026 Box 3 heffingsvrij + drempel (was copied from 2025, now corrected per BD)
-        await conn.execute("""
-            UPDATE fiscale_params
-            SET box3_heffingsvrij_vermogen = 59357, box3_drempel_schulden = 3800
-            WHERE jaar = 2026 AND box3_heffingsvrij_vermogen = 57684
-        """)
-
-        # Data migration: fix DD-MM-YYYY dates → YYYY-MM-DD in uitgaven and werkdagen
-        for table in ('uitgaven', 'werkdagen'):
-            await conn.execute(
-                f"""UPDATE {table}
-                    SET datum = substr(datum,7,4) || '-' || substr(datum,4,2) || '-' || substr(datum,1,2)
-                    WHERE datum GLOB '[0-3][0-9]-[0-1][0-9]-[0-9][0-9][0-9][0-9]'"""
-            )
-
-        await conn.commit()
+    # One-time backfill for betalingskenmerk
+    await backfill_betalingskenmerken(db_path)
 
 
 def _validate_datum(datum: str) -> str:
@@ -321,8 +597,7 @@ def _validate_datum(datum: str) -> str:
 # === Bedrijfsgegevens ===
 
 async def get_bedrijfsgegevens(db_path: Path = DB_PATH) -> Bedrijfsgegevens | None:
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute("SELECT * FROM bedrijfsgegevens WHERE id = 1")
         r = await cursor.fetchone()
         if not r:
@@ -332,69 +607,73 @@ async def get_bedrijfsgegevens(db_path: Path = DB_PATH) -> Bedrijfsgegevens | No
             functie=r['functie'], adres=r['adres'],
             postcode_plaats=r['postcode_plaats'], kvk=r['kvk'],
             iban=r['iban'], thuisplaats=r['thuisplaats'],
+            telefoon=r['telefoon'] if 'telefoon' in r.keys() else '',
+            email=r['email'] if 'email' in r.keys() else '',
         )
-    finally:
-        await conn.close()
 
 
 async def upsert_bedrijfsgegevens(db_path: Path = DB_PATH, **kwargs) -> None:
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         await conn.execute(
             """INSERT OR REPLACE INTO bedrijfsgegevens
-               (id, bedrijfsnaam, naam, functie, adres, postcode_plaats, kvk, iban, thuisplaats)
-               VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               (id, bedrijfsnaam, naam, functie, adres, postcode_plaats,
+                kvk, iban, thuisplaats, telefoon, email)
+               VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (kwargs.get('bedrijfsnaam', ''), kwargs.get('naam', ''),
              kwargs.get('functie', ''), kwargs.get('adres', ''),
              kwargs.get('postcode_plaats', ''), kwargs.get('kvk', ''),
-             kwargs.get('iban', ''), kwargs.get('thuisplaats', ''))
+             kwargs.get('iban', ''), kwargs.get('thuisplaats', ''),
+             kwargs.get('telefoon', ''), kwargs.get('email', ''))
         )
         await conn.commit()
-    finally:
-        await conn.close()
 
 
 # === Klanten ===
 
 async def get_klanten(db_path: Path = DB_PATH, alleen_actief: bool = False) -> list[Klant]:
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         sql = "SELECT * FROM klanten"
         if alleen_actief:
             sql += " WHERE actief = 1"
         sql += " ORDER BY naam"
         cursor = await conn.execute(sql)
         rows = await cursor.fetchall()
+        def _safe(r, key, default=''):
+            keys = r.keys() if hasattr(r, 'keys') else []
+            return (r[key] or default) if key in keys else default
+
         return [Klant(
             id=r['id'], naam=r['naam'], tarief_uur=r['tarief_uur'],
             retour_km=r['retour_km'], adres=r['adres'] or '',
-            kvk=r['kvk'] or '', actief=bool(r['actief'])
+            kvk=r['kvk'] or '', actief=bool(r['actief']),
+            email=_safe(r, 'email'),
+            contactpersoon=_safe(r, 'contactpersoon'),
+            postcode=_safe(r, 'postcode'),
+            plaats=_safe(r, 'plaats'),
         ) for r in rows]
-    finally:
-        await conn.close()
 
 
 async def add_klant(db_path: Path = DB_PATH, **kwargs) -> int:
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
-            "INSERT INTO klanten (naam, tarief_uur, retour_km, adres, kvk, actief) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO klanten (naam, tarief_uur, retour_km, adres, kvk, actief, "
+            "email, contactpersoon, postcode, plaats) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (kwargs['naam'], kwargs.get('tarief_uur', 0), kwargs.get('retour_km', 0),
-             kwargs.get('adres', ''), kwargs.get('kvk', ''), kwargs.get('actief', 1))
+             kwargs.get('adres', ''), kwargs.get('kvk', ''), kwargs.get('actief', 1),
+             kwargs.get('email', ''), kwargs.get('contactpersoon', ''),
+             kwargs.get('postcode', ''), kwargs.get('plaats', ''))
         )
         await conn.commit()
         return cursor.lastrowid
-    finally:
-        await conn.close()
 
 
 async def update_klant(db_path: Path = DB_PATH, klant_id: int = 0, **kwargs) -> None:
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         fields = []
         values = []
-        for key in ('naam', 'tarief_uur', 'retour_km', 'adres', 'kvk', 'actief'):
+        for key in ('naam', 'tarief_uur', 'retour_km', 'adres', 'kvk', 'actief',
+                    'email', 'contactpersoon', 'postcode', 'plaats'):
             if key in kwargs:
                 fields.append(f"{key} = ?")
                 values.append(kwargs[key])
@@ -404,13 +683,10 @@ async def update_klant(db_path: Path = DB_PATH, klant_id: int = 0, **kwargs) -> 
                 f"UPDATE klanten SET {', '.join(fields)} WHERE id = ?", values
             )
             await conn.commit()
-    finally:
-        await conn.close()
 
 
 async def delete_klant(db_path: Path = DB_PATH, klant_id: int = 0) -> None:
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         try:
             await conn.execute("DELETE FROM klanten WHERE id = ?", (klant_id,))
             await conn.commit()
@@ -421,18 +697,77 @@ async def delete_klant(db_path: Path = DB_PATH, klant_id: int = 0) -> None:
                     'gekoppeld aan deze klant.'
                 ) from exc
             raise
-    finally:
-        await conn.close()
+
+
+# === Row-to-model helpers (DRY) ===
+
+def _row_to_werkdag(r) -> Werkdag:
+    """Convert a joined werkdagen+klanten(+facturen) row to a Werkdag dataclass."""
+    fn = r['factuurnummer'] or ''
+    # Derive status: if computed_status column is present (from JOIN), use it;
+    # otherwise derive from factuurnummer presence.
+    if 'computed_status' in r.keys():
+        status = r['computed_status']
+    elif fn:
+        status = 'gefactureerd'
+    else:
+        status = 'ongefactureerd'
+    return Werkdag(
+        id=r['id'], datum=r['datum'], klant_id=r['klant_id'],
+        klant_naam=r['klant_naam'], code=r['code'] or '',
+        activiteit=r['activiteit'] or 'Waarneming dagpraktijk',
+        locatie=r['locatie'] or '', uren=r['uren'], km=r['km'] or 0,
+        tarief=r['tarief'], km_tarief=r['km_tarief'] or 0.23,
+        factuurnummer=fn,
+        status=status,
+        opmerking=r['opmerking'] or '',
+        urennorm=bool(r['urennorm']),
+        locatie_id=r['locatie_id'],
+    )
+
+
+def _row_to_factuur(r) -> Factuur:
+    """Convert a joined facturen+klanten row to a Factuur dataclass."""
+    return Factuur(
+        id=r['id'], nummer=r['nummer'], klant_id=r['klant_id'],
+        klant_naam=r['klant_naam'], datum=r['datum'],
+        totaal_uren=r['totaal_uren'] or 0,
+        totaal_km=r['totaal_km'] or 0,
+        totaal_bedrag=r['totaal_bedrag'],
+        pdf_pad=r['pdf_pad'] or '', status=r['status'] or 'concept',
+        betaald_datum=r['betaald_datum'] or '',
+        type=r['type'] or 'factuur',
+        bron=r['bron'] if 'bron' in r.keys() else 'app',
+    )
+
+
+def _row_to_uitgave(r) -> Uitgave:
+    """Convert an uitgaven row to an Uitgave dataclass."""
+    return Uitgave(
+        id=r['id'], datum=r['datum'], categorie=r['categorie'],
+        omschrijving=r['omschrijving'], bedrag=r['bedrag'],
+        pdf_pad=r['pdf_pad'] or '', is_investering=bool(r['is_investering']),
+        restwaarde_pct=r['restwaarde_pct'] if r['restwaarde_pct'] is not None else 10,
+        levensduur_jaren=r['levensduur_jaren'],
+        aanschaf_bedrag=r['aanschaf_bedrag'],
+        zakelijk_pct=r['zakelijk_pct'] if r['zakelijk_pct'] is not None else 100,
+    )
 
 
 # === Werkdagen ===
 
 async def get_werkdagen(db_path: Path = DB_PATH, jaar: int = None,
                         maand: int = None, klant_id: int = None) -> list[Werkdag]:
-    conn = await get_db(db_path)
-    try:
-        sql = """SELECT w.*, k.naam as klant_naam
-                 FROM werkdagen w JOIN klanten k ON w.klant_id = k.id
+    async with get_db_ctx(db_path) as conn:
+        sql = """SELECT w.*, k.naam as klant_naam,
+                        CASE
+                            WHEN w.factuurnummer = '' OR w.factuurnummer IS NULL THEN 'ongefactureerd'
+                            WHEN f.status = 'betaald' THEN 'betaald'
+                            ELSE 'gefactureerd'
+                        END as computed_status
+                 FROM werkdagen w
+                 JOIN klanten k ON w.klant_id = k.id
+                 LEFT JOIN facturen f ON w.factuurnummer = f.nummer
                  WHERE 1=1"""
         params = []
         if jaar:
@@ -447,55 +782,38 @@ async def get_werkdagen(db_path: Path = DB_PATH, jaar: int = None,
         sql += " ORDER BY w.datum DESC"
         cursor = await conn.execute(sql, params)
         rows = await cursor.fetchall()
-        return [Werkdag(
-            id=r['id'], datum=r['datum'], klant_id=r['klant_id'],
-            klant_naam=r['klant_naam'], code=r['code'] or '',
-            activiteit=r['activiteit'] or 'Waarneming dagpraktijk',
-            locatie=r['locatie'] or '', uren=r['uren'], km=r['km'] or 0,
-            tarief=r['tarief'], km_tarief=r['km_tarief'] or 0.23,
-            status=r['status'] or 'ongefactureerd',
-            factuurnummer=r['factuurnummer'] or '',
-            opmerking=r['opmerking'] or '',
-            urennorm=bool(r['urennorm']),
-            locatie_id=r['locatie_id'],
-        ) for r in rows]
-    finally:
-        await conn.close()
+        return [_row_to_werkdag(r) for r in rows]
 
 
 async def add_werkdag(db_path: Path = DB_PATH, **kwargs) -> int:
     _validate_datum(kwargs['datum'])
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
             """INSERT INTO werkdagen
                (datum, klant_id, code, activiteit, locatie, uren, km,
-                tarief, km_tarief, status, factuurnummer, opmerking, urennorm,
+                tarief, km_tarief, factuurnummer, opmerking, urennorm,
                 locatie_id)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (kwargs['datum'], kwargs['klant_id'],
              kwargs.get('code', ''), kwargs.get('activiteit', 'Waarneming dagpraktijk'),
              kwargs.get('locatie', ''), kwargs['uren'], kwargs.get('km', 0),
              kwargs['tarief'], kwargs.get('km_tarief', 0.23),
-             kwargs.get('status', 'ongefactureerd'), kwargs.get('factuurnummer', ''),
+             kwargs.get('factuurnummer', ''),
              kwargs.get('opmerking', ''), kwargs.get('urennorm', 1),
              kwargs.get('locatie_id'))
         )
         await conn.commit()
         return cursor.lastrowid
-    finally:
-        await conn.close()
 
 
 async def update_werkdag(db_path: Path = DB_PATH, werkdag_id: int = 0, **kwargs) -> None:
     if 'datum' in kwargs:
         _validate_datum(kwargs['datum'])
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         fields = []
         values = []
         allowed = ('datum', 'klant_id', 'code', 'activiteit', 'locatie', 'uren',
-                    'km', 'tarief', 'km_tarief', 'status', 'factuurnummer',
+                    'km', 'tarief', 'km_tarief', 'factuurnummer',
                     'opmerking', 'urennorm', 'locatie_id')
         for key in allowed:
             if key in kwargs:
@@ -507,26 +825,28 @@ async def update_werkdag(db_path: Path = DB_PATH, werkdag_id: int = 0, **kwargs)
                 f"UPDATE werkdagen SET {', '.join(fields)} WHERE id = ?", values
             )
             await conn.commit()
-    finally:
-        await conn.close()
 
 
 async def delete_werkdag(db_path: Path = DB_PATH, werkdag_id: int = 0) -> None:
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
+        cursor = await conn.execute(
+            "SELECT factuurnummer FROM werkdagen WHERE id = ?", (werkdag_id,)
+        )
+        row = await cursor.fetchone()
+        if row and row[0]:
+            raise ValueError(
+                f"Werkdag kan niet verwijderd worden: gekoppeld aan factuur '{row[0]}'"
+            )
         await conn.execute("DELETE FROM werkdagen WHERE id = ?", (werkdag_id,))
         await conn.commit()
-    finally:
-        await conn.close()
 
 
 async def get_werkdagen_ongefactureerd(db_path: Path = DB_PATH,
                                         klant_id: int = None) -> list[Werkdag]:
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         sql = """SELECT w.*, k.naam as klant_naam
                  FROM werkdagen w JOIN klanten k ON w.klant_id = k.id
-                 WHERE w.status = 'ongefactureerd'"""
+                 WHERE (w.factuurnummer = '' OR w.factuurnummer IS NULL)"""
         params = []
         if klant_id:
             sql += " AND w.klant_id = ?"
@@ -534,25 +854,13 @@ async def get_werkdagen_ongefactureerd(db_path: Path = DB_PATH,
         sql += " ORDER BY w.datum"
         cursor = await conn.execute(sql, params)
         rows = await cursor.fetchall()
-        return [Werkdag(
-            id=r['id'], datum=r['datum'], klant_id=r['klant_id'],
-            klant_naam=r['klant_naam'], code=r['code'] or '',
-            activiteit=r['activiteit'] or 'Waarneming dagpraktijk',
-            locatie=r['locatie'] or '', uren=r['uren'], km=r['km'] or 0,
-            tarief=r['tarief'], km_tarief=r['km_tarief'] or 0.23,
-            status=r['status'], factuurnummer=r['factuurnummer'] or '',
-            opmerking=r['opmerking'] or '', urennorm=bool(r['urennorm']),
-            locatie_id=r['locatie_id'],
-        ) for r in rows]
-    finally:
-        await conn.close()
+        return [_row_to_werkdag(r) for r in rows]
 
 
 # === Facturen ===
 
 async def get_facturen(db_path: Path = DB_PATH, jaar: int = None) -> list[Factuur]:
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         sql = """SELECT f.*, k.naam as klant_naam
                  FROM facturen f JOIN klanten k ON f.klant_id = k.id
                  WHERE 1=1"""
@@ -563,44 +871,30 @@ async def get_facturen(db_path: Path = DB_PATH, jaar: int = None) -> list[Factuu
         sql += " ORDER BY f.nummer DESC"
         cursor = await conn.execute(sql, params)
         rows = await cursor.fetchall()
-        return [Factuur(
-            id=r['id'], nummer=r['nummer'], klant_id=r['klant_id'],
-            klant_naam=r['klant_naam'], datum=r['datum'],
-            totaal_uren=r['totaal_uren'] or 0,
-            totaal_km=r['totaal_km'] or 0,
-            totaal_bedrag=r['totaal_bedrag'],
-            pdf_pad=r['pdf_pad'] or '', betaald=bool(r['betaald']),
-            betaald_datum=r['betaald_datum'] or '',
-            type=r['type'] or 'factuur'
-        ) for r in rows]
-    finally:
-        await conn.close()
+        return [_row_to_factuur(r) for r in rows]
 
 
 async def add_factuur(db_path: Path = DB_PATH, **kwargs) -> int:
-    conn = await get_db(db_path)
-    try:
+    _validate_datum(kwargs['datum'])
+    async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
             """INSERT INTO facturen
                (nummer, klant_id, datum, totaal_uren, totaal_km,
-                totaal_bedrag, pdf_pad, betaald, betaald_datum, type)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                totaal_bedrag, pdf_pad, status, betaald_datum, type, bron)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (kwargs['nummer'], kwargs['klant_id'], kwargs['datum'],
              kwargs.get('totaal_uren', 0), kwargs.get('totaal_km', 0),
              kwargs['totaal_bedrag'], kwargs.get('pdf_pad', ''),
-             kwargs.get('betaald', 0), kwargs.get('betaald_datum', ''),
-             kwargs.get('type', 'factuur'))
+             kwargs.get('status', 'concept'), kwargs.get('betaald_datum', ''),
+             kwargs.get('type', 'factuur'), kwargs.get('bron', 'app'))
         )
         await conn.commit()
         return cursor.lastrowid
-    finally:
-        await conn.close()
 
 
 async def get_next_factuurnummer(db_path: Path = DB_PATH, jaar: int = 2026) -> str:
     """Get next sequential invoice number: YYYY-NNN format, no gaps."""
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
             "SELECT MAX(CAST(substr(nummer, 6) AS INTEGER)) FROM facturen WHERE nummer LIKE ?",
             (f"{jaar}-%",)
@@ -608,51 +902,97 @@ async def get_next_factuurnummer(db_path: Path = DB_PATH, jaar: int = 2026) -> s
         row = await cursor.fetchone()
         next_num = (row[0] or 0) + 1
         return f"{jaar}-{next_num:03d}"
-    finally:
-        await conn.close()
+
+
+async def update_factuur_status(db_path: Path = DB_PATH, factuur_id: int = 0,
+                                 status: str = 'verstuurd',
+                                 betaald_datum: str = '') -> None:
+    """Update factuur status.
+
+    Status: 'concept', 'verstuurd', 'betaald'
+    """
+    VALID_TRANSITIONS = {
+        'concept': {'verstuurd', 'betaald'},
+        'verstuurd': {'betaald', 'concept'},
+        'betaald': {'verstuurd'},
+    }
+    if betaald_datum:
+        _validate_datum(betaald_datum)
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            "SELECT status FROM facturen WHERE id = ?", (factuur_id,))
+        current_row = await cur.fetchone()
+        if current_row:
+            current = current_row['status']
+            if status != current and status not in VALID_TRANSITIONS.get(current, set()):
+                raise ValueError(
+                    f"Status overgang '{current}' → '{status}' niet toegestaan")
+        await conn.execute(
+            "UPDATE facturen SET status = ?, betaald_datum = ? WHERE id = ?",
+            (status, betaald_datum, factuur_id))
+        await conn.commit()
 
 
 async def mark_betaald(db_path: Path = DB_PATH, factuur_id: int = 0,
                        datum: str = '', betaald: bool = True) -> None:
-    conn = await get_db(db_path)
-    try:
+    """Backward-compatible wrapper around update_factuur_status."""
+    status = 'betaald' if betaald else 'verstuurd'
+    await update_factuur_status(db_path, factuur_id, status, betaald_datum=datum)
+
+
+async def update_factuur(db_path: Path = DB_PATH, factuur_id: int = 0,
+                         **kwargs) -> None:
+    """Update factuur fields (datum, klant_id, totaal_bedrag, type, pdf_pad)."""
+    if 'datum' in kwargs:
+        _validate_datum(kwargs['datum'])
+    async with get_db_ctx(db_path) as conn:
+        fields = []
+        values = []
+        allowed = ('datum', 'klant_id', 'totaal_uren', 'totaal_km',
+                    'totaal_bedrag', 'pdf_pad', 'type')
+        for key in allowed:
+            if key in kwargs:
+                fields.append(f'{key} = ?')
+                values.append(kwargs[key])
+        if not fields:
+            return
+        values.append(factuur_id)
         await conn.execute(
-            "UPDATE facturen SET betaald = ?, betaald_datum = ? WHERE id = ?",
-            (1 if betaald else 0, datum, factuur_id)
+            f"UPDATE facturen SET {', '.join(fields)} WHERE id = ?",
+            values
         )
-        # Cascade status to linked werkdagen
-        cursor = await conn.execute(
-            "SELECT nummer FROM facturen WHERE id = ?", (factuur_id,)
-        )
-        row = await cursor.fetchone()
-        if row and row['nummer']:
-            new_status = 'betaald' if betaald else 'gefactureerd'
-            await conn.execute(
-                "UPDATE werkdagen SET status = ? WHERE factuurnummer = ?",
-                (new_status, row['nummer'])
-            )
         await conn.commit()
-    finally:
-        await conn.close()
 
 
 async def delete_factuur(db_path: Path = DB_PATH, factuur_id: int = 0) -> None:
-    """Delete a factuur: unlink werkdagen, remove PDF, delete record."""
-    conn = await get_db(db_path)
-    try:
-        # Get factuur nummer and pdf_pad
+    """Delete a factuur: unlink werkdagen, remove PDF, delete record.
+
+    Only concept facturen can be deleted. Raises ValueError for
+    verstuurd or betaald facturen to prevent data loss.
+    """
+    async with get_db_ctx(db_path) as conn:
+        # Get factuur nummer, pdf_pad, and status
         cursor = await conn.execute(
-            "SELECT nummer, pdf_pad FROM facturen WHERE id = ?", (factuur_id,)
+            "SELECT nummer, pdf_pad, status FROM facturen WHERE id = ?",
+            (factuur_id,)
         )
         row = await cursor.fetchone()
         if not row:
             return
         nummer = row['nummer']
         pdf_pad = row['pdf_pad']
+        status = row['status']
+
+        if status in ('verstuurd', 'betaald'):
+            raise ValueError(
+                f"Factuur {nummer} heeft status '{status}' en kan niet "
+                f"verwijderd worden. Alleen concept-facturen mogen verwijderd "
+                f"worden."
+            )
 
         # Unlink werkdagen
         await conn.execute(
-            "UPDATE werkdagen SET status = 'ongefactureerd', factuurnummer = '' "
+            "UPDATE werkdagen SET factuurnummer = '' "
             "WHERE factuurnummer = ?", (nummer,)
         )
 
@@ -665,34 +1005,28 @@ async def delete_factuur(db_path: Path = DB_PATH, factuur_id: int = 0) -> None:
             pdf_file = Path(pdf_pad)
             if pdf_file.exists():
                 pdf_file.unlink()
-    finally:
-        await conn.close()
 
 
 async def link_werkdagen_to_factuur(db_path: Path = DB_PATH,
                                      werkdag_ids: list[int] = None,
                                      factuurnummer: str = '') -> None:
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         if werkdag_ids:
             placeholders = ','.join('?' for _ in werkdag_ids)
             await conn.execute(
-                f"UPDATE werkdagen SET status = 'gefactureerd', factuurnummer = ? "
+                f"UPDATE werkdagen SET factuurnummer = ? "
                 f"WHERE id IN ({placeholders}) "
-                f"AND (status = 'ongefactureerd' OR factuurnummer = '' OR factuurnummer IS NULL)",
+                f"AND (factuurnummer = '' OR factuurnummer IS NULL)",
                 [factuurnummer] + werkdag_ids
             )
             await conn.commit()
-    finally:
-        await conn.close()
 
 
 # === Uitgaven ===
 
 async def get_uitgaven(db_path: Path = DB_PATH, jaar: int = None,
                        categorie: str = None) -> list[Uitgave]:
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         sql = "SELECT * FROM uitgaven WHERE 1=1"
         params = []
         if jaar:
@@ -704,23 +1038,12 @@ async def get_uitgaven(db_path: Path = DB_PATH, jaar: int = None,
         sql += " ORDER BY datum DESC"
         cursor = await conn.execute(sql, params)
         rows = await cursor.fetchall()
-        return [Uitgave(
-            id=r['id'], datum=r['datum'], categorie=r['categorie'],
-            omschrijving=r['omschrijving'], bedrag=r['bedrag'],
-            pdf_pad=r['pdf_pad'] or '', is_investering=bool(r['is_investering']),
-            restwaarde_pct=r['restwaarde_pct'] or 10,
-            levensduur_jaren=r['levensduur_jaren'],
-            aanschaf_bedrag=r['aanschaf_bedrag'],
-            zakelijk_pct=r['zakelijk_pct'] or 100
-        ) for r in rows]
-    finally:
-        await conn.close()
+        return [_row_to_uitgave(r) for r in rows]
 
 
 async def add_uitgave(db_path: Path = DB_PATH, **kwargs) -> int:
     _validate_datum(kwargs['datum'])
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
             """INSERT INTO uitgaven
                (datum, categorie, omschrijving, bedrag, pdf_pad,
@@ -735,15 +1058,12 @@ async def add_uitgave(db_path: Path = DB_PATH, **kwargs) -> int:
         )
         await conn.commit()
         return cursor.lastrowid
-    finally:
-        await conn.close()
 
 
 async def update_uitgave(db_path: Path = DB_PATH, uitgave_id: int = 0, **kwargs) -> None:
     if 'datum' in kwargs:
         _validate_datum(kwargs['datum'])
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         fields = []
         values = []
         allowed = ('datum', 'categorie', 'omschrijving', 'bedrag', 'pdf_pad',
@@ -759,13 +1079,10 @@ async def update_uitgave(db_path: Path = DB_PATH, uitgave_id: int = 0, **kwargs)
                 f"UPDATE uitgaven SET {', '.join(fields)} WHERE id = ?", values
             )
             await conn.commit()
-    finally:
-        await conn.close()
 
 
 async def delete_uitgave(db_path: Path = DB_PATH, uitgave_id: int = 0) -> None:
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
             "SELECT pdf_pad FROM uitgaven WHERE id = ?", (uitgave_id,))
         row = await cursor.fetchone()
@@ -775,14 +1092,11 @@ async def delete_uitgave(db_path: Path = DB_PATH, uitgave_id: int = 0) -> None:
             pdf_file = Path(row['pdf_pad'])
             if pdf_file.exists():
                 pdf_file.unlink()
-    finally:
-        await conn.close()
 
 
 async def get_uitgaven_per_categorie(db_path: Path = DB_PATH,
                                       jaar: int = None) -> list[dict]:
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         sql = "SELECT categorie, SUM(bedrag) as totaal FROM uitgaven"
         params = []
         if jaar:
@@ -792,13 +1106,10 @@ async def get_uitgaven_per_categorie(db_path: Path = DB_PATH,
         cursor = await conn.execute(sql, params)
         rows = await cursor.fetchall()
         return [{'categorie': r['categorie'], 'totaal': r['totaal']} for r in rows]
-    finally:
-        await conn.close()
 
 
 async def get_investeringen(db_path: Path = DB_PATH, jaar: int = None) -> list[Uitgave]:
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         sql = "SELECT * FROM uitgaven WHERE is_investering = 1"
         params = []
         if jaar:
@@ -807,25 +1118,14 @@ async def get_investeringen(db_path: Path = DB_PATH, jaar: int = None) -> list[U
         sql += " ORDER BY datum"
         cursor = await conn.execute(sql, params)
         rows = await cursor.fetchall()
-        return [Uitgave(
-            id=r['id'], datum=r['datum'], categorie=r['categorie'],
-            omschrijving=r['omschrijving'], bedrag=r['bedrag'],
-            pdf_pad=r['pdf_pad'] or '', is_investering=True,
-            restwaarde_pct=r['restwaarde_pct'] or 10,
-            levensduur_jaren=r['levensduur_jaren'],
-            aanschaf_bedrag=r['aanschaf_bedrag'],
-            zakelijk_pct=r['zakelijk_pct'] or 100
-        ) for r in rows]
-    finally:
-        await conn.close()
+        return [_row_to_uitgave(r) for r in rows]
 
 
 # === Banktransacties ===
 
 async def get_banktransacties(db_path: Path = DB_PATH,
                                jaar: int = None) -> list[Banktransactie]:
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         sql = "SELECT * FROM banktransacties WHERE 1=1"
         params = []
         if jaar:
@@ -842,47 +1142,65 @@ async def get_banktransacties(db_path: Path = DB_PATH,
             categorie=r['categorie'] or '',
             koppeling_type=r['koppeling_type'] or '',
             koppeling_id=r['koppeling_id'],
-            csv_bestand=r['csv_bestand'] or ''
+            csv_bestand=r['csv_bestand'] or '',
+            betalingskenmerk=r['betalingskenmerk'] or '',
         ) for r in rows]
-    finally:
-        await conn.close()
 
 
 async def add_banktransacties(db_path: Path = DB_PATH,
                                transacties: list[dict] = None,
                                csv_bestand: str = '') -> int:
-    """Insert batch of bank transactions. Dedup by datum+bedrag+tegenpartij+omschrijving."""
-    conn = await get_db(db_path)
-    try:
+    """Insert batch of bank transactions with count-based dedup.
+
+    If the CSV has N rows with key (datum, bedrag, tegenpartij, omschrijving)
+    and the DB already has M, inserts max(0, N-M) more. This correctly handles
+    genuine repeated transactions (e.g. two identical salary transfers on the
+    same date) while still preventing re-import of the same CSV.
+    """
+    from collections import Counter
+    items = transacties or []
+    if not items:
+        return 0
+
+    # Count how many times each key appears in this batch
+    def make_key(t):
+        return (t['datum'], t['bedrag'], t.get('tegenpartij', ''),
+                t.get('omschrijving', ''))
+
+    batch_counts = Counter(make_key(t) for t in items)
+
+    async with get_db_ctx(db_path) as conn:
         count = 0
-        for t in (transacties or []):
-            # Check for duplicate
+        # For each unique key, check how many already in DB
+        for key, needed in batch_counts.items():
             cur = await conn.execute(
                 """SELECT COUNT(*) FROM banktransacties
                    WHERE datum = ? AND bedrag = ? AND tegenpartij = ? AND omschrijving = ?""",
-                (t['datum'], t['bedrag'], t.get('tegenpartij', ''),
-                 t.get('omschrijving', ''))
+                key
             )
-            if (await cur.fetchone())[0] > 0:
-                continue  # Skip duplicate
-            await conn.execute(
-                """INSERT INTO banktransacties
-                   (datum, bedrag, tegenrekening, tegenpartij, omschrijving, csv_bestand)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                (t['datum'], t['bedrag'], t.get('tegenrekening', ''),
-                 t.get('tegenpartij', ''), t.get('omschrijving', ''), csv_bestand)
-            )
-            count += 1
+            existing = (await cur.fetchone())[0]
+            to_insert = max(0, needed - existing)
+
+            # Find the transactions with this key (in batch order)
+            matching = [t for t in items if make_key(t) == key]
+            for t in matching[:to_insert]:
+                await conn.execute(
+                    """INSERT INTO banktransacties
+                       (datum, bedrag, tegenrekening, tegenpartij, omschrijving,
+                        betalingskenmerk, csv_bestand)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (t['datum'], t['bedrag'], t.get('tegenrekening', ''),
+                     t.get('tegenpartij', ''), t.get('omschrijving', ''),
+                     t.get('betalingskenmerk', ''), csv_bestand)
+                )
+                count += 1
         await conn.commit()
         return count
-    finally:
-        await conn.close()
 
 
 async def update_banktransactie(db_path: Path = DB_PATH, transactie_id: int = 0,
                                  **kwargs) -> None:
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         fields = []
         values = []
         for key in ('categorie', 'koppeling_type', 'koppeling_id'):
@@ -895,8 +1213,6 @@ async def update_banktransactie(db_path: Path = DB_PATH, transactie_id: int = 0,
                 f"UPDATE banktransacties SET {', '.join(fields)} WHERE id = ?", values
             )
             await conn.commit()
-    finally:
-        await conn.close()
 
 
 async def delete_banktransacties(db_path: Path = DB_PATH,
@@ -904,8 +1220,7 @@ async def delete_banktransacties(db_path: Path = DB_PATH,
     """Delete bank transactions by IDs. Returns count deleted."""
     if not transactie_ids:
         return 0
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         placeholders = ','.join('?' for _ in transactie_ids)
         cursor = await conn.execute(
             f"DELETE FROM banktransacties WHERE id IN ({placeholders})",
@@ -913,8 +1228,121 @@ async def delete_banktransacties(db_path: Path = DB_PATH,
         )
         await conn.commit()
         return cursor.rowcount
-    finally:
-        await conn.close()
+
+
+BELASTINGDIENST_IBAN = 'NL86INGB0002445588'
+
+
+async def get_va_betalingen(db_path: Path = DB_PATH, jaar: int = 0) -> dict:
+    """Get actual VA payments from bank transactions for a given year.
+
+    Matches by Belastingdienst IBAN. Uses betalingskenmerk to split IB vs ZVW.
+    IB kenmerken have digits at position 10-11 below 50, ZVW have 50+.
+    """
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            """SELECT ABS(bedrag) as amount, betalingskenmerk
+               FROM banktransacties
+               WHERE tegenrekening = ?
+                 AND datum >= ? AND datum <= ?
+                 AND bedrag < 0""",
+            (BELASTINGDIENST_IBAN, f'{jaar}-01-01', f'{jaar}-12-31')
+        )
+        rows = await cur.fetchall()
+
+    if not rows:
+        return {
+            'ib_betaald': 0, 'ib_termijnen': 0,
+            'zvw_betaald': 0, 'zvw_termijnen': 0,
+            'totaal_betaald': 0, 'has_bank_data': False,
+        }
+
+    ib_betaald = 0.0
+    ib_count = 0
+    zvw_betaald = 0.0
+    zvw_count = 0
+    unmatched = 0.0
+
+    for amount, kenmerk in rows:
+        if kenmerk and len(kenmerk) >= 12 and kenmerk[10:12].isdigit():
+            year_type_digits = int(kenmerk[10:12])
+            if year_type_digits >= 50:
+                zvw_betaald += amount
+                zvw_count += 1
+            else:
+                ib_betaald += amount
+                ib_count += 1
+        else:
+            unmatched += amount
+
+    return {
+        'ib_betaald': round(ib_betaald, 2),
+        'ib_termijnen': ib_count,
+        'zvw_betaald': round(zvw_betaald, 2),
+        'zvw_termijnen': zvw_count,
+        'totaal_betaald': round(ib_betaald + zvw_betaald + unmatched, 2),
+        'has_bank_data': True,
+    }
+
+
+async def backfill_betalingskenmerken(db_path: Path = DB_PATH,
+                                       csv_dir: Path = None) -> int:
+    """One-time backfill: read archived CSVs to populate betalingskenmerk
+    on existing bank transactions that are missing it.
+
+    Matches by (datum, bedrag, tegenpartij, omschrijving) — same dedup key
+    as add_banktransacties. Returns count of rows updated.
+    """
+    from import_.rabobank_csv import parse_rabobank_csv
+
+    if csv_dir is None:
+        csv_dir = db_path.parent / 'bank_csv'
+    if not csv_dir.exists():
+        return 0
+
+    # Check if backfill is needed
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            """SELECT COUNT(*) FROM banktransacties
+               WHERE tegenrekening = 'NL86INGB0002445588'
+                 AND (betalingskenmerk IS NULL OR betalingskenmerk = '')"""
+        )
+        needs_backfill = (await cur.fetchone())[0]
+    if needs_backfill == 0:
+        return 0
+
+    # Parse all archived CSVs
+    kenmerk_map = {}
+    for csv_file in sorted(csv_dir.glob('*.csv')):
+        try:
+            content = csv_file.read_bytes()
+            txns = parse_rabobank_csv(content)
+            for t in txns:
+                k = t.get('betalingskenmerk', '')
+                if k:
+                    key = (t['datum'], t['bedrag'],
+                           t.get('tegenpartij', ''), t.get('omschrijving', ''))
+                    kenmerk_map[key] = k
+        except Exception:
+            continue
+
+    if not kenmerk_map:
+        return 0
+
+    # Update existing rows
+    count = 0
+    async with get_db_ctx(db_path) as conn:
+        for key, kenmerk in kenmerk_map.items():
+            cur = await conn.execute(
+                """UPDATE banktransacties SET betalingskenmerk = ?
+                   WHERE datum = ? AND bedrag = ? AND tegenpartij = ?
+                     AND omschrijving = ?
+                     AND (betalingskenmerk IS NULL OR betalingskenmerk = '')""",
+                (kenmerk, *key)
+            )
+            count += cur.rowcount
+        await conn.commit()
+    return count
 
 
 # === Fiscale Parameters ===
@@ -938,6 +1366,7 @@ def _row_to_fiscale_params(r) -> FiscaleParams:
         kia_ondergrens=r['kia_ondergrens'],
         kia_bovengrens=r['kia_bovengrens'],
         kia_pct=r['kia_pct'],
+        kia_drempel_per_item=r['kia_drempel_per_item'] if 'kia_drempel_per_item' in keys else 450,
         km_tarief=r['km_tarief'],
         schijf1_grens=r['schijf1_grens'],
         schijf1_pct=r['schijf1_pct'],
@@ -979,6 +1408,7 @@ def _row_to_fiscale_params(r) -> FiscaleParams:
         box3_rendement_schuld_pct=_safe_get(r, 'box3_rendement_schuld_pct', 2.46, keys),
         box3_tarief_pct=_safe_get(r, 'box3_tarief_pct', 36, keys),
         box3_drempel_schulden=_safe_get(r, 'box3_drempel_schulden', 3700, keys),
+        box3_fiscaal_partner=bool(_safe_get(r, 'box3_fiscaal_partner', 1, keys)),
         za_actief=bool(_safe_get(r, 'za_actief', 1, keys)),
         sa_actief=bool(_safe_get(r, 'sa_actief', 0, keys)),
         lijfrente_premie=_safe_get(r, 'lijfrente_premie', 0, keys),
@@ -990,37 +1420,31 @@ def _row_to_fiscale_params(r) -> FiscaleParams:
     )
 
 
-async def get_fiscale_params(db_path: Path = DB_PATH, jaar: int = 0) -> FiscaleParams:
-    conn = await get_db(db_path)
-    try:
+async def get_fiscale_params(db_path: Path = DB_PATH, jaar: int = 0) -> FiscaleParams | None:
+    async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute("SELECT * FROM fiscale_params WHERE jaar = ?", (jaar,))
         r = await cursor.fetchone()
         if not r:
             return None
         return _row_to_fiscale_params(r)
-    finally:
-        await conn.close()
 
 
 async def get_all_fiscale_params(db_path: Path = DB_PATH) -> list[FiscaleParams]:
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute("SELECT * FROM fiscale_params ORDER BY jaar")
         rows = await cursor.fetchall()
         return [_row_to_fiscale_params(r) for r in rows]
-    finally:
-        await conn.close()
 
 
 async def upsert_fiscale_params(db_path: Path = DB_PATH, **kwargs) -> None:
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         # Preserve IB-input, partner, box3 input, balans, and ew_naar_partner when overwriting from Instellingen
         cur = await conn.execute(
             "SELECT aov_premie, woz_waarde, hypotheekrente, "
             "voorlopige_aanslag_betaald, voorlopige_aanslag_zvw, "
             "partner_bruto_loon, partner_loonheffing, "
             "box3_bank_saldo, box3_overige_bezittingen, box3_schulden, "
+            "box3_fiscaal_partner, "
             "ew_naar_partner, "
             "balans_bank_saldo, balans_crediteuren, "
             "balans_overige_vorderingen, balans_overige_schulden, "
@@ -1031,7 +1455,7 @@ async def upsert_fiscale_params(db_path: Path = DB_PATH, **kwargs) -> None:
         await conn.execute(
             """INSERT OR REPLACE INTO fiscale_params
                (jaar, zelfstandigenaftrek, startersaftrek, mkb_vrijstelling_pct,
-                kia_ondergrens, kia_bovengrens, kia_pct, km_tarief,
+                kia_ondergrens, kia_bovengrens, kia_pct, kia_drempel_per_item, km_tarief,
                 schijf1_grens, schijf1_pct, schijf2_grens, schijf2_pct, schijf3_pct,
                 ahk_max, ahk_afbouw_pct, ahk_drempel, ak_max,
                 zvw_pct, zvw_max_grondslag, repr_aftrek_pct,
@@ -1045,16 +1469,18 @@ async def upsert_fiscale_params(db_path: Path = DB_PATH, **kwargs) -> None:
                 aov_premie, woz_waarde, hypotheekrente, voorlopige_aanslag_betaald,
                 voorlopige_aanslag_zvw, partner_bruto_loon, partner_loonheffing,
                 box3_bank_saldo, box3_overige_bezittingen, box3_schulden,
+                box3_fiscaal_partner,
                 ew_naar_partner, lijfrente_premie,
                 balans_bank_saldo, balans_crediteuren,
                 balans_overige_vorderingen, balans_overige_schulden,
                 jaarafsluiting_status)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (kwargs['jaar'], kwargs['zelfstandigenaftrek'], kwargs.get('startersaftrek'),
              kwargs['mkb_vrijstelling_pct'], kwargs['kia_ondergrens'],
-             kwargs['kia_bovengrens'], kwargs['kia_pct'], kwargs['km_tarief'],
+             kwargs['kia_bovengrens'], kwargs['kia_pct'],
+             kwargs.get('kia_drempel_per_item', 450), kwargs['km_tarief'],
              kwargs['schijf1_grens'], kwargs['schijf1_pct'],
              kwargs['schijf2_grens'], kwargs['schijf2_pct'], kwargs['schijf3_pct'],
              kwargs['ahk_max'], kwargs['ahk_afbouw_pct'], kwargs['ahk_drempel'],
@@ -1087,6 +1513,7 @@ async def upsert_fiscale_params(db_path: Path = DB_PATH, **kwargs) -> None:
              existing['box3_bank_saldo'] if existing else 0,
              existing['box3_overige_bezittingen'] if existing else 0,
              existing['box3_schulden'] if existing else 0,
+             existing['box3_fiscaal_partner'] if existing else 1,
              existing['ew_naar_partner'] if existing else 1,
              existing['lijfrente_premie'] if existing else 0,
              existing['balans_bank_saldo'] if existing else 0,
@@ -1096,8 +1523,6 @@ async def upsert_fiscale_params(db_path: Path = DB_PATH, **kwargs) -> None:
              existing['jaarafsluiting_status'] if existing else 'concept')
         )
         await conn.commit()
-    finally:
-        await conn.close()
 
 
 async def update_ib_inputs(db_path: Path = DB_PATH, jaar: int = 0,
@@ -1107,8 +1532,7 @@ async def update_ib_inputs(db_path: Path = DB_PATH, jaar: int = 0,
                            voorlopige_aanslag_zvw: float = 0,
                            lijfrente_premie: float = 0) -> None:
     """Update only the IB-input columns for a specific year."""
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         await conn.execute(
             """UPDATE fiscale_params
                SET aov_premie = ?, woz_waarde = ?,
@@ -1119,8 +1543,6 @@ async def update_ib_inputs(db_path: Path = DB_PATH, jaar: int = 0,
              voorlopige_aanslag_betaald, voorlopige_aanslag_zvw,
              lijfrente_premie, jaar))
         await conn.commit()
-    finally:
-        await conn.close()
 
 
 async def update_za_sa_toggles(db_path: Path = DB_PATH, jaar: int = 0,
@@ -1130,15 +1552,12 @@ async def update_za_sa_toggles(db_path: Path = DB_PATH, jaar: int = 0,
 
     Returns True if a row was updated, False if no fiscale_params row exists.
     """
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
             "UPDATE fiscale_params SET za_actief = ?, sa_actief = ? WHERE jaar = ?",
             (int(za_actief), int(sa_actief), jaar))
         await conn.commit()
         return cursor.rowcount > 0
-    finally:
-        await conn.close()
 
 
 async def update_ew_naar_partner(db_path: Path = DB_PATH, jaar: int = 0,
@@ -1147,15 +1566,12 @@ async def update_ew_naar_partner(db_path: Path = DB_PATH, jaar: int = 0,
 
     Returns True if a row was updated, False if no fiscale_params row exists.
     """
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
             "UPDATE fiscale_params SET ew_naar_partner = ? WHERE jaar = ?",
             (1 if value else 0, jaar))
         await conn.commit()
         return cursor.rowcount > 0
-    finally:
-        await conn.close()
 
 
 async def update_box3_inputs(db_path: Path = DB_PATH, jaar: int = 0,
@@ -1166,8 +1582,7 @@ async def update_box3_inputs(db_path: Path = DB_PATH, jaar: int = 0,
 
     Returns True if a row was updated, False if no fiscale_params row exists.
     """
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
             """UPDATE fiscale_params
                SET box3_bank_saldo = ?,
@@ -1177,38 +1592,49 @@ async def update_box3_inputs(db_path: Path = DB_PATH, jaar: int = 0,
             (bank_saldo, overige_bezittingen, schulden, jaar))
         await conn.commit()
         return cursor.rowcount > 0
-    finally:
-        await conn.close()
+
+
+async def update_partner_inputs(db_path: Path = DB_PATH, jaar: int = 0,
+                                 bruto_loon: float = 0,
+                                 loonheffing: float = 0) -> bool:
+    """Update partner input fields in fiscale_params for a year.
+
+    Returns True if a row was updated, False if no fiscale_params row exists.
+    """
+    async with get_db_ctx(db_path) as conn:
+        cursor = await conn.execute(
+            """UPDATE fiscale_params
+               SET partner_bruto_loon = ?, partner_loonheffing = ?
+               WHERE jaar = ?""",
+            (bruto_loon, loonheffing, jaar))
+        await conn.commit()
+        return cursor.rowcount > 0
 
 
 # === Aggregation queries (voor dashboard + jaarafsluiting) ===
 
 async def get_omzet_per_maand(db_path: Path = DB_PATH, jaar: int = 2026) -> list[float]:
     """Returns list of 12 monthly revenue totals."""
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
             """SELECT substr(datum, 6, 2) as maand, SUM(totaal_bedrag) as totaal
                FROM facturen
-               WHERE substr(datum, 1, 4) = ?
+               WHERE substr(datum, 1, 4) = ? AND status != 'concept'
                GROUP BY maand ORDER BY maand""",
             (str(jaar),)
         )
         rows = await cursor.fetchall()
         maand_map = {r['maand']: r['totaal'] for r in rows}
         return [maand_map.get(f"{m:02d}", 0) for m in range(1, 13)]
-    finally:
-        await conn.close()
 
 
 async def get_kpis(db_path: Path = DB_PATH, jaar: int = 2026) -> dict:
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         jaar_str = str(jaar)
-        # Omzet
+        # Omzet (excludes concept invoices)
         cur = await conn.execute(
             "SELECT COALESCE(SUM(totaal_bedrag), 0) FROM facturen "
-            "WHERE substr(datum, 1, 4) = ?",
+            "WHERE substr(datum, 1, 4) = ? AND status != 'concept'",
             (jaar_str,)
         )
         omzet = (await cur.fetchone())[0]
@@ -1231,7 +1657,7 @@ async def get_kpis(db_path: Path = DB_PATH, jaar: int = 2026) -> dict:
         # Openstaand
         cur = await conn.execute(
             "SELECT COALESCE(SUM(totaal_bedrag), 0) FROM facturen "
-            "WHERE substr(datum, 1, 4) = ? AND betaald = 0",
+            "WHERE substr(datum, 1, 4) = ? AND status = 'verstuurd'",
             (jaar_str,)
         )
         openstaand = (await cur.fetchone())[0]
@@ -1243,62 +1669,54 @@ async def get_kpis(db_path: Path = DB_PATH, jaar: int = 2026) -> dict:
             'uren': uren,
             'openstaand': openstaand,
         }
-    finally:
-        await conn.close()
+
+
+async def get_kpis_tot_datum(db_path: Path = DB_PATH, jaar: int = 2026,
+                             max_datum: str = '') -> dict:
+    """Get KPIs for a year up to a specific date (inclusive).
+
+    Used for fair YoY comparison: compare previous year up to the same
+    calendar date as today, not full months.
+    """
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            "SELECT COALESCE(SUM(totaal_bedrag), 0) FROM facturen "
+            "WHERE datum >= ? AND datum <= ? AND status != 'concept'",
+            (f'{jaar}-01-01', max_datum))
+        omzet = (await cur.fetchone())[0]
+
+        cur = await conn.execute(
+            "SELECT COALESCE(SUM(bedrag), 0) FROM uitgaven "
+            "WHERE datum >= ? AND datum <= ? AND is_investering = 0",
+            (f'{jaar}-01-01', max_datum))
+        kosten = (await cur.fetchone())[0]
+
+        return {'omzet': omzet, 'kosten': kosten}
 
 
 async def get_omzet_per_klant(db_path: Path = DB_PATH, jaar: int = 2026) -> list[dict]:
     """Revenue breakdown per customer for a given year."""
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
             """SELECT k.naam, SUM(f.totaal_uren) as uren,
                       SUM(f.totaal_km) as km, SUM(f.totaal_bedrag) as bedrag
                FROM facturen f JOIN klanten k ON f.klant_id = k.id
-               WHERE substr(f.datum, 1, 4) = ?
+               WHERE substr(f.datum, 1, 4) = ? AND f.status != 'concept'
                GROUP BY k.naam ORDER BY bedrag DESC""",
             (str(jaar),)
         )
         rows = await cursor.fetchall()
         return [{'naam': r['naam'], 'uren': r['uren'] or 0,
                  'km': r['km'] or 0, 'bedrag': r['bedrag'] or 0} for r in rows]
-    finally:
-        await conn.close()
-
-
-async def get_recente_facturen(db_path: Path = DB_PATH,
-                                limit: int = 5) -> list[Factuur]:
-    """Get most recent invoices across all years."""
-    conn = await get_db(db_path)
-    try:
-        cursor = await conn.execute(
-            """SELECT f.*, k.naam as klant_naam
-               FROM facturen f JOIN klanten k ON f.klant_id = k.id
-               ORDER BY f.datum DESC LIMIT ?""",
-            (limit,)
-        )
-        rows = await cursor.fetchall()
-        return [Factuur(
-            id=r['id'], nummer=r['nummer'], klant_id=r['klant_id'],
-            klant_naam=r['klant_naam'], datum=r['datum'],
-            totaal_uren=r['totaal_uren'] or 0, totaal_km=r['totaal_km'] or 0,
-            totaal_bedrag=r['totaal_bedrag'],
-            pdf_pad=r['pdf_pad'] or '', betaald=bool(r['betaald']),
-            betaald_datum=r['betaald_datum'] or '',
-            type=r['type'] or 'factuur'
-        ) for r in rows]
-    finally:
-        await conn.close()
 
 
 async def get_openstaande_facturen(db_path: Path = DB_PATH,
                                     jaar: int = None) -> list[Factuur]:
     """Get unpaid invoices."""
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         sql = """SELECT f.*, k.naam as klant_naam
                  FROM facturen f JOIN klanten k ON f.klant_id = k.id
-                 WHERE f.betaald = 0 AND f.type = 'factuur'"""
+                 WHERE f.status = 'verstuurd'"""
         params = []
         if jaar:
             sql += " AND substr(f.datum, 1, 4) = ?"
@@ -1306,62 +1724,33 @@ async def get_openstaande_facturen(db_path: Path = DB_PATH,
         sql += " ORDER BY f.datum"
         cursor = await conn.execute(sql, params)
         rows = await cursor.fetchall()
-        return [Factuur(
-            id=r['id'], nummer=r['nummer'], klant_id=r['klant_id'],
-            klant_naam=r['klant_naam'], datum=r['datum'],
-            totaal_uren=r['totaal_uren'] or 0, totaal_km=r['totaal_km'] or 0,
-            totaal_bedrag=r['totaal_bedrag'],
-            pdf_pad=r['pdf_pad'] or '', betaald=False,
-            betaald_datum='', type=r['type'] or 'factuur'
-        ) for r in rows]
-    finally:
-        await conn.close()
-
-
-async def get_factuur_count(db_path: Path = DB_PATH, jaar: int = 2026) -> int:
-    """Count invoices for a year."""
-    conn = await get_db(db_path)
-    try:
-        cur = await conn.execute(
-            "SELECT COUNT(*) FROM facturen WHERE substr(datum, 1, 4) = ? AND type = 'factuur'",
-            (str(jaar),)
-        )
-        return (await cur.fetchone())[0]
-    finally:
-        await conn.close()
+        return [_row_to_factuur(r) for r in rows]
 
 
 async def get_uren_totaal(db_path: Path = DB_PATH, jaar: int = 2026,
                            urennorm_only: bool = True) -> float:
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         sql = "SELECT COALESCE(SUM(uren), 0) FROM werkdagen WHERE substr(datum, 1, 4) = ?"
         params = [str(jaar)]
         if urennorm_only:
             sql += " AND urennorm = 1"
         cur = await conn.execute(sql, params)
         return (await cur.fetchone())[0]
-    finally:
-        await conn.close()
 
 
 async def get_omzet_totaal(db_path: Path = DB_PATH, jaar: int = 2026) -> float:
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cur = await conn.execute(
             "SELECT COALESCE(SUM(totaal_bedrag), 0) FROM facturen "
-            "WHERE substr(datum, 1, 4) = ?",
+            "WHERE substr(datum, 1, 4) = ? AND status != 'concept'",
             (str(jaar),)
         )
         return (await cur.fetchone())[0]
-    finally:
-        await conn.close()
 
 
 async def get_data_counts(db_path: Path = DB_PATH, jaar: int = 2026) -> dict:
     """Get counts of facturen, uitgaven, and werkdagen for a year."""
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cur = await conn.execute(
             "SELECT COUNT(*) FROM facturen "
             "WHERE substr(datum, 1, 4) = ?",
@@ -1380,45 +1769,36 @@ async def get_data_counts(db_path: Path = DB_PATH, jaar: int = 2026) -> dict:
             'n_uitgaven': n_uitgaven,
             'n_werkdagen': n_werkdagen,
         }
-    finally:
-        await conn.close()
 
 
 async def get_representatie_totaal(db_path: Path = DB_PATH, jaar: int = 2026) -> float:
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cur = await conn.execute(
             "SELECT COALESCE(SUM(bedrag), 0) FROM uitgaven "
             "WHERE substr(datum, 1, 4) = ? AND categorie = 'Representatie'",
             (str(jaar),)
         )
         return (await cur.fetchone())[0]
-    finally:
-        await conn.close()
 
 
 async def get_werkdagen_ongefactureerd_summary(
         db_path: Path = DB_PATH, jaar: int = 2026) -> dict:
     """Get count and estimated amount of unfactured werkdagen for a year."""
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cur = await conn.execute(
             """SELECT COUNT(*) as aantal,
                       COALESCE(SUM(uren * tarief + km * km_tarief), 0) as bedrag
                FROM werkdagen
-               WHERE status = 'ongefactureerd'
+               WHERE (factuurnummer = '' OR factuurnummer IS NULL)
                  AND substr(datum, 1, 4) = ?""",
             (str(jaar),))
         r = await cur.fetchone()
         return {'aantal': r['aantal'], 'bedrag': r['bedrag']}
-    finally:
-        await conn.close()
 
 
 async def get_km_totaal(db_path: Path = DB_PATH, jaar: int = 2026) -> dict:
     """Get total km and km-vergoeding for a year."""
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cur = await conn.execute(
             """SELECT COALESCE(SUM(km), 0) as km,
                       COALESCE(SUM(km * km_tarief), 0) as vergoeding
@@ -1426,31 +1806,83 @@ async def get_km_totaal(db_path: Path = DB_PATH, jaar: int = 2026) -> dict:
             (str(jaar),))
         r = await cur.fetchone()
         return {'km': r['km'], 'vergoeding': r['vergoeding']}
-    finally:
-        await conn.close()
 
 
 async def get_investeringen_voor_afschrijving(db_path: Path = DB_PATH,
                                                tot_jaar: int = 2026) -> list[Uitgave]:
     """Get all investments up to and including given year."""
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
             "SELECT * FROM uitgaven WHERE is_investering = 1 "
             "AND CAST(substr(datum, 1, 4) AS INTEGER) <= ? ORDER BY datum",
             (tot_jaar,)
         )
         rows = await cursor.fetchall()
-        return [Uitgave(
-            id=r['id'], datum=r['datum'], categorie=r['categorie'],
-            omschrijving=r['omschrijving'], bedrag=r['bedrag'],
-            is_investering=True, restwaarde_pct=r['restwaarde_pct'] or 10,
-            levensduur_jaren=r['levensduur_jaren'],
-            aanschaf_bedrag=r['aanschaf_bedrag'],
-            zakelijk_pct=r['zakelijk_pct'] or 100
-        ) for r in rows]
-    finally:
-        await conn.close()
+        return [_row_to_uitgave(r) for r in rows]
+
+
+# === Afschrijving overrides ===
+
+async def get_afschrijving_overrides(db_path: Path = DB_PATH,
+                                      uitgave_id: int = 0) -> dict[int, float]:
+    """Get all depreciation overrides for a single investment.
+
+    Returns dict mapping jaar → bedrag.
+    """
+    async with get_db_ctx(db_path) as conn:
+        cursor = await conn.execute(
+            "SELECT jaar, bedrag FROM afschrijving_overrides WHERE uitgave_id = ?",
+            (uitgave_id,))
+        rows = await cursor.fetchall()
+        return {r['jaar']: r['bedrag'] for r in rows}
+
+
+async def get_afschrijving_overrides_batch(
+    db_path: Path = DB_PATH,
+    uitgave_ids: list[int] | None = None,
+) -> dict[int, dict[int, float]]:
+    """Get overrides for multiple investments.
+
+    Returns dict mapping uitgave_id → {jaar → bedrag}.
+    """
+    if not uitgave_ids:
+        return {}
+    async with get_db_ctx(db_path) as conn:
+        placeholders = ','.join('?' * len(uitgave_ids))
+        cursor = await conn.execute(
+            f"SELECT uitgave_id, jaar, bedrag FROM afschrijving_overrides "
+            f"WHERE uitgave_id IN ({placeholders})",
+            uitgave_ids)
+        rows = await cursor.fetchall()
+        result: dict[int, dict[int, float]] = {}
+        for r in rows:
+            result.setdefault(r['uitgave_id'], {})[r['jaar']] = r['bedrag']
+        return result
+
+
+async def set_afschrijving_override(db_path: Path = DB_PATH,
+                                     uitgave_id: int = 0,
+                                     jaar: int = 0,
+                                     bedrag: float = 0.0) -> None:
+    """Set (upsert) a depreciation override for a specific investment+year."""
+    async with get_db_ctx(db_path) as conn:
+        await conn.execute(
+            """INSERT INTO afschrijving_overrides (uitgave_id, jaar, bedrag)
+               VALUES (?, ?, ?)
+               ON CONFLICT(uitgave_id, jaar) DO UPDATE SET bedrag = excluded.bedrag""",
+            (uitgave_id, jaar, bedrag))
+        await conn.commit()
+
+
+async def delete_afschrijving_override(db_path: Path = DB_PATH,
+                                        uitgave_id: int = 0,
+                                        jaar: int = 0) -> None:
+    """Delete a specific depreciation override."""
+    async with get_db_ctx(db_path) as conn:
+        await conn.execute(
+            "DELETE FROM afschrijving_overrides WHERE uitgave_id = ? AND jaar = ?",
+            (uitgave_id, jaar))
+        await conn.commit()
 
 
 # === Aangifte documenten ===
@@ -1458,8 +1890,7 @@ async def get_investeringen_voor_afschrijving(db_path: Path = DB_PATH,
 async def get_aangifte_documenten(db_path: Path = DB_PATH,
                                   jaar: int = 0) -> list[AangifteDocument]:
     """Get all aangifte documents for a year."""
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
             "SELECT * FROM aangifte_documenten WHERE jaar = ? ORDER BY categorie, documenttype",
             (jaar,))
@@ -1470,8 +1901,6 @@ async def get_aangifte_documenten(db_path: Path = DB_PATH,
             bestandspad=r['bestandspad'], upload_datum=r['upload_datum'],
             notitie=r['notitie'] or ''
         ) for r in rows]
-    finally:
-        await conn.close()
 
 
 async def add_aangifte_document(db_path: Path = DB_PATH, jaar: int = 0,
@@ -1480,8 +1909,7 @@ async def add_aangifte_document(db_path: Path = DB_PATH, jaar: int = 0,
                                  upload_datum: str = '',
                                  notitie: str = '') -> int:
     """Add a new aangifte document record. Returns id."""
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
             """INSERT INTO aangifte_documenten
                (jaar, categorie, documenttype, bestandsnaam, bestandspad, upload_datum, notitie)
@@ -1490,48 +1918,197 @@ async def add_aangifte_document(db_path: Path = DB_PATH, jaar: int = 0,
              upload_datum, notitie))
         await conn.commit()
         return cursor.lastrowid
-    finally:
-        await conn.close()
 
 
 async def delete_aangifte_document(db_path: Path = DB_PATH,
                                     doc_id: int = 0) -> None:
     """Delete an aangifte document record."""
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         await conn.execute(
             "DELETE FROM aangifte_documenten WHERE id = ?", (doc_id,))
         await conn.commit()
-    finally:
-        await conn.close()
 
 
-async def get_openstaande_debiteuren(db_path: Path = DB_PATH, jaar: int = 0) -> float:
-    """Sum of unpaid invoices for the given year."""
-    conn = await get_db(db_path)
-    try:
+async def get_debiteuren_op_peildatum(db_path: Path = DB_PATH,
+                                       peildatum: str = '') -> float:
+    """Sum of receivables outstanding as of peildatum (typically 31-12-{year}).
+
+    An invoice is a receivable at peildatum if:
+    - It was issued on or before peildatum, AND
+    - It's still unpaid (status != 'betaald'), OR
+    - It was paid AFTER peildatum (status = 'betaald' AND betaald_datum > peildatum)
+
+    Invoices with status='betaald' but no betaald_datum are assumed paid within their
+    invoice period (conservative — not counted as receivables).
+    """
+    async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
-            "SELECT COALESCE(SUM(totaal_bedrag), 0) FROM facturen "
-            "WHERE betaald = 0 AND strftime('%Y', datum) = ?",
-            (str(jaar),))
+            """SELECT COALESCE(SUM(totaal_bedrag), 0) FROM facturen
+               WHERE datum <= ?
+                 AND status != 'concept'
+                 AND (
+                     status != 'betaald'
+                     OR (status = 'betaald' AND betaald_datum != '' AND betaald_datum > ?)
+                 )""",
+            (peildatum, peildatum))
         row = await cursor.fetchone()
         return float(row[0])
-    finally:
-        await conn.close()
+
+
+async def find_factuur_matches(db_path: Path = DB_PATH) -> list[dict]:
+    """Find matches between open facturen and incoming bank payments.
+
+    Returns match proposals WITHOUT applying them. Two-pass matching:
+    1. Match by invoice number in bank omschrijving + amount within EUR 1
+    2. Fall back to amount matching (within EUR 1 tolerance)
+
+    Bank payment may arrive up to 14 days before factuur date.
+    Each bank transaction used at most once (greedy, chronological).
+
+    Returns list of match dicts with factuur and bank details + match_type.
+    """
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            """SELECT id, nummer, datum, totaal_bedrag FROM facturen
+               WHERE status = 'verstuurd' ORDER BY datum""")
+        open_facturen = await cur.fetchall()
+        if not open_facturen:
+            return []
+
+        cur = await conn.execute(
+            """SELECT id, datum, bedrag, tegenpartij, omschrijving
+               FROM banktransacties
+               WHERE bedrag > 0
+               AND (koppeling_type IS NULL OR koppeling_type = '')
+               ORDER BY datum""")
+        bank_txns = await cur.fetchall()
+
+        used_bank_ids = set()
+        matches = []
+
+        def date_ok(bank_datum, factuur_datum):
+            fd = _date.fromisoformat(factuur_datum)
+            earliest = (fd - _timedelta(days=14)).isoformat()
+            return bank_datum >= earliest
+
+        # Pass 1: Match by invoice number in omschrijving + amount sanity
+        for f in open_facturen:
+            nummer = f['nummer'].lower()
+            for b in bank_txns:
+                if b['id'] in used_bank_ids:
+                    continue
+                if not date_ok(b['datum'], f['datum']):
+                    continue
+                omschr = (b['omschrijving'] or '').lower()
+                if nummer in omschr:
+                    if abs(b['bedrag'] - f['totaal_bedrag']) > 1.00:
+                        continue
+                    used_bank_ids.add(b['id'])
+                    matches.append({
+                        'factuur_id': f['id'],
+                        'factuur_nummer': f['nummer'],
+                        'factuur_bedrag': f['totaal_bedrag'],
+                        'factuur_datum': f['datum'],
+                        'bank_id': b['id'],
+                        'bank_datum': b['datum'],
+                        'bank_bedrag': b['bedrag'],
+                        'bank_tegenpartij': b['tegenpartij'] or '',
+                        'match_type': 'nummer',
+                    })
+                    break
+
+        matched_factuur_ids = {m['factuur_id'] for m in matches}
+
+        # Pass 2: Amount matching for remaining
+        for f in open_facturen:
+            if f['id'] in matched_factuur_ids:
+                continue
+            for b in bank_txns:
+                if b['id'] in used_bank_ids:
+                    continue
+                if not date_ok(b['datum'], f['datum']):
+                    continue
+                if abs(b['bedrag'] - f['totaal_bedrag']) < 1.00:
+                    used_bank_ids.add(b['id'])
+                    matches.append({
+                        'factuur_id': f['id'],
+                        'factuur_nummer': f['nummer'],
+                        'factuur_bedrag': f['totaal_bedrag'],
+                        'factuur_datum': f['datum'],
+                        'bank_id': b['id'],
+                        'bank_datum': b['datum'],
+                        'bank_bedrag': b['bedrag'],
+                        'bank_tegenpartij': b['tegenpartij'] or '',
+                        'match_type': 'bedrag',
+                    })
+                    break
+
+        return matches
+
+
+async def apply_factuur_matches(db_path: Path = DB_PATH,
+                                 matches: list[dict] = None) -> int:
+    """Apply confirmed factuur-bank matches.
+
+    For each match: marks factuur as betaald and links bank transaction.
+    Returns count of applied matches.
+    """
+    if not matches:
+        return 0
+
+    applied = 0
+    async with get_db_ctx(db_path) as conn:
+        for m in matches:
+            # Defense-in-depth: only allow verstuurd → betaald transition
+            cur = await conn.execute(
+                "SELECT status FROM facturen WHERE id = ?",
+                (m['factuur_id'],))
+            row = await cur.fetchone()
+            if not row or row['status'] not in ('verstuurd',):
+                continue
+            await conn.execute(
+                "UPDATE facturen SET status = 'betaald', betaald_datum = ? WHERE id = ?",
+                (m['bank_datum'], m['factuur_id']))
+            await conn.execute(
+                "UPDATE banktransacties SET koppeling_type = 'factuur', "
+                "koppeling_id = ? WHERE id = ?",
+                (m['factuur_id'], m['bank_id']))
+            applied += 1
+        await conn.commit()
+    return applied
 
 
 async def get_nog_te_factureren(db_path: Path = DB_PATH, jaar: int = 0) -> float:
-    """Sum of (uren * tarief + km * km_tarief) for unfactured werkdagen in the given year."""
-    conn = await get_db(db_path)
-    try:
+    """Sum of (uren * tarief + km * km_tarief) for unfactured werkdagen in the given year.
+
+    Excludes werkdagen with zero revenue (admin/study hours) since those are
+    never invoiced — they only count toward urencriterium.
+    """
+    async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
             "SELECT COALESCE(SUM(uren * tarief + km * km_tarief), 0.0) FROM werkdagen "
-            "WHERE status = 'ongefactureerd' AND substr(datum, 1, 4) = ?",
+            "WHERE (factuurnummer = '' OR factuurnummer IS NULL) AND substr(datum, 1, 4) = ? "
+            "AND tarief > 0",
             (str(jaar),))
         row = await cursor.fetchone()
         return float(row[0])
-    finally:
-        await conn.close()
+
+
+async def get_belastingdienst_betalingen(db_path: Path = DB_PATH,
+                                         jaar: int = 0) -> float:
+    """Sum of payments to Belastingdienst for a given year (negative = paid out).
+
+    Returns positive number representing total paid. Excludes Boekhouder and refunds.
+    """
+    async with get_db_ctx(db_path) as conn:
+        cursor = await conn.execute(
+            """SELECT COALESCE(SUM(ABS(bedrag)), 0.0) FROM banktransacties
+               WHERE LOWER(tegenpartij) LIKE '%belastingdienst%'
+               AND bedrag < 0
+               AND substr(datum, 1, 4) = ?""",
+            (str(jaar),))
+        row = await cursor.fetchone()
+        return float(row[0])
 
 
 async def update_balans_inputs(db_path: Path = DB_PATH, jaar: int = 0,
@@ -1540,8 +2117,7 @@ async def update_balans_inputs(db_path: Path = DB_PATH, jaar: int = 0,
                                 balans_overige_vorderingen: float = 0,
                                 balans_overige_schulden: float = 0) -> bool:
     """Update balance sheet manual input fields for a specific year."""
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
             """UPDATE fiscale_params
                SET balans_bank_saldo = ?, balans_crediteuren = ?,
@@ -1551,42 +2127,17 @@ async def update_balans_inputs(db_path: Path = DB_PATH, jaar: int = 0,
              balans_overige_vorderingen, balans_overige_schulden, jaar))
         await conn.commit()
         return cursor.rowcount > 0
-    finally:
-        await conn.close()
 
 
 async def update_jaarafsluiting_status(db_path: Path = DB_PATH, jaar: int = 0,
                                         status: str = 'concept') -> bool:
     """Update jaarafsluiting status for a specific year ('concept' or 'definitief')."""
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
             "UPDATE fiscale_params SET jaarafsluiting_status = ? WHERE jaar = ?",
             (status, jaar))
         await conn.commit()
         return cursor.rowcount > 0
-    finally:
-        await conn.close()
-
-
-async def update_partner_inkomen(db_path: Path = DB_PATH, jaar: int = 0,
-                                  partner_bruto_loon: float = 0,
-                                  partner_loonheffing: float = 0) -> bool:
-    """Update partner income fields in fiscale_params for a year.
-
-    Returns True if a row was updated, False if no fiscale_params row exists.
-    """
-    conn = await get_db(db_path)
-    try:
-        cursor = await conn.execute(
-            """UPDATE fiscale_params
-               SET partner_bruto_loon = ?, partner_loonheffing = ?
-               WHERE jaar = ?""",
-            (partner_bruto_loon, partner_loonheffing, jaar))
-        await conn.commit()
-        return cursor.rowcount > 0
-    finally:
-        await conn.close()
 
 
 # --- Klant Locaties ---
@@ -1594,8 +2145,7 @@ async def update_partner_inkomen(db_path: Path = DB_PATH, jaar: int = 0,
 
 async def get_klant_locaties(db_path, klant_id):
     """Get all locations for a klant, ordered by name."""
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cur = await conn.execute(
             "SELECT id, klant_id, naam, retour_km FROM klant_locaties "
             "WHERE klant_id = ? ORDER BY naam",
@@ -1604,42 +2154,22 @@ async def get_klant_locaties(db_path, klant_id):
         return [KlantLocatie(id=r['id'], klant_id=r['klant_id'],
                              naam=r['naam'], retour_km=r['retour_km'])
                 for r in rows]
-    finally:
-        await conn.close()
 
 
 async def add_klant_locatie(db_path, klant_id, naam, retour_km):
     """Add a location to a klant. Returns the new location id."""
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         cur = await conn.execute(
             "INSERT INTO klant_locaties (klant_id, naam, retour_km) "
             "VALUES (?, ?, ?)",
             (klant_id, naam, retour_km))
         await conn.commit()
         return cur.lastrowid
-    finally:
-        await conn.close()
-
-
-async def update_klant_locatie(db_path, locatie_id, naam, retour_km):
-    """Update a location's name and/or km."""
-    conn = await get_db(db_path)
-    try:
-        await conn.execute(
-            "UPDATE klant_locaties SET naam = ?, retour_km = ? WHERE id = ?",
-            (naam, retour_km, locatie_id))
-        await conn.commit()
-    finally:
-        await conn.close()
 
 
 async def delete_klant_locatie(db_path, locatie_id):
     """Delete a location by id."""
-    conn = await get_db(db_path)
-    try:
+    async with get_db_ctx(db_path) as conn:
         await conn.execute(
             "DELETE FROM klant_locaties WHERE id = ?", (locatie_id,))
         await conn.commit()
-    finally:
-        await conn.close()

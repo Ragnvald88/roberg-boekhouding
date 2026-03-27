@@ -29,6 +29,18 @@ class TestParseDutchAmount:
     def test_whitespace(self):
         assert parse_dutch_amount('  1.278,48  ') == 1278.48
 
+    def test_empty_string(self):
+        assert parse_dutch_amount('') == 0.0
+
+    def test_dot_only(self):
+        assert parse_dutch_amount('.') == 0.0
+
+    def test_comma_only(self):
+        assert parse_dutch_amount(',') == 0.0
+
+    def test_garbage(self):
+        assert parse_dutch_amount('abc') == 0.0
+
 
 # ── Date parsing ────────────────────────────────────────────────────
 
@@ -715,8 +727,8 @@ class TestResolveANWKlant:
         assert name == 'HAP NoordOost'
         assert kid == 5
 
-    def test_gr_too_short_no_match(self):
-        """'Gr' pattern removed — too broad (matched 'background.pdf' etc.)."""
+    def test_gr_factuur_matches_groningen(self):
+        """'Gr_Factuur' pattern maps to HAP NoordOost."""
         name, kid = resolve_anw_klant('2512_Gr_Factuur.pdf', MOCK_KLANTEN)
-        assert name is None
-        assert kid is None
+        assert name == 'HAP NoordOost'
+        assert kid == MOCK_KLANTEN['HAP NoordOost']

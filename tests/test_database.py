@@ -3,18 +3,12 @@
 import pytest
 import aiosqlite
 from database import (
-    init_db, get_db, add_klant, get_klanten, add_werkdag, get_werkdagen,
-    update_werkdag, delete_werkdag, get_werkdagen_ongefactureerd,
+    init_db, get_db, get_db_ctx, add_klant, get_klanten, add_werkdag,
+    get_werkdagen, update_werkdag, delete_werkdag,
+    get_werkdagen_ongefactureerd,
     add_factuur, get_facturen, get_next_factuurnummer,
     add_uitgave, get_uitgaven, get_uitgaven_per_categorie,
 )
-
-
-@pytest.fixture
-async def db(tmp_path):
-    db_path = tmp_path / "test.sqlite3"
-    await init_db(db_path)
-    return db_path
 
 
 @pytest.mark.asyncio
@@ -116,7 +110,7 @@ async def test_werkdagen_ongefactureerd(db):
     kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=44)
     wid1 = await add_werkdag(db, datum="2026-02-01", klant_id=kid, uren=8, tarief=80)
     wid2 = await add_werkdag(db, datum="2026-02-02", klant_id=kid, uren=9, tarief=80,
-                              status='gefactureerd')
+                              factuurnummer='2026-001')
     ongefact = await get_werkdagen_ongefactureerd(db)
     assert len(ongefact) == 1
     assert ongefact[0].id == wid1
@@ -156,11 +150,16 @@ async def test_uitgaven_per_categorie(db):
 
 
 @pytest.mark.asyncio
-async def test_check_constraint_uren_positive(db):
+async def test_check_constraint_uren_non_negative(db):
     kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=44)
+    # uren=0 is allowed (non-patient business km)
+    wd_id = await add_werkdag(db, datum="2026-02-23", klant_id=kid,
+                               uren=0, tarief=80)
+    assert wd_id > 0
+    # uren < 0 must still be rejected
     with pytest.raises(Exception):
-        await add_werkdag(db, datum="2026-02-23", klant_id=kid,
-                          uren=0, tarief=80)  # uren must be > 0
+        await add_werkdag(db, datum="2026-02-24", klant_id=kid,
+                          uren=-1, tarief=80)  # uren must be >= 0
 
 
 @pytest.mark.asyncio
@@ -168,3 +167,32 @@ async def test_check_constraint_bedrag_positive(db):
     with pytest.raises(Exception):
         await add_uitgave(db, datum="2026-01-01", categorie="Test",
                           omschrijving="Test", bedrag=-10)
+
+
+@pytest.mark.asyncio
+async def test_migrations_fresh_db(tmp_path):
+    """Fresh database gets all migrations applied."""
+    db = tmp_path / 'test.db'
+    await init_db(db)
+    async with get_db_ctx(db) as conn:
+        cur = await conn.execute("SELECT MAX(version) FROM schema_version")
+        row = await cur.fetchone()
+        assert row[0] is not None and row[0] > 0
+
+
+@pytest.mark.asyncio
+async def test_migrations_idempotent(tmp_path):
+    """Running init_db twice doesn't fail or re-apply migrations."""
+    db = tmp_path / 'test.db'
+    await init_db(db)
+    await init_db(db)  # second run should be a no-op
+    async with get_db_ctx(db) as conn:
+        cur = await conn.execute("SELECT COUNT(*) FROM schema_version")
+        count = (await cur.fetchone())[0]
+        assert count > 0
+
+        # Verify fiscale_params columns exist
+        cur = await conn.execute("PRAGMA table_info(fiscale_params)")
+        columns = {row[1] for row in await cur.fetchall()}
+        assert 'box3_fiscaal_partner' in columns
+        assert 'jaarafsluiting_status' in columns

@@ -3,20 +3,14 @@
 import pytest
 from database import (
     init_db, get_db, get_aangifte_documenten, add_aangifte_document,
-    delete_aangifte_document, update_partner_inkomen, update_ew_naar_partner,
-    get_fiscale_params, upsert_fiscale_params,
-    add_uitgave, add_werkdag, add_klant,
+    delete_aangifte_document, update_ew_naar_partner,
+    get_fiscale_params, upsert_fiscale_params, update_balans_inputs,
+    add_uitgave, add_werkdag, add_klant, add_factuur,
     _validate_datum,
 )
-from components.fiscal_utils import fiscale_params_to_dict, fetch_fiscal_data
+from components.fiscal_utils import fiscale_params_to_dict, fetch_fiscal_data, bereken_balans
+from fiscal.berekeningen import bereken_volledig
 from import_.seed_data import FISCALE_PARAMS
-
-
-@pytest.fixture
-async def db(tmp_path):
-    db_path = tmp_path / "test.sqlite3"
-    await init_db(db_path)
-    return db_path
 
 
 @pytest.mark.asyncio
@@ -139,33 +133,6 @@ async def test_partner_fields_in_fiscale_params(db):
     assert params.partner_bruto_loon == 0.0
     assert params.partner_loonheffing == 0.0
 
-    # Update partner income
-    result = await update_partner_inkomen(
-        db, jaar=2024,
-        partner_bruto_loon=45000.00,
-        partner_loonheffing=12500.00,
-    )
-    assert result is True
-
-    # Verify saved values
-    params = await get_fiscale_params(db, jaar=2024)
-    assert params.partner_bruto_loon == 45000.00
-    assert params.partner_loonheffing == 12500.00
-
-
-@pytest.mark.asyncio
-async def test_update_partner_inkomen_no_row(db):
-    """update_partner_inkomen returns False when no fiscale_params row exists."""
-    result = await update_partner_inkomen(
-        db, jaar=2099,
-        partner_bruto_loon=50000.00,
-        partner_loonheffing=15000.00,
-    )
-    assert result is False
-    # Verify no row was created
-    params = await get_fiscale_params(db, jaar=2099)
-    assert params is None
-
 
 @pytest.mark.asyncio
 async def test_upsert_preserves_partner_fields(db):
@@ -174,12 +141,13 @@ async def test_upsert_preserves_partner_fields(db):
     params_2024 = FISCALE_PARAMS[2024]
     await upsert_fiscale_params(db, **params_2024)
 
-    # Set partner income
-    await update_partner_inkomen(
-        db, jaar=2024,
-        partner_bruto_loon=42000.00,
-        partner_loonheffing=11000.00,
-    )
+    # Set partner income via direct SQL (simulating aangifte page save)
+    from database import get_db_ctx
+    async with get_db_ctx(db) as conn:
+        await conn.execute(
+            "UPDATE fiscale_params SET partner_bruto_loon = ?, partner_loonheffing = ? WHERE jaar = ?",
+            (42000.00, 11000.00, 2024))
+        await conn.commit()
 
     # Re-save fiscal params (simulating Instellingen save)
     await upsert_fiscale_params(db, **params_2024)
@@ -198,20 +166,23 @@ async def test_upsert_preserves_partner_fields(db):
 async def test_ddmmyyyy_migration_fixes_uitgaven(tmp_path):
     """init_db migrates DD-MM-YYYY dates to YYYY-MM-DD in uitgaven."""
     db_path = tmp_path / "test_migration.sqlite3"
-    await init_db(db_path)
 
-    # Insert a row with DD-MM-YYYY format directly (bypassing validation)
-    conn = await get_db(db_path)
-    await conn.execute(
-        "INSERT INTO uitgaven (datum, categorie, omschrijving, bedrag) "
-        "VALUES ('15-03-2024', 'kantoor', 'Test', 50.00)")
-    await conn.execute(
-        "INSERT INTO uitgaven (datum, categorie, omschrijving, bedrag) "
-        "VALUES ('2024-03-15', 'kantoor', 'Good', 25.00)")
-    await conn.commit()
-    await conn.close()
+    # Create tables via SCHEMA_SQL but without running migrations
+    import aiosqlite
+    from database import SCHEMA_SQL
+    async with aiosqlite.connect(db_path) as conn:
+        await conn.executescript(SCHEMA_SQL)
+        await conn.commit()
+        # Insert bad dates before init_db runs migrations
+        await conn.execute(
+            "INSERT INTO uitgaven (datum, categorie, omschrijving, bedrag) "
+            "VALUES ('15-03-2024', 'kantoor', 'Test', 50.00)")
+        await conn.execute(
+            "INSERT INTO uitgaven (datum, categorie, omschrijving, bedrag) "
+            "VALUES ('2024-03-15', 'kantoor', 'Good', 25.00)")
+        await conn.commit()
 
-    # Run init_db again — migration should fix the bad date
+    # Run init_db — migration 12 should fix the bad date
     await init_db(db_path)
 
     conn = await get_db(db_path)
@@ -227,20 +198,22 @@ async def test_ddmmyyyy_migration_fixes_uitgaven(tmp_path):
 async def test_ddmmyyyy_migration_fixes_werkdagen(tmp_path):
     """init_db migrates DD-MM-YYYY dates to YYYY-MM-DD in werkdagen."""
     db_path = tmp_path / "test_migration.sqlite3"
-    await init_db(db_path)
 
-    # Insert klant first (FK requirement)
-    conn = await get_db(db_path)
-    await conn.execute(
-        "INSERT INTO klanten (naam, tarief_uur) VALUES ('Test', 80)")
-    # Insert werkdag with bad date directly
-    await conn.execute(
-        "INSERT INTO werkdagen (datum, klant_id, uren, tarief) "
-        "VALUES ('27-01-2024', 1, 8, 80)")
-    await conn.commit()
-    await conn.close()
+    # Create tables via SCHEMA_SQL but without running migrations
+    import aiosqlite
+    from database import SCHEMA_SQL
+    async with aiosqlite.connect(db_path) as conn:
+        await conn.executescript(SCHEMA_SQL)
+        await conn.commit()
+        # Insert klant + werkdag with bad date before migrations
+        await conn.execute(
+            "INSERT INTO klanten (naam, tarief_uur) VALUES ('Test', 80)")
+        await conn.execute(
+            "INSERT INTO werkdagen (datum, klant_id, uren, tarief) "
+            "VALUES ('27-01-2024', 1, 8, 80)")
+        await conn.commit()
 
-    # Run init_db again
+    # Run init_db — migration 12 should fix the bad date
     await init_db(db_path)
 
     conn = await get_db(db_path)
@@ -379,3 +352,170 @@ async def test_upsert_preserves_ew_naar_partner(db):
     # ew_naar_partner should still be False
     params = await get_fiscale_params(db, jaar=2024)
     assert params.ew_naar_partner is False
+
+
+# ============================================================
+# bereken_balans tests
+# ============================================================
+
+@pytest.mark.asyncio
+async def test_bereken_balans_empty(db):
+    """Empty DB with params → all values 0 except pass-through."""
+    await upsert_fiscale_params(db, **FISCALE_PARAMS[2024])
+    result = await bereken_balans(db, jaar=2024, activastaat=[])
+    assert result['mva'] == 0
+    assert result['debiteuren'] == 0
+    assert result['nog_te_factureren'] == 0
+    assert result['totaal_activa'] == 0
+    assert result['totaal_schulden'] == 0
+    assert result['eigen_vermogen'] == 0
+
+
+@pytest.mark.asyncio
+async def test_bereken_balans_with_activastaat(db):
+    """MVA is sum of boekwaarde from activastaat."""
+    await upsert_fiscale_params(db, **FISCALE_PARAMS[2024])
+    activastaat = [
+        {'omschrijving': 'MacBook', 'boekwaarde': 2000.0},
+        {'omschrijving': 'Camera', 'boekwaarde': 1500.50},
+    ]
+    result = await bereken_balans(db, jaar=2024, activastaat=activastaat)
+    assert result['mva'] == 3500.50
+    assert result['totaal_activa'] == 3500.50
+
+
+@pytest.mark.asyncio
+async def test_bereken_balans_with_debiteuren(db):
+    """Unpaid facturen show as debiteuren on balance sheet."""
+    await upsert_fiscale_params(db, **FISCALE_PARAMS[2024])
+    kid = await add_klant(db, naam="Test", tarief_uur=80)
+    await add_factuur(db, nummer="2024-001", klant_id=kid,
+                      datum="2024-06-15", totaal_bedrag=2000, status='verstuurd')
+    await add_factuur(db, nummer="2024-002", klant_id=kid,
+                      datum="2024-07-15", totaal_bedrag=1000, status='betaald')
+
+    result = await bereken_balans(db, jaar=2024, activastaat=[])
+    assert result['debiteuren'] == 2000.0  # only unpaid
+    assert result['totaal_activa'] == 2000.0
+
+
+@pytest.mark.asyncio
+async def test_bereken_balans_with_uninvoiced_werkdagen(db):
+    """Ongefactureerde werkdagen show as nog_te_factureren."""
+    await upsert_fiscale_params(db, **FISCALE_PARAMS[2024])
+    kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=44)
+    await add_werkdag(db, datum="2024-06-10", klant_id=kid,
+                      uren=8, tarief=80, km=44, km_tarief=0.23)
+    # Expected: 8*80 + 44*0.23 = 640 + 10.12 = 650.12
+    result = await bereken_balans(db, jaar=2024, activastaat=[])
+    assert abs(result['nog_te_factureren'] - 650.12) < 0.01
+    assert abs(result['totaal_activa'] - 650.12) < 0.01
+
+
+@pytest.mark.asyncio
+async def test_bereken_balans_with_manual_inputs(db):
+    """Manual balance inputs from fiscale_params are included."""
+    await upsert_fiscale_params(db, **FISCALE_PARAMS[2024])
+    await update_balans_inputs(db, jaar=2024,
+                                balans_bank_saldo=5000,
+                                balans_crediteuren=1500,
+                                balans_overige_vorderingen=200,
+                                balans_overige_schulden=300)
+
+    result = await bereken_balans(db, jaar=2024, activastaat=[])
+    assert result['bank_saldo'] == 5000
+    assert result['overige_vorderingen'] == 200
+    assert result['crediteuren'] == 1500
+    assert result['overige_schulden'] == 300
+    assert result['totaal_activa'] == 5200  # 5000 + 200
+    assert result['totaal_schulden'] == 1800  # 1500 + 300
+    assert result['eigen_vermogen'] == 3400  # 5200 - 1800
+
+
+@pytest.mark.asyncio
+async def test_bereken_balans_kapitaalsvergelijking(db):
+    """prive_onttrekkingen = begin_vermogen + winst - eigen_vermogen."""
+    await upsert_fiscale_params(db, **FISCALE_PARAMS[2024])
+    await update_balans_inputs(db, jaar=2024, balans_bank_saldo=10000)
+
+    result = await bereken_balans(db, jaar=2024, activastaat=[],
+                                   winst=50000, begin_vermogen=20000)
+    # eigen_vermogen = 10000 - 0 = 10000
+    # prive_onttrekkingen = 20000 + 50000 - 10000 = 60000
+    assert result['eigen_vermogen'] == 10000
+    assert result['begin_vermogen'] == 20000
+    assert result['winst'] == 50000
+    assert result['prive_onttrekkingen'] == 60000
+
+
+@pytest.mark.asyncio
+async def test_bereken_balans_no_params(db):
+    """Without fiscale_params, manual inputs default to 0."""
+    result = await bereken_balans(db, jaar=2099, activastaat=[
+        {'omschrijving': 'Test', 'boekwaarde': 1000.0}
+    ])
+    assert result['mva'] == 1000.0
+    assert result['bank_saldo'] == 0
+    assert result['crediteuren'] == 0
+    assert result['eigen_vermogen'] == 1000.0
+
+
+# ============================================================
+# fetch_fiscal_data → bereken_volledig pipeline integration test
+# ============================================================
+
+@pytest.mark.asyncio
+async def test_fetch_to_bereken_pipeline(db):
+    """Integration: fetch_fiscal_data → bereken_volledig produces valid result."""
+    await upsert_fiscale_params(db, **FISCALE_PARAMS[2024])
+
+    # Add realistic test data
+    kid = await add_klant(db, naam="Testpraktijk", tarief_uur=77.50, retour_km=52)
+    # Add werkdagen: 10 days × 8.5h = 85 uren
+    for day in range(1, 11):
+        await add_werkdag(db, datum=f"2024-03-{day:02d}", klant_id=kid,
+                          uren=8.5, tarief=77.50, km=52, km_tarief=0.23,
+                          factuurnummer='2024-001')
+    # Add a factuur
+    await add_factuur(db, nummer="2024-001", klant_id=kid,
+                      datum="2024-03-15", totaal_bedrag=6800, status='betaald')
+    # Add some expenses
+    await add_uitgave(db, datum="2024-01-15", categorie="Bankkosten",
+                      omschrijving="Rabo", bedrag=12.50)
+    await add_uitgave(db, datum="2024-02-01", categorie="Representatie",
+                      omschrijving="Lunch", bedrag=45.00)
+
+    # Fetch fiscal data
+    data = await fetch_fiscal_data(db, 2024)
+    assert data is not None
+    assert data['omzet'] == 6800
+    assert abs(data['representatie'] - 45.00) < 0.01
+    assert data['uren'] == 85.0
+
+    # Feed into bereken_volledig — same pattern as aangifte.py
+    f = bereken_volledig(
+        omzet=data['omzet'], kosten=data['kosten_excl_inv'],
+        afschrijvingen=data['totaal_afschrijvingen'],
+        representatie=data['representatie'],
+        investeringen_totaal=data['inv_totaal_dit_jaar'],
+        uren=data['uren'], params=data['params_dict'],
+        aov=data['aov'], lijfrente=data.get('lijfrente', 0),
+        woz=data['woz'],
+        hypotheekrente=data['hypotheekrente'],
+        voorlopige_aanslag=data['voorlopige_aanslag'],
+        voorlopige_aanslag_zvw=data['voorlopige_aanslag_zvw'],
+        ew_naar_partner=data['ew_naar_partner'],
+    )
+
+    # Verify the pipeline produces sensible results
+    # winst = omzet - kosten_excl_inv (expenses + km_vergoeding)
+    assert f.winst < 6800  # reduced by expenses and km_vergoeding
+    assert f.winst > 6000  # but still positive
+    assert f.fiscale_winst > 0
+    assert f.belastbare_winst > 0
+    assert f.bruto_ib > 0
+    assert f.arbeidskorting > 0
+    # With 85 uren (< 1225), urencriterium fails → no ZA/SA
+    assert f.uren_criterium_gehaald is False
+    assert f.zelfstandigenaftrek == 0
+    assert f.startersaftrek == 0

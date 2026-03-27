@@ -11,22 +11,23 @@ Tabs:
   5. Documenten              (icon: folder)
 """
 
+import asyncio
 from datetime import date
 from pathlib import Path
-from typing import NamedTuple
 
 from nicegui import events, ui
 
 from components.fiscal_utils import fetch_fiscal_data, fiscale_params_to_dict
-from components.layout import create_layout
+from components.layout import create_layout, page_title
 from components.utils import format_euro
 from database import (
     get_fiscale_params, get_aangifte_documenten,
     add_aangifte_document, delete_aangifte_document,
     update_ib_inputs, update_box3_inputs, update_ew_naar_partner,
-    update_za_sa_toggles,
-    DB_PATH,
+    update_za_sa_toggles, get_belastingdienst_betalingen,
+    update_partner_inputs, DB_PATH,
 )
+from components.shared_ui import year_options
 from fiscal.berekeningen import bereken_volledig, bereken_box3
 
 AANGIFTE_DIR = DB_PATH.parent / 'aangifte'
@@ -65,40 +66,9 @@ BD = {
 
 # === Document checklist ===
 
-class DocSpec(NamedTuple):
-    categorie: str
-    documenttype: str
-    label: str
-    meerdere: bool
-    verplicht: bool
-
-
-AANGIFTE_DOCS = [
-    DocSpec('winst_onderneming', 'jaaroverzicht_uren_km', 'Jaaroverzicht uren/km', False, True),
-    DocSpec('winst_onderneming', 'winst_verlies', 'Winst & verlies', False, True),
-    DocSpec('winst_onderneming', 'km_registratie', 'Kilometerregistratie', False, False),
-    DocSpec('eigen_woning', 'woz_beschikking', 'WOZ-beschikking', False, False),
-    DocSpec('eigen_woning', 'hypotheek_jaaroverzicht', 'Hypotheek jaaroverzicht', True, False),
-    DocSpec('inkomensvoorzieningen', 'aov_jaaroverzicht', 'AOV jaaroverzicht', False, False),
-    DocSpec('box3', 'jaaroverzicht_prive', 'Jaaroverzicht privérekening', True, False),
-    DocSpec('box3', 'jaaroverzicht_zakelijk', 'Jaaroverzicht zakelijke rekening', True, False),
-    DocSpec('box3', 'jaaroverzicht_spaar', 'Jaaroverzicht spaarrekening', True, False),
-    DocSpec('box3', 'beleggingsoverzicht', 'Beleggingsoverzicht', True, False),
-    DocSpec('voorlopige_aanslag', 'va_ib_beschikking', 'VA IB beschikking', False, False),
-    DocSpec('voorlopige_aanslag', 'va_zvw_beschikking', 'VA ZVW beschikking', False, False),
-    DocSpec('definitieve_aangifte', 'ingediende_aangifte', 'Ingediende aangifte (Boekhouder)', False, False),
-]
-
-AUTO_TYPES = {'jaaroverzicht_uren_km', 'winst_verlies'}
-
-CATEGORIE_LABELS = {
-    'winst_onderneming': 'Winst uit onderneming',
-    'eigen_woning': 'Eigen woning',
-    'inkomensvoorzieningen': 'Inkomensvoorzieningen',
-    'box3': 'Box 3',
-    'voorlopige_aanslag': 'Voorlopige aanslag',
-    'definitieve_aangifte': 'Definitieve aangifte',
-}
+from components.document_specs import (
+    DocSpec, AANGIFTE_DOCS, AUTO_TYPES, CATEGORIE_LABELS,
+)
 
 
 @ui.page('/aangifte')
@@ -107,7 +77,7 @@ async def aangifte_page():
 
     huidig_jaar = date.today().year
     vorig_jaar = huidig_jaar - 1
-    jaren = list(range(huidig_jaar, 2022, -1))
+    jaren = year_options()
     state = {'jaar': vorig_jaar}
 
     # --- Cached fiscal computation (avoid triple fetch+calc) ---
@@ -133,6 +103,7 @@ async def aangifte_page():
             voorlopige_aanslag=data['voorlopige_aanslag'],
             voorlopige_aanslag_zvw=data['voorlopige_aanslag_zvw'],
             ew_naar_partner=data['ew_naar_partner'],
+            partner_inkomen=data['params'].partner_bruto_loon or 0,
         )
         _cache.update(jaar=jaar, data=data, fiscaal=f)
         return data, f
@@ -174,34 +145,20 @@ async def aangifte_page():
             ui.label(label).classes(css)
             ui.label(format_euro(amount)).classes(f'{css} text-right')
 
-    def _result_color_line(label: str, bedrag: float):
-        """Result line with color coding (green=terug, red=bij)."""
-        color = ('text-positive' if bedrag < 0
-                 else 'text-negative' if bedrag > 0 else '')
-        prefix = 'terug' if bedrag < 0 else 'bij' if bedrag > 0 else ''
-        tekst = (f'{format_euro(abs(bedrag))} ({prefix})'
-                 if bedrag != 0 else format_euro(0))
-        with ui.row().classes('w-full justify-between items-center'):
-            ui.label(label).classes('text-body2')
-            with ui.row().classes('items-center gap-1'):
-                ui.label(tekst).classes(f'text-body2 {color}')
-                if bedrag != 0:
-                    ui.button(icon='content_copy',
-                              on_click=lambda b=abs(bedrag), l=label: _copy_value(b, l)) \
-                        .props('flat dense round size=xs color=primary')
-
     # --- Main layout ---
     with ui.column().classes('w-full p-6 max-w-7xl mx-auto gap-4'):
-        with ui.row().classes('w-full items-center justify-between'):
-            with ui.column().classes('gap-0'):
-                ui.label('Aangifte Invulhulp').classes('text-h5') \
-                    .style('color: #0F172A; font-weight: 700')
-                ui.label('Kopieer waarden naar MijnBelastingdienst.nl').classes(
-                    'text-caption text-grey-7')
+        # Header row
+        with ui.row().classes('w-full items-end'):
+            page_title('Aangifte Invulhulp')
+            ui.label('Kopieer waarden naar MijnBelastingdienst.nl').classes(
+                'text-caption text-grey-7 q-ml-md q-mb-xs')
+
+        # Filter bar
+        with ui.element('div').classes('page-toolbar w-full'):
             jaar_select = ui.select(
                 {j: str(j) for j in jaren}, value=vorig_jaar, label='Aangiftejaar',
                 on_change=lambda e: on_jaar_change(e.value),
-            ).classes('w-36')
+            ).classes('w-32')
 
         # Warnings container (missing data, jaarafsluiting status)
         warnings_container = ui.column().classes('w-full gap-2')
@@ -326,6 +283,13 @@ async def aangifte_page():
                     _invulhulp_line(
                         f'Winst > Kosten > {cat}', cat, r['totaal'])
 
+                # Km-vergoeding (separate from expense categories)
+                km_verg = data.get('km_vergoeding', 0)
+                if km_verg > 0:
+                    _invulhulp_line(
+                        'Winst > Kosten > Vervoerskosten > Kilometervergoeding',
+                        'Km-vergoeding (zakelijke ritten)', km_verg)
+
                 ui.separator().classes('my-1')
                 _invulhulp_line(BD['kosten_totaal'],
                                 'Totaal bedrijfslasten', f.kosten, bold=True)
@@ -418,13 +382,12 @@ async def aangifte_page():
                         on_change=lambda: _on_za_sa_change(),
                     )
 
-                # Urencriterium badge
-                gehaald = f.uren_criterium_gehaald
+                # Urencriterium — only warn if not met
                 with ui.row().classes('items-center gap-2'):
-                    ui.label(f'Urencriterium: {f.uren_criterium:.0f} uur')
-                    if gehaald:
-                        ui.badge('gehaald', color='positive').classes('text-xs')
-                    else:
+                    ui.label(
+                        f'Urencriterium: {f.uren_criterium:.0f} / 1.225 uur'
+                    ).classes('text-caption text-grey-7')
+                    if not f.uren_criterium_gehaald:
                         ui.badge('NIET gehaald', color='negative').classes('text-xs')
 
                 _invulhulp_line(BD['za'], '- Zelfstandigenaftrek', f.zelfstandigenaftrek)
@@ -519,23 +482,88 @@ async def aangifte_page():
                 ui.label(f'{BD["aov"]} / Inkomensvoorzieningen > Lijfrentepremie').classes(
                     'text-caption text-grey-6')
 
-            # Card 3: Voorlopige aanslagen
-            with ui.card().classes('w-full'):
-                ui.label('Voorlopige aanslagen').classes('text-subtitle1 text-weight-bold')
+            # Card 3: Voorlopige aanslagen — prominent styling
+            with ui.card().classes('w-full') \
+                    .style('border-left: 4px solid var(--q-primary)'):
+                with ui.row().classes('items-center gap-2'):
+                    ui.icon('account_balance', color='primary')
+                    ui.label('Voorlopige aanslagen') \
+                        .classes('text-subtitle1 text-weight-bold')
+                ui.label(
+                    'Vul hier de bedragen in van je VA beschikking(en).'
+                ).classes('text-caption text-grey-7 q-mb-sm')
                 ui.separator().classes('my-1')
 
                 with ui.row().classes('gap-4 flex-wrap'):
                     va_ib_input = ui.number(
-                        'VA Inkomstenbelasting', value=data['voorlopige_aanslag'],
+                        'VA Inkomstenbelasting (jaarbedrag)',
+                        value=data['voorlopige_aanslag'],
                         format='%.2f', prefix='€',
-                    ).classes('w-52')
+                    ).classes('w-60')
                     va_zvw_input = ui.number(
-                        'VA Zorgverzekeringswet', value=data['voorlopige_aanslag_zvw'],
+                        'VA Zorgverzekeringswet (jaarbedrag)',
+                        value=data['voorlopige_aanslag_zvw'],
                         format='%.2f', prefix='€',
-                    ).classes('w-52')
-                ui.label(f'{BD["va_ib"]}, {BD["va_zvw"]}').classes('text-caption text-grey-6')
+                    ).classes('w-60')
+                ui.label(f'{BD["va_ib"]}, {BD["va_zvw"]}') \
+                    .classes('text-caption text-grey-6')
 
-            # Save button
+                # Show bank-detected payments
+                bd_betaald = await get_belastingdienst_betalingen(DB_PATH, jaar)
+                va_totaal = data['voorlopige_aanslag'] + data['voorlopige_aanslag_zvw']
+                if bd_betaald > 0 or va_totaal > 0:
+                    ui.separator().classes('q-my-sm')
+                    with ui.row().classes('gap-8 items-start'):
+                        with ui.column().classes('gap-0'):
+                            ui.label('Betaald via bank').classes(
+                                'text-caption text-grey-7')
+                            ui.label(format_euro(bd_betaald)).classes(
+                                'text-body1 text-weight-bold text-positive')
+                        if va_totaal > 0:
+                            with ui.column().classes('gap-0'):
+                                ui.label('Beschikking totaal').classes(
+                                    'text-caption text-grey-7')
+                                ui.label(format_euro(va_totaal)).classes(
+                                    'text-body1 text-weight-bold')
+                            with ui.column().classes('gap-0'):
+                                verschil = va_totaal - bd_betaald
+                                ui.label(
+                                    'Nog te betalen' if verschil > 0
+                                    else 'Meer betaald'
+                                ).classes('text-caption text-grey-7')
+                                color = ('text-warning' if verschil > 0
+                                         else 'text-positive')
+                                ui.label(format_euro(abs(verschil))) \
+                                    .classes(f'text-body1 text-weight-bold {color}')
+                    ui.label(
+                        'Banktotaal = alle betalingen aan Belastingdienst '
+                        '(IB + ZVW + evt. definitieve aanslagen)'
+                    ).classes('text-caption text-grey-6')
+
+            # Card 4: Partner gegevens
+            with ui.card().classes('w-full'):
+                ui.label('Partner').classes('text-subtitle1 text-weight-bold')
+                ui.separator().classes('my-1')
+                with ui.row().classes('gap-4 flex-wrap'):
+                    partner_loon_input = ui.number(
+                        'Bruto jaarloon', value=params.partner_bruto_loon or 0,
+                        format='%.2f', prefix='\u20ac',
+                    ).classes('w-48')
+                    partner_lh_input = ui.number(
+                        'Loonheffing', value=params.partner_loonheffing or 0,
+                        format='%.2f', prefix='\u20ac',
+                    ).classes('w-48')
+                ui.label('Nodig voor berekening AHK partner').classes(
+                    'text-caption text-grey-6')
+
+                # Show calculated partner AHK if available
+                if f.partner_ahk > 0:
+                    ui.separator().classes('my-1')
+                    with ui.row().classes('w-full justify-between items-center q-py-xs'):
+                        ui.label('Berekende AHK partner').classes('text-caption text-grey-7')
+                        ui.label(format_euro(f.partner_ahk)).classes('text-bold')
+
+            # Auto-save on blur/change for all inputs
             async def save_prive():
                 aov_val = float(aov_input.value or 0)
                 woz_val = float(woz_input.value or 0)
@@ -554,7 +582,11 @@ async def aangifte_page():
                     lijfrente_premie=lijfrente_val,
                 )
                 await update_ew_naar_partner(DB_PATH, jaar=jaar, value=ew_val)
-                ui.notify('Opgeslagen', type='positive')
+                await update_partner_inputs(
+                    DB_PATH, jaar=jaar,
+                    bruto_loon=float(partner_loon_input.value or 0),
+                    loonheffing=float(partner_lh_input.value or 0),
+                )
 
                 # Invalidate cache and refresh dependent views
                 _invalidate_cache()
@@ -564,8 +596,12 @@ async def aangifte_page():
                 await render_overzicht()
                 await render_warnings()
 
-            ui.button('Opslaan', icon='save', on_click=save_prive) \
-                .props('color=primary').classes('q-mt-sm')
+            # Attach auto-save to all prive inputs
+            for _inp in [woz_input, hyp_input, aov_input, lijfrente_input,
+                         va_ib_input, va_zvw_input,
+                         partner_loon_input, partner_lh_input]:
+                _inp.on('blur', save_prive)
+            ew_partner_check.on('change', save_prive)
 
     def _render_ew_results(container, f, woz, hypotheekrente, ew_naar_partner, params_dict):
         """Render eigen woning computed results."""
@@ -629,7 +665,8 @@ async def aangifte_page():
                     ).classes('w-52')
 
                 partner_check = ui.checkbox(
-                    'Fiscaal partner (verdubbelt heffingsvrij vermogen)', value=True,
+                    'Fiscaal partner (verdubbelt heffingsvrij vermogen)',
+                    value=bool(params.box3_fiscaal_partner),
                 ).classes('q-mt-sm')
 
                 ui.label(f'{BD["box3_bank"]}, {BD["box3_overig"]}, {BD["box3_schulden"]}').classes(
@@ -649,6 +686,15 @@ async def aangifte_page():
                     if not saved:
                         ui.notify(f'Geen fiscale parameters voor {jaar}', type='warning')
                         return
+
+                    # Persist fiscaal partner flag
+                    from database import get_db_ctx
+                    async with get_db_ctx(DB_PATH) as conn:
+                        await conn.execute(
+                            "UPDATE fiscale_params SET box3_fiscaal_partner = ? "
+                            "WHERE jaar = ?",
+                            (1 if partner_check.value else 0, jaar))
+                        await conn.commit()
 
                     p = await get_fiscale_params(DB_PATH, jaar)
                     pd = fiscale_params_to_dict(p)
@@ -715,7 +761,8 @@ async def aangifte_page():
             return
 
         params_dict = data['params_dict']
-        box3 = bereken_box3(params_dict)
+        fp_partner = bool(data['params'].box3_fiscaal_partner)
+        box3 = bereken_box3(params_dict, fiscaal_partner=fp_partner)
 
         with overzicht_container:
             ui.label('Dit overzicht toont dezelfde waarden als het eindscherm van '
@@ -760,6 +807,8 @@ async def aangifte_page():
 
                 _line('- Algemene heffingskorting', f.ahk)
                 _line('- Arbeidskorting', f.arbeidskorting)
+                if f.partner_ahk > 0:
+                    _line('  AHK partner (informatie)', f.partner_ahk)
                 ui.separator().classes('my-1')
                 _invulhulp_line(BD['netto_ib'], 'Netto IB', f.netto_ib, bold=True)
 
@@ -781,46 +830,74 @@ async def aangifte_page():
                     _invulhulp_line(BD['box3_belasting'], 'Box 3 belasting',
                                     box3.belasting, bold=True)
 
-            # Card 5: Resultaat
+            # Card 5: Resultaat — structured breakdown
             with ui.card().classes('w-full').style(
                     'border: 2px solid #0d9488; background: #f0fdfa'):
                 ui.label('Resultaat').classes('text-subtitle1 text-weight-bold')
                 ui.separator().classes('my-1')
 
-                if f.voorlopige_aanslag > 0 or f.voorlopige_aanslag_zvw > 0:
-                    _result_color_line(
-                        f'IB: {format_euro(f.netto_ib)} - VA {format_euro(f.voorlopige_aanslag)}',
-                        f.resultaat_ib)
-                    _result_color_line(
-                        f'ZVW: {format_euro(f.zvw)} - VA {format_euro(f.voorlopige_aanslag_zvw)}',
-                        f.resultaat_zvw)
-
+                # --- Berekende belasting ---
+                ui.label('Berekende belasting').classes(
+                    'text-subtitle2 text-grey-8 q-mt-sm')
+                _line('Netto IB / PVV', f.netto_ib)
+                _line('ZVW-bijdrage', f.zvw)
                 if box3.belasting > 0:
-                    _result_color_line('Box 3', box3.belasting)
-
+                    _line('Box 3', box3.belasting)
+                totaal_berekend = f.netto_ib + f.zvw + box3.belasting
                 ui.separator().classes('my-1')
+                _line('Totaal berekend', totaal_berekend, bold=True)
+
+                # --- Reeds betaald (voorlopige aanslagen) ---
+                has_va = (f.voorlopige_aanslag > 0
+                          or f.voorlopige_aanslag_zvw > 0)
+                if has_va:
+                    ui.label('Reeds betaald (voorlopige aanslagen)').classes(
+                        'text-subtitle2 text-grey-8 q-mt-md')
+                    if f.voorlopige_aanslag > 0:
+                        _line('VA Inkomstenbelasting',
+                              -f.voorlopige_aanslag)
+                    if f.voorlopige_aanslag_zvw > 0:
+                        _line('VA Zorgverzekeringswet',
+                              -f.voorlopige_aanslag_zvw)
+                    totaal_betaald = (f.voorlopige_aanslag
+                                      + f.voorlopige_aanslag_zvw)
+                    ui.separator().classes('my-1')
+                    _line('Totaal betaald', -totaal_betaald, bold=True)
+
+                # --- Eindresultaat ---
+                ui.separator().classes('my-2').style(
+                    'border-top: 2px solid #0d9488')
 
                 totaal = f.resultaat + box3.belasting
                 if totaal < 0:
-                    with ui.row().classes('w-full justify-between items-center'):
-                        ui.label('Totaal terug te ontvangen').classes('text-bold text-h6')
+                    with ui.row().classes(
+                            'w-full justify-between items-center'):
+                        ui.label('Terug te ontvangen').classes(
+                            'text-bold text-h6')
                         with ui.row().classes('items-center gap-2'):
                             ui.label(format_euro(abs(totaal))).classes(
                                 'text-bold text-h6 text-positive')
-                            ui.button(icon='content_copy',
-                                      on_click=lambda: _copy_value(abs(totaal), 'Totaal terug')) \
-                                .props('round color=positive size=sm')
+                            ui.button(
+                                icon='content_copy',
+                                on_click=lambda: _copy_value(
+                                    abs(totaal), 'Totaal terug'),
+                            ).props('round color=positive size=sm')
                 elif totaal > 0:
-                    with ui.row().classes('w-full justify-between items-center'):
-                        ui.label('Totaal bij te betalen').classes('text-bold text-h6')
+                    with ui.row().classes(
+                            'w-full justify-between items-center'):
+                        ui.label('Bij te betalen').classes(
+                            'text-bold text-h6')
                         with ui.row().classes('items-center gap-2'):
                             ui.label(format_euro(totaal)).classes(
                                 'text-bold text-h6 text-negative')
-                            ui.button(icon='content_copy',
-                                      on_click=lambda: _copy_value(totaal, 'Totaal bij')) \
-                                .props('round color=negative size=sm')
+                            ui.button(
+                                icon='content_copy',
+                                on_click=lambda: _copy_value(
+                                    totaal, 'Totaal bij'),
+                            ).props('round color=negative size=sm')
                 else:
-                    with ui.row().classes('w-full justify-between items-center'):
+                    with ui.row().classes(
+                            'w-full justify-between items-center'):
                         ui.label('Resultaat').classes('text-bold text-h6')
                         ui.label(format_euro(0)).classes('text-bold text-h6')
 
@@ -939,7 +1016,8 @@ async def aangifte_page():
 
         safe_name = Path(e.file.name).name.replace(' ', '_')
         file_path = target_dir / safe_name
-        await e.file.save(file_path)
+        content = await e.file.read()
+        await asyncio.to_thread(file_path.write_bytes, content)
 
         await add_aangifte_document(
             DB_PATH, jaar=jaar, categorie=categorie,

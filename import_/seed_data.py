@@ -15,11 +15,11 @@ AK_BRACKETS = {
         {"lower": 115295, "upper": None, "rate": 0, "base": 0},
     ],
     2024: [
-        {"lower": 0, "upper": 11491, "rate": 0.08425, "base": 0},
-        {"lower": 11491, "upper": 24821, "rate": 0.31433, "base": 968},
-        {"lower": 24821, "upper": 39958, "rate": 0.02471, "base": 5158},
-        {"lower": 39958, "upper": 124935, "rate": -0.06510, "base": 5532},
-        {"lower": 124935, "upper": None, "rate": 0, "base": 0},
+        {"lower": 0, "upper": 11490, "rate": 0.08425, "base": 0},
+        {"lower": 11490, "upper": 24820, "rate": 0.31433, "base": 968},
+        {"lower": 24820, "upper": 39957, "rate": 0.02471, "base": 5158},
+        {"lower": 39957, "upper": 124934, "rate": -0.06510, "base": 5532},
+        {"lower": 124934, "upper": None, "rate": 0, "base": 0},
     ],
     2025: [
         {"lower": 0, "upper": 12169, "rate": 0.08053, "base": 0},
@@ -207,16 +207,16 @@ KLANT_LOCATIES = {
     'HAP MiddenLand': [
         ('Assen', 60), ('Hoogeveen', 128), ('Emmen', 102),
     ],
-    'Praktijk K2': [('Vlagtwedde', 108)],
+    'Klant2': [('Vlagtwedde', 108)],
     "Praktijk K6": [('Marum', 54)],
     'K. Klant7': [('Marum', 54)],
-    'Praktijk K14': [('Winsum', 44)],
+    'HAP K14': [('Winsum', 44)],
     'Praktijk K10': [('Smilde', 78)],
     'Praktijk K11': [('Marum', 40)],
     'Praktijk K12': [('Marum', 54)],
     'Praktijk K13': [('De Wilp', 46)],
     'Praktijk K9': [('Sellingen', 92)],
-    'Klant8': [('Marum', 54)],
+    'K. Klant8': [('Marum', 54)],
 }
 
 

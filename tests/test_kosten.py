@@ -2,16 +2,9 @@
 
 import pytest
 from database import (
-    init_db, add_uitgave, get_uitgaven, get_uitgaven_per_categorie,
+    add_uitgave, get_uitgaven, get_uitgaven_per_categorie,
     get_investeringen, update_uitgave, delete_uitgave,
 )
-
-
-@pytest.fixture
-async def db(tmp_path):
-    db_path = tmp_path / "test.sqlite3"
-    await init_db(db_path)
-    return db_path
 
 
 @pytest.mark.asyncio

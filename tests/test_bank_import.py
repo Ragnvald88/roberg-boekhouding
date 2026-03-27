@@ -1,15 +1,8 @@
 """Tests voor Rabobank CSV parser en bank import."""
 
 import pytest
-from database import init_db, add_banktransacties, get_banktransacties
+from database import add_banktransacties, get_banktransacties, backfill_betalingskenmerken
 from import_.rabobank_csv import parse_rabobank_csv
-
-
-@pytest.fixture
-async def db(tmp_path):
-    db_path = tmp_path / "test.sqlite3"
-    await init_db(db_path)
-    return db_path
 
 
 # --- CSV Parser tests ---
@@ -31,13 +24,15 @@ def make_csv_row(
     omschrijving1: str = "Betaling factuur",
     omschrijving2: str = "januari 2026",
     omschrijving3: str = "",
+    betalingskenmerk: str = "",
 ) -> str:
     """Build a single Rabobank CSV data row."""
     return (
         f'"NL00TEST0000000001";"EUR";"RABONL2U";"000000000000001234";'
         f'"{datum}";"{datum}";"{bedrag}";"+1234,56";'
-        f'"{tegenrekening}";"{tegenpartij}";"";"";"RABONL2U";"ba";"";"";"";"";"";"'
-        f'{omschrijving1}";"{omschrijving2}";"{omschrijving3}";"";"";"";""'
+        f'"{tegenrekening}";"{tegenpartij}";"";"";"RABONL2U";"ba";"";"";"";"";'
+        f'"{betalingskenmerk}";'
+        f'"{omschrijving1}";"{omschrijving2}";"{omschrijving3}";"";"";"";""'
     )
 
 
@@ -154,10 +149,10 @@ def test_parse_comma_separated_fallback():
         '"Machtigingskenmerk","Incassant ID","Betalingskenmerk","Omschrijving-1",'
         '"Omschrijving-2","Omschrijving-3","Reden retour","Oorspr bedrag","Oorspr munt","Koers"'
     )
-    # With comma separator, amounts use dot decimal
+    # Rabobank always uses Dutch decimal format (comma), even in comma-separated CSV
     row = (
         '"NL00TEST0000000001","EUR","RABONL2U","000000000000001234",'
-        '"2026-01-15","2026-01-15","-77.50","+1234.56",'
+        '"2026-01-15","2026-01-15","-77,50","+1.234,56",'
         '"NL12RABO0123456789","Test Partner","","","RABONL2U","ba","","","","","","'
         'Test betaling","","","","","",""'
     )
@@ -167,6 +162,37 @@ def test_parse_comma_separated_fallback():
 
     assert len(result) == 1
     assert result[0]['bedrag'] == pytest.approx(-77.50)
+
+
+def test_parse_real_rabobank_format():
+    """Real Rabobank export format with spaced column names and thousands seps."""
+    # This matches the actual Rabobank "Transacties downloaden" CSV format
+    header = (
+        '"IBAN/BBAN","Valuta","BIC","Volg nr","Datum","Valuta datum","Bedrag",'
+        '"saldo na boeking","IBAN/BBAN tegenpartij","Naam tegenpartij",'
+        '"Naam uiteind begunst","Naam initiërende partij","BIC tegenpartij",'
+        '"Transactie soort","Batch nr","Transactiereferentie","Machtigingskenmerk",'
+        '"Incassant ID","Betalingskenmerk","Omschrijving - 1","Omschrijving - 2",'
+        '"Omschrijving - 3","Oorzaakscode","Oorspr bedrag","Oorspr valuta","Koers",'
+        '"Naam rekeninghouder"'
+    )
+    row = (
+        '"NL00TEST0000000000","EUR","RABONL2UXXX","","03-01-2025","03-01-2025",'
+        '"-2.919,00","3.386,17","NL00TEST0000000001","T. Gebruiker","","","RABONL2UXXX",'
+        '"bg","","","","","","Factuurbetaling MacBook Pro","extra info","","","","","",'
+        '"TestBV huisartswaarnemer"'
+    )
+    csv_bytes = (header + '\n' + row).encode('utf-8')
+
+    result = parse_rabobank_csv(csv_bytes)
+
+    assert len(result) == 1
+    assert result[0]['datum'] == '2025-01-03'
+    assert result[0]['bedrag'] == pytest.approx(-2919.00)
+    assert result[0]['tegenpartij'] == 'T. Gebruiker'
+    assert result[0]['tegenrekening'] == 'NL00TEST0000000001'
+    assert 'Factuurbetaling MacBook Pro' in result[0]['omschrijving']
+    assert 'extra info' in result[0]['omschrijving']
 
 
 def test_parse_merged_description_fields():
@@ -212,6 +238,28 @@ def test_parse_large_amounts():
 
     assert len(result) == 1
     assert result[0]['bedrag'] == pytest.approx(12345.67)
+
+
+def test_parse_thousands_separator():
+    """Amounts with Dutch thousands separator dots must parse correctly."""
+    csv_bytes = build_csv([
+        make_csv_row(datum="2026-01-15", bedrag="-2.919,00",
+                     tegenpartij="Apple",
+                     omschrijving1="MacBook Pro"),
+        make_csv_row(datum="2026-01-20", bedrag="+18.386,81",
+                     tegenpartij="SPH",
+                     omschrijving1="Pensioenpremie"),
+        make_csv_row(datum="2026-02-01", bedrag="-1.000,00",
+                     tegenpartij="Prive",
+                     omschrijving1="Salaris"),
+    ])
+
+    result = parse_rabobank_csv(csv_bytes)
+
+    assert len(result) == 3
+    assert result[0]['bedrag'] == pytest.approx(-2919.00)
+    assert result[1]['bedrag'] == pytest.approx(18386.81)
+    assert result[2]['bedrag'] == pytest.approx(-1000.00)
 
 
 # --- Database integration tests ---
@@ -282,3 +330,81 @@ async def test_duplicate_transactions_rejected(db):
 
     all_trans = await get_banktransacties(db, jaar=2024)
     assert len(all_trans) == 1
+
+
+def test_parse_betalingskenmerk():
+    """Betalingskenmerk column is captured when present."""
+    csv_bytes = build_csv([
+        make_csv_row(
+            tegenrekening="NL86INGB0002445588",
+            tegenpartij="Belastingdienst",
+            bedrag="-2800,00",
+            betalingskenmerk="0124412647060001",
+            omschrijving1="",
+        ),
+        make_csv_row(
+            tegenrekening="NL86INGB0002445588",
+            tegenpartij="Belastingdienst",
+            bedrag="-1808,00",
+            betalingskenmerk="0124412647560014",
+            omschrijving1="",
+        ),
+    ])
+    result = parse_rabobank_csv(csv_bytes)
+    assert len(result) == 2
+    assert result[0]['betalingskenmerk'] == '0124412647060001'
+    assert result[1]['betalingskenmerk'] == '0124412647560014'
+
+
+def test_parse_empty_betalingskenmerk():
+    """Missing betalingskenmerk defaults to empty string."""
+    csv_bytes = build_csv([make_csv_row()])
+    result = parse_rabobank_csv(csv_bytes)
+    assert result[0].get('betalingskenmerk', '') == ''
+
+
+@pytest.mark.asyncio
+async def test_add_banktransacties_with_betalingskenmerk(db):
+    """Betalingskenmerk is stored when provided."""
+    txns = [{
+        'datum': '2026-02-23',
+        'bedrag': -2800.0,
+        'tegenrekening': 'NL86INGB0002445588',
+        'tegenpartij': 'Belastingdienst',
+        'omschrijving': '',
+        'betalingskenmerk': '0124412647060001',
+    }]
+    count = await add_banktransacties(db, txns, csv_bestand='test.csv')
+    assert count == 1
+
+    result = await get_banktransacties(db)
+    assert len(result) == 1
+    assert result[0].betalingskenmerk == '0124412647060001'
+
+
+@pytest.mark.asyncio
+async def test_backfill_betalingskenmerken(db, tmp_path):
+    """Backfill reads archived CSVs and updates betalingskenmerk on existing rows."""
+    # Insert a transaction without betalingskenmerk
+    txns = [{'datum': '2026-02-23', 'bedrag': -2800.0,
+             'tegenrekening': 'NL86INGB0002445588',
+             'tegenpartij': 'Belastingdienst', 'omschrijving': ''}]
+    await add_banktransacties(db, txns)
+
+    # Create a CSV archive that has the betalingskenmerk
+    csv_dir = tmp_path / 'bank_csv'
+    csv_dir.mkdir()
+    csv_content = build_csv([
+        make_csv_row(datum='23-02-2026', bedrag='-2.800,00',
+                     tegenrekening='NL86INGB0002445588',
+                     tegenpartij='Belastingdienst',
+                     betalingskenmerk='0124412647060001',
+                     omschrijving1='', omschrijving2=''),
+    ])
+    (csv_dir / 'test.csv').write_bytes(csv_content)
+
+    count = await backfill_betalingskenmerken(db, csv_dir)
+    assert count >= 1
+
+    result = await get_banktransacties(db)
+    assert result[0].betalingskenmerk == '0124412647060001'

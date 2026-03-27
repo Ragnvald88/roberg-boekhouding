@@ -1,13 +1,14 @@
 """Werkdagen pagina — uren/km registratie met tabel en dialog."""
 
 from nicegui import app, ui
-from components.layout import create_layout
-from components.utils import format_euro, generate_csv
+from components.layout import create_layout, page_title
+from components.utils import format_euro, format_datum, generate_csv
 from components.werkdag_form import open_werkdag_dialog
 from database import (
     get_werkdagen, get_klanten, delete_werkdag, DB_PATH,
 )
 from datetime import date
+from components.shared_ui import year_options
 
 MAANDEN = {
     0: 'Alle', 1: 'Jan', 2: 'Feb', 3: 'Mar', 4: 'Apr', 5: 'Mei', 6: 'Jun',
@@ -28,32 +29,51 @@ async def werkdagen_page():
     summary_container = {'ref': None}
 
     with ui.column().classes('w-full p-6 max-w-7xl mx-auto gap-6'):
-        # Header row
-        with ui.row().classes('w-full items-center gap-4'):
-            ui.label('Werkdagen').classes('text-h5') \
-                .style('color: #0F172A; font-weight: 700')
+        # Header row: title + primary action
+        with ui.row().classes('w-full items-center'):
+            page_title('Werkdagen')
+            ui.space()
+            ui.button(
+                'Nieuwe werkdag', icon='add',
+                on_click=lambda: open_werkdag_dialog(on_save=refresh_table),
+            ).props('color=primary')
 
-        # Filter + action row
-        with ui.row().classes('w-full items-end gap-4'):
+        # Filter bar
+        with ui.element('div').classes('page-toolbar w-full'):
             jaar_select = ui.select(
-                {y: str(y) for y in range(2023, current_year + 2)},
+                year_options(include_next=True, as_dict=True, descending=False),
                 value=current_year, label='Jaar',
-            ).classes('w-32')
+            ).classes('w-28')
 
             maand_select = ui.select(
                 MAANDEN, value=0, label='Maand',
-            ).classes('w-32')
+            ).classes('w-28')
 
             klant_sel = ui.select(
                 klant_options, value=0, label='Klant',
-            ).classes('w-48')
+            ).classes('w-44')
+
+            STATUS_OPTIONS = {
+                '': 'Alle',
+                'ongefactureerd': 'Ongefactureerd',
+                'gefactureerd': 'Gefactureerd',
+                'betaald': 'Betaald',
+            }
+            status_sel = ui.select(
+                STATUS_OPTIONS, value='', label='Status',
+            ).classes('w-36')
 
             ui.space()
 
             async def export_csv():
                 year = jaar_select.value
                 month = maand_select.value if maand_select.value != 0 else None
-                werkdagen = await get_werkdagen(DB_PATH, jaar=year, maand=month)
+                klant = klant_sel.value if klant_sel.value != 0 else None
+                status = status_sel.value or None
+                all_wd = await get_werkdagen(DB_PATH, jaar=year, maand=month,
+                                              klant_id=klant)
+                werkdagen = [w for w in all_wd
+                             if status is None or w.status == status]
                 headers = ['Datum', 'Klant', 'Code', 'Uren', 'Km', 'Tarief',
                            'Km-tarief', 'Totaal', 'Status']
                 rows = []
@@ -66,15 +86,53 @@ async def werkdagen_page():
                 ui.download.content(csv_str.encode('utf-8-sig'),
                                     f'werkdagen_{year}.csv')
 
-            ui.button(
-                'Exporteer CSV', icon='download',
-                on_click=export_csv,
-            ).props('outline color=primary')
+            ui.button(icon='download',
+                      on_click=export_csv) \
+                .props('flat round color=secondary size=sm') \
+                .tooltip('Exporteer CSV')
 
-            ui.button(
-                'Nieuwe werkdag', icon='add',
-                on_click=lambda: open_werkdag_dialog(on_save=refresh_table),
-            ).props('color=primary')
+            async def export_uren_overzicht():
+                """Export uren-overzicht as CSV for urencriterium documentation."""
+                rows = await get_werkdagen(DB_PATH, jaar=jaar_select.value)
+                uren_rows = [w for w in rows if w.urennorm == 1]
+                headers = ['Datum', 'Klant', 'Locatie', 'Uren', 'Activiteit']
+                csv_rows = [[format_datum(w.datum), w.klant_naam, w.locatie or '',
+                              str(w.uren), w.activiteit] for w in uren_rows]
+                totaal = sum(w.uren for w in uren_rows)
+                csv_rows.append(['', '', 'TOTAAL', str(totaal), ''])
+                csv_data = generate_csv(headers, csv_rows)
+                ui.download(
+                    csv_data.encode('utf-8-sig'),
+                    f'urenregistratie_{jaar_select.value}.csv')
+
+            ui.button('Urenregistratie', icon='schedule',
+                      on_click=export_uren_overzicht).props('outline size=sm')
+
+            async def export_km_logboek():
+                """Export km-logboek as CSV for Belastingdienst documentation."""
+                rows = await get_werkdagen(DB_PATH, jaar=jaar_select.value)
+                klanten_dict = {k.id: k for k in await get_klanten(DB_PATH)}
+                km_rows = [w for w in rows if w.km and w.km > 0]
+                headers = ['Datum', 'Klant', 'Locatie', 'Vertrek', 'Bestemming',
+                           'Retour km', 'Doel']
+                csv_rows = []
+                for w in km_rows:
+                    klant = klanten_dict.get(w.klant_id)
+                    bestemming = w.locatie or (klant.naam if klant else '')
+                    csv_rows.append([
+                        format_datum(w.datum), w.klant_naam, w.locatie or '',
+                        'Thuisadres', bestemming, str(w.km),
+                        'Waarneming huisartspraktijk',
+                    ])
+                totaal = sum(w.km for w in km_rows)
+                csv_rows.append(['', '', '', '', 'TOTAAL', str(totaal), ''])
+                csv_data = generate_csv(headers, csv_rows)
+                ui.download(
+                    csv_data.encode('utf-8-sig'),
+                    f'km_logboek_{jaar_select.value}.csv')
+
+            ui.button('Km-logboek', icon='directions_car',
+                      on_click=export_km_logboek).props('outline size=sm')
 
         # Bulk action toolbar (hidden when nothing selected)
         bulk_bar = ui.row().classes('w-full items-center gap-4')
@@ -103,19 +161,31 @@ async def werkdagen_page():
                 ids = [r['id'] for r in selected]
 
                 async def confirm_bulk_delete():
+                    deleted = 0
+                    skipped = 0
                     for wid in ids:
-                        await delete_werkdag(DB_PATH, werkdag_id=wid)
+                        try:
+                            await delete_werkdag(DB_PATH, werkdag_id=wid)
+                            deleted += 1
+                        except ValueError:
+                            skipped += 1
                     dlg.close()
-                    ui.notify(f'{len(ids)} werkdag(en) verwijderd', type='positive')
+                    if deleted:
+                        ui.notify(f'{deleted} werkdag(en) verwijderd', type='positive')
+                    if skipped:
+                        ui.notify(
+                            f'{skipped} werkdag(en) overgeslagen (gefactureerd/betaald)',
+                            type='warning',
+                        )
                     await refresh_table()
 
                 with ui.dialog() as dlg, ui.card():
                     ui.label(f'{len(ids)} werkdag(en) verwijderen?')
                     with ui.row():
+                        ui.button('Annuleren', on_click=dlg.close).props('flat')
                         ui.button('Ja, verwijderen',
                                   on_click=confirm_bulk_delete) \
                             .props('color=negative')
-                        ui.button('Annuleren', on_click=dlg.close)
                 dlg.open()
 
             ui.button(
@@ -152,6 +222,8 @@ async def werkdagen_page():
              'style': 'width:75px'},
             {'name': 'status', 'label': 'Status', 'field': 'status', 'align': 'center',
              'style': 'width:85px'},
+            {'name': 'factuur', 'label': 'Factuur', 'field': 'factuurnummer', 'align': 'left',
+             'style': 'width:85px'},
             {'name': 'actions', 'label': '', 'field': 'actions', 'align': 'center',
              'style': 'width:70px'},
         ]
@@ -159,9 +231,14 @@ async def werkdagen_page():
         table = ui.table(
             columns=columns, rows=[], row_key='id',
             selection='multiple',
-            pagination={'rowsPerPage': 25, 'sortBy': 'datum', 'descending': True},
+            pagination={'rowsPerPage': 25, 'sortBy': 'datum', 'descending': True,
+                        'rowsPerPageOptions': [10, 20, 50, 0]},
         ).classes('w-full')
         table_ref['ref'] = table
+
+        table.add_slot('body-cell-datum', '''
+            <q-td :props="props">{{ props.row.datum_fmt }}</q-td>
+        ''')
 
         table.add_slot('body-cell-status', '''
             <q-td :props="props">
@@ -180,9 +257,11 @@ async def werkdagen_page():
         table.add_slot('body-cell-actions', '''
             <q-td :props="props">
                 <q-btn icon="edit" flat dense round size="sm"
-                    @click="() => $parent.$emit('edit', props.row)" />
+                    @click="() => $parent.$emit('edit', props.row)"
+                    title="Bewerken" />
                 <q-btn icon="delete" flat dense round size="sm" color="negative"
-                    @click="() => $parent.$emit('delete', props.row)" />
+                    @click="() => $parent.$emit('delete', props.row)"
+                    title="Verwijderen" />
             </q-td>
         ''')
 
@@ -214,9 +293,11 @@ async def werkdagen_page():
                 klant_id = None
             klant_sel.update()
 
+            status_filter = status_sel.value or None
             werkdagen = [
                 w for w in all_werkdagen
-                if klant_id is None or w.klant_id == klant_id
+                if (klant_id is None or w.klant_id == klant_id)
+                and (status_filter is None or w.status == status_filter)
             ]
 
             rows = []
@@ -237,6 +318,7 @@ async def werkdagen_page():
                     'tarief_fmt': format_euro(w.tarief),
                     'totaal_fmt': format_euro(bedrag),
                     'status': w.status,
+                    'factuurnummer': w.factuurnummer or '',
                 })
                 totaal_uren += w.uren
                 totaal_km += w.km
@@ -270,11 +352,14 @@ async def werkdagen_page():
             row = e.args
             with ui.dialog() as dlg, ui.card():
                 ui.label(f"Werkdag {row['datum']} verwijderen?")
+                ui.label(f"{row['datum']} — {row.get('klant_naam', '')} — "
+                         f"{row.get('uren', 0)} uur — "
+                         f"{row.get('totaal_fmt', '')}").classes('text-grey')
                 with ui.row():
+                    ui.button('Annuleren', on_click=dlg.close).props('flat')
                     ui.button('Ja, verwijderen',
                               on_click=lambda: confirm_delete(row['id'], dlg)) \
                         .props('color=negative')
-                    ui.button('Annuleren', on_click=dlg.close)
             dlg.open()
 
         async def confirm_delete(werkdag_id, dlg):
@@ -290,6 +375,7 @@ async def werkdagen_page():
         jaar_select.on_value_change(lambda _: refresh_table())
         maand_select.on_value_change(lambda _: refresh_table())
         klant_sel.on_value_change(lambda _: refresh_table())
+        status_sel.on_value_change(lambda _: refresh_table())
 
         # Initial load
         await refresh_table()

@@ -2,7 +2,10 @@
 
 import csv
 import io
+import logging
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 
 def parse_rabobank_csv(file_content: bytes) -> list[dict]:
@@ -33,11 +36,14 @@ def parse_rabobank_csv(file_content: bytes) -> list[dict]:
 
     reader = csv.DictReader(io.StringIO(text), delimiter=sep)
     transactions = []
+    skipped = 0
 
     for row in reader:
         # Parse date (YYYY-MM-DD or DD-MM-YYYY)
         datum_str = row.get('Datum', '').strip().strip('"')
         if not datum_str:
+            skipped += 1
+            logger.warning("Rij overgeslagen: lege datum")
             continue
 
         datum = None
@@ -49,30 +55,50 @@ def parse_rabobank_csv(file_content: bytes) -> list[dict]:
                 continue
 
         if datum is None:
+            skipped += 1
+            logger.warning("Rij overgeslagen: ongeldig datumformaat %r", datum_str)
             continue
 
-        # Amount: strip quotes, remove leading +, comma→dot for Dutch decimal
+        # Amount: Dutch formatting uses dot for thousands, comma for decimal
+        # e.g. "-2.919,00" → remove dots → "-2919,00" → comma→dot → -2919.00
         bedrag_str = row.get('Bedrag', '0').strip().strip('"')
-        bedrag_str = bedrag_str.replace(',', '.')
+        bedrag_str = bedrag_str.replace('.', '').replace(',', '.')
         try:
             bedrag = float(bedrag_str)
         except ValueError:
+            skipped += 1
+            logger.warning("Rij overgeslagen: ongeldig bedrag %r op datum %s", row.get('Bedrag', ''), datum_str)
             continue
 
         # Merge description fields (Rabobank splits over 3 columns)
+        # Column names vary between export formats:
+        #   Semicolon export: "Omschrijving-1" (no spaces)
+        #   Comma export:     "Omschrijving - 1" (with spaces)
         omschrijving_parts = []
-        for key in ('Omschrijving-1', 'Omschrijving-2', 'Omschrijving-3'):
-            val = row.get(key, '').strip().strip('"')
+        for suffix in ('1', '2', '3'):
+            val = (row.get(f'Omschrijving-{suffix}', '')
+                   or row.get(f'Omschrijving - {suffix}', ''))
+            val = val.strip().strip('"')
             if val:
                 omschrijving_parts.append(val)
         omschrijving = ' '.join(omschrijving_parts)
 
+        # Tegenrekening column name varies between formats
+        tegenrekening = (row.get('Tegenrekening IBAN/BBAN', '')
+                         or row.get('IBAN/BBAN tegenpartij', ''))
+
+        betalingskenmerk = row.get('Betalingskenmerk', '').strip().strip('"')
+
         transactions.append({
             'datum': datum,
             'bedrag': bedrag,
-            'tegenrekening': row.get('Tegenrekening IBAN/BBAN', '').strip().strip('"'),
+            'tegenrekening': tegenrekening.strip().strip('"'),
             'tegenpartij': row.get('Naam tegenpartij', '').strip().strip('"'),
             'omschrijving': omschrijving,
+            'betalingskenmerk': betalingskenmerk,
         })
+
+    if skipped > 0:
+        logger.warning("%d rijen overgeslagen bij import", skipped)
 
     return transactions

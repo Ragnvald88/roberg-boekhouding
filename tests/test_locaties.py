@@ -2,16 +2,9 @@
 
 import pytest
 from database import (
-    init_db, add_klant, get_klant_locaties,
-    add_klant_locatie, update_klant_locatie, delete_klant_locatie,
+    add_klant, get_klant_locaties,
+    add_klant_locatie, delete_klant_locatie,
 )
-
-
-@pytest.fixture
-async def db(tmp_path):
-    db_path = tmp_path / "test.sqlite3"
-    await init_db(db_path)
-    return db_path
 
 
 @pytest.mark.asyncio
@@ -33,18 +26,6 @@ async def test_add_and_get_locaties(db):
     assert assen.retour_km == 60
     emmen = next(loc for loc in locaties if loc.naam == "Emmen")
     assert emmen.retour_km == 102
-
-
-@pytest.mark.asyncio
-async def test_update_locatie(db):
-    """Update a location's name and km."""
-    kid = await add_klant(db, naam="DDG", tarief_uur=124, retour_km=12)
-    lid = await add_klant_locatie(db, klant_id=kid, naam="Groningen", retour_km=12)
-    await update_klant_locatie(db, locatie_id=lid, naam="Groningen Stad", retour_km=14)
-    locaties = await get_klant_locaties(db, klant_id=kid)
-    assert len(locaties) == 1
-    assert locaties[0].naam == "Groningen Stad"
-    assert locaties[0].retour_km == 14
 
 
 @pytest.mark.asyncio

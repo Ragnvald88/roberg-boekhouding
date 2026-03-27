@@ -5,7 +5,7 @@ Standalone boekhoudapplicatie (NiceGUI + Python) voor een eenmanszaak huisartswa
 ## Tech Stack
 - **UI**: NiceGUI >=3.0 (Quasar/Vue), browser mode (`ui.run(host='127.0.0.1', port=8085)`)
 - **Database**: SQLite via aiosqlite, raw SQL met `?` placeholders, GEEN ORM
-- **PDF**: WeasyPrint + Jinja2, **Charts**: ECharts via `ui.echart`
+- **PDF**: WeasyPrint + Jinja2 (`templates/factuur.html`), **Charts**: ECharts via `ui.echart`
 - **Python**: 3.12+
 
 ## Commands
@@ -15,112 +15,100 @@ source .venv/bin/activate
 export DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib
 python main.py  # → http://127.0.0.1:8085
 
-# Tests (286 passing)
+# Tests (491 passing, 14 skipped)
 DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib .venv/bin/python -m pytest tests/ -v
+# MANDATORY: run after every code change, confirm 0 failures before reporting done
 ```
 
 ## Database
-9 tabellen: `klanten`, `klant_locaties`, `werkdagen`, `facturen`, `uitgaven`, `banktransacties`, `fiscale_params`, `bedrijfsgegevens`, `aangifte_documenten`
+10 tabellen: `klanten`, `klant_locaties`, `werkdagen`, `facturen`, `uitgaven`, `banktransacties`, `fiscale_params`, `bedrijfsgegevens`, `aangifte_documenten`, `afschrijving_overrides`
 
 - Raw SQL, `?` placeholders — GEEN f-strings in SQL
 - Bedragen REAL, datums TEXT (YYYY-MM-DD)
 - `aiosqlite` async, WAL mode, foreign keys ON
-- `bedrijfsgegevens` = single-row (CHECK id=1)
+- **Connection pattern**: `async with get_db_ctx(db_path) as conn:`
+- `werkdagen.status`: derived at query time from `factuurnummer` + `facturen.status` (column removed in migration 20)
+- `facturen.status` TEXT: `'concept'`, `'verstuurd'`, `'betaald'` (migration 14)
+- `facturen.type` TEXT: `'factuur'` (werkdag-backed), `'anw'` (imported ANW), `'vergoeding'` (ad-hoc, no werkdagen) (migration 21)
+- `klanten.email` TEXT (migration 15)
+- `banktransacties.betalingskenmerk` TEXT (migration 13)
 - SQLite op lokaal filesystem, NIET via SMB (WAL faalt)
 
 ## Ontwikkelregels
 
 ### Architectuur
 - Browser mode ALTIJD — NOOIT native/pywebview
-- Shared layout via `components/layout.py`
+- Shared layout via `components/layout.py` (includes `page_title` helper + dashboard CSS classes)
 - Elke pagina is `@ui.page('/route')` in eigen bestand
-- `format_euro`/`format_datum` ALLEEN uit `components/utils.py`
-- **Fiscal utils**: `components/fiscal_utils.py` (shared `fiscale_params_to_dict` + `fetch_fiscal_data`)
+- `format_euro(value, decimals=2)`/`format_datum` ALLEEN uit `components/utils.py`
+- **Shared UI**: `components/shared_ui.py` (year_options, date_input, confirm_dialog)
+- **Invoice builder**: `components/invoice_builder.py` (two-panel dialog with live iframe preview)
+- **Invoice generator**: `components/invoice_generator.py` (WeasyPrint PDF with QR support)
+- **Invoice preview**: `components/invoice_preview.py` (Jinja2 HTML for iframe preview)
+- **Charts**: `components/charts.py` (revenue_bar_chart, cost_donut_chart)
+- **KPI strip**: `components/kpi_card.py` (kpi_strip for jaarafsluiting + facturen)
+- **Fiscal utils**: `components/fiscal_utils.py` (fetch_fiscal_data, extrapoleer_jaaromzet)
 - **Fiscal engine**: `fiscal/berekeningen.py` (bereken_volledig waterfall + bereken_box3)
-- **Heffingskortingen**: `fiscal/heffingskortingen.py` (AK brackets + AHK)
-- **KPI cards**: `components/kpi_card.py` (shared kpi_card + kpi_strip)
 
 ### NiceGUI Patronen
 - `ui.table` (NIET AG Grid), `ui.echart` voor charts
-- **Tabel selectie**: ALTIJD `selection='multiple'`. NOOIT custom checkbox slots met `$parent.$emit`. Gebruik `table.selected` en `table.on('selection', handler)`.
-- Bij full `body` slot met selectie: `<q-checkbox v-model="props.selected" dense />` (Quasar-managed), NIET `v-model="props.row.selected"`.
-- **Add/edit formulieren**: via `ui.dialog()` popup, NIET inline op de pagina. Referentie: werkdag_form.py, kosten.py, facturen.py.
-- Quasar semantic kleuren (`positive`, `negative`, `warning`, `primary`) — geen hardcoded hex in pagina's
+- **Tabel selectie**: ALTIJD `selection='multiple'`. Gebruik `table.selected` en `table.on('selection', handler)`.
+- **Add/edit formulieren**: via `ui.dialog()` popup, NIET inline op de pagina.
+- Quasar semantic kleuren (`positive`, `negative`, `warning`, `primary`, `info`) — geen hardcoded hex in pagina's
+- **Persistent tables**: Create `ui.table` once with slots/events, update via `table.rows = rows; table.update()`
+- **Blocking I/O**: Wrap WeasyPrint, PDF extraction, file copies in `asyncio.to_thread()`
+- **Invoice preview isolation**: Use `<iframe>` with base64 data URI for CSS-isolated template preview (prevents Quasar CSS interference)
+
+### Invoice Status Lifecycle
+```
+Concept (grey) → Verstuurd (blue/info) → Betaald (green/positive)
+                       ↓
+                  Verlopen (red/negative, computed: verstuurd + past due)
+```
+- New invoices start as `'concept'` — freely editable
+- "Verstuur via e-mail" opens Mail.app via AppleScript with PDF attached → marks verstuurd
+- Revenue queries (`get_omzet_*`, `get_kpis`) exclude concept invoices
+- `update_factuur_status()` cascades to linked werkdagen
+
+### Kwaliteitseisen
+- Bij NiceGUI upload events: ALTIJD `await e.file.read()` en `e.file.name`. NOOIT `e.content.read()` of `e.name`.
+- Bij SQL queries op `facturen`: controleer altijd of `status != 'concept'` filtering nodig is (zie `get_omzet_*` patronen).
+- Bij `werkdagen` data: `factuurnummer = ''` betekent ongefactureerd. Maar oude werkdagen kunnen extern gefactureerd zijn — controleer altijd of het recente data betreft.
+- Bij klant-lookup via `klant_by_name[naam]`: dit geeft een Klant object, gebruik `.id` voor het ID.
+- Bij `_build_regels()`: km-velden op line_items worden gesplitst naar aparte reiskosten-regels voor de PDF.
 
 ### YAGNI
-Geen: user auth, BTW-administratie, loon/voorraad, email, real-time bank-API, auto-matching, CI/CD, multi-language
+Geen: user auth, BTW-administratie, loon/voorraad, real-time bank-API, auto-matching, CI/CD, multi-language
 
 ## Domeinkennis (fiscaal)
 
 ### Basisregels
 - **BTW-vrijgesteld** (art. 11 Wet OB) → kosten INCL BTW, geen BTW-aangifte
 - **Urencriterium**: 1.225 uur/jaar. Achterwacht (urennorm=0) telt NIET mee
-- **AOV**: GEEN bedrijfskosten → Box 1 inkomensvoorziening
-- **KIA**: 28% bij totaal investeringen >= €2.901 (inclusive)
+- **Pensioenpremie SPH**: WEL bedrijfskosten, **AOV**: GEEN bedrijfskosten → Box 1 inkomensvoorziening
+- **KIA**: 28% bij investeringen >= ondergrens, per-item drempel configureerbaar per jaar
 - **Afschrijvingen**: lineair, restwaarde 10%, eerste jaar pro-rata per maand
-- **Representatie**: 80%-regeling (configureerbaar in `fiscale_params`)
+- **Representatie**: 80%-regeling, 20% bijtelling op fiscale winst
 - **Factuur vereisten**: naam+adres+KvK, factuurnummer YYYY-NNN, vervaldatum 14d, BTW-vrijstellingstekst
+- **Factuur datum = last werkdag date** (work-date based, NOT invoice issue date)
+- **ANW diensten**: km tracked but km_tarief=0 (travel included in ANW tarief)
 
-### DB-driven parameters (alle configureerbaar in Instellingen)
-- **Arbeidskorting**: JSON brackets in `arbeidskorting_brackets` column, fallback to Python constants in `heffingskortingen.py`
-- **PVV rates**: `pvv_aow/anw/wlz_pct` columns (default 17.90/0.10/9.65), fallback to constants
-- **Box 3**: Per-jaar rendementen (bank/overig/schuld), heffingsvrij vermogen, tarief, drempel schulden
-- **Alle andere**: ZA, SA, MKB%, KIA, AHK, AK, ZVW, schijf1/2/3, EW forfait, villataks, Wet Hillen, etc.
-- **ZA/SA toggles**: `za_actief`/`sa_actief` booleans per year (DB-driven, editable in Instellingen + Jaarafsluiting)
-- **Lijfrentepremie**: `lijfrente_premie` per year (reduces verzamelinkomen)
-- **Input velden** (preserved across param upserts): AOV, WOZ, hypotheekrente, VA IB, VA ZVW, partner, Box 3 saldi, ew_naar_partner, lijfrente_premie, balans inputs
-
-### Fiscal engine
+### Fiscal engine regels
 - **Arbeidskorting input** = fiscale_winst (vóór ZA/SA/MKB), NOT belastbare_winst
-- **Tariefsaanpassing**: Since 2023, deductions at basistarief only. Excess clawed back.
-- **Eigen woning**: Configurable `ew_naar_partner`. Default True (Boekhouder practice).
+- **Tariefsaanpassing**: Since 2023, deductions at basistarief only
+- **Eigen woning**: Configurable `ew_naar_partner`. Default True (Boekhouder practice)
 - **ZVW grondslag** = belastbare_winst, NOT verzamelinkomen
 - **PVV** = 27.65% over min(verzamelinkomen, premiegrondslag)
-- **PVV premiegrondslag**: 2024=38098, 2025+ = schijf1_grens
-- **Box 3 drempel schulden**: Per-persoon (2023: 3400, 2024: 3700, 2025: 3700, 2026: 3800). Doubled if partner. Schulden below drempel ignored.
-- **Box 3 rendementen**: Must use DEFINITIEVE percentages (not voorlopig/preliminary)
+- **Box 3 rendementen**: Must use DEFINITIEVE percentages (not voorlopig)
 
-### Boekhouder referentiecijfers (tests valideren hiertegen)
-- **2023**: winst €62.522 → belastbare winst €45.801 → IB terug €415
-- **2024**: winst €95.145 → belastbare winst €76.776 → IB terug €3.137
+### Dashboard
+- Hero KPIs (omzet, winst, belasting) with sparklines + secondary strip + contextual alerts
+- Real VA tracking from bank transactions via `betalingskenmerk` column
+- YoY delta uses day-precise comparison (`get_kpis_tot_datum`), not full-month
+- Revenue queries exclude concept invoices
 
-## Jaarafsluiting pagina (Pure Business Report)
-5-tab layout: Balans, W&V, Toelichting, Controles, Document. Year defaults to vorig jaar.
-KPI strip: Omzet, Winst, Eigen vermogen, Balanstotaal (business-only).
-Balans tab: activa/passiva with edit toggle for manual inputs (bank, crediteuren, overige).
-Status workflow: concept (orange) → definitief (green), with lock/reopen. DB: `jaarafsluiting_status`.
-PDF export: 4-page Yuki-style (cover+grondslagen, balans, W&V+kosten, toelichting). No IB/tax content.
-Controles tab: business checks only (kosten/omzet ratio, urencriterium, balans check, missing data).
-Nav order: Jaarafsluiting before Aangifte (close books first, then file taxes).
-
-## Facturen pagina
-- "Importeer PDF" button: upload dialog with multi-file PDF import
-- Auto-detects dagpraktijk vs ANW format, parses line items (uren/km/tarief per werkdag)
-- Klant auto-resolution via `import_/klant_mapping.py`, dedup by factuurnummer
-- Creates factuur record + werkdagen from parsed line items (or links existing werkdagen)
-- **PDF parser** (`import_/pdf_parser.py`): `detect_invoice_type()`, `extract_dagpraktijk_line_items()`, `extract_anw_diensten()`
-- Handles 7+ invoice format variations (2024 old, 2025 Klant7/Klant2-combined, 2026 standard/Klant15, ANW HAP NoordOost/Drenthe)
-- **Klant2 3-amount validation**: Only treats 3-euro-amount lines as combined format when `uren*tarief + reiskosten ≈ total`
-- **Import robustness**: per-item error handling, double-click protection, single DB connection per factuur werkdagen
-- **Revenue queries**: Both dagpraktijk (`type='factuur'`) and ANW (`type='anw'`) included in all omzet/KPI calculations
-
-## Aangifte pagina (Invulhulp)
-5-tab invulhulp mirroring Belastingdienst IB-aangifte structure. Year defaults to vorig jaar.
-Each value shows BD field label + copy-to-clipboard (raw integer for portal input).
-Tabs: Winst uit onderneming, Prive & aftrek (inputs save to DB), Box 3 (inputs+calc), Overzicht (final summary), Documenten (upload checklist)
-- **Winst tab**: ZA/SA toggles (auto-save + recalculate), fiscal waterfall, urencriterium badge
-- **Prive tab**: AOV + lijfrente inputs, eigen woning (WOZ/hypotheek/partner toggle), voorlopige aanslagen
-- **Missing data warnings**: Banner at top for missing uitgaven, no AOV, jaarafsluiting not definitief
-- **Auto-doc detection**: Checks `data/pdf/{year}/Jaarcijfers_*.pdf` for auto-completion
-- **Known gap**: Fiscal advisory panel (ZA trajectory, SA tracking, KIA check, belastingdruk) not yet implemented
-
-## Bekende Bugs
-
-- ~~**Bank CSV geen dedup**~~: Opgelost — per-transactie dedup op datum+bedrag+tegenpartij+omschrijving.
-- ~~**delete_klant UI**~~: Opgelost — try/except ValueError met ui.notify foutmelding.
-
-## Recente verbeteringen (Phase 1 — 2026-03-08)
-- **2026 Box 3 fix**: heffingsvrij_vermogen 57684→59357, drempel_schulden 3700→3800 (per Belastingdienst officieel)
-- **SQLite performance**: synchronous=NORMAL, cache_size=10000, temp_store=MEMORY
-- **Error boundary**: app.on_exception met ui.notify + traceback
-- **Cleanup**: run_full_import.py verwijderd, httpx dependency verwijderd
+### VA bank matching
+- `banktransacties.betalingskenmerk` captures Rabobank CSV payment reference
+- `get_va_betalingen()` splits IB/ZVW by kenmerk digit pattern (position 10-11: <50=IB, ≥50=ZVW)
+- `backfill_betalingskenmerken()` runs on startup to populate existing transactions
+- Belastingdienst IBAN: NL86INGB0002445588

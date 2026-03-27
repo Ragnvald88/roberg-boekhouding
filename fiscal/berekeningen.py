@@ -89,6 +89,7 @@ class FiscaalResultaat:
     pvv_wlz: float = 0.0  # Wlz component (9.65%)
     ahk: float = 0.0
     arbeidskorting: float = 0.0
+    partner_ahk: float = 0.0
     netto_ib: float = 0.0
     zvw: float = 0.0
     # Resultaat
@@ -153,8 +154,9 @@ def bereken_box3(params: dict, fiscaal_partner: bool = True) -> Box3Resultaat:
     grondslag = max(0, totaal_bezittingen - schulden - heffingsvrij)
 
     # Grondslag can't exceed total rendement proportion
-    if totaal_bezittingen - schulden > 0:
-        rendement_ratio = totaal_rendement / (totaal_bezittingen - schulden) if (totaal_bezittingen - schulden) > 0 else 0
+    netto_vermogen = totaal_bezittingen - schulden
+    if netto_vermogen > 0 and grondslag > 0:
+        rendement_ratio = totaal_rendement / netto_vermogen
         voordeel = grondslag * rendement_ratio
     else:
         voordeel = 0
@@ -183,7 +185,8 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
                      woz: float = 0, hypotheekrente: float = 0,
                      voorlopige_aanslag: float = 0,
                      voorlopige_aanslag_zvw: float = 0,
-                     ew_naar_partner: bool = False) -> FiscaalResultaat:
+                     ew_naar_partner: bool = False,
+                     partner_inkomen: float = 0) -> FiscaalResultaat:
     """Complete fiscal waterfall using Decimal precision.
 
     Args:
@@ -206,6 +209,18 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
     """
     r = FiscaalResultaat(jaar=params.get('jaar', 0))
     w: list[str] = []
+
+    # Validate required fiscal params
+    required_keys = ['kia_ondergrens', 'kia_bovengrens', 'kia_pct',
+                     'zelfstandigenaftrek', 'mkb_vrijstelling_pct',
+                     'schijf1_grens', 'schijf1_pct', 'schijf2_grens',
+                     'schijf2_pct', 'schijf3_pct',
+                     'zvw_max_grondslag', 'zvw_pct']
+    missing = [k for k in required_keys if k not in params]
+    if missing:
+        raise ValueError(
+            f"Fiscale parameters incompleet voor {params.get('jaar', '?')}: "
+            f"ontbrekend: {', '.join(missing)}")
 
     # Convert all inputs to Decimal for calculation precision
     d_omzet = D(omzet)
@@ -386,6 +401,13 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
     ahk = bereken_algemene_heffingskorting(r.verzamelinkomen, jaar, params)
     r.ahk = ahk
 
+    # Partner AHK: calculate if partner income provided
+    if partner_inkomen > 0:
+        r.partner_ahk = bereken_algemene_heffingskorting(
+            partner_inkomen, jaar, params)
+    else:
+        r.partner_ahk = 0.0
+
     # Arbeidskorting: op basis van arbeidsinkomen = fiscale winst
     # (= winst uit onderneming VÓÓR zelfstandigenaftrek, startersaftrek en MKB-vrijstelling)
     ak = bereken_arbeidskorting(r.fiscale_winst, jaar,
@@ -430,6 +452,13 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
         w.append(f"Kosten/omzet ratio hoog: {r.kosten_omzet_ratio}%")
     if (d_za + d_sa) > d_fiscale_winst and d_fiscale_winst > 0:
         w.append("ZA + SA hoger dan fiscale winst: aftrek deels verloren")
+
+    if lijfrente > 0:
+        max_reasonable = r.fiscale_winst * 0.30 if r.fiscale_winst > 0 else 15000
+        if lijfrente > max_reasonable:
+            w.append(f"Lijfrentepremie (€{lijfrente:,.0f}) lijkt hoog — "
+                     "controleer of dit binnen uw jaarruimte valt via de "
+                     "Belastingdienst jaarruimte rekenhulp.")
 
     r.waarschuwingen = w
     return r

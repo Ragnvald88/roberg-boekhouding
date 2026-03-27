@@ -15,6 +15,8 @@ class Bedrijfsgegevens:
     kvk: str = ''
     iban: str = ''
     thuisplaats: str = ''
+    telefoon: str = ''
+    email: str = ''
 
 
 @dataclass
@@ -26,6 +28,10 @@ class Klant:
     adres: str = ''
     kvk: str = ''
     actief: bool = True
+    email: str = ''
+    contactpersoon: str = ''
+    postcode: str = ''
+    plaats: str = ''
 
 
 @dataclass
@@ -49,8 +55,8 @@ class Werkdag:
     km: float = 0.0
     tarief: float = 0.0
     km_tarief: float = 0.23
-    status: str = 'ongefactureerd'
     factuurnummer: str = ''
+    status: str = ''  # computed: derived from factuurnummer + facturen.status
     opmerking: str = ''
     urennorm: bool = True
     locatie_id: int | None = None
@@ -67,9 +73,10 @@ class Factuur:
     totaal_km: float = 0.0
     totaal_bedrag: float = 0.0
     pdf_pad: str = ''
-    betaald: bool = False
+    status: str = 'concept'
     betaald_datum: str = ''
     type: str = 'factuur'
+    bron: str = 'app'
 
 
 @dataclass
@@ -99,6 +106,7 @@ class Banktransactie:
     koppeling_type: str = ''
     koppeling_id: Optional[int] = None
     csv_bestand: str = ''
+    betalingskenmerk: str = ''
 
 
 @dataclass
@@ -110,6 +118,7 @@ class FiscaleParams:
     kia_ondergrens: float = 0.0
     kia_bovengrens: float = 0.0
     kia_pct: float = 0.0
+    kia_drempel_per_item: float = 450.0
     km_tarief: float = 0.0
     schijf1_grens: float = 0.0
     schijf1_pct: float = 0.0
@@ -159,6 +168,7 @@ class FiscaleParams:
     box3_rendement_schuld_pct: float = 2.46
     box3_tarief_pct: float = 36.0
     box3_drempel_schulden: float = 3700.0
+    box3_fiscaal_partner: bool = True
     # ZA/SA toggles (per year — ZA phasing out, SA max 3x in first 5 years)
     za_actief: bool = True
     sa_actief: bool = False

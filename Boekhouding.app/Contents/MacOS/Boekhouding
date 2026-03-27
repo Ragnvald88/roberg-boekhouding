@@ -1,0 +1,14 @@
+#!/bin/bash
+PORT=8085
+PROJECT_DIR="$HOME/Library/CloudStorage/SynologyDrive-Main/06_Development/roberg-boekhouding"
+
+# If already running, just open the browser
+if lsof -i :$PORT -sTCP:LISTEN >/dev/null 2>&1; then
+    open "http://127.0.0.1:$PORT"
+    exit 0
+fi
+
+cd "$PROJECT_DIR"
+source .venv/bin/activate
+export DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib
+exec python main.py
