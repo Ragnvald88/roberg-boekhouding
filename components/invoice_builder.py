@@ -136,7 +136,8 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None):
     klant_by_id = {k.id: k for k in klanten}
     ongefactureerd_per_klant = {}  # klant_id -> list[Werkdag]
     for w in all_ongefactureerd:
-        if w.tarief > 0:  # exclude admin/study hours
+        # Only show current + previous year, exclude admin/study hours
+        if w.tarief > 0 and w.datum[:4] >= str(jaar - 1):
             ongefactureerd_per_klant.setdefault(w.klant_id, []).append(w)
 
     # --- State ---
