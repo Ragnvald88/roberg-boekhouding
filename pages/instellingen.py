@@ -89,8 +89,8 @@ async def instellingen_page():
                                     ).classes('w-48')
 
                             async def handle_logo_upload(e):
-                                content = e.content.read()
-                                ext = e.name.rsplit('.', 1)[-1].lower()
+                                content = await e.file.read()
+                                ext = e.file.name.rsplit('.', 1)[-1].lower()
                                 # Remove any existing logo files
                                 for f in logo_dir.glob('logo.*'):
                                     f.unlink()

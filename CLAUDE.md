@@ -26,7 +26,7 @@ DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib .venv/bin/python -m pytest tests/ -
 - Bedragen REAL, datums TEXT (YYYY-MM-DD)
 - `aiosqlite` async, WAL mode, foreign keys ON
 - **Connection pattern**: `async with get_db_ctx(db_path) as conn:`
-- `werkdagen.status` CHECK: `('ongefactureerd', 'gefactureerd', 'betaald')`
+- `werkdagen.status`: derived at query time from `factuurnummer` + `facturen.status` (column removed in migration 20)
 - `facturen.status` TEXT: `'concept'`, `'verstuurd'`, `'betaald'` (migration 14)
 - `facturen.type` TEXT: `'factuur'` (werkdag-backed), `'anw'` (imported ANW), `'vergoeding'` (ad-hoc, no werkdagen) (migration 21)
 - `klanten.email` TEXT (migration 15)

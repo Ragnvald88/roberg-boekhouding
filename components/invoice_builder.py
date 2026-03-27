@@ -610,7 +610,7 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None):
                 # Hidden upload element — triggered by clicking the card
                 async def handle_qr_upload(e):
                     nonlocal qr_url
-                    content = e.content.read()
+                    content = await e.file.read()
                     await asyncio.to_thread(qr_path.write_bytes, content)
                     qr_url = '/qr-files/betaal_qr.png'
                     _render_qr_card(True)
@@ -882,7 +882,7 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None):
                         kid = matched_klant_id['value']
                         if not kid:
                             if naam in klant_by_name:
-                                kid = klant_by_name[naam]
+                                kid = klant_by_name[naam].id
                             else:
                                 kid = await add_klant(DB_PATH, naam=naam)
 
