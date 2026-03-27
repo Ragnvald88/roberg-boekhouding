@@ -131,6 +131,14 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None):
     jaar = date.today().year
     next_nummer = await get_next_factuurnummer(DB_PATH, jaar=jaar)
 
+    # Load ongefactureerde werkdagen grouped by klant
+    all_ongefactureerd = await get_werkdagen_ongefactureerd(DB_PATH)
+    klant_by_id = {k.id: k for k in klanten}
+    ongefactureerd_per_klant = {}  # klant_id -> list[Werkdag]
+    for w in all_ongefactureerd:
+        if w.tarief > 0:  # exclude admin/study hours
+            ongefactureerd_per_klant.setdefault(w.klant_id, []).append(w)
+
     # --- State ---
     line_items = []  # list of dicts: {datum, omschrijving, aantal, tarief, werkdag_id}
     matched_klant_id = {'value': None}
@@ -294,6 +302,92 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None):
                 for inp in [contact_input, adres_input,
                             postcode_input, plaats_input]:
                     inp.on('blur', lambda _=None: schedule_preview_update())
+
+                # ── Ongefactureerde werkdagen suggesties ──
+                ongefact_container = ui.column().classes('w-full gap-1')
+
+                def _render_ongefactureerd():
+                    ongefact_container.clear()
+                    if not ongefactureerd_per_klant:
+                        return
+                    with ongefact_container:
+                        ui.label('Ongefactureerde werkdagen').classes(
+                            'text-subtitle2 text-grey-8 q-mt-md')
+                        for kid, wds in sorted(
+                                ongefactureerd_per_klant.items(),
+                                key=lambda x: -len(x[1])):
+                            kl = klant_by_id.get(kid)
+                            if not kl:
+                                continue
+                            n = len(wds)
+                            bedrag = sum(
+                                w.uren * w.tarief + w.km * w.km_tarief
+                                for w in wds)
+                            label = (f'1 dag' if n == 1
+                                     else f'{n} dagen')
+
+                            def make_importer(klant, werkdagen):
+                                def do_import():
+                                    # Fill klant fields
+                                    bedrijf_input.value = klant.naam
+                                    matched_klant_id['value'] = klant.id
+                                    if klant.adres:
+                                        adres_input.value = klant.adres
+                                    if klant.contactpersoon:
+                                        contact_input.value = (
+                                            klant.contactpersoon)
+                                    if klant.postcode:
+                                        postcode_input.value = klant.postcode
+                                    if klant.plaats:
+                                        plaats_input.value = klant.plaats
+
+                                    # Import werkdagen
+                                    thuisplaats = bg_dict.get(
+                                        'thuisplaats', '')
+                                    line_items.clear()
+                                    line_items.extend(
+                                        _werkdagen_to_line_items(
+                                            werkdagen, thuisplaats))
+
+                                    # Set datum to last werkdag
+                                    dates = [li['datum']
+                                             for li in line_items
+                                             if li['datum']]
+                                    if dates:
+                                        datum_input.value = max(dates)
+
+                                    render_line_items()
+                                    schedule_preview_update()
+
+                                    # Hide the suggestions
+                                    ongefact_container.clear()
+                                return do_import
+
+                            with ui.row().classes(
+                                'w-full items-center gap-3 q-py-xs '
+                                'q-px-sm rounded'
+                            ).style(
+                                'border: 1px solid #E2E8F0; '
+                                'border-radius: 8px; cursor: pointer'
+                            ).on(
+                                'click', make_importer(kl, wds)
+                            ):
+                                ui.icon('work', size='sm',
+                                        color='teal')
+                                ui.label(kl.naam).classes(
+                                    'text-body2 flex-grow')
+                                ui.label(label).classes(
+                                    'text-caption text-grey-6')
+                                ui.label(
+                                    format_euro(bedrag)
+                                ).classes(
+                                    'text-body2 text-weight-bold'
+                                ).style(
+                                    'font-variant-numeric: tabular-nums')
+                                ui.icon('arrow_forward', size='xs',
+                                        color='grey-5')
+
+                _render_ongefactureerd()
 
                 # ── Factuurregels ──
                 with ui.row().classes('w-full items-center q-mt-md'):
@@ -514,15 +608,6 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None):
                 qr_container = ui.column().classes('w-full q-mt-md gap-0')
 
                 # Hidden upload element — triggered by clicking the card
-                _qr_upload = ui.upload(
-                    label='', auto_upload=True,
-                    max_file_size=2_000_000,
-                ).props('flat accept=".png,.jpg,.jpeg"')
-                _qr_upload.classes('hidden')
-
-                def _pick_qr():
-                    _qr_upload.run_method('pickFiles')
-
                 async def handle_qr_upload(e):
                     nonlocal qr_url
                     content = e.content.read()
@@ -532,7 +617,16 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None):
                     ui.notify('QR-code opgeslagen', type='positive')
                     schedule_preview_update()
 
-                _qr_upload.on('upload', handle_qr_upload)
+                _qr_upload = ui.upload(
+                    label='', auto_upload=True,
+                    on_upload=handle_qr_upload,
+                    max_file_size=2_000_000,
+                ).props('flat accept=".png,.jpg,.jpeg"')
+                _qr_upload.style(
+                    'visibility: hidden; height: 0; overflow: hidden')
+
+                def _pick_qr():
+                    _qr_upload.run_method('pickFiles')
 
                 def _render_qr_card(exists: bool):
                     qr_container.clear()
@@ -940,6 +1034,12 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None):
                     matched_klant_id['value'] = klant_obj.id
                     if klant_obj.adres:
                         adres_input.value = klant_obj.adres
+                    if klant_obj.contactpersoon:
+                        contact_input.value = klant_obj.contactpersoon
+                    if klant_obj.postcode:
+                        postcode_input.value = klant_obj.postcode
+                    if klant_obj.plaats:
+                        plaats_input.value = klant_obj.plaats
 
                 thuisplaats = bg_dict.get('thuisplaats', '')
                 line_items.extend(
