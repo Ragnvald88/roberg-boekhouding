@@ -107,12 +107,14 @@ def _build_regels(line_items: list[dict]) -> list[dict]:
     return regels
 
 
-async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None):
+async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None,
+                               pre_nummer=None):
     """Open the two-panel invoice builder dialog.
 
     Args:
         on_save: async callback after successful save (refresh table)
         pre_selected_werkdag_ids: list of werkdag IDs pre-selected from werkdagen page
+        pre_nummer: pre-fill factuurnummer (for editing existing concept)
     """
     # Load reference data
     klanten = await get_klanten(DB_PATH, alleen_actief=True)
@@ -139,7 +141,7 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None):
         }
 
     jaar = date.today().year
-    next_nummer = await get_next_factuurnummer(DB_PATH, jaar=jaar)
+    next_nummer = pre_nummer or await get_next_factuurnummer(DB_PATH, jaar=jaar)
 
     # Load ongefactureerde werkdagen grouped by klant
     all_ongefactureerd = await get_werkdagen_ongefactureerd(DB_PATH)

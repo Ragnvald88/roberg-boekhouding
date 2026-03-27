@@ -665,7 +665,37 @@ async def facturen_page():
 
         async def on_edit(e):
             row = e.args
-            await open_edit_dialog(row)
+            # Concept werkdag-facturen → full invoice builder
+            if row['status'] == 'concept' and row.get('type') == 'factuur':
+                await _reopen_concept_in_builder(row)
+            else:
+                await open_edit_dialog(row)
+
+        async def _reopen_concept_in_builder(row):
+            """Reopen a concept factuur in the invoice builder for editing."""
+            # Find linked werkdag IDs
+            async with get_db_ctx(DB_PATH) as conn:
+                cur = await conn.execute(
+                    "SELECT id FROM werkdagen WHERE factuurnummer = ?",
+                    (row['nummer'],))
+                wd_rows = await cur.fetchall()
+            werkdag_ids = [r['id'] for r in wd_rows]
+
+            if not werkdag_ids:
+                # No werkdagen linked — fall back to simple dialog
+                await open_edit_dialog(row)
+                return
+
+            # Delete the concept (unlinks werkdagen, making them available)
+            factuur_id = row['id']
+            await delete_factuur(DB_PATH, factuur_id=factuur_id)
+
+            # Open builder with those werkdagen pre-selected
+            await open_invoice_builder(
+                on_save=refresh_table,
+                pre_selected_werkdag_ids=werkdag_ids,
+                pre_nummer=row['nummer'],
+            )
 
         async def open_edit_dialog(row):
             """Open dialog to edit factuur details."""
