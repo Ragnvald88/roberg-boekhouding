@@ -738,6 +738,84 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None):
                             if inspect.iscoroutine(result):
                                 await result
 
+                    async def opslaan_als_concept():
+                        """Save factuur as concept without generating PDF."""
+                        naam = bedrijf_input.value
+                        if not naam:
+                            ui.notify('Vul een bedrijfsnaam in',
+                                      type='warning')
+                            return
+                        if not line_items:
+                            ui.notify('Voeg minstens een factuurregel toe',
+                                      type='warning')
+                            return
+
+                        nummer = nummer_input.value
+                        factuur_datum = (
+                            datum_input.value
+                            or date.today().isoformat())
+
+                        kid = matched_klant_id['value']
+                        if not kid:
+                            if naam in klant_by_name:
+                                kid = klant_by_name[naam]
+                            else:
+                                kid = await add_klant(DB_PATH, naam=naam)
+
+                        totaal_uren = sum(
+                            li.get('aantal', 0) for li in line_items
+                            if not li.get('is_reiskosten'))
+                        totaal_km = sum(
+                            li.get('aantal', 0) for li in line_items
+                            if li.get('is_reiskosten'))
+                        totaal_bedrag = sum(
+                            (li.get('aantal', 0) or 0)
+                            * (li.get('tarief', 0) or 0)
+                            for li in line_items)
+
+                        has_werkdagen = any(
+                            li.get('werkdag_id') for li in line_items)
+                        factuur_type = ('factuur' if has_werkdagen
+                                        else 'vergoeding')
+
+                        await add_factuur(
+                            DB_PATH,
+                            nummer=nummer,
+                            klant_id=kid,
+                            datum=factuur_datum,
+                            totaal_uren=totaal_uren,
+                            totaal_km=totaal_km,
+                            totaal_bedrag=totaal_bedrag,
+                            pdf_pad='',
+                            type=factuur_type,
+                            status='concept',
+                        )
+
+                        werkdag_ids = [
+                            li['werkdag_id'] for li in line_items
+                            if li.get('werkdag_id')]
+                        if werkdag_ids:
+                            await link_werkdagen_to_factuur(
+                                DB_PATH,
+                                werkdag_ids=werkdag_ids,
+                                factuurnummer=nummer,
+                            )
+
+                        dlg.close()
+                        ui.notify(
+                            f'Concept {nummer} opgeslagen '
+                            f'({format_euro(totaal_bedrag)})',
+                            type='info')
+
+                        if on_save:
+                            result = on_save()
+                            if inspect.iscoroutine(result):
+                                await result
+
+                    ui.button(
+                        'Opslaan als concept', icon='save',
+                        on_click=opslaan_als_concept,
+                    ).props('outline color=primary')
                     ui.button(
                         'Genereer factuur', icon='receipt',
                         on_click=genereer_factuur,

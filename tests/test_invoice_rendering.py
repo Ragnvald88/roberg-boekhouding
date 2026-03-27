@@ -50,9 +50,8 @@ def test_render_full_invoice():
     assert 'Dr. Test' in html
     assert 'Waarneming dagpraktijk' in html
     assert 'Reiskosten (retour' in html
-    # Subtotals should appear (werk != totaal)
-    assert 'Subtotaal waarnemingen' in html
-    assert 'Subtotaal reiskosten' in html
+    # Subtotals hidden for single werkdag + reiskosten (only shown for >1 werkdagen)
+    assert 'Subtotaal waarnemingen' not in html
 
 
 def test_render_no_subtotals_when_no_reiskosten():
@@ -125,7 +124,7 @@ def test_render_btw_legal_citation():
         nummer='2026-008', factuur_datum='2026-02-15',
         bedrijfsgegevens=_BEDRIJF)
 
-    assert 'art. 11 lid 1 onderdeel g Wet OB 1968' in html
+    assert 'Vrijgesteld van BTW' in html
 
 
 def test_render_bedrag_computed_if_missing():

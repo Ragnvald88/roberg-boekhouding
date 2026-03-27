@@ -88,7 +88,7 @@
                          padding: 2mm 3mm; text-align: left; }
   .betaal-tbl td.bl { padding: 2mm 3mm; color: #555;
                       border-bottom: 0.5pt solid #ddd;
-                      white-space: nowrap; }
+                      white-space: nowrap; width: 35%; }
   .betaal-tbl td.bv { padding: 2mm 3mm; font-weight: 600; color: #2c3e50;
                       border-bottom: 0.5pt solid #ddd;
                       white-space: nowrap; }
@@ -141,10 +141,18 @@
   <div class="info">
     {% if klant.naam|default('') %}{{ klant.naam }}{% endif %}
     {% if klant.contactpersoon|default('') %}<br>{{ klant.contactpersoon }}{% endif %}
-    {% if klant.adres|default('') %}<br>{{ klant.adres }}{% endif %}
+    {% set adres = klant.adres|default('') %}
     {% set pc = klant.postcode|default('') %}
     {% set pl = klant.plaats|default('') %}
-    {% if pc or pl %}<br>{{ pc }} {{ pl }}{% endif %}
+    {% if adres and (pc or pl) %}
+      <br>{{ adres }}
+      <br>{{ pc }} {{ pl }}
+    {% elif adres and ', ' in adres and not pc and not pl %}
+      <br>{{ adres.split(', ')[0] }}
+      <br>{{ adres.split(', ')[1:] | join(', ') }}
+    {% elif adres %}
+      <br>{{ adres }}
+    {% endif %}
   </div>
 </div>
 
@@ -172,7 +180,8 @@
 </table>
 
 <div class="totaal-section">
-  {% if subtotaal_werk != totaal %}
+  {% set werk_regels = regels | selectattr('is_reiskosten', 'false') | list if regels else [] %}
+  {% if subtotaal_werk != totaal and werk_regels | length > 1 %}
   <div class="subtotaal">Subtotaal waarnemingen: {{ subtotaal_werk | format_euro }}</div>
   <div class="subtotaal">Subtotaal reiskosten: {{ subtotaal_km | format_euro }}</div>
   {% endif %}
@@ -181,7 +190,7 @@
     <span class="totaal-amount">{{ totaal | format_euro }}</span>
   </div>
 </div>
-<p class="vat-notice">* Vrijgesteld van BTW op grond van art. 11 lid 1 onderdeel g Wet OB 1968</p>
+<p class="vat-notice">* Vrijgesteld van BTW</p>
 
 <div class="spacer"></div>
 
