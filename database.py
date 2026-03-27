@@ -2056,8 +2056,16 @@ async def apply_factuur_matches(db_path: Path = DB_PATH,
     if not matches:
         return 0
 
+    applied = 0
     async with get_db_ctx(db_path) as conn:
         for m in matches:
+            # Defense-in-depth: only allow verstuurd → betaald transition
+            cur = await conn.execute(
+                "SELECT status FROM facturen WHERE id = ?",
+                (m['factuur_id'],))
+            row = await cur.fetchone()
+            if not row or row['status'] not in ('verstuurd',):
+                continue
             await conn.execute(
                 "UPDATE facturen SET status = 'betaald', betaald_datum = ? WHERE id = ?",
                 (m['bank_datum'], m['factuur_id']))
@@ -2065,8 +2073,9 @@ async def apply_factuur_matches(db_path: Path = DB_PATH,
                 "UPDATE banktransacties SET koppeling_type = 'factuur', "
                 "koppeling_id = ? WHERE id = ?",
                 (m['factuur_id'], m['bank_id']))
+            applied += 1
         await conn.commit()
-    return len(matches)
+    return applied
 
 
 async def get_nog_te_factureren(db_path: Path = DB_PATH, jaar: int = 0) -> float:

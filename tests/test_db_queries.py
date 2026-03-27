@@ -779,5 +779,51 @@ async def test_omzet_excludes_concept_regression(db):
     assert await get_omzet_totaal(db, jaar=2026) == 1000  # concept excluded
 
 
+# ============================================================
+# Task 2: apply_factuur_matches status validation
+# ============================================================
+
+@pytest.mark.asyncio
+async def test_apply_matches_only_verstuurd(db):
+    """apply_factuur_matches should only transition verstuurd→betaald,
+    not concept→betaald."""
+    kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=0)
+    # Create a concept factuur
+    fid_concept = await add_factuur(db, nummer='2026-C10', klant_id=kid,
+                                     datum='2026-03-01', totaal_uren=8, totaal_km=0,
+                                     totaal_bedrag=640.00, status='concept')
+    # Create a verstuurd factuur
+    fid_verstuurd = await add_factuur(db, nummer='2026-V10', klant_id=kid,
+                                       datum='2026-03-01', totaal_uren=8, totaal_km=0,
+                                       totaal_bedrag=640.00, status='verstuurd')
+    await add_banktransacties(db, [
+        {'datum': '2026-03-10', 'bedrag': 640.00, 'tegenpartij': 'Test',
+         'omschrijving': 'pay1', 'categorie': ''},
+        {'datum': '2026-03-11', 'bedrag': 640.00, 'tegenpartij': 'Test',
+         'omschrijving': 'pay2', 'categorie': ''},
+    ], csv_bestand='test.csv')
+
+    # Manually craft matches that include both concept and verstuurd
+    async with get_db_ctx(db) as conn:
+        cur = await conn.execute("SELECT id FROM banktransacties ORDER BY datum")
+        bank_rows = await cur.fetchall()
+
+    fake_matches = [
+        {'factuur_id': fid_concept, 'bank_id': bank_rows[0]['id'],
+         'bank_datum': '2026-03-10'},
+        {'factuur_id': fid_verstuurd, 'bank_id': bank_rows[1]['id'],
+         'bank_datum': '2026-03-11'},
+    ]
+
+    count = await apply_factuur_matches(db, fake_matches)
+    # Only the verstuurd one should have been applied
+    assert count == 1
+
+    async with get_db_ctx(db) as conn:
+        cur = await conn.execute('SELECT status FROM facturen WHERE id=?', (fid_concept,))
+        assert (await cur.fetchone())['status'] == 'concept'  # unchanged!
+
+        cur = await conn.execute('SELECT status FROM facturen WHERE id=?', (fid_verstuurd,))
+        assert (await cur.fetchone())['status'] == 'betaald'  # changed!
 
 
