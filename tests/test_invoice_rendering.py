@@ -4,7 +4,7 @@ import pytest
 from types import SimpleNamespace
 
 from components.invoice_preview import render_invoice_html
-from components.invoice_builder import _werkdagen_to_line_items
+from components.invoice_builder import _werkdagen_to_line_items, _build_regels
 
 
 # ============================================================
@@ -169,23 +169,20 @@ def _make_werkdag(**kwargs):
 
 
 def test_werkdagen_to_line_items_basic():
-    """Single werkdag produces waarneming + reiskosten rows."""
+    """Single werkdag produces one item with km fields."""
     wd = _make_werkdag()
     items = _werkdagen_to_line_items([wd], thuisplaats='Dorp')
 
-    assert len(items) == 2
-    # First = waarneming
+    assert len(items) == 1
     assert items[0]['omschrijving'] == 'Waarneming dagpraktijk'
     assert items[0]['aantal'] == 9
     assert items[0]['tarief'] == 77.50
     assert items[0]['werkdag_id'] == 1
     assert items[0]['is_reiskosten'] is False
-    # Second = reiskosten
-    assert 'Reiskosten (retour Dorp' in items[1]['omschrijving']
-    assert items[1]['aantal'] == 52
-    assert items[1]['tarief'] == 0.23
-    assert items[1]['werkdag_id'] is None
-    assert items[1]['is_reiskosten'] is True
+    # Km fields on same item
+    assert items[0]['km'] == 52
+    assert items[0]['km_tarief'] == 0.23
+    assert 'Reiskosten (retour Dorp' in items[0]['km_omschrijving']
 
 
 def test_werkdagen_to_line_items_no_km():
@@ -202,8 +199,8 @@ def test_werkdagen_to_line_items_no_locatie():
     wd = _make_werkdag(locatie='')
     items = _werkdagen_to_line_items([wd], thuisplaats='Dorp')
 
-    assert len(items) == 2
-    assert items[1]['omschrijving'] == 'Reiskosten'
+    assert len(items) == 1
+    assert items[0]['km_omschrijving'] == 'Reiskosten'
 
 
 def test_werkdagen_to_line_items_locatie_no_thuisplaats():
@@ -211,11 +208,11 @@ def test_werkdagen_to_line_items_locatie_no_thuisplaats():
     wd = _make_werkdag(locatie='Teststad')
     items = _werkdagen_to_line_items([wd], thuisplaats='')
 
-    assert items[1]['omschrijving'] == 'Reiskosten (retour \u2013 Teststad)'
+    assert items[0]['km_omschrijving'] == 'Reiskosten (retour \u2013 Teststad)'
 
 
 def test_werkdagen_to_line_items_multiple():
-    """Multiple werkdagen produce correct number of rows."""
+    """Multiple werkdagen produce one item each with km fields."""
     wds = [
         _make_werkdag(id=1, datum='2026-02-01', km=50),
         _make_werkdag(id=2, datum='2026-02-02', km=0),
@@ -223,10 +220,10 @@ def test_werkdagen_to_line_items_multiple():
     ]
     items = _werkdagen_to_line_items(wds, thuisplaats='Dorp')
 
-    # wd1: werk + reis = 2, wd2: werk only = 1, wd3: werk + reis = 2
-    assert len(items) == 5
-    assert sum(1 for i in items if i['is_reiskosten']) == 2
-    assert sum(1 for i in items if not i['is_reiskosten']) == 3
+    assert len(items) == 3  # one per werkdag
+    assert items[0]['km'] == 50
+    assert items[1]['km'] == 0
+    assert items[2]['km'] == 30
 
 
 def test_werkdagen_to_line_items_dict_input():
@@ -326,7 +323,7 @@ def test_subtotal_missing_flag_defaults_to_werk():
 
 
 def test_werkdagen_to_items_subtotal_integration():
-    """End-to-end: werkdagen → line_items → correct subtotals."""
+    """End-to-end: werkdagen → line_items → _build_regels → correct subtotals."""
     wds = [
         _make_werkdag(id=1, uren=9, tarief=80, km=50, km_tarief=0.23,
                       locatie='Teststad'),
@@ -334,13 +331,16 @@ def test_werkdagen_to_items_subtotal_integration():
                       locatie=''),
     ]
     items = _werkdagen_to_line_items(wds, thuisplaats='Dorp')
+    assert len(items) == 2  # one per werkdag
+
+    # Build regels splits km back out for PDF
+    regels = _build_regels(items)
+    assert len(regels) == 3  # 2 werk + 1 reiskosten (wd2 has km=0)
 
     subtotaal_werk = sum(
-        i['aantal'] * i['tarief'] for i in items
-        if not i.get('is_reiskosten'))
+        r['bedrag'] for r in regels if not r.get('is_reiskosten'))
     subtotaal_km = sum(
-        i['aantal'] * i['tarief'] for i in items
-        if i.get('is_reiskosten'))
+        r['bedrag'] for r in regels if r.get('is_reiskosten'))
 
     # wd1: 9*80=720, wd2: 8*80=640 → werk=1360
     assert subtotaal_werk == 1360.0

@@ -32,9 +32,8 @@ app.add_static_files('/logo-files', str(LOGO_DIR))
 def _werkdagen_to_line_items(werkdagen, thuisplaats: str = '') -> list[dict]:
     """Convert werkdag objects/dicts to line_item dicts for the builder.
 
-    Each werkdag produces a waarneming line and optionally a reiskosten line.
-    Returns list of dicts with keys: datum, omschrijving, aantal, tarief,
-    werkdag_id, is_reiskosten.
+    Each werkdag produces a single line_item with optional km fields.
+    Reiskosten are split out into separate PDF regels by _build_regels.
     """
     items = []
     for w in werkdagen:
@@ -51,7 +50,17 @@ def _werkdagen_to_line_items(werkdagen, thuisplaats: str = '') -> list[dict]:
                    else w.get('locatie', ''))
         wid = w.id if hasattr(w, 'id') else w.get('id')
 
-        # Waarneming row
+        # Build reiskosten omschrijving
+        if km > 0:
+            if locatie and thuisplaats:
+                km_omschr = f'Reiskosten (retour {thuisplaats} \u2013 {locatie})'
+            elif locatie:
+                km_omschr = f'Reiskosten (retour \u2013 {locatie})'
+            else:
+                km_omschr = 'Reiskosten'
+        else:
+            km_omschr = ''
+
         items.append({
             'datum': datum,
             'omschrijving': activiteit or 'Waarneming dagpraktijk',
@@ -59,29 +68,18 @@ def _werkdagen_to_line_items(werkdagen, thuisplaats: str = '') -> list[dict]:
             'tarief': tarief,
             'werkdag_id': wid,
             'is_reiskosten': False,
+            'km': km,
+            'km_tarief': km_tarief,
+            'km_omschrijving': km_omschr,
         })
-
-        # Reiskosten row
-        if km > 0:
-            if locatie and thuisplaats:
-                omschr = f'Reiskosten (retour {thuisplaats} \u2013 {locatie})'
-            elif locatie:
-                omschr = f'Reiskosten (retour \u2013 {locatie})'
-            else:
-                omschr = 'Reiskosten'
-            items.append({
-                'datum': datum,
-                'omschrijving': omschr,
-                'aantal': km,
-                'tarief': km_tarief,
-                'werkdag_id': None,
-                'is_reiskosten': True,
-            })
     return items
 
 
 def _build_regels(line_items: list[dict]) -> list[dict]:
-    """Convert line_items state into regels dicts for invoice rendering."""
+    """Convert line_items state into regels dicts for invoice rendering.
+
+    Splits km fields back into separate reiskosten regels for the PDF.
+    """
     regels = []
     for li in line_items:
         aantal = li.get('aantal', 0) or 0
@@ -94,6 +92,18 @@ def _build_regels(line_items: list[dict]) -> list[dict]:
             'bedrag': aantal * tarief,
             'is_reiskosten': li.get('is_reiskosten', False),
         })
+        # Split km into separate reiskosten regel for PDF
+        km = li.get('km', 0) or 0
+        km_tarief = li.get('km_tarief', 0) or 0
+        if km > 0:
+            regels.append({
+                'datum': li.get('datum', ''),
+                'omschrijving': li.get('km_omschrijving', 'Reiskosten'),
+                'aantal': km,
+                'tarief': km_tarief,
+                'bedrag': km * km_tarief,
+                'is_reiskosten': True,
+            })
     return regels
 
 
@@ -341,7 +351,8 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None):
                             'w-full items-center gap-2 no-wrap'
                         ):
                             a_inp = ui.number(
-                                'Aantal', value=item.get('aantal', 0),
+                                'Uren' if not item.get('is_reiskosten') else 'Aantal',
+                                value=item.get('aantal', 0),
                                 format='%.2f', min=0, step=0.5,
                             ).props('outlined dense').classes('w-24')
 
@@ -350,12 +361,22 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None):
                                 format='%.2f', min=0, step=0.50,
                             ).props('outlined dense').classes('w-28')
 
+                            # Km field (inline, only for non-reiskosten items)
+                            km_val = item.get('km', 0) or 0
+                            km_inp = None
+                            if not item.get('is_reiskosten'):
+                                km_inp = ui.number(
+                                    'Km', value=km_val,
+                                    format='%.0f', min=0, step=1,
+                                ).props('outlined dense').classes('w-20')
+
                             ui.space()
 
-                            bedrag = (item.get('aantal', 0) or 0) * (
+                            uren_bedrag = (item.get('aantal', 0) or 0) * (
                                 item.get('tarief', 0) or 0)
+                            km_bedrag = km_val * (item.get('km_tarief', 0) or 0)
                             bedrag_label = ui.label(
-                                format_euro(bedrag),
+                                format_euro(uren_bedrag + km_bedrag),
                             ).classes(
                                 'text-body1 text-weight-bold text-right'
                             ).style(
@@ -363,7 +384,7 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None):
                             )
 
                         def make_updater(i, d_ref, o_ref, a_ref, t_ref,
-                                         b_ref):
+                                         km_ref, b_ref):
                             def update(_=None):
                                 line_items[i]['datum'] = d_ref.value or ''
                                 line_items[i]['omschrijving'] = (
@@ -372,20 +393,28 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None):
                                     a_ref.value or 0)
                                 line_items[i]['tarief'] = float(
                                     t_ref.value or 0)
-                                b = line_items[i]['aantal'] * line_items[i][
-                                    'tarief']
-                                b_ref.text = format_euro(b)
+                                if km_ref is not None:
+                                    line_items[i]['km'] = float(
+                                        km_ref.value or 0)
+                                uren_b = (line_items[i]['aantal']
+                                          * line_items[i]['tarief'])
+                                km_b = (line_items[i].get('km', 0)
+                                        * line_items[i].get('km_tarief', 0))
+                                b_ref.text = format_euro(uren_b + km_b)
                                 schedule_preview_update()
                             return update
 
                         updater = make_updater(
-                            idx, d_inp, o_inp, a_inp, t_inp, bedrag_label)
+                            idx, d_inp, o_inp, a_inp, t_inp,
+                            km_inp, bedrag_label)
                         d_inp.on(
                             'update:model-value',
                             lambda _=None, u=updater: u())
                         o_inp.on('blur', updater)
                         a_inp.on_value_change(updater)
                         t_inp.on_value_change(updater)
+                        if km_inp is not None:
+                            km_inp.on_value_change(updater)
 
                 # Buttons: add free line + import werkdagen
                 with ui.row().classes('w-full gap-2 q-mt-xs'):
@@ -687,16 +716,17 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None):
                                 type='negative')
                             return
 
-                        # Calculate totals
+                        # Calculate totals (km now on same item, not separate)
                         totaal_uren = sum(
                             li.get('aantal', 0) for li in line_items
                             if not li.get('is_reiskosten'))
                         totaal_km = sum(
-                            li.get('aantal', 0) for li in line_items
-                            if li.get('is_reiskosten'))
+                            li.get('km', 0) or 0 for li in line_items)
                         totaal_bedrag = sum(
                             (li.get('aantal', 0) or 0)
                             * (li.get('tarief', 0) or 0)
+                            + (li.get('km', 0) or 0)
+                            * (li.get('km_tarief', 0) or 0)
                             for li in line_items)
 
                         # Auto-detect type: werkdag-linked = factuur, free-form = vergoeding
@@ -766,11 +796,12 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None):
                             li.get('aantal', 0) for li in line_items
                             if not li.get('is_reiskosten'))
                         totaal_km = sum(
-                            li.get('aantal', 0) for li in line_items
-                            if li.get('is_reiskosten'))
+                            li.get('km', 0) or 0 for li in line_items)
                         totaal_bedrag = sum(
                             (li.get('aantal', 0) or 0)
                             * (li.get('tarief', 0) or 0)
+                            + (li.get('km', 0) or 0)
+                            * (li.get('km_tarief', 0) or 0)
                             for li in line_items)
 
                         has_werkdagen = any(
