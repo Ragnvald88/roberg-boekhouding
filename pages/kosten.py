@@ -746,7 +746,8 @@ async def kosten_page():
         safe_name = Path(upload_event.file.name).name.replace(' ', '_')
         filename = f'uitgave_{uitgave_id}_{safe_name}'
         filepath = UITGAVEN_DIR / filename
-        await upload_event.file.save(filepath)
+        content = await upload_event.file.read()
+        await asyncio.to_thread(filepath.write_bytes, content)
         await update_uitgave(DB_PATH, uitgave_id=uitgave_id,
                              pdf_pad=str(filepath))
         return filepath

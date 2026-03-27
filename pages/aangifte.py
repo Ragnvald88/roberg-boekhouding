@@ -11,6 +11,7 @@ Tabs:
   5. Documenten              (icon: folder)
 """
 
+import asyncio
 from datetime import date
 from pathlib import Path
 
@@ -1015,7 +1016,8 @@ async def aangifte_page():
 
         safe_name = Path(e.file.name).name.replace(' ', '_')
         file_path = target_dir / safe_name
-        await e.file.save(file_path)
+        content = await e.file.read()
+        await asyncio.to_thread(file_path.write_bytes, content)
 
         await add_aangifte_document(
             DB_PATH, jaar=jaar, categorie=categorie,

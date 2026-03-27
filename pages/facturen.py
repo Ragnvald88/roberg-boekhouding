@@ -421,7 +421,8 @@ async def facturen_page():
                     'type': f.type,
                     'bron': f.bron,
                 })
-                totaal += f.totaal_bedrag
+                if f.status != 'concept':
+                    totaal += f.totaal_bedrag
                 if f.status != 'betaald' and f.status != 'concept':
                     openstaand += f.totaal_bedrag
 
@@ -790,22 +791,26 @@ async def facturen_page():
 
                         # Handle status change (cascades to werkdagen)
                         new_status = edit_status.value
-                        if new_status != row['status']:
-                            betaald_datum = ''
-                            if new_status == 'betaald':
-                                betaald_datum = (edit_betaald_datum.value
-                                                 or date.today().isoformat())
-                            await update_factuur_status(
-                                DB_PATH, factuur_id=row['id'],
-                                status=new_status,
-                                betaald_datum=betaald_datum)
-                        elif (new_status == 'betaald'
-                              and edit_betaald_datum.value
-                              != row.get('betaald_datum', '')):
-                            await update_factuur_status(
-                                DB_PATH, factuur_id=row['id'],
-                                status='betaald',
-                                betaald_datum=edit_betaald_datum.value)
+                        try:
+                            if new_status != row['status']:
+                                betaald_datum = ''
+                                if new_status == 'betaald':
+                                    betaald_datum = (edit_betaald_datum.value
+                                                     or date.today().isoformat())
+                                await update_factuur_status(
+                                    DB_PATH, factuur_id=row['id'],
+                                    status=new_status,
+                                    betaald_datum=betaald_datum)
+                            elif (new_status == 'betaald'
+                                  and edit_betaald_datum.value
+                                  != row.get('betaald_datum', '')):
+                                await update_factuur_status(
+                                    DB_PATH, factuur_id=row['id'],
+                                    status='betaald',
+                                    betaald_datum=edit_betaald_datum.value)
+                        except ValueError as ex:
+                            ui.notify(str(ex), type='negative')
+                            return
 
                         # Handle PDF removal
                         if pdf_removed['value'] and existing_pdf:
@@ -826,7 +831,8 @@ async def facturen_page():
                             filename = (
                                 f'factuur_{row["id"]}_{safe_name}')
                             filepath = import_dir / filename
-                            await evt.file.save(filepath)
+                            content = await evt.file.read()
+                            await asyncio.to_thread(filepath.write_bytes, content)
                             await update_factuur(
                                 DB_PATH, factuur_id=row['id'],
                                 pdf_pad=str(filepath))
