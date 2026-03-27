@@ -15,9 +15,9 @@ from components.invoice_preview import render_invoice_html
 from components.shared_ui import date_input, open_klant_dialog
 from components.utils import format_euro, format_datum
 from database import (
-    DB_PATH, add_factuur, add_klant, get_bedrijfsgegevens, get_klanten,
-    get_next_factuurnummer, get_werkdagen, get_werkdagen_ongefactureerd,
-    link_werkdagen_to_factuur,
+    DB_PATH, add_factuur, add_klant, get_bedrijfsgegevens, get_db_ctx,
+    get_klanten, get_next_factuurnummer, get_werkdagen,
+    get_werkdagen_ongefactureerd, link_werkdagen_to_factuur,
 )
 
 PDF_DIR = DB_PATH.parent / "facturen"
@@ -116,6 +116,16 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None):
     """
     # Load reference data
     klanten = await get_klanten(DB_PATH, alleen_actief=True)
+
+    # Sort klanten by most recent factuur (most active first)
+    async with get_db_ctx(DB_PATH) as conn:
+        cur = await conn.execute(
+            "SELECT klant_id, MAX(datum) as laatste, COUNT(*) as n "
+            "FROM facturen WHERE status != 'concept' GROUP BY klant_id")
+        _activity = {r['klant_id']: (r['laatste'], r['n'])
+                     for r in await cur.fetchall()}
+    klanten.sort(key=lambda k: _activity.get(k.id, ('', 0)), reverse=True)
+
     klant_by_name = {k.naam: k for k in klanten}
     bg = await get_bedrijfsgegevens(DB_PATH)
     bg_dict = {}
