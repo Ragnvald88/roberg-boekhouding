@@ -15,8 +15,9 @@ source .venv/bin/activate
 export DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib
 python main.py  # → http://127.0.0.1:8085
 
-# Tests (488 passing, 14 skipped)
+# Tests (491 passing, 14 skipped)
 DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib .venv/bin/python -m pytest tests/ -v
+# MANDATORY: run after every code change, confirm 0 failures before reporting done
 ```
 
 ## Database
@@ -68,6 +69,13 @@ Concept (grey) → Verstuurd (blue/info) → Betaald (green/positive)
 - "Verstuur via e-mail" opens Mail.app via AppleScript with PDF attached → marks verstuurd
 - Revenue queries (`get_omzet_*`, `get_kpis`) exclude concept invoices
 - `update_factuur_status()` cascades to linked werkdagen
+
+### Kwaliteitseisen
+- Bij NiceGUI upload events: ALTIJD `await e.file.read()` en `e.file.name`. NOOIT `e.content.read()` of `e.name`.
+- Bij SQL queries op `facturen`: controleer altijd of `status != 'concept'` filtering nodig is (zie `get_omzet_*` patronen).
+- Bij `werkdagen` data: `factuurnummer = ''` betekent ongefactureerd. Maar oude werkdagen kunnen extern gefactureerd zijn — controleer altijd of het recente data betreft.
+- Bij klant-lookup via `klant_by_name[naam]`: dit geeft een Klant object, gebruik `.id` voor het ID.
+- Bij `_build_regels()`: km-velden op line_items worden gesplitst naar aparte reiskosten-regels voor de PDF.
 
 ### YAGNI
 Geen: user auth, BTW-administratie, loon/voorraad, real-time bank-API, auto-matching, CI/CD, multi-language
