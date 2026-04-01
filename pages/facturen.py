@@ -33,6 +33,51 @@ PDF_DIR.mkdir(parents=True, exist_ok=True)
 app.add_static_files('/facturen-files', str(PDF_DIR))
 
 
+def _build_mail_body(nummer, bedrag, iban, bedrijfsnaam, naam, telefoon, bg_email, betaallink=''):
+    """Build email body. Returns (body, is_html) tuple."""
+    tel_line = f'Tel: {telefoon}' if telefoon else ''
+
+    if betaallink:
+        body = (
+            f'<div style="font-family: Helvetica, Arial, sans-serif; font-size: 14px; color: #333;">'
+            f'<p>Bijgaand stuur ik u factuur {nummer}.</p>'
+            f'<p>Het totaalbedrag van {bedrag} verzoek ik u binnen 14 dagen '
+            f'over te maken op rekeningnummer {iban} t.n.v. {bedrijfsnaam}, '
+            f'onder vermelding van factuurnummer {nummer}.</p>'
+            f'<p>U kunt ook direct betalen via '
+            f'<a href="{betaallink}">deze betaallink</a>.</p>'
+            f'<p>Mocht u vragen hebben, dan hoor ik het graag.</p>'
+            f'<br>'
+            f'<p>Met vriendelijke groet,</p>'
+            f'<p>{naam}<br><br>'
+            f'{bedrijfsnaam}<br>'
+            f'{tel_line + "<br>" if tel_line else ""}'
+            f'{bg_email}</p>'
+            f'</div>'
+        )
+        return body, True
+    else:
+        body = (
+            f'Bijgaand stuur ik u factuur {nummer}.\n'
+            f'\n'
+            f'Het totaalbedrag van {bedrag} verzoek ik u binnen 14 dagen '
+            f'over te maken op rekeningnummer {iban} t.n.v. {bedrijfsnaam}, '
+            f'onder vermelding van factuurnummer {nummer}.\n'
+            f'\n'
+            f'Mocht u vragen hebben, dan hoor ik het graag.\n'
+            f'\n'
+            f'\n'
+            f'Met vriendelijke groet,\n'
+            f'\n'
+            f'{naam}\n'
+            f'\n'
+            f'{bedrijfsnaam}\n'
+            f'{f"Tel: {telefoon}" if telefoon else ""}\n'
+            f'{bg_email}'
+        )
+        return body, False
+
+
 def _is_verlopen(datum_str: str) -> bool:
     """Check if an invoice is overdue (>14 days past datum and unpaid)."""
     try:
@@ -40,6 +85,20 @@ def _is_verlopen(datum_str: str) -> bool:
         return (d + timedelta(days=14)) < date.today()
     except (ValueError, TypeError):
         return False
+
+
+def _display_status(f) -> str:
+    """Return the display status for a factuur: concept/verstuurd/verlopen/betaald."""
+    if f.status == 'verstuurd' and _is_verlopen(f.datum):
+        return 'verlopen'
+    return f.status
+
+
+def _filter_facturen_by_status(facturen, status_val: str):
+    """Filter facturen list by display status (including computed 'verlopen')."""
+    if not status_val:
+        return facturen
+    return [f for f in facturen if _display_status(f) == status_val]
 
 
 @ui.page('/facturen')
@@ -114,17 +173,8 @@ async def facturen_page():
                 if filter_klant['value']:
                     facturen = [f for f in facturen
                                 if f.klant_naam == filter_klant['value']]
-                status_val = filter_status['value']
-                if status_val == 'concept':
-                    facturen = [f for f in facturen if f.status == 'concept']
-                elif status_val == 'verstuurd':
-                    facturen = [f for f in facturen
-                                if f.status == 'verstuurd' and not _is_verlopen(f.datum)]
-                elif status_val == 'verlopen':
-                    facturen = [f for f in facturen
-                                if f.status == 'verstuurd' and _is_verlopen(f.datum)]
-                elif status_val == 'betaald':
-                    facturen = [f for f in facturen if f.status == 'betaald']
+                facturen = _filter_facturen_by_status(
+                    facturen, filter_status['value'])
                 if filter_type['value']:
                     facturen = [f for f in facturen
                                 if f.type == filter_type['value']]
@@ -133,11 +183,12 @@ async def facturen_page():
                 type_labels_csv = {'factuur': 'Werkdag', 'anw': 'ANW',
                                    'vergoeding': 'Vergoeding'}
                 status_labels = {'concept': 'Concept', 'verstuurd': 'Verstuurd',
-                                 'betaald': 'Betaald'}
+                                 'verlopen': 'Verlopen', 'betaald': 'Betaald'}
                 rows = [[f.nummer, f.datum, f.klant_naam,
                          type_labels_csv.get(f.type, f.type),
                          f.totaal_uren, f.totaal_km, f.totaal_bedrag,
-                         status_labels.get(f.status, f.status.capitalize())]
+                         status_labels.get(_display_status(f),
+                                           f.status.capitalize())]
                         for f in facturen]
                 csv_str = generate_csv(headers, rows)
                 ui.download.content(
@@ -194,7 +245,15 @@ async def facturen_page():
             <q-td :props="props">
                 <div class="row items-center no-wrap gap-1">
                     <q-icon
-                        v-if="props.row.type === 'vergoeding'"
+                        v-if="props.row.type === 'anw'"
+                        name="nightlight"
+                        size="xs"
+                        color="info"
+                    >
+                        <q-tooltip>ANW-dienst</q-tooltip>
+                    </q-icon>
+                    <q-icon
+                        v-else-if="props.row.type === 'vergoeding'"
                         name="receipt_long"
                         size="xs"
                         color="grey-6"
@@ -202,20 +261,20 @@ async def facturen_page():
                         <q-tooltip>Vergoeding</q-tooltip>
                     </q-icon>
                     <q-icon
-                        v-else-if="props.row.bron === 'import'"
-                        name="upload_file"
-                        size="xs"
-                        color="grey-6"
-                    >
-                        <q-tooltip>Geïmporteerd</q-tooltip>
-                    </q-icon>
-                    <q-icon
                         v-else
-                        name="edit_note"
+                        name="work"
                         size="xs"
                         color="teal"
                     >
-                        <q-tooltip>Aangemaakt in app</q-tooltip>
+                        <q-tooltip>Dagpraktijk</q-tooltip>
+                    </q-icon>
+                    <q-icon
+                        v-if="props.row.bron === 'import'"
+                        name="file_upload"
+                        size="11px"
+                        color="grey-5"
+                    >
+                        <q-tooltip>Geïmporteerd</q-tooltip>
                     </q-icon>
                     {{ props.row.nummer }}
                 </div>
@@ -255,7 +314,7 @@ async def facturen_page():
                        color="grey-7">
                     <q-menu auto-close>
                         <q-list dense style="min-width: 200px">
-                            <q-item v-if="props.row.status === 'concept'" clickable
+                            <q-item v-if="props.row.status !== 'betaald'" clickable
                                 @click="() => $parent.$emit('edit', props.row)">
                                 <q-item-section side>
                                     <q-icon name="edit" size="xs"
@@ -372,17 +431,8 @@ async def facturen_page():
                             if f.klant_naam == filter_klant['value']]
 
             # Status filter
-            status_val = filter_status['value']
-            if status_val == 'concept':
-                facturen = [f for f in facturen if f.status == 'concept']
-            elif status_val == 'verstuurd':
-                facturen = [f for f in facturen
-                            if f.status == 'verstuurd' and not _is_verlopen(f.datum)]
-            elif status_val == 'verlopen':
-                facturen = [f for f in facturen
-                            if f.status == 'verstuurd' and _is_verlopen(f.datum)]
-            elif status_val == 'betaald':
-                facturen = [f for f in facturen if f.status == 'betaald']
+            facturen = _filter_facturen_by_status(
+                facturen, filter_status['value'])
 
             # Type filter
             if filter_type['value']:
@@ -393,8 +443,7 @@ async def facturen_page():
             totaal = 0
             openstaand = 0
             for f in facturen:
-                # Compute verlopen status (only applies to verstuurd invoices)
-                is_verlopen = f.status == 'verstuurd' and _is_verlopen(f.datum)
+                is_verlopen = _display_status(f) == 'verlopen'
                 try:
                     factuur_date = datetime.strptime(f.datum, '%Y-%m-%d').date()
                     vervaldatum_fmt = format_datum(
@@ -606,9 +655,16 @@ async def facturen_page():
                                 f'{skipped} concept-facturen overgeslagen '
                                 f'(verstuur eerst)',
                                 type='info')
+                        marked = n - skipped
                         dialog.close()
-                        ui.notify(f'{n} facturen gemarkeerd als betaald',
-                                  type='positive')
+                        if marked > 0:
+                            ui.notify(
+                                f'{marked} facturen gemarkeerd als betaald',
+                                type='positive')
+                        elif not skipped:
+                            ui.notify(
+                                'Geen facturen gemarkeerd',
+                                type='info')
                         await refresh_table()
 
                     ui.button('Ja, betaald', on_click=do_bulk_betaald) \
@@ -672,29 +728,35 @@ async def facturen_page():
                 await open_edit_dialog(row)
 
         async def _reopen_concept_in_builder(row):
-            """Reopen a concept factuur in the invoice builder for editing."""
-            # Find linked werkdag IDs
+            """Reopen a concept factuur in the invoice builder for editing.
+
+            The old concept is NOT deleted upfront — it stays in the DB
+            as a safety net. The builder receives replacing_factuur_id
+            and only deletes the old concept on successful save.
+            """
+            old_nummer = row['nummer']
+            old_klant_id = row.get('klant_id')
+
+            # Find linked werkdag IDs + regels_json for pre-selection
             async with get_db_ctx(DB_PATH) as conn:
                 cur = await conn.execute(
                     "SELECT id FROM werkdagen WHERE factuurnummer = ?",
-                    (row['nummer'],))
+                    (old_nummer,))
                 wd_rows = await cur.fetchall()
+                cur2 = await conn.execute(
+                    "SELECT regels_json FROM facturen WHERE id = ?",
+                    (row['id'],))
+                frow = await cur2.fetchone()
             werkdag_ids = [r['id'] for r in wd_rows]
+            regels_json = frow['regels_json'] if frow else ''
 
-            if not werkdag_ids:
-                # No werkdagen linked — fall back to simple dialog
-                await open_edit_dialog(row)
-                return
-
-            # Delete the concept (unlinks werkdagen, making them available)
-            factuur_id = row['id']
-            await delete_factuur(DB_PATH, factuur_id=factuur_id)
-
-            # Open builder with those werkdagen pre-selected
             await open_invoice_builder(
                 on_save=refresh_table,
-                pre_selected_werkdag_ids=werkdag_ids,
-                pre_nummer=row['nummer'],
+                pre_selected_werkdag_ids=werkdag_ids or None,
+                pre_nummer=old_nummer,
+                pre_klant_id=old_klant_id,
+                replacing_factuur_id=row['id'],
+                pre_regels_json=regels_json,
             )
 
         async def open_edit_dialog(row):
@@ -849,7 +911,7 @@ async def facturen_page():
                                 pdf_pad='')
                             p = Path(existing_pdf)
                             if p.exists():
-                                p.unlink()
+                                await asyncio.to_thread(p.unlink)
 
                         # Handle PDF upload
                         if upload_file.get('event'):
@@ -927,27 +989,19 @@ async def facturen_page():
             telefoon = bg.telefoon if bg else ''
             bg_email = bg.email if bg else ''
 
-            subject = f'Factuur {nummer}'
-            body = (
-                f'Bijgaand stuur ik u factuur {nummer}.\\n'
-                f'\\n'
-                f'Het totaalbedrag van {bedrag} verzoek ik u binnen 14 dagen '
-                f'over te maken op rekeningnummer {iban} t.n.v. {bedrijfsnaam}, '
-                f'onder vermelding van factuurnummer {nummer}.\\n'
-                f'\\n'
-                f'Mocht u vragen hebben, dan hoor ik het graag.\\n'
-                f'\\n'
-                f'\\n'
-                f'Met vriendelijke groet,\\n'
-                f'\\n'
-                f'{naam}\\n'
-                f'\\n'
-                f'{bedrijfsnaam}\\n'
-                f'{f"Tel: {telefoon}" if telefoon else ""}\\n'
-                f'{bg_email}'
-            )
+            # Fetch betaallink from DB
+            betaallink = ''
+            async with get_db_ctx(DB_PATH) as conn:
+                cur = await conn.execute(
+                    "SELECT betaallink FROM facturen WHERE id = ?", (row['id'],))
+                r = await cur.fetchone()
+                if r and r['betaallink']:
+                    betaallink = r['betaallink']
 
-            # Escape for AppleScript (double backslash for quotes)
+            subject = f'Factuur {nummer}'
+            body, is_html = _build_mail_body(
+                nummer, bedrag, iban, bedrijfsnaam, naam, telefoon, bg_email, betaallink)
+
             body_osa = body.replace('\\', '\\\\').replace('"', '\\\\"')
             subject_osa = subject.replace('"', '\\\\"')
             pdf_path_abs = str(Path(pdf_path).resolve())
@@ -957,10 +1011,16 @@ async def facturen_page():
             if klant_email:
                 to_line = f'make new to recipient with properties {{address:"{klant_email}"}}'
 
+            # Use html content property when betaallink present
+            if is_html:
+                content_prop = f'html content:"{body_osa}"'
+            else:
+                content_prop = f'content:"{body_osa}"'
+
             applescript = (
                 'tell application "Mail"\n'
                 f'  set newMsg to make new outgoing message with properties '
-                f'{{subject:"{subject_osa}", content:"{body_osa}", visible:true}}\n'
+                f'{{subject:"{subject_osa}", {content_prop}, visible:true}}\n'
                 f'  tell newMsg\n'
                 f'    {to_line}\n'
                 f'    make new attachment with properties '
@@ -1012,83 +1072,105 @@ async def facturen_page():
                 cursor = await conn.execute("SELECT nummer FROM facturen")
                 existing_nummers = {row[0] for row in await cursor.fetchall()}
 
-            with ui.dialog() as dlg, ui.card().classes('w-full max-w-5xl'):
-                ui.label('Facturen importeren uit PDF').classes('text-h6 q-mb-sm')
+            with ui.dialog() as dlg, ui.card().classes(
+                'w-full max-w-2xl q-pa-none'
+            ):
+                # Header with close button
+                with ui.row().classes(
+                    'w-full items-center q-pa-md q-pb-sm'
+                ):
+                    ui.label('Facturen importeren uit PDF').classes(
+                        'text-h6')
+                    ui.space()
+                    ui.button(icon='close', on_click=dlg.close) \
+                        .props('flat round dense')
 
-                preview_container = ui.column().classes('w-full gap-2')
-                bottom_container = ui.column().classes('w-full')
+                with ui.column().classes('w-full q-px-md q-pb-md gap-3'):
+                    opt_werkdagen = {'value': True}
+                    opt_betaald = {'value': True}
 
-                opt_werkdagen = {'value': True}
-                opt_betaald = {'value': True}
+                    async def handle_upload(e: events.UploadEventArguments):
+                        content = await e.file.read()
+                        filename = e.file.name
 
-                async def handle_upload(e: events.UploadEventArguments):
-                    content = await e.file.read()
-                    filename = e.file.name
+                        with tempfile.NamedTemporaryFile(
+                            suffix='.pdf', delete=False,
+                        ) as tmp:
+                            tmp.write(content)
+                            tmp_path = tmp.name
 
-                    with tempfile.NamedTemporaryFile(
-                        suffix='.pdf', delete=False,
-                    ) as tmp:
-                        tmp.write(content)
-                        tmp_path = tmp.name
+                        try:
+                            text = await asyncio.to_thread(
+                                extract_pdf_text, tmp_path)
+                            inv_type = detect_invoice_type(text)
 
-                    try:
-                        text = await asyncio.to_thread(extract_pdf_text, tmp_path)
-                        inv_type = detect_invoice_type(text)
+                            if inv_type == 'dagpraktijk':
+                                parsed = parse_dagpraktijk_text(
+                                    text, filename)
+                            elif inv_type == 'anw':
+                                parsed = parse_anw_text(text, filename)
+                            else:
+                                parsed_items.append({
+                                    '_type': 'unknown',
+                                    '_filename': filename,
+                                    '_status': 'fout',
+                                    '_error': 'Niet herkend PDF-formaat',
+                                })
+                                render_preview()
+                                return
 
-                        if inv_type == 'dagpraktijk':
-                            parsed = parse_dagpraktijk_text(text, filename)
-                        elif inv_type == 'anw':
-                            parsed = parse_anw_text(text, filename)
-                        else:
+                            parsed['_type'] = inv_type
+                            parsed['_filename'] = filename
+                            parsed['_content'] = content
+
+                            # Dedup check
+                            nummer = parsed.get('factuurnummer')
+                            if nummer and nummer in existing_nummers:
+                                parsed['_status'] = 'duplicaat'
+                            else:
+                                parsed['_status'] = 'nieuw'
+
+                            # Klant resolution
+                            if inv_type == 'dagpraktijk':
+                                suffix = (
+                                    filename.split('_', 1)[1]
+                                    .replace('.pdf', '')
+                                    if '_' in filename else None)
+                                db_naam, klant_id = resolve_klant(
+                                    parsed.get('klant_name'), suffix,
+                                    klant_lookup)
+                            else:
+                                db_naam, klant_id = resolve_anw_klant(
+                                    filename, klant_lookup)
+
+                            parsed['_klant_naam'] = db_naam
+                            parsed['_klant_id'] = klant_id
+
+                            parsed_items.append(parsed)
+                            render_preview()
+                        except Exception as ex:
                             parsed_items.append({
-                                '_type': 'unknown', '_filename': filename,
-                                '_status': 'fout',
-                                '_error': 'Niet herkend PDF-formaat',
+                                '_type': 'error', '_filename': filename,
+                                '_status': 'fout', '_error': str(ex),
                             })
                             render_preview()
-                            return
+                        finally:
+                            await asyncio.to_thread(Path(tmp_path).unlink)
 
-                        parsed['_type'] = inv_type
-                        parsed['_filename'] = filename
-                        parsed['_content'] = content
+                    # Upload zone — compact dropzone style
+                    ui.upload(
+                        multiple=True, on_upload=handle_upload,
+                        auto_upload=True,
+                    ).props(
+                        'accept=".pdf" flat bordered color=teal '
+                        'label="Klik of sleep PDF-bestanden hierheen"'
+                    ).classes('w-full').style(
+                        'border-style: dashed; border-radius: 8px'
+                    )
 
-                        # Dedup check
-                        nummer = parsed.get('factuurnummer')
-                        if nummer and nummer in existing_nummers:
-                            parsed['_status'] = 'duplicaat'
-                        else:
-                            parsed['_status'] = 'nieuw'
-
-                        # Klant resolution
-                        if inv_type == 'dagpraktijk':
-                            suffix = (filename.split('_', 1)[1].replace('.pdf', '')
-                                      if '_' in filename else None)
-                            db_naam, klant_id = resolve_klant(
-                                parsed.get('klant_name'), suffix, klant_lookup)
-                        else:
-                            db_naam, klant_id = resolve_anw_klant(
-                                filename, klant_lookup)
-
-                        parsed['_klant_naam'] = db_naam
-                        parsed['_klant_id'] = klant_id
-
-                        parsed_items.append(parsed)
-                        render_preview()
-                    except Exception as ex:
-                        parsed_items.append({
-                            '_type': 'error', '_filename': filename,
-                            '_status': 'fout', '_error': str(ex),
-                        })
-                        render_preview()
-                    finally:
-                        Path(tmp_path).unlink()
-
-                ui.upload(
-                    multiple=True, on_upload=handle_upload, auto_upload=True,
-                ).props(
-                    'accept=".pdf" label="Sleep PDF-bestanden hierheen of '
-                    'klik om te kiezen" flat bordered'
-                ).classes('w-full')
+                    preview_container = ui.column().classes(
+                        'w-full gap-2')
+                    bottom_container = ui.column().classes('w-full')
 
                 def render_preview():
                     preview_container.clear()
@@ -1100,86 +1182,119 @@ async def facturen_page():
                     with preview_container:
                         for i, item in enumerate(parsed_items):
                             status = item.get('_status', 'fout')
+                            inv_type = item.get('_type', '?')
 
+                            # Left border color by status
                             if status == 'nieuw':
-                                bg_class = 'bg-green-1'
+                                border_color = 'var(--q-positive)'
+                                bg = 'white'
                             elif status == 'duplicaat':
-                                bg_class = 'bg-grey-2'
+                                border_color = '#9e9e9e'
+                                bg = '#fafafa'
                             else:
-                                bg_class = 'bg-red-1'
+                                border_color = 'var(--q-negative)'
+                                bg = '#fff5f5'
 
-                            with ui.row().classes(
-                                f'w-full items-center gap-3 q-pa-sm '
-                                f'rounded-borders {bg_class}'
+                            with ui.card().classes(
+                                'w-full q-pa-sm'
+                            ).style(
+                                f'border-left: 3px solid {border_color}; '
+                                f'box-shadow: none; background: {bg}'
                             ):
-                                # Status badge
-                                if status == 'nieuw':
-                                    ui.badge('Nieuw', color='positive')
-                                elif status == 'duplicaat':
-                                    ui.badge('Duplicaat', color='grey')
-                                else:
-                                    ui.badge('Fout', color='negative')
+                                # Row 1: badges + nummer + bedrag
+                                with ui.row().classes(
+                                    'w-full items-center gap-2'
+                                ):
+                                    if status == 'nieuw':
+                                        ui.badge('Nieuw',
+                                                 color='positive')
+                                    elif status == 'duplicaat':
+                                        ui.badge('Duplicaat',
+                                                 color='grey')
+                                    else:
+                                        ui.badge('Fout',
+                                                 color='negative')
 
-                                # Type
-                                inv_type = item.get('_type', '?')
-                                type_label = ('Dagpraktijk' if inv_type == 'dagpraktijk'
-                                              else 'ANW' if inv_type == 'anw'
-                                              else '?')
-                                ui.label(type_label).classes(
-                                    'text-caption text-grey-8')
+                                    type_label = (
+                                        'Dagpraktijk'
+                                        if inv_type == 'dagpraktijk'
+                                        else 'ANW'
+                                        if inv_type == 'anw' else '?')
+                                    ui.badge(
+                                        type_label,
+                                        color=('info'
+                                               if inv_type == 'anw'
+                                               else 'teal-4'),
+                                    ).props('outline')
 
-                                # Nummer
-                                nummer = item.get('factuurnummer', '-')
-                                ui.label(nummer).classes('text-weight-bold')
-
-                                # Datum
-                                datum = item.get('factuurdatum', '')
-                                if datum:
-                                    ui.label(format_datum(datum))
-
-                                # Klant
-                                klant_naam = item.get('_klant_naam')
-                                if klant_naam:
-                                    ui.label(klant_naam).classes(
-                                        'text-grey-8')
-                                elif status == 'nieuw':
-                                    # Unresolved: show select
-                                    sel = ui.select(
-                                        klant_options, label='Klant',
-                                        with_input=True,
-                                    ).classes('w-64')
-
-                                    def _make_klant_handler(idx, select):
-                                        def handler(_):
-                                            items = parsed_items
-                                            items[idx]['_klant_id'] = select.value
-                                            items[idx]['_klant_naam'] = (
-                                                klant_options.get(select.value))
-                                            render_bottom()
-                                        return handler
-                                    sel.on_value_change(
-                                        _make_klant_handler(i, sel))
-
-                                ui.space()
-
-                                # Bedrag
-                                bedrag = item.get('totaal_bedrag')
-                                if bedrag:
-                                    ui.label(format_euro(bedrag)).classes(
+                                    nummer = item.get(
+                                        'factuurnummer', '-')
+                                    ui.label(nummer).classes(
                                         'text-weight-bold')
 
-                                # Werkdagen count
-                                n_items = len(item.get('line_items', []))
-                                if n_items:
-                                    ui.badge(
-                                        f'{n_items} dag{"en" if n_items != 1 else ""}',
-                                        color='info')
+                                    ui.space()
 
-                                # Error message
-                                if status == 'fout':
-                                    ui.label(
-                                        item.get('_error', 'Fout')
-                                    ).classes('text-negative text-caption')
+                                    bedrag = item.get('totaal_bedrag')
+                                    if bedrag:
+                                        ui.label(
+                                            format_euro(bedrag)
+                                        ).classes('text-weight-bold')
+
+                                    n_items = len(
+                                        item.get('line_items', []))
+                                    if n_items:
+                                        ui.badge(
+                                            f'{n_items} dag'
+                                            f'{"en" if n_items != 1 else ""}',
+                                            color='info')
+
+                                # Row 2: datum + klant
+                                with ui.row().classes(
+                                    'w-full items-center gap-2 '
+                                    'q-mt-xs'
+                                ):
+                                    datum = item.get(
+                                        'factuurdatum', '')
+                                    if datum:
+                                        ui.label(
+                                            format_datum(datum)
+                                        ).classes(
+                                            'text-caption text-grey-7')
+
+                                    klant_naam = item.get(
+                                        '_klant_naam')
+                                    if klant_naam:
+                                        ui.label(klant_naam).classes(
+                                            'text-caption text-grey-7')
+                                    elif status == 'nieuw':
+                                        sel = ui.select(
+                                            klant_options,
+                                            label='Klant',
+                                            with_input=True,
+                                        ).classes('w-52').props(
+                                            'dense')
+
+                                        def _make_klant_handler(
+                                            idx, select
+                                        ):
+                                            def handler(_):
+                                                parsed_items[idx][
+                                                    '_klant_id'
+                                                ] = select.value
+                                                parsed_items[idx][
+                                                    '_klant_naam'
+                                                ] = klant_options.get(
+                                                    select.value)
+                                                render_bottom()
+                                            return handler
+                                        sel.on_value_change(
+                                            _make_klant_handler(i, sel))
+
+                                    if status == 'fout':
+                                        ui.label(
+                                            item.get('_error', 'Fout')
+                                        ).classes(
+                                            'text-caption text-negative')
 
                     render_bottom()
 
@@ -1187,13 +1302,15 @@ async def facturen_page():
                     bottom_container.clear()
                     new_count = sum(
                         1 for it in parsed_items
-                        if it.get('_status') == 'nieuw' and it.get('_klant_id'))
+                        if it.get('_status') == 'nieuw'
+                        and it.get('_klant_id'))
                     dup_count = sum(
                         1 for it in parsed_items
                         if it.get('_status') == 'duplicaat')
                     unresolved = sum(
                         1 for it in parsed_items
-                        if it.get('_status') == 'nieuw' and not it.get('_klant_id'))
+                        if it.get('_status') == 'nieuw'
+                        and not it.get('_klant_id'))
 
                     with bottom_container:
                         if not parsed_items:
@@ -1201,22 +1318,26 @@ async def facturen_page():
 
                         ui.separator().classes('q-my-sm')
 
-                        # Options
-                        with ui.row().classes('w-full items-center gap-4'):
+                        # Options row
+                        with ui.row().classes(
+                            'w-full items-center gap-6'
+                        ):
                             cb_wd = ui.checkbox(
                                 'Werkdagen aanmaken',
                                 value=opt_werkdagen['value'],
                             )
                             cb_wd.on_value_change(
-                                lambda e: opt_werkdagen.update(value=e.value))
+                                lambda e: opt_werkdagen.update(
+                                    value=e.value))
                             cb_bt = ui.checkbox(
                                 'Markeer als betaald',
                                 value=opt_betaald['value'],
                             )
                             cb_bt.on_value_change(
-                                lambda e: opt_betaald.update(value=e.value))
+                                lambda e: opt_betaald.update(
+                                    value=e.value))
 
-                        # Summary + import button
+                        # Summary + action buttons
                         with ui.row().classes(
                             'w-full items-center gap-4 q-mt-sm'
                         ):
@@ -1229,7 +1350,8 @@ async def facturen_page():
                             if unresolved:
                                 ui.label(
                                     f'{unresolved} zonder klant'
-                                ).classes('text-caption text-warning')
+                                ).classes(
+                                    'text-caption text-warning')
                             ui.space()
                             ui.button(
                                 'Annuleren', on_click=dlg.close,
@@ -1385,7 +1507,6 @@ async def facturen_page():
                                                 km=km,
                                                 tarief=tarief,
                                                 km_tarief=km_tarief,
-                                                status='gefactureerd',
                                                 factuurnummer=nummer,
                                                 urennorm=urennorm,
                                             )

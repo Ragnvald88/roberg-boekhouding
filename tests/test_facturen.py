@@ -6,6 +6,7 @@ from database import (
     add_klant, add_werkdag, add_factuur, update_factuur,
     get_facturen, get_next_factuurnummer, mark_betaald,
     link_werkdagen_to_factuur, get_werkdagen, delete_factuur,
+    save_factuur_atomic,
 )
 from import_.seed_data import seed_all
 from components.invoice_generator import generate_invoice
@@ -357,3 +358,231 @@ async def test_factuur_type_defaults_to_factuur(seeded_db):
     facturen = await get_facturen(seeded_db, jaar=2026)
     f = next(f for f in facturen if f.nummer == '2026-051')
     assert f.type == 'factuur'
+
+
+# ============================================================
+# save_factuur_atomic
+# ============================================================
+
+@pytest.mark.asyncio
+async def test_save_factuur_atomic_basic(db):
+    """Atomic save: creates factuur and links werkdagen in one transaction."""
+    kid = await add_klant(db, naam="Atomic", tarief_uur=80, retour_km=44)
+    wid = await add_werkdag(db, datum="2026-04-01", klant_id=kid,
+                             uren=9, tarief=80, km=44, km_tarief=0.23)
+
+    fid = await save_factuur_atomic(
+        db, werkdag_ids=[wid],
+        nummer="2026-A01", klant_id=kid, datum="2026-04-01",
+        totaal_bedrag=730.12, totaal_uren=9, totaal_km=44)
+
+    facturen = await get_facturen(db, jaar=2026)
+    assert len(facturen) == 1
+    assert facturen[0].nummer == "2026-A01"
+
+    werkdagen = await get_werkdagen(db, jaar=2026)
+    assert werkdagen[0].factuurnummer == "2026-A01"
+
+
+@pytest.mark.asyncio
+async def test_save_factuur_atomic_replaces_concept(db):
+    """Atomic save: old concept is deleted, werkdagen re-linked."""
+    kid = await add_klant(db, naam="Replace", tarief_uur=80, retour_km=44)
+    wid = await add_werkdag(db, datum="2026-05-01", klant_id=kid,
+                             uren=8, tarief=80, km=30, km_tarief=0.23)
+
+    # Create old concept
+    old_id = await add_factuur(db, nummer="2026-R01", klant_id=kid,
+                                datum="2026-05-01", totaal_bedrag=640,
+                                status='concept')
+    await link_werkdagen_to_factuur(db, werkdag_ids=[wid],
+                                     factuurnummer="2026-R01")
+
+    # Replace with new factuur (same nummer)
+    new_id = await save_factuur_atomic(
+        db, replacing_factuur_id=old_id, werkdag_ids=[wid],
+        nummer="2026-R01", klant_id=kid, datum="2026-05-01",
+        totaal_bedrag=646.90, totaal_uren=8, totaal_km=30,
+        pdf_pad='/tmp/test.pdf')
+
+    # new_id may equal old_id (SQLite reuses rowids) — that's fine
+    facturen = await get_facturen(db, jaar=2026)
+    assert len(facturen) == 1
+    assert facturen[0].totaal_bedrag == 646.90
+
+    werkdagen = await get_werkdagen(db, jaar=2026)
+    assert werkdagen[0].factuurnummer == "2026-R01"
+
+
+@pytest.mark.asyncio
+async def test_save_factuur_atomic_rollback_on_duplicate(db):
+    """If insert fails (duplicate nummer), old concept is NOT deleted."""
+    kid = await add_klant(db, naam="Rollback", tarief_uur=80, retour_km=0)
+
+    # Create two concepts
+    old_id = await add_factuur(db, nummer="2026-DUP", klant_id=kid,
+                                datum="2026-06-01", totaal_bedrag=500,
+                                status='concept')
+    await add_factuur(db, nummer="2026-EXISTING", klant_id=kid,
+                       datum="2026-06-15", totaal_bedrag=600,
+                       status='verstuurd')
+
+    # Try to replace old_id with nummer that already exists
+    import sqlite3
+    with pytest.raises(sqlite3.IntegrityError):
+        await save_factuur_atomic(
+            db, replacing_factuur_id=old_id,
+            nummer="2026-EXISTING", klant_id=kid, datum="2026-06-01",
+            totaal_bedrag=500)
+
+    # Old concept should still exist (rollback)
+    facturen = await get_facturen(db, jaar=2026)
+    nummers = {f.nummer for f in facturen}
+    assert "2026-DUP" in nummers, "Old concept was deleted despite rollback!"
+
+
+# ============================================================
+# _calc_totals tests
+# ============================================================
+
+from components.invoice_builder import _calc_totals
+
+
+def test_calc_totals_basic():
+    """Items with werkdag_id → type='factuur', correct uren/km/bedrag."""
+    items = [
+        {'datum': '2026-03-01', 'aantal': 9, 'tarief': 80.0,
+         'km': 52, 'km_tarief': 0.23, 'werkdag_id': 1, 'is_reiskosten': False},
+        {'datum': '2026-03-02', 'aantal': 8, 'tarief': 80.0,
+         'km': 44, 'km_tarief': 0.23, 'werkdag_id': 2, 'is_reiskosten': False},
+    ]
+    uren, km, bedrag, ftype = _calc_totals(items)
+    assert uren == 17
+    assert km == 96
+    # bedrag = (9*80 + 52*0.23) + (8*80 + 44*0.23) = 731.96 + 650.12 = 1382.08
+    expected = 9 * 80 + 52 * 0.23 + 8 * 80 + 44 * 0.23
+    assert abs(bedrag - expected) < 0.01
+    assert ftype == 'factuur'
+
+
+def test_calc_totals_none_values():
+    """Items with km=None, km_tarief=None → handled as 0."""
+    items = [
+        {'datum': '2026-03-01', 'aantal': 8, 'tarief': 77.50,
+         'km': None, 'km_tarief': None, 'werkdag_id': 1, 'is_reiskosten': False},
+    ]
+    uren, km, bedrag, ftype = _calc_totals(items)
+    assert uren == 8
+    assert km == 0
+    assert bedrag == 8 * 77.50
+    assert ftype == 'factuur'
+
+
+def test_calc_totals_vergoeding():
+    """Items without werkdag_id → type='vergoeding'."""
+    items = [
+        {'datum': '2026-03-01', 'aantal': 1, 'tarief': 500.0,
+         'km': 0, 'km_tarief': 0, 'werkdag_id': None, 'is_reiskosten': False},
+    ]
+    uren, km, bedrag, ftype = _calc_totals(items)
+    assert uren == 1
+    assert km == 0
+    assert bedrag == 500.0
+    assert ftype == 'vergoeding'
+
+
+def test_calc_totals_empty():
+    """Empty list → all zeros, type='vergoeding'."""
+    uren, km, bedrag, ftype = _calc_totals([])
+    assert uren == 0
+    assert km == 0
+    assert bedrag == 0
+    assert ftype == 'vergoeding'
+
+
+# ============================================================
+# regels_json round-trip (concept persistence)
+# ============================================================
+
+@pytest.mark.asyncio
+async def test_concept_regels_json_round_trip(db):
+    """Save concept with regels_json, read back, verify data preserved."""
+    import json
+    kid = await add_klant(db, naam="RoundTrip", tarief_uur=80, retour_km=44)
+
+    line_items = [
+        {'datum': '2026-04-01', 'omschrijving': 'Aangepast tarief',
+         'aantal': 9, 'tarief': 95, 'werkdag_id': None,
+         'is_reiskosten': False, 'km': 0, 'km_tarief': 0},
+        {'datum': '2026-04-02', 'omschrijving': 'Vrije regel',
+         'aantal': 1, 'tarief': 150, 'werkdag_id': None,
+         'is_reiskosten': False},
+    ]
+    klant_fields = {'naam': 'RoundTrip', 'adres': 'Teststraat 1',
+                    'postcode': '1234 AB', 'plaats': 'Teststad',
+                    'contactpersoon': 'Dr. Test'}
+    regels_data = {'line_items': line_items, 'klant_fields': klant_fields}
+
+    fid = await save_factuur_atomic(
+        db, nummer='2026-RT1', klant_id=kid, datum='2026-04-01',
+        totaal_bedrag=1005, status='concept',
+        regels_json=json.dumps(regels_data))
+
+    # Read back
+    from database import get_db_ctx
+    async with get_db_ctx(db) as conn:
+        cur = await conn.execute(
+            "SELECT regels_json FROM facturen WHERE id = ?", (fid,))
+        row = await cur.fetchone()
+
+    saved = json.loads(row['regels_json'])
+    assert len(saved['line_items']) == 2
+    assert saved['line_items'][0]['tarief'] == 95
+    assert saved['line_items'][1]['omschrijving'] == 'Vrije regel'
+    assert saved['klant_fields']['adres'] == 'Teststraat 1'
+
+
+@pytest.mark.asyncio
+async def test_final_invoice_no_regels_json(db):
+    """Final (non-concept) invoices should have empty regels_json."""
+    kid = await add_klant(db, naam="Final", tarief_uur=80, retour_km=0)
+    fid = await add_factuur(db, nummer='2026-FIN', klant_id=kid,
+                             datum='2026-05-01', totaal_bedrag=640,
+                             status='verstuurd')
+
+    from database import get_db_ctx
+    async with get_db_ctx(db) as conn:
+        cur = await conn.execute(
+            "SELECT regels_json FROM facturen WHERE id = ?", (fid,))
+        row = await cur.fetchone()
+    assert row['regels_json'] == ''
+
+
+# ============================================================
+# _build_mail_body tests
+# ============================================================
+
+from pages.facturen import _build_mail_body
+
+
+def test_build_mail_body_with_betaallink():
+    body, is_html = _build_mail_body(
+        '2026-021', '€ 1.097,34', 'NL00 TEST 0000 0000 00',
+        'TestBV huisartswaarnemer', 'Test Gebruiker',
+        '06 0000 0000', 'info@testbedrijf.nl',
+        betaallink='https://betaalverzoek.rabobank.nl/betaalverzoek/?id=abc',
+    )
+    assert is_html is True
+    assert '<a href="https://betaalverzoek.rabobank.nl/betaalverzoek/?id=abc">deze betaallink</a>' in body
+    assert 'Bijgaand stuur ik u factuur 2026-021' in body
+
+
+def test_build_mail_body_without_betaallink():
+    body, is_html = _build_mail_body(
+        '2026-021', '€ 1.097,34', 'NL00 TEST 0000 0000 00',
+        'TestBV huisartswaarnemer', 'Test Gebruiker',
+        '06 0000 0000', 'info@testbedrijf.nl',
+    )
+    assert is_html is False
+    assert 'betaallink' not in body
+    assert 'Bijgaand stuur ik u factuur 2026-021' in body
