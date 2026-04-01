@@ -1062,25 +1062,38 @@ async def facturen_page():
             if klant_email:
                 to_line = f'make new to recipient with properties {{address:"{klant_email}"}}'
 
-            # Use html content property when betaallink present
             if is_html:
-                content_prop = f'html content:"{body_osa}"'
+                # HTML path: create message first, attach file, then set
+                # html content last (setting it in properties + attachment
+                # at "last paragraph of content" wipes the HTML body)
+                applescript = (
+                    'tell application "Mail"\n'
+                    f'  set newMsg to make new outgoing message with properties '
+                    f'{{subject:"{subject_osa}", visible:true}}\n'
+                    f'  tell newMsg\n'
+                    f'    {to_line}\n'
+                    f'    make new attachment with properties '
+                    f'{{file name:POSIX file "{pdf_path_abs}"}}\n'
+                    f'  end tell\n'
+                    f'  set html content of newMsg to "{body_osa}"\n'
+                    f'  activate\n'
+                    f'end tell'
+                )
             else:
-                content_prop = f'content:"{body_osa}"'
-
-            applescript = (
-                'tell application "Mail"\n'
-                f'  set newMsg to make new outgoing message with properties '
-                f'{{subject:"{subject_osa}", {content_prop}, visible:true}}\n'
-                f'  tell newMsg\n'
-                f'    {to_line}\n'
-                f'    make new attachment with properties '
-                f'{{file name:POSIX file "{pdf_path_abs}"}} '
-                f'at after last paragraph of content\n'
-                f'  end tell\n'
-                f'  activate\n'
-                f'end tell'
-            )
+                # Plain text path: original working approach
+                applescript = (
+                    'tell application "Mail"\n'
+                    f'  set newMsg to make new outgoing message with properties '
+                    f'{{subject:"{subject_osa}", content:"{body_osa}", visible:true}}\n'
+                    f'  tell newMsg\n'
+                    f'    {to_line}\n'
+                    f'    make new attachment with properties '
+                    f'{{file name:POSIX file "{pdf_path_abs}"}} '
+                    f'at after last paragraph of content\n'
+                    f'  end tell\n'
+                    f'  activate\n'
+                    f'end tell'
+                )
 
             try:
                 result = await asyncio.to_thread(
