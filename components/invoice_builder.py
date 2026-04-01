@@ -694,54 +694,67 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None,
                     f'() => getElement({_qr_upload.id})'
                     f'.$refs.qRef.pickFiles()')
 
-                qr_indicator = ui.row().classes(
-                    'w-full items-center gap-2 q-mt-sm')
+                qr_indicator = ui.column().classes(
+                    'w-full q-mt-sm')
 
                 def _render_qr_indicator(exists: bool):
                     qr_indicator.clear()
                     with qr_indicator:
                         if exists:
-                            ui.icon('qr_code_2', size='xs',
-                                    color='positive')
-                            ui.label('QR-code actief').classes(
-                                'text-caption text-grey-7')
-                            ui.space()
-                            ui.button(
-                                'Vervangen', icon='swap_horiz',
-                            ).on(
-                                'click', js_handler=_pick_qr_js,
-                            ).props(
-                                'flat dense size=sm color=grey-7 '
-                                'no-caps')
-                            # Show decoded betaallink
-                            link = _qr_bytes.get('betaallink', '')
-                            if link:
+                            with ui.card().classes('w-full').style(
+                                'background: #f0faf6; border: 1px solid #c8e6d8; '
+                                'border-radius: 8px; padding: 10px 14px;'
+                            ).props('flat'):
                                 with ui.row().classes(
-                                        'w-full items-center gap-1 '
-                                        'q-mt-xs'):
-                                    ui.icon('link', size='xs',
-                                            color='grey-6')
-                                    ui.label(
-                                        link[:50]
-                                        + ('...' if len(link) > 50
-                                           else '')
-                                    ).classes(
-                                        'text-caption text-grey-6'
-                                    ).style(
-                                        'word-break: break-all')
+                                        'w-full items-center no-wrap'):
+                                    ui.icon(
+                                        'check_circle', size='xs',
+                                        color='positive')
+                                    ui.label('QR-code').classes(
+                                        'text-caption text-weight-medium'
+                                    ).style('color: #2e7d59')
+                                    ui.space()
+                                    ui.button(
+                                        'Vervangen',
+                                        icon='swap_horiz',
+                                    ).on(
+                                        'click',
+                                        js_handler=_pick_qr_js,
+                                    ).props(
+                                        'flat dense size=sm '
+                                        'color=grey-7 no-caps')
+                                link = _qr_bytes.get(
+                                    'betaallink', '')
+                                if link:
+                                    ui.link(
+                                        link, link, new_tab=True,
+                                    ).classes('text-caption').style(
+                                        'color: #7a8a96; '
+                                        'word-break: break-all; '
+                                        'text-decoration: none; '
+                                        'display: block; '
+                                        'margin-top: 4px;')
                         else:
-                            ui.icon('qr_code_2', size='xs',
-                                    color='grey-4')
-                            ui.label('Geen QR-code').classes(
-                                'text-caption text-grey-5')
-                            ui.space()
-                            ui.button(
-                                'Toevoegen', icon='add',
-                            ).on(
-                                'click', js_handler=_pick_qr_js,
-                            ).props(
-                                'flat dense size=sm color=primary '
-                                'no-caps')
+                            with ui.row().classes(
+                                    'w-full items-center gap-2'
+                            ).style(
+                                'border: 1px dashed #ccd5db; '
+                                'border-radius: 8px; '
+                                'padding: 8px 14px;'):
+                                ui.icon(
+                                    'qr_code_2', size='xs',
+                                    color='grey-5')
+                                ui.label('Geen QR-code').classes(
+                                    'text-caption text-grey-5')
+                                ui.space()
+                                ui.button(
+                                    'Toevoegen', icon='add',
+                                ).on(
+                                    'click',
+                                    js_handler=_pick_qr_js,
+                                ).props(
+                                    'flat dense size=sm '
+                                    'color=primary no-caps')
 
                 _render_qr_indicator(bool(_qr_bytes['data']))
 
