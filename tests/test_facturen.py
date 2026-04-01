@@ -574,6 +574,8 @@ def test_build_mail_body_with_betaallink():
     )
     assert is_html is True
     assert '<a href="https://betaalverzoek.rabobank.nl/betaalverzoek/?id=abc">deze betaallink</a>' in body
+    assert 'eenvoudig betalen via' in body
+    assert 'onder vermelding van factuurnummer 2026-021. U kunt ook' in body
     assert 'Bijgaand stuur ik u factuur 2026-021' in body
 
 
