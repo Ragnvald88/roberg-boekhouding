@@ -15,7 +15,7 @@ source .venv/bin/activate
 export DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib
 python main.py  # → http://127.0.0.1:8085
 
-# Tests (491 passing, 14 skipped)
+# Tests (537 passing, 14 skipped)
 DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib .venv/bin/python -m pytest tests/ -v
 # MANDATORY: run after every code change, confirm 0 failures before reporting done
 ```
@@ -32,6 +32,7 @@ DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib .venv/bin/python -m pytest tests/ -
 - `facturen.type` TEXT: `'factuur'` (werkdag-backed), `'anw'` (imported ANW), `'vergoeding'` (ad-hoc, no werkdagen) (migration 21)
 - `klanten.email` TEXT (migration 15)
 - `banktransacties.betalingskenmerk` TEXT (migration 13)
+- `facturen.betaallink` TEXT: Rabobank betaalverzoek URL, auto-decoded from QR (migration 23)
 - SQLite op lokaal filesystem, NIET via SMB (WAL faalt)
 
 ## Ontwikkelregels
@@ -67,6 +68,9 @@ Concept (grey) → Verstuurd (blue/info) → Betaald (green/positive)
 ```
 - New invoices start as `'concept'` — freely editable
 - "Verstuur via e-mail" opens Mail.app via AppleScript with PDF attached → marks verstuurd
+- Concepts without PDF: auto-generates from `regels_json` before sending
+- With betaallink: HTML email via `html content` AppleScript property (set AFTER attachment)
+- Without betaallink: plain text email via `content` property
 - Revenue queries (`get_omzet_*`, `get_kpis`) exclude concept invoices
 - `update_factuur_status()` cascades to linked werkdagen
 
@@ -76,6 +80,8 @@ Concept (grey) → Verstuurd (blue/info) → Betaald (green/positive)
 - Bij `werkdagen` data: `factuurnummer = ''` betekent ongefactureerd. Maar oude werkdagen kunnen extern gefactureerd zijn — controleer altijd of het recente data betreft.
 - Bij klant-lookup via `klant_by_name[naam]`: dit geeft een Klant object, gebruik `.id` voor het ID.
 - Bij `_build_regels()`: km-velden op line_items worden gesplitst naar aparte reiskosten-regels voor de PDF.
+- **Gebruiker boven data**: als de gebruiker zegt dat data niet klopt, onderzoek de migraties/defaults/dataflow die de waarde hebben gezet — vertrouw niet blindelings op DB-waarden.
+- **Bij migraties**: check altijd of UPDATE statements ALLE relevante records dekken, niet alleen een subset per jaar.
 
 ### YAGNI
 Geen: user auth, BTW-administratie, loon/voorraad, real-time bank-API, auto-matching, CI/CD, multi-language
@@ -111,4 +117,12 @@ Geen: user auth, BTW-administratie, loon/voorraad, real-time bank-API, auto-matc
 - `banktransacties.betalingskenmerk` captures Rabobank CSV payment reference
 - `get_va_betalingen()` splits IB/ZVW by kenmerk digit pattern (position 10-11: <50=IB, ≥50=ZVW)
 - `backfill_betalingskenmerken()` runs on startup to populate existing transactions
+- `backfill_betaallinks()` runs on startup to decode QR files → betaallink URLs
 - Belastingdienst IBAN: NL86INGB0002445588
+
+### Betaallink / QR flow
+- QR upload in invoice builder → `cv2.QRCodeDetector` auto-decodes Rabobank URL
+- Stored in `facturen.betaallink`, QR image at `data/facturen/{nummer}_qr.png`
+- Email: `_build_mail_body()` returns `(body, is_html)` — HTML when betaallink present
+- **AppleScript**: HTML path must set `html content` BEFORE attachment (order matters)
+- **AppleScript escaping**: `"` → `\"` (NOT `\\"` — that breaks HTML attribute quotes)
