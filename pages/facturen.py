@@ -1063,19 +1063,21 @@ async def facturen_page():
                 to_line = f'make new to recipient with properties {{address:"{klant_email}"}}'
 
             if is_html:
-                # HTML path: create message first, attach file, then set
-                # html content last (setting it in properties + attachment
-                # at "last paragraph of content" wipes the HTML body)
+                # HTML path: set html content first, then attach via
+                # content reference so attachment follows the body text
                 applescript = (
                     'tell application "Mail"\n'
                     f'  set newMsg to make new outgoing message with properties '
                     f'{{subject:"{subject_osa}", visible:true}}\n'
+                    f'  set html content of newMsg to "{body_osa}"\n'
                     f'  tell newMsg\n'
                     f'    {to_line}\n'
-                    f'    make new attachment with properties '
-                    f'{{file name:POSIX file "{pdf_path_abs}"}}\n'
                     f'  end tell\n'
-                    f'  set html content of newMsg to "{body_osa}"\n'
+                    f'  tell content of newMsg\n'
+                    f'    make new attachment with properties '
+                    f'{{file name:POSIX file "{pdf_path_abs}"}} '
+                    f'at after last paragraph\n'
+                    f'  end tell\n'
                     f'  activate\n'
                     f'end tell'
                 )
