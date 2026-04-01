@@ -348,7 +348,7 @@ async def facturen_page():
                                 <q-item-section>Toon in Finder</q-item-section>
                             </q-item>
                             <q-separator />
-                            <q-item v-if="props.row.status === 'concept'" clickable
+                            <q-item v-if="props.row.status !== 'betaald' && props.row.pdf_pad" clickable
                                 @click="() => $parent.$emit('sendmail', props.row)">
                                 <q-item-section side>
                                     <q-icon name="email" size="xs"
@@ -363,13 +363,6 @@ async def facturen_page():
                                             color="info" />
                                 </q-item-section>
                                 <q-item-section>Markeer als verstuurd</q-item-section>
-                            </q-item>
-                            <q-item v-if="props.row.status === 'verstuurd' || props.row.verlopen" clickable
-                                @click="() => $parent.$emit('sendmail', props.row)">
-                                <q-item-section side>
-                                    <q-icon name="email" size="xs" />
-                                </q-item-section>
-                                <q-item-section>Verstuur opnieuw</q-item-section>
                             </q-item>
                             <q-item v-if="props.row.status === 'verstuurd' || props.row.verlopen" clickable
                                 @click="() => $parent.$emit('markbetaald',
