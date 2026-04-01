@@ -31,12 +31,17 @@ app.add_static_files('/logo-files', str(LOGO_DIR))
 
 def _decode_qr_url(image_bytes: bytes) -> str:
     """Decode a QR image and return the URL, or '' if decoding fails."""
-    arr = np.frombuffer(image_bytes, dtype=np.uint8)
-    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-    if img is None:
+    if not image_bytes:
         return ''
-    data, _, _ = cv2.QRCodeDetector().detectAndDecode(img)
-    return data if data and data.startswith('http') else ''
+    try:
+        arr = np.frombuffer(image_bytes, dtype=np.uint8)
+        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if img is None:
+            return ''
+        data, _, _ = cv2.QRCodeDetector().detectAndDecode(img)
+        return data if data and data.startswith('http') else ''
+    except Exception:
+        return ''
 
 
 def _werkdagen_to_line_items(werkdagen, thuisplaats: str = '') -> list[dict]:
