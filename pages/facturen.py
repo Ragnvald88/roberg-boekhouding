@@ -9,7 +9,8 @@ from pathlib import Path
 from nicegui import app, events, ui
 
 from components.layout import create_layout, page_title
-from components.invoice_builder import open_invoice_builder
+from components.invoice_builder import open_invoice_builder, _build_regels
+from components.invoice_generator import generate_invoice
 from components.utils import format_euro, format_datum, generate_csv
 from database import (
     get_facturen, add_factuur,
@@ -348,7 +349,7 @@ async def facturen_page():
                                 <q-item-section>Toon in Finder</q-item-section>
                             </q-item>
                             <q-separator />
-                            <q-item v-if="props.row.status !== 'betaald' && props.row.pdf_pad" clickable
+                            <q-item v-if="props.row.status !== 'betaald'" clickable
                                 @click="() => $parent.$emit('sendmail', props.row)">
                                 <q-item-section side>
                                     <q-icon name="email" size="xs"
@@ -957,11 +958,68 @@ async def facturen_page():
 
         async def on_send_mail(e):
             """Send invoice via email using macOS Mail.app, then mark as verstuurd."""
+            import json as _json
             row = e.args
             pdf_path = row.get('pdf_pad', '')
+            nummer = row['nummer']
+
+            # Auto-generate PDF for concepts that don't have one yet
             if not pdf_path or not Path(pdf_path).exists():
-                ui.notify('PDF niet gevonden — genereer eerst de factuur', type='warning')
-                return
+                async with get_db_ctx(DB_PATH) as conn:
+                    cur = await conn.execute(
+                        "SELECT regels_json, betaallink FROM facturen WHERE id = ?",
+                        (row['id'],))
+                    frow = await cur.fetchone()
+                regels_json = frow['regels_json'] if frow else ''
+                if not regels_json:
+                    ui.notify('Geen factuurregels — open de factuur eerst via Bewerken',
+                              type='warning')
+                    return
+                regels_data = _json.loads(regels_json)
+                line_items = regels_data.get('line_items', [])
+                regels = _build_regels(line_items)
+
+                # Get klant info for PDF
+                all_klanten = await get_klanten(DB_PATH, alleen_actief=False)
+                klant_obj = next(
+                    (k for k in all_klanten if k.id == row.get('klant_id')), None)
+                klant_fields = regels_data.get('klant_fields', {})
+                if not klant_fields and klant_obj:
+                    klant_fields = {
+                        'naam': klant_obj.naam, 'adres': klant_obj.adres or '',
+                        'postcode': getattr(klant_obj, 'postcode', ''),
+                        'plaats': getattr(klant_obj, 'plaats', ''),
+                    }
+
+                bg = await get_bedrijfsgegevens(DB_PATH)
+                bg_dict = {}
+                if bg:
+                    for fld in ('bedrijfsnaam', 'naam', 'adres',
+                                'postcode_plaats', 'kvk', 'iban',
+                                'telefoon', 'email'):
+                        bg_dict[fld] = getattr(bg, fld, '') or ''
+
+                # QR code
+                qr_file = DB_PATH.parent / 'facturen' / f'{nummer}_qr.png'
+                gen_qr = str(qr_file) if qr_file.exists() else ''
+
+                factuur_datum = row.get('datum', '') or date.today().isoformat()
+                pdf_dir = DB_PATH.parent / 'facturen'
+                try:
+                    pdf_path_obj = await asyncio.to_thread(
+                        generate_invoice,
+                        nummer, klant_fields, [], pdf_dir,
+                        factuur_datum=factuur_datum,
+                        bedrijfsgegevens=bg_dict,
+                        pre_regels=regels,
+                        qr_path=gen_qr,
+                    )
+                    pdf_path = str(pdf_path_obj)
+                    # Update factuur with generated PDF path
+                    await update_factuur(DB_PATH, row['id'], pdf_pad=pdf_path)
+                except Exception as ex:
+                    ui.notify(f'PDF generatie mislukt: {ex}', type='negative')
+                    return
 
             # Get klant email if available
             klant_id = row.get('klant_id')
@@ -975,7 +1033,6 @@ async def facturen_page():
             # Get business info for email body
             bg = await get_bedrijfsgegevens(DB_PATH)
 
-            nummer = row['nummer']
             bedrag = format_euro(row['totaal_bedrag'])
             iban = bg.iban if bg else ''
             bedrijfsnaam = bg.bedrijfsnaam if bg else ''
