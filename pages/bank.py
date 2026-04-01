@@ -1,6 +1,7 @@
 """Bank pagina — Rabobank CSV import + categoriseren."""
 
 import asyncio
+import json
 from datetime import datetime
 
 from nicegui import ui
@@ -8,7 +9,8 @@ from nicegui import ui
 from components.layout import create_layout, page_title
 from components.utils import format_euro, format_datum, generate_csv, BANK_CATEGORIEEN
 from database import (
-    get_banktransacties, add_banktransacties, update_banktransactie,
+    get_banktransacties, get_imported_csv_bestanden,
+    add_banktransacties, update_banktransactie,
     delete_banktransacties, find_factuur_matches, apply_factuur_matches,
     DB_PATH,
 )
@@ -120,8 +122,7 @@ async def bank_page():
             return
 
         # Check for duplicate CSV import
-        bestaande = await get_banktransacties(DB_PATH, jaar=selected_jaar['value'])
-        bestaande_csvs = {t.csv_bestand for t in bestaande if t.csv_bestand}
+        bestaande_csvs = await get_imported_csv_bestanden(DB_PATH)
         if any(csv.endswith(f'_{filename}') for csv in bestaande_csvs):
             ui.notify(f"CSV '{filename}' is al eerder geimporteerd", type='warning')
             return
@@ -152,6 +153,7 @@ async def bank_page():
     async def handle_categorie_change(row_id: int, new_cat: str):
         """Update category for a bank transaction."""
         await update_banktransactie(DB_PATH, transactie_id=row_id, categorie=new_cat)
+        ui.notify('Categorie bijgewerkt', type='positive')
         await refresh_table()
 
     async def handle_jaar_change(new_jaar):
@@ -347,7 +349,7 @@ async def bank_page():
                 <q-td key="categorie" :props="props">
                     <q-select
                         v-model="props.row.categorie"
-                        :options="''' + str(BANK_CATEGORIEEN) + r'''"
+                        :options="''' + json.dumps(BANK_CATEGORIEEN) + r'''"
                         dense outlined
                         emit-value map-options
                         @update:model-value="(val) => $parent.$emit('cat_change', {id: props.row.id, cat: val})"

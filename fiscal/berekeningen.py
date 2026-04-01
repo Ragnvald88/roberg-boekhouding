@@ -17,27 +17,28 @@ from fiscal.heffingskortingen import (
 
 
 def bereken_eigenwoningforfait(woz: float, ew_forfait_pct: float = 0.35,
-                                villataks_grens: float = 1_350_000) -> float:
+                                villataks_grens: float = 1_350_000,
+                                villataks_pct: float = 2.35) -> float:
     """Bereken eigenwoningforfait op basis van WOZ-waarde.
 
     Args:
         woz: WOZ-waarde eigen woning.
         ew_forfait_pct: Forfait percentage (bijv. 0.35 = 0.35%).
-        villataks_grens: Boven dit bedrag geldt 2.35%.
+        villataks_grens: Boven dit bedrag geldt villataks_pct%.
+        villataks_pct: Percentage boven villataks grens (default 2.35%).
     """
     if woz <= 0:
         return 0.0
     pct = ew_forfait_pct / 100
     if woz <= villataks_grens:
         return woz * pct
-    return villataks_grens * pct + (woz - villataks_grens) * 0.0235
+    return villataks_grens * pct + (woz - villataks_grens) * (villataks_pct / 100)
 
 
 # PVV component percentages (premies volksverzekeringen, stable across years)
 PVV_AOW_PCT = Decimal('17.90')
 PVV_ANW_PCT = Decimal('0.10')
 PVV_WLZ_PCT = Decimal('9.65')
-PVV_TOTAAL_PCT = PVV_AOW_PCT + PVV_ANW_PCT + PVV_WLZ_PCT  # 27.65
 
 
 def D(v) -> Decimal:
@@ -297,6 +298,7 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
             float(d_woz),
             ew_forfait_pct=params.get('ew_forfait_pct', 0.35),
             villataks_grens=params.get('villataks_grens', 1_350_000),
+            villataks_pct=params.get('villataks_pct', 2.35),
         )))
         d_ew_saldo = d_ew_forfait - d_hypotheekrente
         # Wet Hillen: als forfait > rente, verlaag de bijtelling

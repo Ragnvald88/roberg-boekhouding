@@ -55,7 +55,7 @@ def parse_dutch_amount(s: str) -> float:
     else:
         # No comma. Check if dot is a thousands separator (exactly 3 digits after)
         # e.g., '1.234' = 1234, but '9.24' = 9.24 (decimal)
-        if re.match(r'^\d{1,3}(\.\d{3})+$', s):
+        if re.match(r'^-?\d{1,3}(\.\d{3})+$', s):
             s = s.replace('.', '')
     try:
         return float(s)
@@ -502,21 +502,6 @@ def extract_anw_diensten(text: str) -> list[dict]:
     return sorted(diensten_by_date.values(), key=lambda d: d['datum'])
 
 
-def parse_dagpraktijk_pdf(pdf_path: Path) -> dict:
-    """Parse a dagpraktijk (self-created) invoice PDF.
-
-    Returns dict with keys:
-        factuurnummer: str | None
-        factuurdatum: str | None (YYYY-MM-DD)
-        totaal_bedrag: float | None
-        klant_name: str | None (as found in PDF, needs mapping)
-        work_dates: list[str] (YYYY-MM-DD)
-        filename: str
-    """
-    text = extract_pdf_text(pdf_path)
-    return parse_dagpraktijk_text(text, pdf_path.name)
-
-
 def parse_dagpraktijk_text(text: str, filename: str = '') -> dict:
     """Parse dagpraktijk invoice from already-extracted text."""
     return {
@@ -528,22 +513,6 @@ def parse_dagpraktijk_text(text: str, filename: str = '') -> dict:
         'line_items': extract_dagpraktijk_line_items(text),
         'filename': filename,
     }
-
-
-def parse_anw_pdf(pdf_path: Path) -> dict:
-    """Parse an ANW (self-billing) invoice PDF.
-
-    Returns dict with keys:
-        factuurnummer: str | None
-        factuurdatum: str | None (YYYY-MM-DD)
-        totaal_bedrag: float | None
-        klant_name: str | None
-        periode: str | None
-        dienst_dates: list[str] (YYYY-MM-DD)
-        filename: str
-    """
-    text = extract_pdf_text(pdf_path)
-    return parse_anw_text(text, pdf_path.name)
 
 
 def parse_anw_text(text: str, filename: str = '') -> dict:

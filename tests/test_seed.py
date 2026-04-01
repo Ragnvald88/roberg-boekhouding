@@ -42,7 +42,7 @@ async def test_seed_creates_fiscale_params(db):
     assert fp.ahk_drempel == 28406
     assert fp.ak_max == 5599
     assert fp.zvw_pct == 5.26
-    assert fp.zvw_max_grondslag == 75860
+    assert fp.zvw_max_grondslag == 75864
     assert fp.repr_aftrek_pct == 80
 
 

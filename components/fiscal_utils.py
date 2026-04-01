@@ -234,8 +234,8 @@ async def extrapoleer_jaaromzet(db_path: Path, jaar: int) -> dict:
     prior_total = sum(prior_maanden)
 
     if prior_total > 0 and complete_months >= 3:
-        prior_ytd = sum(prior_maanden[:month])
-        prior_fraction = prior_ytd / prior_total if prior_total > 0 else (month / 12)
+        prior_ytd = sum(prior_maanden[:complete_months])
+        prior_fraction = prior_ytd / prior_total if prior_total > 0 else (complete_months / 12)
         if prior_fraction > 0.05:
             pattern = ytd_omzet / prior_fraction
             extrapolated = round(0.7 * linear + 0.3 * pattern, 2)

@@ -57,25 +57,10 @@ ui.add_css('''
         font-size: 11px !important;
     }
 
-    .toolbar-divider {
-        width: 1px;
-        height: 24px;
-        background: #CBD5E1;
-        flex-shrink: 0;
-    }
-
     /* Invoice builder panel styling */
     .builder-panel-border { border-right: 1px solid var(--q-separator-color, #e2e8f0); }
     .builder-line-card { border: 1px solid var(--q-separator-color, #e2e8f0); box-shadow: none; }
     .builder-preview-bg { background: var(--q-separator-color, #e2e8f0); }
-
-    /* KPI card hover */
-    .kpi-card {
-        transition: box-shadow 0.2s ease;
-    }
-    .kpi-card:hover {
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08) !important;
-    }
 
     /* Sidebar nav — clean minimal style */
     .nav-item {

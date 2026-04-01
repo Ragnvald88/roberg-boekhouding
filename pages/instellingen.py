@@ -93,7 +93,7 @@ async def instellingen_page():
                                 ext = e.file.name.rsplit('.', 1)[-1].lower()
                                 # Remove any existing logo files
                                 for f in logo_dir.glob('logo.*'):
-                                    f.unlink()
+                                    await asyncio.to_thread(f.unlink)
                                 dest = logo_dir / f'logo.{ext}'
                                 await asyncio.to_thread(dest.write_bytes, content)
                                 logo_preview.clear()
@@ -441,7 +441,7 @@ async def instellingen_page():
                         with zipfile.ZipFile(backup_path, 'w', zipfile.ZIP_DEFLATED) as zf:
                             if DB_PATH.exists():
                                 zf.write(DB_PATH, 'boekhouding.sqlite3')
-                            for subdir in ['facturen', 'uitgaven', 'jaarafsluiting', 'bank_csv', 'aangifte']:
+                            for subdir in ['facturen', 'uitgaven', 'jaarafsluiting', 'bank_csv', 'aangifte', 'logo']:
                                 dir_path = DB_PATH.parent / subdir
                                 if dir_path.exists():
                                     for f in dir_path.rglob('*'):

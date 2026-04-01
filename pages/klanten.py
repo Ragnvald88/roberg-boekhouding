@@ -88,11 +88,11 @@ async def klanten_page():
 
     columns = [
         {'name': 'naam', 'label': 'Naam', 'field': 'naam',
-         'align': 'left'},
+         'align': 'left', 'sortable': True},
         {'name': 'tarief', 'label': 'Tarief/uur',
-         'field': 'tarief_fmt', 'align': 'right'},
+         'field': 'tarief_fmt', 'align': 'right', 'sortable': True},
         {'name': 'km', 'label': 'Retour km', 'field': 'retour_km',
-         'align': 'right'},
+         'align': 'right', 'sortable': True},
         {'name': 'adres', 'label': 'Adres', 'field': 'adres',
          'align': 'left'},
         {'name': 'actief', 'label': 'Actief', 'field': 'actief_txt',

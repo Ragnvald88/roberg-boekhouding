@@ -13,7 +13,6 @@ from components.kpi_card import kpi_strip
 from components.layout import create_layout, page_title
 from components.utils import format_euro
 from database import (
-    find_factuur_matches, apply_factuur_matches,
     update_balans_inputs,
     update_jaarafsluiting_status,
     get_bedrijfsgegevens,
@@ -787,14 +786,6 @@ async def jaarafsluiting_page():
     # Initial render
     await render_all()
 
-    # Auto-match open facturen to bank payments
-    matches = await find_factuur_matches(DB_PATH)
-    if matches:
-        n = await apply_factuur_matches(DB_PATH, matches)
-        nummers = ', '.join(m['factuur_nummer'] for m in matches)
-        ui.notify(f'{n} facturen als betaald gemarkeerd: {nummers}',
-                  type='positive')
-        await render_all()
 
 
 # === PDF Template Rendering ===

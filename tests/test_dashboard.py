@@ -51,3 +51,47 @@ def test_verlopen_invalid_date():
 
 def test_verlopen_empty_string():
     assert _is_verlopen('') is False
+
+
+# --- generate_csv tests ---
+
+from components.utils import generate_csv
+
+
+def test_generate_csv_basic():
+    """Headers + rows → semicolon-separated output."""
+    headers = ['Naam', 'Bedrag', 'Datum']
+    rows = [
+        ['Testpraktijk', '1234.56', '2026-01-15'],
+        ['Andere Praktijk', '500.00', '2026-02-20'],
+    ]
+    result = generate_csv(headers, rows)
+    lines = result.strip().splitlines()
+    assert len(lines) == 3
+    assert lines[0].strip() == 'Naam;Bedrag;Datum'
+    assert lines[1].strip() == 'Testpraktijk;1234.56;2026-01-15'
+    assert lines[2].strip() == 'Andere Praktijk;500.00;2026-02-20'
+
+
+def test_generate_csv_special_chars():
+    """Commas and quotes in data → properly escaped."""
+    headers = ['Omschrijving', 'Bedrag']
+    rows = [
+        ['Lunch, diner & borrel', '45.00'],
+        ['Item "special"', '10.00'],
+    ]
+    result = generate_csv(headers, rows)
+    lines = result.strip().split('\n')
+    # Semicolon delimiter: commas in data should NOT cause extra fields
+    # The CSV writer should quote fields containing special characters
+    assert 'Lunch, diner & borrel' in lines[1]
+    assert '45.00' in lines[1]
+    # Quotes in data should be escaped (doubled)
+    assert '"special"' in lines[2] or 'special' in lines[2]
+    # Verify the line parses back correctly with semicolon delimiter
+    import csv
+    import io
+    reader = csv.reader(io.StringIO(result), delimiter=';')
+    parsed = list(reader)
+    assert parsed[1][0] == 'Lunch, diner & borrel'
+    assert parsed[2][0] == 'Item "special"'

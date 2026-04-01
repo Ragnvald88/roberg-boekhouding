@@ -101,7 +101,7 @@ async def werkdagen_page():
                 totaal = sum(w.uren for w in uren_rows)
                 csv_rows.append(['', '', 'TOTAAL', str(totaal), ''])
                 csv_data = generate_csv(headers, csv_rows)
-                ui.download(
+                ui.download.content(
                     csv_data.encode('utf-8-sig'),
                     f'urenregistratie_{jaar_select.value}.csv')
 
@@ -127,7 +127,7 @@ async def werkdagen_page():
                 totaal = sum(w.km for w in km_rows)
                 csv_rows.append(['', '', '', '', 'TOTAAL', str(totaal), ''])
                 csv_data = generate_csv(headers, csv_rows)
-                ui.download(
+                ui.download.content(
                     csv_data.encode('utf-8-sig'),
                     f'km_logboek_{jaar_select.value}.csv')
 
@@ -144,6 +144,23 @@ async def werkdagen_page():
                 selected = table_ref['ref'].selected
                 if not selected:
                     ui.notify('Selecteer eerst werkdagen', type='warning')
+                    return
+                # Validate: all selected werkdagen must be from same klant
+                klant_ids = set(r['klant_id'] for r in selected)
+                if len(klant_ids) > 1:
+                    namen = set(r['klant_naam'] for r in selected)
+                    ui.notify(
+                        f'Selectie bevat meerdere klanten: {", ".join(namen)}. '
+                        f'Selecteer werkdagen van één klant.',
+                        type='warning')
+                    return
+                # Validate: skip already-invoiced werkdagen
+                al_gefactureerd = [r for r in selected if r.get('factuurnummer')]
+                if al_gefactureerd:
+                    ui.notify(
+                        f'{len(al_gefactureerd)} werkdag(en) al gefactureerd — '
+                        f'deselecteer deze eerst.',
+                        type='warning')
                     return
                 ids = [r['id'] for r in selected]
                 app.storage.user['selected_werkdagen'] = ids
@@ -310,6 +327,7 @@ async def werkdagen_page():
                 rows.append({
                     'id': w.id,
                     'datum': w.datum,
+                    'datum_fmt': format_datum(w.datum),
                     'klant_naam': w.klant_naam,
                     'klant_id': w.klant_id,
                     'code': w.code,
@@ -363,7 +381,13 @@ async def werkdagen_page():
             dlg.open()
 
         async def confirm_delete(werkdag_id, dlg):
-            await delete_werkdag(DB_PATH, werkdag_id=werkdag_id)
+            try:
+                await delete_werkdag(DB_PATH, werkdag_id=werkdag_id)
+            except ValueError:
+                dlg.close()
+                ui.notify('Kan gefactureerde werkdag niet verwijderen',
+                          type='warning')
+                return
             dlg.close()
             ui.notify('Werkdag verwijderd', type='positive')
             await refresh_table()

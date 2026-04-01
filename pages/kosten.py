@@ -9,7 +9,7 @@ from pathlib import Path
 from nicegui import ui
 
 from components.layout import create_layout, page_title
-from components.utils import format_euro, generate_csv, KOSTEN_CATEGORIEEN as CATEGORIEEN
+from components.utils import format_euro, format_datum, generate_csv, KOSTEN_CATEGORIEEN as CATEGORIEEN
 from database import (
     add_uitgave, delete_uitgave, get_uitgaven, get_uitgaven_per_categorie,
     get_investeringen_voor_afschrijving, update_uitgave, get_fiscale_params,
@@ -84,6 +84,7 @@ async def kosten_page():
             row = {
                 'id': u.id,
                 'datum': u.datum,
+                'datum_fmt': format_datum(u.datum),
                 'categorie': u.categorie,
                 'omschrijving': u.omschrijving,
                 'bedrag': u.bedrag,
@@ -574,7 +575,6 @@ async def kosten_page():
                         input_omschrijving.value = ''
                         input_bedrag.value = None
                         input_investering.value = False
-                        input_investering.set_visibility(False)
                         investering_velden.set_visibility(False)
                         representatie_note.set_visibility(
                             saved_cat == 'Representatie')
@@ -658,14 +658,30 @@ async def kosten_page():
                               ).props('flat dense size=sm')
 
                     async def remove_bon():
-                        await update_uitgave(DB_PATH, uitgave_id=row['id'],
-                                             pdf_pad='')
-                        p = Path(existing_pdf)
-                        if p.exists():
-                            p.unlink()
-                        ui.notify('Bon verwijderd', type='positive')
-                        dialog.close()
-                        await ververs()
+                        with ui.dialog() as confirm_dlg, ui.card():
+                            ui.label('Bon verwijderen?')
+                            ui.label('Het bonbestand wordt permanent verwijderd.') \
+                                .classes('text-grey')
+                            with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
+                                ui.button('Annuleren',
+                                          on_click=confirm_dlg.close).props('flat')
+
+                                async def do_remove():
+                                    await update_uitgave(
+                                        DB_PATH, uitgave_id=row['id'],
+                                        pdf_pad='')
+                                    p = Path(existing_pdf)
+                                    if p.exists():
+                                        await asyncio.to_thread(p.unlink)
+                                    confirm_dlg.close()
+                                    dialog.close()
+                                    ui.notify('Bon verwijderd', type='positive')
+                                    await ververs()
+
+                                ui.button('Verwijderen',
+                                          on_click=do_remove) \
+                                    .props('color=negative')
+                        confirm_dlg.open()
 
                     ui.button('Verwijder bon', icon='delete',
                               on_click=remove_bon).props(
@@ -985,6 +1001,9 @@ async def kosten_page():
                            @click="$parent.$emit('viewdoc', props.row)"
                            title="Bekijk bon" />
                 </q-td>
+            ''')
+            _tbl.add_slot('body-cell-datum', '''
+                <q-td :props="props">{{ props.row.datum_fmt }}</q-td>
             ''')
             _tbl.add_slot('body-cell-acties', '''
                 <q-td :props="props">

@@ -41,6 +41,18 @@ class TestParseDutchAmount:
     def test_garbage(self):
         assert parse_dutch_amount('abc') == 0.0
 
+    def test_negative_thousands_no_comma(self):
+        """Negative amount with dots-as-thousands, no comma → -1234."""
+        assert parse_dutch_amount('-1.234') == -1234.0
+
+    def test_negative_with_comma(self):
+        """Negative amount with comma decimal separator."""
+        assert parse_dutch_amount('-1.234,56') == -1234.56
+
+    def test_thousands_no_comma(self):
+        """Positive thousands-only (no decimal comma) → 1234."""
+        assert parse_dutch_amount('1.234') == 1234.0
+
 
 # ── Date parsing ────────────────────────────────────────────────────
 

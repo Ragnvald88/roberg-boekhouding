@@ -4,10 +4,10 @@ import pytest
 from database import (
     add_klant, add_werkdag, add_factuur, add_uitgave,
     add_banktransacties, mark_betaald,
-    get_omzet_totaal, get_representatie_totaal,
+    get_omzet_totaal, get_omzet_per_maand, get_representatie_totaal,
     get_debiteuren_op_peildatum,
     find_factuur_matches, apply_factuur_matches,
-    get_nog_te_factureren, get_kpis, get_data_counts,
+    get_nog_te_factureren, get_kpis, get_kpis_tot_datum, get_data_counts,
     get_afschrijving_overrides, get_afschrijving_overrides_batch,
     set_afschrijving_override, delete_afschrijving_override,
     get_db_ctx, get_va_betalingen, get_openstaande_facturen,
@@ -385,18 +385,35 @@ async def test_find_matches_anw_nummer(db):
 
 @pytest.mark.asyncio
 async def test_find_matches_amount_outside_tolerance(db):
-    """Amount difference > EUR 1 → no match."""
+    """Amount difference > EUR 0.05 (pass 2) → no match."""
     kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=0)
     await add_factuur(db, nummer='2026-X', klant_id=kid,
                        datum='2026-02-01', totaal_uren=8, totaal_km=0,
                        totaal_bedrag=640.00, status='verstuurd')
     await add_banktransacties(db, [
-        {'datum': '2026-02-10', 'bedrag': 650.00, 'tegenpartij': 'Test',
+        {'datum': '2026-02-10', 'bedrag': 640.06, 'tegenpartij': 'Test',
          'omschrijving': 'payment', 'categorie': ''},
     ], csv_bestand='test.csv')
 
     matches = await find_factuur_matches(db)
     assert len(matches) == 0
+
+
+@pytest.mark.asyncio
+async def test_find_matches_amount_within_rounding_tolerance(db):
+    """Amount difference < EUR 0.05 (pass 2) → match."""
+    kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=0)
+    await add_factuur(db, nummer='2026-RT', klant_id=kid,
+                       datum='2026-02-01', totaal_uren=8, totaal_km=0,
+                       totaal_bedrag=640.00, status='verstuurd')
+    await add_banktransacties(db, [
+        {'datum': '2026-02-10', 'bedrag': 640.04, 'tegenpartij': 'Test',
+         'omschrijving': 'payment', 'categorie': ''},
+    ], csv_bestand='test.csv')
+
+    matches = await find_factuur_matches(db)
+    assert len(matches) == 1
+    assert matches[0]['match_type'] == 'bedrag'
 
 
 @pytest.mark.asyncio
@@ -486,6 +503,40 @@ async def test_find_matches_15_day_boundary_fail(db):
     await add_banktransacties(db, [
         {'datum': '2026-03-01', 'bedrag': 640.00, 'tegenpartij': 'Someone',
          'omschrijving': 'betaling', 'categorie': ''},
+    ], csv_bestand='test.csv')
+
+    matches = await find_factuur_matches(db)
+    assert len(matches) == 0
+
+
+@pytest.mark.asyncio
+async def test_find_matches_90_day_upper_bound_pass(db):
+    """Payment 89 days after factuur date should still match."""
+    kid = await add_klant(db, naam="Late", tarief_uur=80, retour_km=0)
+    await add_factuur(db, nummer='2026-LATE', klant_id=kid,
+                       datum='2026-01-01', totaal_uren=8, totaal_km=0,
+                       totaal_bedrag=640.00, status='verstuurd')
+    # 89 days after 2026-01-01 = 2026-03-31
+    await add_banktransacties(db, [
+        {'datum': '2026-03-31', 'bedrag': 640.00, 'tegenpartij': 'Late',
+         'omschrijving': 'payment', 'categorie': ''},
+    ], csv_bestand='test.csv')
+
+    matches = await find_factuur_matches(db)
+    assert len(matches) == 1
+
+
+@pytest.mark.asyncio
+async def test_find_matches_91_day_upper_bound_fail(db):
+    """Payment 91 days after factuur date should NOT match."""
+    kid = await add_klant(db, naam="TooLate", tarief_uur=80, retour_km=0)
+    await add_factuur(db, nummer='2026-TLATE', klant_id=kid,
+                       datum='2026-01-01', totaal_uren=8, totaal_km=0,
+                       totaal_bedrag=640.00, status='verstuurd')
+    # 91 days after 2026-01-01 = 2026-04-02
+    await add_banktransacties(db, [
+        {'datum': '2026-04-02', 'bedrag': 640.00, 'tegenpartij': 'TooLate',
+         'omschrijving': 'payment', 'categorie': ''},
     ], csv_bestand='test.csv')
 
     matches = await find_factuur_matches(db)
@@ -859,5 +910,172 @@ async def test_duplicate_factuurnummer_rejected(db):
     with pytest.raises(sqlite3.IntegrityError):
         await add_factuur(db, nummer='2024-001', klant_id=klant_id,
                           datum='2024-02-01', totaal_bedrag=200.00)
+
+
+# ============================================================
+# get_kpis_tot_datum (YoY comparison — HIGH priority gap)
+# ============================================================
+
+@pytest.mark.asyncio
+async def test_kpis_tot_datum_basic(db):
+    """Revenue up to a specific date, excluding later facturen."""
+    kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=0)
+    await add_factuur(db, nummer='2025-001', klant_id=kid,
+                       datum='2025-02-10', totaal_bedrag=500.00,
+                       status='verstuurd')
+    await add_factuur(db, nummer='2025-002', klant_id=kid,
+                       datum='2025-04-15', totaal_bedrag=700.00,
+                       status='verstuurd')
+
+    result = await get_kpis_tot_datum(db, jaar=2025, max_datum='2025-03-31')
+    assert result['omzet'] == 500.00  # only Feb factuur
+
+
+@pytest.mark.asyncio
+async def test_kpis_tot_datum_includes_exact_date(db):
+    """Factuur on exact max_datum is included."""
+    kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=0)
+    await add_factuur(db, nummer='2025-010', klant_id=kid,
+                       datum='2025-03-15', totaal_bedrag=600.00,
+                       status='verstuurd')
+
+    result = await get_kpis_tot_datum(db, jaar=2025, max_datum='2025-03-15')
+    assert result['omzet'] == 600.00
+
+
+@pytest.mark.asyncio
+async def test_kpis_tot_datum_excludes_concepts(db):
+    """Concept facturen are excluded from YoY comparison."""
+    kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=0)
+    await add_factuur(db, nummer='2025-020', klant_id=kid,
+                       datum='2025-02-01', totaal_bedrag=1000.00,
+                       status='concept')
+    await add_factuur(db, nummer='2025-021', klant_id=kid,
+                       datum='2025-02-15', totaal_bedrag=500.00,
+                       status='verstuurd')
+
+    result = await get_kpis_tot_datum(db, jaar=2025, max_datum='2025-12-31')
+    assert result['omzet'] == 500.00  # concept excluded
+
+
+@pytest.mark.asyncio
+async def test_kpis_tot_datum_includes_kosten(db):
+    """Kosten are also filtered by max_datum."""
+    kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=0)
+    await add_factuur(db, nummer='2025-030', klant_id=kid,
+                       datum='2025-01-15', totaal_bedrag=1000.00,
+                       status='verstuurd')
+    await add_uitgave(db, datum='2025-01-20', categorie='Kantoor',
+                       omschrijving='Pen', bedrag=10.00)
+    await add_uitgave(db, datum='2025-06-01', categorie='Kantoor',
+                       omschrijving='Paper', bedrag=25.00)
+
+    result = await get_kpis_tot_datum(db, jaar=2025, max_datum='2025-03-31')
+    assert result['omzet'] == 1000.00
+    assert result['kosten'] == 10.00  # only Jan uitgave
+
+
+# ============================================================
+# get_omzet_per_maand (sparkline data — HIGH priority gap)
+# ============================================================
+
+@pytest.mark.asyncio
+async def test_omzet_per_maand_basic(db):
+    """Monthly revenue breakdown returns 12-element list."""
+    kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=0)
+    await add_factuur(db, nummer='2025-040', klant_id=kid,
+                       datum='2025-01-15', totaal_bedrag=1000.00,
+                       status='verstuurd')
+    await add_factuur(db, nummer='2025-041', klant_id=kid,
+                       datum='2025-03-20', totaal_bedrag=500.00,
+                       status='betaald')
+    await add_factuur(db, nummer='2025-042', klant_id=kid,
+                       datum='2025-03-25', totaal_bedrag=300.00,
+                       status='verstuurd')
+
+    months = await get_omzet_per_maand(db, jaar=2025)
+    assert len(months) == 12
+    assert months[0] == 1000.00  # Jan
+    assert months[1] == 0        # Feb
+    assert months[2] == 800.00   # Mar (500 + 300)
+    assert all(m == 0 for m in months[3:])  # Apr-Dec
+
+
+@pytest.mark.asyncio
+async def test_omzet_per_maand_excludes_concepts(db):
+    """Concept facturen excluded from monthly breakdown."""
+    kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=0)
+    await add_factuur(db, nummer='2025-050', klant_id=kid,
+                       datum='2025-06-01', totaal_bedrag=1000.00,
+                       status='concept')
+    await add_factuur(db, nummer='2025-051', klant_id=kid,
+                       datum='2025-06-15', totaal_bedrag=400.00,
+                       status='verstuurd')
+
+    months = await get_omzet_per_maand(db, jaar=2025)
+    assert months[5] == 400.00  # Jun: concept excluded
+
+
+@pytest.mark.asyncio
+async def test_omzet_per_maand_empty_year(db):
+    """Year with no facturen returns 12 zeros."""
+    months = await get_omzet_per_maand(db, jaar=2025)
+    assert months == [0] * 12
+
+
+# ============================================================
+# update_klant
+# ============================================================
+
+from database import update_klant, get_klanten, factuurnummer_exists
+
+
+@pytest.mark.asyncio
+async def test_update_klant_tarief(db):
+    """Change tarief_uur, verify persisted AND other fields unchanged."""
+    kid = await add_klant(db, naam="Testpraktijk", tarief_uur=77.50,
+                          retour_km=52, adres="Testlaan 1")
+    await update_klant(db, klant_id=kid, tarief_uur=85.00)
+
+    klanten = await get_klanten(db)
+    k = next(k for k in klanten if k.id == kid)
+    assert k.tarief_uur == 85.00
+    # Other fields unchanged
+    assert k.naam == "Testpraktijk"
+    assert k.retour_km == 52
+    assert k.adres == "Testlaan 1"
+
+
+@pytest.mark.asyncio
+async def test_update_klant_email(db):
+    """Change email, verify persisted."""
+    kid = await add_klant(db, naam="EmailTest", tarief_uur=80,
+                          email="old@example.com")
+    await update_klant(db, klant_id=kid, email="new@example.com")
+
+    klanten = await get_klanten(db)
+    k = next(k for k in klanten if k.id == kid)
+    assert k.email == "new@example.com"
+    assert k.naam == "EmailTest"  # unchanged
+
+
+# ============================================================
+# factuurnummer_exists
+# ============================================================
+
+
+@pytest.mark.asyncio
+async def test_factuurnummer_exists_true(db):
+    """Create factuur, verify exists returns True."""
+    kid = await add_klant(db, naam="ExistsTest", tarief_uur=80)
+    await add_factuur(db, nummer="2026-EX1", klant_id=kid,
+                      datum="2026-01-15", totaal_bedrag=500)
+    assert await factuurnummer_exists(db, nummer="2026-EX1") is True
+
+
+@pytest.mark.asyncio
+async def test_factuurnummer_exists_false(db):
+    """Verify non-existent nummer returns False."""
+    assert await factuurnummer_exists(db, nummer="9999-ZZZ") is False
 
 

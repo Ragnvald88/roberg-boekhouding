@@ -23,7 +23,8 @@ from components.utils import format_euro
 from database import (
     get_fiscale_params, get_aangifte_documenten,
     add_aangifte_document, delete_aangifte_document,
-    update_ib_inputs, update_box3_inputs, update_ew_naar_partner,
+    update_ib_inputs, update_box3_inputs, update_box3_fiscaal_partner,
+    update_ew_naar_partner,
     update_za_sa_toggles, get_belastingdienst_betalingen,
     update_partner_inputs, DB_PATH,
 )
@@ -384,8 +385,11 @@ async def aangifte_page():
 
                 # Urencriterium — only warn if not met
                 with ui.row().classes('items-center gap-2'):
+                    uc_norm = int(data['params_dict'].get(
+                        'urencriterium', 1225))
                     ui.label(
-                        f'Urencriterium: {f.uren_criterium:.0f} / 1.225 uur'
+                        f'Urencriterium: {f.uren_criterium:.0f}'
+                        f' / {uc_norm:,} uur'.replace(',', '.')
                     ).classes('text-caption text-grey-7')
                     if not f.uren_criterium_gehaald:
                         ui.badge('NIET gehaald', color='negative').classes('text-xs')
@@ -688,13 +692,9 @@ async def aangifte_page():
                         return
 
                     # Persist fiscaal partner flag
-                    from database import get_db_ctx
-                    async with get_db_ctx(DB_PATH) as conn:
-                        await conn.execute(
-                            "UPDATE fiscale_params SET box3_fiscaal_partner = ? "
-                            "WHERE jaar = ?",
-                            (1 if partner_check.value else 0, jaar))
-                        await conn.commit()
+                    await update_box3_fiscaal_partner(
+                        DB_PATH, jaar=jaar,
+                        fiscaal_partner=partner_check.value)
 
                     p = await get_fiscale_params(DB_PATH, jaar)
                     pd = fiscale_params_to_dict(p)
@@ -704,9 +704,11 @@ async def aangifte_page():
                     _render_box3_results(box3_results_container, box3, pd)
                     ui.notify('Box 3 opgeslagen', type='positive')
 
-                ui.button('Opslaan & bereken', icon='calculate',
-                          on_click=save_and_calc_box3,
-                          ).props('color=primary').classes('q-mt-sm')
+                # Auto-save on blur (matches Prive tab pattern)
+                for inp in [bank_input, overig_input, schuld_input]:
+                    inp.on('blur', lambda _: save_and_calc_box3())
+                partner_check.on_value_change(
+                    lambda _: save_and_calc_box3())
 
             # Results card (use same default as checkbox)
             box3_results_container = ui.column().classes('w-full')
@@ -1050,7 +1052,7 @@ async def aangifte_page():
         # Delete file first, then DB record (if file fails, DB stays consistent)
         file_path = Path(doc.bestandspad)
         if file_path.exists():
-            file_path.unlink()
+            await asyncio.to_thread(file_path.unlink)
         await delete_aangifte_document(DB_PATH, doc.id)
         dialog.close()
         ui.notify(f'{doc.bestandsnaam} verwijderd', type='warning')

@@ -31,13 +31,7 @@ def year_options(include_next: bool = False, as_dict: bool = False,
     return years
 
 
-def _iso_to_nl(iso_date: str) -> str:
-    """Convert YYYY-MM-DD → DD-MM-YYYY for display."""
-    if iso_date and len(iso_date) == 10 and iso_date[4] == '-':
-        parts = iso_date.split('-')
-        if len(parts) == 3:
-            return f'{parts[2]}-{parts[1]}-{parts[0]}'
-    return iso_date or ''
+from components.utils import format_datum as _iso_to_nl  # reuse shared converter
 
 
 def _nl_to_iso(nl_date: str) -> str:

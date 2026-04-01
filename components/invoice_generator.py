@@ -2,7 +2,6 @@
 
 from pathlib import Path
 from datetime import datetime, timedelta
-from weasyprint import HTML
 
 from components.template_env import TEMPLATE_DIR, _env
 from components.utils import format_datum
@@ -24,7 +23,7 @@ def generate_invoice(factuur_nummer: str, klant: dict, werkdagen: list[dict],
         output_dir: directory to save PDF
         factuur_datum: ISO date string, defaults to today
         bedrijfsgegevens: dict with bedrijfsnaam, naam, functie, adres, postcode_plaats, kvk, iban, thuisplaats
-        qr_path: path to QR code image; auto-detects from data/qr/betaal_qr.png if empty
+        qr_path: path to QR code image (per-factuur betaallink); empty = no QR
         pre_regels: pre-built line items (skips werkdagen→regels conversion if provided)
 
     Returns: Path to generated PDF
@@ -92,12 +91,7 @@ def generate_invoice(factuur_nummer: str, klant: dict, werkdagen: list[dict],
 
     totaal = subtotaal_werk + subtotaal_km
 
-    # Auto-detect QR code from default location
-    if not qr_path:
-        default_qr = DATA_DIR / 'qr' / 'betaal_qr.png'
-        if default_qr.exists():
-            qr_path = str(default_qr)
-
+    # QR code — only used when explicitly passed (per-factuur betaallink)
     qr_uri = ''
     if qr_path and Path(qr_path).exists():
         qr_uri = Path(qr_path).resolve().as_uri()
@@ -135,6 +129,7 @@ def generate_invoice(factuur_nummer: str, klant: dict, werkdagen: list[dict],
 
     # Two-pass render: first plain flow to check page count, then pin
     # betaal to page bottom via position:fixed if it fits on 1 page.
+    from weasyprint import HTML
     html_plain = template.render(**tpl_vars, pin_betaal=False)
     doc_plain = HTML(string=html_plain, base_url=str(TEMPLATE_DIR)).render()
 
@@ -147,7 +142,7 @@ def generate_invoice(factuur_nummer: str, klant: dict, werkdagen: list[dict],
         doc = doc_plain
 
     # Sanitize filename
-    klant_naam = klant.get('naam', 'Onbekend').replace(' ', '_').replace("'", '')
+    klant_naam = klant.get('naam', 'Onbekend').split()[-1].replace("'", '')
     output_path = output_dir / f"{factuur_nummer}_{klant_naam}.pdf"
     output_dir.mkdir(parents=True, exist_ok=True)
 

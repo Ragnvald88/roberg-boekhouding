@@ -1,6 +1,7 @@
 """Werkdag dialog — add/edit werkdag via popup."""
 
 from nicegui import ui
+from components.shared_ui import date_input
 from components.utils import format_euro
 from database import (
     get_klanten, add_werkdag, update_werkdag, get_fiscale_params,
@@ -66,19 +67,10 @@ async def open_werkdag_dialog(on_save=None, werkdag=None):
         # --- Section 1: Datum, Klant, Locatie ---
 
         # Row 1: Datum (full width)
-        datum_input = ui.input(
+        datum_input = date_input(
             'Datum',
             value=werkdag.datum if is_edit else date.today().isoformat(),
         ).classes('w-full')
-        with datum_input:
-            with ui.menu().props('no-parent-event') as menu:
-                with ui.date(
-                    value=werkdag.datum if is_edit else date.today().isoformat(),
-                ).bind_value(datum_input) as date_picker:
-                    date_picker.on('update:model-value', lambda: menu.close())
-            with datum_input.add_slot('append'):
-                ui.icon('edit_calendar').on('click', menu.open) \
-                    .classes('cursor-pointer')
 
         # Row 2: Klant (full width, searchable)
         klant_select = ui.select(

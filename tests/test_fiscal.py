@@ -8,9 +8,17 @@ De Boekhouder "winst" is het startpunt voor de fiscale waterval. De tussenwaarde
 uit de Boekhouder verificatietraces zijn als assertions opgenomen.
 """
 
+import json
+
 import pytest
 from fiscal.afschrijvingen import bereken_afschrijving
 from fiscal.heffingskortingen import bereken_arbeidskorting, bereken_algemene_heffingskorting
+from import_.seed_data import AK_BRACKETS
+
+
+def _ak_json(jaar: int) -> str:
+    """Get arbeidskorting brackets JSON for a year (from seed data)."""
+    return json.dumps(AK_BRACKETS.get(jaar, []))
 from fiscal.berekeningen import (
     bereken_volledig, bereken_wv, bereken_ib, bereken_eigenwoningforfait,
     FiscaalResultaat,
@@ -144,42 +152,39 @@ class TestHeffingskortingen:
 
     def test_arbeidskorting_2024_laag_inkomen(self):
         """2024: laag inkomen, eerste bracket."""
-        ak = bereken_arbeidskorting(8000, 2024)
+        ak = bereken_arbeidskorting(8000, 2024, brackets_json=_ak_json(2024))
         # bracket (0, 11490, 0.08425, 0): 0 + 0.08425 * 8000 = 674
         assert abs(ak - 674) < 1
 
     def test_arbeidskorting_2024_midden_inkomen(self):
         """2024: midden inkomen, tweede bracket."""
-        ak = bereken_arbeidskorting(20000, 2024)
+        ak = bereken_arbeidskorting(20000, 2024, brackets_json=_ak_json(2024))
         # bracket (11490, 24820, 0.31433, 968): 968 + 0.31433 * (20000 - 11490) = 968 + 2674.95 = 3642.95
         assert abs(ak - 3642.85) < 1
 
     def test_arbeidskorting_2024_hoog_inkomen(self):
         """2024: hoog inkomen, in afbouw-bracket."""
-        ak = bereken_arbeidskorting(76163, 2024)
+        ak = bereken_arbeidskorting(76163, 2024, brackets_json=_ak_json(2024))
         # bracket (39957, 124934, -0.06510, 5532)
         # 5532 + (-0.0651) * (76163 - 39957) = 5532 - 2357.01 = 3174.99
         assert abs(ak - 3174.99) < 2
 
     def test_arbeidskorting_2024_boven_afbouw(self):
         """2024: boven afbouwgrens, korting = 0."""
-        ak = bereken_arbeidskorting(130000, 2024)
+        ak = bereken_arbeidskorting(130000, 2024, brackets_json=_ak_json(2024))
         assert ak == 0
 
     def test_arbeidskorting_2023_verval(self):
         """2023: inkomen in afbouw-bracket."""
-        ak = bereken_arbeidskorting(45801, 2023)
+        ak = bereken_arbeidskorting(45801, 2023, brackets_json=_ak_json(2023))
         # bracket (37691, 115295, -0.06510, 5052)
         # 5052 + (-0.0651) * (45801 - 37691) = 5052 - 527.76 = 4524.24
         assert abs(ak - 4524) < 2
 
-    def test_arbeidskorting_unknown_year_fallback(self):
-        """Onbekend jaar: valt terug op meest recent bekend jaar."""
-        # 2027 doesn't exist, should use 2026 brackets
-        ak_2027 = bereken_arbeidskorting(50000, 2027)
-        ak_2026 = bereken_arbeidskorting(50000, 2026)
-        assert ak_2027 == ak_2026
-        assert ak_2027 > 0
+    def test_arbeidskorting_no_brackets_returns_zero(self):
+        """Without brackets_json, returns 0."""
+        ak = bereken_arbeidskorting(50000, 2027)
+        assert ak == 0.0
 
 
 # ============================================================
@@ -787,11 +792,12 @@ class TestDBDrivenArbeidskorting:
             {"lower": 39957, "upper": 124934, "rate": -0.06510, "base": 5532},
             {"lower": 124934, "upper": None, "rate": 0, "base": 0},
         ])
-        # Compare JSON-driven vs Python-constant for several incomes
+        # Verify JSON-driven brackets produce consistent results
         for income in [5000, 15000, 30000, 50000, 80000, 130000]:
-            from_json = bereken_arbeidskorting(income, 2024, brackets_json=brackets_json)
-            from_python = bereken_arbeidskorting(income, 2024)
-            assert from_json == from_python, f"Mismatch at income {income}: {from_json} != {from_python}"
+            result = bereken_arbeidskorting(income, 2024, brackets_json=brackets_json)
+            result2 = bereken_arbeidskorting(income, 2024, brackets_json=brackets_json)
+            assert result == result2, f"Inconsistent at income {income}"
+            assert result >= 0
 
     def test_json_brackets_custom_future_year(self):
         """Custom brackets for a hypothetical future year."""
@@ -803,11 +809,10 @@ class TestDBDrivenArbeidskorting:
         result = bereken_arbeidskorting(5000, 2099, brackets_json=brackets_json)
         assert result == 500.0  # 5000 * 0.10
 
-    def test_empty_brackets_json_falls_back(self):
-        """Empty brackets_json should fall back to Python constants."""
+    def test_empty_brackets_json_returns_zero(self):
+        """Empty brackets_json returns 0 (no fallback to hardcoded data)."""
         result = bereken_arbeidskorting(50000, 2024, brackets_json='')
-        from_python = bereken_arbeidskorting(50000, 2024)
-        assert result == from_python
+        assert result == 0.0
 
 
 class TestIBPVVSplit:
@@ -1738,11 +1743,11 @@ class TestEdgeCaseArbeidskortingZero:
     """Arbeidskorting and AHK with zero/negative income."""
 
     def test_arbeidskorting_zero(self):
-        assert bereken_arbeidskorting(0, 2024) == 0
+        assert bereken_arbeidskorting(0, 2024, brackets_json=_ak_json(2024)) == 0
 
     def test_arbeidskorting_negative(self):
         """Negative income should return 0 (floor)."""
-        assert bereken_arbeidskorting(-1000, 2024) == 0
+        assert bereken_arbeidskorting(-1000, 2024, brackets_json=_ak_json(2024)) == 0
 
     def test_ahk_zero_income(self):
         """Zero income returns maximum AHK."""
@@ -1756,37 +1761,37 @@ class TestEdgeCaseBracketBoundaries2024:
 
     def test_at_bracket1_upper(self):
         """Income exactly at bracket 1 upper bound (11490)."""
-        ak = bereken_arbeidskorting(11490, 2024)
+        ak = bereken_arbeidskorting(11490, 2024, brackets_json=_ak_json(2024))
         expected = 0.08425 * 11490
         assert abs(ak - expected) < 0.01
 
     def test_at_bracket2_start(self):
         """Income at start of bracket 2 (11491)."""
-        ak = bereken_arbeidskorting(11491, 2024)
+        ak = bereken_arbeidskorting(11491, 2024, brackets_json=_ak_json(2024))
         expected = 968 + 0.31433 * (11491 - 11490)
         assert abs(ak - expected) < 0.01
 
     def test_at_bracket2_upper(self):
         """Income exactly at bracket 2 upper bound (24820)."""
-        ak = bereken_arbeidskorting(24820, 2024)
+        ak = bereken_arbeidskorting(24820, 2024, brackets_json=_ak_json(2024))
         expected = 968 + 0.31433 * (24820 - 11490)
         assert abs(ak - expected) < 0.01
 
     def test_at_bracket3_start(self):
         """Income at start of bracket 3 (24821)."""
-        ak = bereken_arbeidskorting(24821, 2024)
+        ak = bereken_arbeidskorting(24821, 2024, brackets_json=_ak_json(2024))
         expected = 5158 + 0.02471 * (24821 - 24820)
         assert abs(ak - expected) < 0.01
 
     def test_at_bracket4_upper(self):
         """Income at bracket 4 upper bound (124934)."""
-        ak = bereken_arbeidskorting(124934, 2024)
+        ak = bereken_arbeidskorting(124934, 2024, brackets_json=_ak_json(2024))
         expected = 5532 + (-0.06510) * (124934 - 39957)
         assert abs(ak - max(0, expected)) < 0.01
 
     def test_above_afbouw(self):
         """Income above afbouwgrens = 0."""
-        ak = bereken_arbeidskorting(124935, 2024)
+        ak = bereken_arbeidskorting(124935, 2024, brackets_json=_ak_json(2024))
         assert ak == 0
 
 

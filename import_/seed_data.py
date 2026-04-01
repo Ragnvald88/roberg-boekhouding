@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from database import upsert_fiscale_params, get_all_fiscale_params
 
-# Arbeidskorting brackets per year (same data as heffingskortingen.py constants).
+# Arbeidskorting brackets per year (single source of truth — DB-driven).
 # Format: [{"lower", "upper", "rate", "base"}, ...]
 AK_BRACKETS = {
     2023: [
@@ -89,7 +89,7 @@ FISCALE_PARAMS: dict[int, dict] = {
         'za_actief': 1, 'sa_actief': 1,  # First 3 years: SA active
         'mkb_vrijstelling_pct': 13.31,
         'kia_ondergrens': 2801,
-        'kia_bovengrens': 69764,
+        'kia_bovengrens': 69765,
         'kia_pct': 28,
         'km_tarief': 0.23,
         'schijf1_grens': 75518,
@@ -136,7 +136,7 @@ FISCALE_PARAMS: dict[int, dict] = {
         'ahk_drempel': 28406,
         'ak_max': 5599,
         'zvw_pct': 5.26,
-        'zvw_max_grondslag': 75860,
+        'zvw_max_grondslag': 75864,
         'repr_aftrek_pct': 80,
         'ew_forfait_pct': 0.35,
         'villataks_grens': 1_330_000,
@@ -157,7 +157,7 @@ FISCALE_PARAMS: dict[int, dict] = {
         'za_actief': 1, 'sa_actief': 0,  # Year 4+: SA no longer active
         'mkb_vrijstelling_pct': 12.70,
         'kia_ondergrens': 2901,
-        'kia_bovengrens': 70602,
+        'kia_bovengrens': 71683,
         'kia_pct': 28,
         'km_tarief': 0.23,
         'schijf1_grens': 38883,

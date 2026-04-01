@@ -1,7 +1,10 @@
 """Dashboard pagina — hero KPIs, sparklines, contextual alerts."""
 
 import asyncio
+import logging
 from datetime import date, datetime
+
+log = logging.getLogger(__name__)
 
 from nicegui import ui
 
@@ -137,8 +140,7 @@ async def dashboard_page():
                 'basis_maanden': projection['basis_maanden'],
             }
         except Exception:
-            import traceback
-            traceback.print_exc()
+            log.exception('IB estimate failed for year %s', jaar)
             return None
 
     def _render_delta_badge(delta_pct: float):
@@ -181,7 +183,7 @@ async def dashboard_page():
         # Run all independent DB calls concurrently
         (kpis, kpis_vorig, omzet_huidig, omzet_vorig, kosten_per_cat,
          openstaande, ongefact, km_data,
-         ib_resultaat, fp, va_data) = await asyncio.gather(
+         ib_resultaat, fp, va_data, aangifte_docs) = await asyncio.gather(
             get_kpis(DB_PATH, jaar=jaar),
             get_kpis(DB_PATH, jaar=jaar - 1),
             get_omzet_per_maand(DB_PATH, jaar=jaar),
@@ -193,6 +195,7 @@ async def dashboard_page():
             _compute_ib_estimate(jaar),
             get_fiscale_params(DB_PATH, jaar),
             get_va_betalingen(DB_PATH, jaar),
+            get_aangifte_documenten(DB_PATH, jaar),
         )
 
         uren_criterium = int(fp.urencriterium) if fp else URENCRITERIUM_DEFAULT
@@ -201,8 +204,13 @@ async def dashboard_page():
         huidig_jaar = date.today().year
         if jaar == huidig_jaar:
             # Compare up to today's date in previous year (day-precise)
-            vandaag = date.today().isoformat()
-            vorig_datum = f'{jaar - 1}-{vandaag[5:]}'  # same MM-DD
+            vandaag_date = date.today()
+            try:
+                vorig_date = vandaag_date.replace(year=vandaag_date.year - 1)
+            except ValueError:  # Feb 29 → Feb 28 in non-leap year
+                vorig_date = vandaag_date.replace(
+                    year=vandaag_date.year - 1, day=28)
+            vorig_datum = vorig_date.isoformat()
             vorig_ytd = await get_kpis_tot_datum(
                 DB_PATH, jaar=jaar - 1, max_datum=vorig_datum)
             vorig_ytd_omzet = vorig_ytd['omzet']
@@ -356,9 +364,7 @@ async def dashboard_page():
                                     termijn_text = (
                                         ' \u00b7 '.join(parts) + ' termijnen')
                                 else:
-                                    total_t = (va_data['ib_termijnen']
-                                               + va_data['zvw_termijnen'])
-                                    termijn_text = f'{total_t} betalingen'
+                                    termijn_text = 'geen termijnen'
                                 ui.label(termijn_text).style(
                                     'font-size: 10px; color: #94A3B8; '
                                     'margin-top: 6px; text-align: right')
@@ -415,7 +421,7 @@ async def dashboard_page():
                                 'context-text')
 
                 # Documenten
-                docs = await get_aangifte_documenten(DB_PATH, jaar)
+                docs = aangifte_docs
                 docs_done = len({d.documenttype for d in docs})
                 docs_total = len(AANGIFTE_DOCS)
                 docs_pct = round(
