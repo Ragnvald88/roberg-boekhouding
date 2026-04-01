@@ -1053,8 +1053,8 @@ async def facturen_page():
             body, is_html = _build_mail_body(
                 nummer, bedrag, iban, bedrijfsnaam, naam, telefoon, bg_email, betaallink)
 
-            body_osa = body.replace('\\', '\\\\').replace('"', '\\\\"')
-            subject_osa = subject.replace('"', '\\\\"')
+            body_osa = body.replace('\\', '\\\\').replace('"', '\\"')
+            subject_osa = subject.replace('"', '\\"')
             pdf_path_abs = str(Path(pdf_path).resolve())
 
             # Build AppleScript
@@ -1083,10 +1083,14 @@ async def facturen_page():
             )
 
             try:
-                await asyncio.to_thread(
+                result = await asyncio.to_thread(
                     subprocess.run,
                     ['osascript', '-e', applescript],
                     capture_output=True, timeout=15)
+                if result.returncode != 0:
+                    err = result.stderr.decode().strip() if result.stderr else 'onbekende fout'
+                    ui.notify(f'Mail.app fout: {err}', type='negative')
+                    return
 
                 # Mark as verstuurd if currently concept
                 if row.get('status') == 'concept':
