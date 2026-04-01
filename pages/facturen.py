@@ -38,21 +38,22 @@ def _build_mail_body(nummer, bedrag, iban, bedrijfsnaam, naam, telefoon, bg_emai
     tel_line = f'Tel: {telefoon}' if telefoon else ''
 
     if betaallink:
+        from html import escape as esc
         body = (
             f'<div style="font-family: Helvetica, Arial, sans-serif; font-size: 14px; color: #333;">'
-            f'<p>Bijgaand stuur ik u factuur {nummer}.</p>'
-            f'<p>Het totaalbedrag van {bedrag} verzoek ik u binnen 14 dagen '
-            f'over te maken op rekeningnummer {iban} t.n.v. {bedrijfsnaam}, '
-            f'onder vermelding van factuurnummer {nummer}.</p>'
+            f'<p>Bijgaand stuur ik u factuur {esc(nummer)}.</p>'
+            f'<p>Het totaalbedrag van {esc(bedrag)} verzoek ik u binnen 14 dagen '
+            f'over te maken op rekeningnummer {esc(iban)} t.n.v. {esc(bedrijfsnaam)}, '
+            f'onder vermelding van factuurnummer {esc(nummer)}.</p>'
             f'<p>U kunt ook direct betalen via '
-            f'<a href="{betaallink}">deze betaallink</a>.</p>'
+            f'<a href="{esc(betaallink, quote=True)}">deze betaallink</a>.</p>'
             f'<p>Mocht u vragen hebben, dan hoor ik het graag.</p>'
             f'<br>'
             f'<p>Met vriendelijke groet,</p>'
-            f'<p>{naam}<br><br>'
-            f'{bedrijfsnaam}<br>'
-            f'{tel_line + "<br>" if tel_line else ""}'
-            f'{bg_email}</p>'
+            f'<p>{esc(naam)}<br><br>'
+            f'{esc(bedrijfsnaam)}<br>'
+            f'{esc(tel_line) + "<br>" if tel_line else ""}'
+            f'{esc(bg_email)}</p>'
             f'</div>'
         )
         return body, True
