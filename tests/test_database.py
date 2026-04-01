@@ -8,6 +8,7 @@ from database import (
     get_werkdagen_ongefactureerd,
     add_factuur, get_facturen, get_next_factuurnummer,
     add_uitgave, get_uitgaven, get_uitgaven_per_categorie,
+    save_factuur_atomic,
 )
 
 
@@ -196,3 +197,47 @@ async def test_migrations_idempotent(tmp_path):
         columns = {row[1] for row in await cur.fetchall()}
         assert 'box3_fiscaal_partner' in columns
         assert 'jaarafsluiting_status' in columns
+
+
+# ============================================================
+# _validate_datum edge cases
+# ============================================================
+
+from database import _validate_datum
+
+
+def test_validate_datum_invalid_month_13():
+    """Month 13 is not a valid calendar date."""
+    with pytest.raises(ValueError):
+        _validate_datum('2026-13-01')
+
+
+def test_validate_datum_invalid_day_32():
+    """Day 32 is not a valid calendar date."""
+    with pytest.raises(ValueError):
+        _validate_datum('2026-01-32')
+
+
+def test_validate_datum_valid():
+    """A valid date should not raise."""
+    result = _validate_datum('2026-06-15')
+    assert result == '2026-06-15'
+
+
+# ============================================================
+# Factuur betaallink persistence
+# ============================================================
+
+
+@pytest.mark.asyncio
+async def test_factuur_betaallink_persisted(db):
+    """Betaallink is stored and retrieved from facturen."""
+    kid = await add_klant(db, naam='Test')
+    fid = await save_factuur_atomic(
+        db, nummer='2026-099', klant_id=kid, datum='2026-01-01',
+        totaal_bedrag=100.0, pdf_pad='', type='factuur',
+        betaallink='https://betaalverzoek.rabobank.nl/betaalverzoek/?id=abc123',
+    )
+    facturen = await get_facturen(db)
+    f = next(f for f in facturen if f.id == fid)
+    assert f.betaallink == 'https://betaalverzoek.rabobank.nl/betaalverzoek/?id=abc123'

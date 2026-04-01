@@ -1,6 +1,6 @@
 """Dataclasses voor boekhouding — plain Python, geen ORM."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 
@@ -77,6 +77,7 @@ class Factuur:
     betaald_datum: str = ''
     type: str = 'factuur'
     bron: str = 'app'
+    betaallink: str = ''
 
 
 @dataclass
