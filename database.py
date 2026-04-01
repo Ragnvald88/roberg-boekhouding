@@ -582,6 +582,8 @@ async def init_db(db_path: Path = DB_PATH) -> None:
 
     # One-time backfill for betalingskenmerk
     await backfill_betalingskenmerken(db_path)
+    # Backfill betaallinks from existing QR files on disk
+    await backfill_betaallinks(db_path)
 
 
 def _validate_datum(datum: str) -> str:
@@ -1442,6 +1444,42 @@ async def backfill_betalingskenmerken(db_path: Path = DB_PATH,
             )
             count += cur.rowcount
         await conn.commit()
+    return count
+
+
+async def backfill_betaallinks(db_path: Path = DB_PATH) -> int:
+    """Backfill betaallink from QR files on disk for facturen missing it."""
+    facturen_dir = db_path.parent / 'facturen'
+    if not facturen_dir.exists():
+        return 0
+    count = 0
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            "SELECT id, nummer FROM facturen "
+            "WHERE betaallink IS NULL OR betaallink = ''")
+        rows = await cur.fetchall()
+        for row in rows:
+            qr_file = facturen_dir / f"{row['nummer']}_qr.png"
+            if not qr_file.exists():
+                continue
+            try:
+                import cv2
+                import numpy as np
+                img_bytes = qr_file.read_bytes()
+                arr = np.frombuffer(img_bytes, dtype=np.uint8)
+                img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+                if img is None:
+                    continue
+                data, _, _ = cv2.QRCodeDetector().detectAndDecode(img)
+                if data and data.startswith('http'):
+                    await conn.execute(
+                        "UPDATE facturen SET betaallink = ? WHERE id = ?",
+                        (data, row['id']))
+                    count += 1
+            except Exception:
+                continue
+        if count:
+            await conn.commit()
     return count
 
 
