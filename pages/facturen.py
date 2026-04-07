@@ -331,7 +331,11 @@ async def facturen_page():
         table.add_slot('body-cell-status', '''
             <q-td :props="props">
                 <q-badge v-if="props.row.status === 'betaald'" color="positive" label="Betaald" />
-                <q-badge v-else-if="props.row.verlopen" color="negative" label="Verlopen" />
+                <q-badge v-else-if="props.row.verlopen" color="negative" label="Verlopen">
+                    <q-tooltip v-if="props.row.herinnering_datum">
+                        Herinnering verstuurd op {{ props.row.herinnering_datum }}
+                    </q-tooltip>
+                </q-badge>
                 <q-badge v-else-if="props.row.status === 'verstuurd'" color="info" label="Verstuurd" />
                 <q-badge v-else color="grey-6" label="Concept" />
             </q-td>
@@ -389,6 +393,14 @@ async def facturen_page():
                                             color="info" />
                                 </q-item-section>
                                 <q-item-section>Verstuur via e-mail</q-item-section>
+                            </q-item>
+                            <q-item v-if="props.row.verlopen" clickable
+                                @click="() => $parent.$emit('sendherinnering', props.row)">
+                                <q-item-section side>
+                                    <q-icon name="notification_important" size="xs"
+                                            color="warning" />
+                                </q-item-section>
+                                <q-item-section>Herinnering versturen</q-item-section>
                             </q-item>
                             <q-item v-if="props.row.status === 'concept'" clickable
                                 @click="() => $parent.$emit('markverstuurd', props.row)">
@@ -497,6 +509,7 @@ async def facturen_page():
                     'pdf_pad': f.pdf_pad,
                     'type': f.type,
                     'bron': f.bron,
+                    'herinnering_datum': format_datum(f.herinnering_datum) if f.herinnering_datum else '',
                 })
                 if f.status != 'concept':
                     totaal += f.totaal_bedrag
@@ -1152,10 +1165,96 @@ async def facturen_page():
             except Exception as ex:
                 ui.notify(f'Fout bij openen Mail.app: {ex}', type='negative')
 
+        async def on_send_herinnering(e):
+            """Send reminder email for overdue invoice via macOS Mail.app."""
+            row = e.args
+            pdf_path = row.get('pdf_pad', '')
+            nummer = row['nummer']
+
+            if not pdf_path or not Path(pdf_path).exists():
+                ui.notify('Geen PDF gevonden voor deze factuur', type='warning')
+                return
+
+            all_klanten = await get_klanten(DB_PATH, alleen_actief=False)
+            bg = await get_bedrijfsgegevens(DB_PATH)
+            klant_obj = next(
+                (k for k in all_klanten if k.id == row.get('klant_id')), None)
+            klant_email = (klant_obj.email or '') if klant_obj and hasattr(klant_obj, 'email') else ''
+
+            bedrag = format_euro(row['totaal_bedrag'])
+            datum_fmt = format_datum(row['datum'])
+            iban = bg.iban if bg else ''
+            bedrijfsnaam = bg.bedrijfsnaam if bg else ''
+            naam = bg.naam if bg else ''
+            telefoon = bg.telefoon if bg else ''
+            bg_email_addr = bg.email if bg else ''
+
+            betaallink = ''
+            async with get_db_ctx(DB_PATH) as conn:
+                cur = await conn.execute(
+                    "SELECT betaallink FROM facturen WHERE id = ?", (row['id'],))
+                r = await cur.fetchone()
+                if r and r['betaallink']:
+                    betaallink = r['betaallink']
+
+            subject = f'Herinnering: Factuur {nummer}'
+            body = _build_herinnering_body(
+                nummer, bedrag, datum_fmt, iban, bedrijfsnaam, naam,
+                telefoon, bg_email_addr, betaallink)
+
+            body_osa = body.replace('\\', '\\\\').replace('"', '\\"')
+            subject_osa = subject.replace('"', '\\"')
+            pdf_path_abs = str(Path(pdf_path).resolve())
+
+            to_line = ''
+            if klant_email:
+                to_line = f'make new to recipient with properties {{address:"{klant_email}"}}'
+
+            applescript = (
+                'tell application "Mail"\n'
+                f'  set newMsg to make new outgoing message with properties '
+                f'{{subject:"{subject_osa}", content:"{body_osa}", visible:true}}\n'
+                f'  tell newMsg\n'
+                f'    {to_line}\n'
+                f'    make new attachment with properties '
+                f'{{file name:POSIX file "{pdf_path_abs}"}} '
+                f'at after last paragraph of content\n'
+                f'  end tell\n'
+                f'  activate\n'
+                f'end tell'
+            )
+
+            try:
+                result = await asyncio.to_thread(
+                    subprocess.run,
+                    ['osascript', '-e', applescript],
+                    capture_output=True, timeout=15)
+                if result.returncode != 0:
+                    err = result.stderr.decode().strip() if result.stderr else 'onbekende fout'
+                    ui.notify(f'Mail.app fout: {err}', type='negative')
+                    return
+
+                # Store herinnering date
+                async with get_db_ctx(DB_PATH) as conn:
+                    await conn.execute(
+                        "UPDATE facturen SET herinnering_datum = ? WHERE id = ?",
+                        (date.today().isoformat(), row['id']))
+                    await conn.commit()
+
+                ui.notify(f'Herinnering voor {nummer} geopend in Mail.app',
+                          type='positive')
+                await refresh_table()
+            except subprocess.TimeoutExpired:
+                ui.notify('Mail.app reageerde niet — probeer handmatig',
+                          type='warning')
+            except Exception as ex:
+                ui.notify(f'Fout bij openen Mail.app: {ex}', type='negative')
+
         table.on('markbetaald', on_mark_betaald)
         table.on('markonbetaald', on_mark_onbetaald)
         table.on('markverstuurd', on_mark_verstuurd)
         table.on('sendmail', on_send_mail)
+        table.on('sendherinnering', on_send_herinnering)
         table.on('deletefactuur', on_delete_factuur)
         table.on('download', on_download)
         table.on('edit', on_edit)
