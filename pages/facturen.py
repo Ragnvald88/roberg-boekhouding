@@ -80,6 +80,39 @@ def _build_mail_body(nummer, bedrag, iban, bedrijfsnaam, naam, telefoon, bg_emai
         return body, False
 
 
+def _build_herinnering_body(nummer, bedrag, datum, iban, bedrijfsnaam, naam,
+                            telefoon, bg_email, betaallink=''):
+    """Build plain text herinnering email body for overdue invoices."""
+    betaallink_line = (
+        f'U kunt ook eenvoudig betalen via deze link:\n{betaallink}\n'
+        if betaallink else ''
+    )
+    return (
+        f'Beste klant,\n'
+        f'\n'
+        f'Wellicht is het aan uw aandacht ontsnapt, maar ik heb nog geen '
+        f'betaling ontvangen voor factuur {nummer} van {datum} ter hoogte '
+        f'van {bedrag}.\n'
+        f'\n'
+        f'Ik verzoek u vriendelijk het bedrag binnen 7 dagen over te maken op '
+        f'rekeningnummer {iban} t.n.v. {bedrijfsnaam}, onder vermelding van '
+        f'factuurnummer {nummer}.\n'
+        f'\n'
+        f'{betaallink_line}'
+        f'Mocht de betaling reeds onderweg zijn, dan kunt u dit bericht als '
+        f'niet verzonden beschouwen. Heeft u vragen, neem dan gerust contact op.\n'
+        f'\n'
+        f'\n'
+        f'Met vriendelijke groet,\n'
+        f'\n'
+        f'{naam}\n'
+        f'\n'
+        f'{bedrijfsnaam}\n'
+        f'{f"Tel: {telefoon}" if telefoon else ""}\n'
+        f'{bg_email}'
+    )
+
+
 def _is_verlopen(datum_str: str) -> bool:
     """Check if an invoice is overdue (>14 days past datum and unpaid)."""
     try:

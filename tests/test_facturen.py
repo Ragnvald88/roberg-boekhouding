@@ -562,7 +562,7 @@ async def test_final_invoice_no_regels_json(db):
 # _build_mail_body tests
 # ============================================================
 
-from pages.facturen import _build_mail_body
+from pages.facturen import _build_mail_body, _build_herinnering_body
 
 
 def test_build_mail_body_with_betaallink():
@@ -588,3 +588,40 @@ def test_build_mail_body_without_betaallink():
     assert is_html is False
     assert 'betaallink' not in body
     assert 'Bijgaand stuur ik u factuur 2026-021' in body
+
+
+# ============================================================
+# _build_herinnering_body tests
+# ============================================================
+
+
+def test_herinnering_body_with_betaallink():
+    """Herinnering body includes betaallink when provided."""
+    body = _build_herinnering_body(
+        nummer='2026-001', bedrag='€ 1.234,00', datum='1 februari 2026',
+        iban='NL00RABO0123456789', bedrijfsnaam='Testpraktijk',
+        naam='Dr. Test', telefoon='06-12345678', bg_email='test@test.nl',
+        betaallink='https://pay.example.com/123',
+    )
+    assert 'factuur 2026-001' in body
+    assert '€ 1.234,00' in body
+    assert '1 februari 2026' in body
+    assert 'aan uw aandacht ontsnapt' in body
+    assert '7 dagen' in body
+    assert 'NL00RABO0123456789' in body
+    assert 'https://pay.example.com/123' in body
+    assert 'Dr. Test' in body
+    assert 'Testpraktijk' in body
+    assert '06-12345678' in body
+
+
+def test_herinnering_body_without_betaallink():
+    """Herinnering body omits betaallink paragraph when empty."""
+    body = _build_herinnering_body(
+        nummer='2026-002', bedrag='€ 500,00', datum='15 maart 2026',
+        iban='NL00RABO0123456789', bedrijfsnaam='Testpraktijk',
+        naam='Dr. Test', telefoon='', bg_email='test@test.nl',
+    )
+    assert 'betalen via deze link' not in body
+    assert 'factuur 2026-002' in body
+    assert '€ 500,00' in body
