@@ -625,3 +625,45 @@ def test_herinnering_body_without_betaallink():
     assert 'betalen via deze link' not in body
     assert 'factuur 2026-002' in body
     assert '€ 500,00' in body
+
+
+# ============================================================
+# herinnering_datum integration tests
+# ============================================================
+
+
+@pytest.mark.asyncio
+async def test_herinnering_datum_stored(seeded_db):
+    """Storing herinnering_datum updates the factuur record."""
+    from database import get_klanten, get_db_ctx
+    klanten = await get_klanten(seeded_db)
+    kid = klanten[0].id
+
+    await add_factuur(seeded_db, nummer='2026-010', klant_id=kid,
+                      datum='2026-01-01', totaal_bedrag=500,
+                      status='verstuurd')
+
+    async with get_db_ctx(seeded_db) as conn:
+        await conn.execute(
+            "UPDATE facturen SET herinnering_datum = ? WHERE nummer = ?",
+            ('2026-04-07', '2026-010'))
+        await conn.commit()
+
+    facturen = await get_facturen(seeded_db)
+    f = next(f for f in facturen if f.nummer == '2026-010')
+    assert f.herinnering_datum == '2026-04-07'
+
+
+@pytest.mark.asyncio
+async def test_herinnering_datum_default_empty(seeded_db):
+    """New facturen have empty herinnering_datum by default."""
+    from database import get_klanten
+    klanten = await get_klanten(seeded_db)
+    kid = klanten[0].id
+
+    await add_factuur(seeded_db, nummer='2026-011', klant_id=kid,
+                      datum='2026-03-01', totaal_bedrag=300)
+
+    facturen = await get_facturen(seeded_db)
+    f = next(f for f in facturen if f.nummer == '2026-011')
+    assert f.herinnering_datum == ''
