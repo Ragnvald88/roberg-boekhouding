@@ -199,9 +199,6 @@ async def test_migrations_idempotent(tmp_path):
         assert 'jaarafsluiting_status' in columns
 
 
-# ============================================================
-# _validate_datum edge cases
-# ============================================================
 
 from database import _validate_datum
 
@@ -224,9 +221,6 @@ def test_validate_datum_valid():
     assert result == '2026-06-15'
 
 
-# ============================================================
-# Factuur betaallink persistence
-# ============================================================
 
 
 @pytest.mark.asyncio
@@ -241,3 +235,14 @@ async def test_factuur_betaallink_persisted(db):
     facturen = await get_facturen(db)
     f = next(f for f in facturen if f.id == fid)
     assert f.betaallink == 'https://betaalverzoek.rabobank.nl/betaalverzoek/?id=abc123'
+
+
+@pytest.mark.asyncio
+async def test_facturen_herinnering_datum_column(db):
+    """herinnering_datum column exists with default empty string."""
+    from database import get_db_ctx
+    async with get_db_ctx(db) as conn:
+        cur = await conn.execute("PRAGMA table_info(facturen)")
+        cols = {row['name']: row for row in await cur.fetchall()}
+        assert 'herinnering_datum' in cols
+        assert cols['herinnering_datum']['dflt_value'] == "''"

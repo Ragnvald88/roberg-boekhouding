@@ -358,6 +358,9 @@ MIGRATIONS = [
     (23, "add_betaallink_to_facturen", [
         "ALTER TABLE facturen ADD COLUMN betaallink TEXT DEFAULT ''",
     ]),
+    (24, "add_herinnering_datum_to_facturen", [
+        "ALTER TABLE facturen ADD COLUMN herinnering_datum TEXT DEFAULT ''",
+    ]),
 ]
 
 
