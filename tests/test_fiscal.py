@@ -20,7 +20,7 @@ def _ak_json(jaar: int) -> str:
     """Get arbeidskorting brackets JSON for a year (from seed data)."""
     return json.dumps(AK_BRACKETS.get(jaar, []))
 from fiscal.berekeningen import (
-    bereken_volledig, bereken_wv, bereken_ib, bereken_eigenwoningforfait,
+    bereken_volledig, bereken_eigenwoningforfait,
     FiscaalResultaat,
 )
 
@@ -28,9 +28,6 @@ from fiscal.berekeningen import (
 from import_.seed_data import FISCALE_PARAMS
 
 
-# ============================================================
-# Afschrijvingen
-# ============================================================
 
 class TestAfschrijvingen:
     """Tests voor lineaire afschrijving met pro-rata eerste jaar."""
@@ -117,9 +114,6 @@ class TestAfschrijvingen:
         # We volgen de pro-rata methode per specificatie
 
 
-# ============================================================
-# Heffingskortingen
-# ============================================================
 
 class TestHeffingskortingen:
     """Tests voor AHK en arbeidskorting."""
@@ -187,52 +181,6 @@ class TestHeffingskortingen:
         assert ak == 0.0
 
 
-# ============================================================
-# Winst & Verlies (simpele functie)
-# ============================================================
-
-class TestWinstVerlies:
-    """Tests voor bereken_wv."""
-
-    def test_wv_basic(self):
-        """Basis W&V berekening."""
-        result = bereken_wv(omzet=95145, kosten=5000, afschrijvingen=1200)
-        assert result['winst'] == 88945
-
-    def test_wv_geen_kosten(self):
-        """W&V zonder kosten."""
-        result = bereken_wv(omzet=50000, kosten=0, afschrijvingen=0)
-        assert result['winst'] == 50000
-
-
-# ============================================================
-# IB berekening (losse functie)
-# ============================================================
-
-class TestIB:
-    """Tests voor bereken_ib."""
-
-    def test_ib_2024_schijf1(self):
-        """2024: inkomen volledig in schijf 1."""
-        params = FISCALE_PARAMS[2024]
-        result = bereken_ib(50000, params)
-        # bruto = 50000 * 0.3697 = 18485
-        assert abs(result['bruto_ib'] - 18485) < 5
-
-    def test_ib_2025_drie_schijven(self):
-        """2025: inkomen in alle 3 schijven (schijf1_grens < schijf2_grens)."""
-        params = FISCALE_PARAMS[2025]
-        result = bereken_ib(90000, params)
-        # schijf1: 38441 * 0.3582 = 13770.21
-        # schijf2: (76817 - 38441) * 0.3748 = 38376 * 0.3748 = 14383.32
-        # schijf3: (90000 - 76817) * 0.4950 = 13183 * 0.4950 = 6525.59
-        # bruto = 34679.12
-        assert abs(result['bruto_ib'] - 34679) < 1
-
-
-# ============================================================
-# Volledige fiscale waterval - Boekhouder referentietests
-# ============================================================
 
 class TestFiscaleWinst:
     """Tests voor de fiscale winst waterval tot belastbare_winst."""
@@ -465,9 +413,6 @@ class TestVolledig:
         assert result.startersaftrek == 2123
 
 
-# ============================================================
-# Eigenwoningforfait + Wet Hillen
-# ============================================================
 
 class TestEigenwoningforfait:
     """Tests voor eigenwoningforfait berekening."""
@@ -586,9 +531,6 @@ class TestWetHillen:
         assert abs(result.arbeidskorting - 1985) < 1
 
 
-# ============================================================
-# Audit bug-fix regression tests (2026-03-03)
-# ============================================================
 
 class TestEWNaarPartner:
     """Eigen woning allocation to partner."""
@@ -1380,7 +1322,6 @@ class TestFormatDatum:
         assert format_datum(None) == ""
 
 
-# === Box 3 drempel schulden tests ===
 
 class TestBox3DrempelSchulden:
     """Tests for Box 3 drempel schulden feature."""
@@ -1468,7 +1409,6 @@ class TestBox3DrempelSchulden:
         assert result.grondslag == 80000 - 1300 - 57000  # 21700
 
 
-# === Boekhouder 2023 tests ===
 
 class TestBoekhouder2023Winst:
     """Validate against Boekhouder 2023 rapport (onderneming portion only).
@@ -1517,7 +1457,6 @@ class TestBoekhouder2023Winst:
         assert abs(boekhouder.verzamelinkomen - (boekhouder.belastbare_winst - 1753)) < 5
 
 
-# === Balance sheet tests ===
 
 class TestBalans:
     """Tests for balance sheet calculation."""
@@ -1560,7 +1499,6 @@ class TestBalans:
         assert eigen_vermogen + totaal_schulden == totaal_activa
 
 
-# === ZA/SA toggle tests ===
 
 class TestZASAToggles:
     """Tests for za_actief / sa_actief toggle behavior."""
@@ -1627,7 +1565,6 @@ class TestZASAToggles:
         assert any('ZA + SA' in w for w in result.waarschuwingen)
 
 
-# === Lijfrente test ===
 
 class TestLijfrente:
     """Tests for lijfrentepremie deduction."""
@@ -1704,9 +1641,6 @@ class TestLijfrente:
         assert result.verzamelinkomen == 0
 
 
-# ============================================================
-# Edge case tests — negative, zero, boundary, high income
-# ============================================================
 
 class TestEdgeCaseNegativeWinst:
     """When kosten > omzet, belastbare_winst should floor at 0."""
@@ -1862,9 +1796,6 @@ class TestEdgeCaseBox3NegativeRendement:
         assert abs(result.belasting - 222.91) < 1
 
 
-# ============================================================
-# Income extrapolation and personal data fallback tests
-# ============================================================
 
 class TestExtrapoleerJaaromzet:
     """Tests for annual income extrapolation."""
@@ -1952,54 +1883,6 @@ class TestExtrapoleerJaaromzet:
         assert result['extrapolated_omzet'] > 0
         assert result['extrapolated_omzet'] == 500 * 12  # 500/1month * 12
 
-
-class TestPersonalDataFallback:
-    """Tests for prior-year personal data fallback."""
-
-    def test_current_year_values_preferred(self):
-        from components.fiscal_utils import get_personal_data_with_fallback
-        current = type('P', (), {'woz_waarde': 700000, 'hypotheekrente': 7000,
-                                  'aov_premie': 3500, 'partner_bruto_loon': 0,
-                                  'partner_loonheffing': 0, 'box3_bank_saldo': 0,
-                                  'box3_overige_bezittingen': 0, 'box3_schulden': 0})()
-        prior = type('P', (), {'woz_waarde': 650000, 'hypotheekrente': 7200,
-                                'aov_premie': 3000, 'partner_bruto_loon': 40000,
-                                'partner_loonheffing': 7000, 'box3_bank_saldo': 25000,
-                                'box3_overige_bezittingen': 0, 'box3_schulden': 35000})()
-        result, fallbacks = get_personal_data_with_fallback(current, prior)
-        assert result['woz']['value'] == 700000
-        assert result['woz']['source'] == 'current'
-        assert 'woz_waarde' not in fallbacks
-
-    def test_fallback_to_prior_year(self):
-        from components.fiscal_utils import get_personal_data_with_fallback
-        current = type('P', (), {'woz_waarde': 0, 'hypotheekrente': 0,
-                                  'aov_premie': 0, 'partner_bruto_loon': 0,
-                                  'partner_loonheffing': 0, 'box3_bank_saldo': 0,
-                                  'box3_overige_bezittingen': 0, 'box3_schulden': 0})()
-        prior = type('P', (), {'woz_waarde': 650000, 'hypotheekrente': 7200,
-                                'aov_premie': 3000, 'partner_bruto_loon': 40000,
-                                'partner_loonheffing': 7000, 'box3_bank_saldo': 25000,
-                                'box3_overige_bezittingen': 0, 'box3_schulden': 35000})()
-        result, fallbacks = get_personal_data_with_fallback(current, prior)
-        assert result['woz']['value'] == 650000
-        assert result['woz']['source'] == 'prior'
-        assert 'woz_waarde' in fallbacks
-
-    def test_no_prior_returns_zero(self):
-        from components.fiscal_utils import get_personal_data_with_fallback
-        current = type('P', (), {'woz_waarde': 0, 'hypotheekrente': 0,
-                                  'aov_premie': 0, 'partner_bruto_loon': 0,
-                                  'partner_loonheffing': 0, 'box3_bank_saldo': 0,
-                                  'box3_overige_bezittingen': 0, 'box3_schulden': 0})()
-        result, fallbacks = get_personal_data_with_fallback(current, None)
-        assert result['woz']['value'] == 0
-        assert result['woz']['source'] == 'none'
-
-
-# ============================================================
-# Partner AHK
-# ============================================================
 
 class TestPartnerAHK:
     """Tests for partner algemene heffingskorting calculation."""

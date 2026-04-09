@@ -33,9 +33,6 @@ from fiscal.berekeningen import bereken_volledig, bereken_box3
 
 AANGIFTE_DIR = DB_PATH.parent / 'aangifte'
 
-
-# === Belastingdienst field mapping ===
-
 BD = {
     'omzet': 'Winst > Opbrengsten > Netto-omzet',
     'kosten_totaal': 'Winst > Kosten > Totaal bedrijfslasten',
@@ -64,13 +61,9 @@ BD = {
     'zvw': 'Bijdrage Zorgverzekeringswet',
 }
 
-
-# === Document checklist ===
-
 from components.document_specs import (
     DocSpec, AANGIFTE_DOCS, AUTO_TYPES, CATEGORIE_LABELS,
 )
-
 
 @ui.page('/aangifte')
 async def aangifte_page():
@@ -80,8 +73,6 @@ async def aangifte_page():
     vorig_jaar = huidig_jaar - 1
     jaren = year_options()
     state = {'jaar': vorig_jaar}
-
-    # --- Cached fiscal computation (avoid triple fetch+calc) ---
     _cache = {'jaar': None, 'data': None, 'fiscaal': None}
 
     async def _get_fiscal(jaar: int):
@@ -112,8 +103,6 @@ async def aangifte_page():
     def _invalidate_cache():
         """Clear cache so next _get_fiscal() recalculates."""
         _cache.update(jaar=None, data=None, fiscaal=None)
-
-    # --- Copy helper ---
     def _copy_value(amount: float, label: str = ''):
         """Copy raw integer value to clipboard (what you type in BD portal)."""
         import json
@@ -145,8 +134,6 @@ async def aangifte_page():
         with ui.row().classes('w-full justify-between items-center q-py-xs'):
             ui.label(label).classes(css)
             ui.label(format_euro(amount)).classes(f'{css} text-right')
-
-    # --- Main layout ---
     with ui.column().classes('w-full p-6 max-w-7xl mx-auto gap-4'):
         # Header row
         with ui.row().classes('w-full items-end'):
@@ -183,10 +170,6 @@ async def aangifte_page():
             with ui.tab_panel(tab_docs):
                 progress_container = ui.column().classes('w-full')
                 checklist_container = ui.column().classes('w-full gap-2')
-
-    # ============================================================
-    # Event handlers
-    # ============================================================
 
     async def on_jaar_change(jaar):
         state['jaar'] = jaar
@@ -246,10 +229,6 @@ async def aangifte_page():
         docs = await get_aangifte_documenten(DB_PATH, state['jaar'])
         await render_progress(docs)
         await render_checklist(docs)
-
-    # ============================================================
-    # Tab 1: Winst uit onderneming
-    # ============================================================
 
     async def render_winst():
         winst_container.clear()
@@ -415,10 +394,6 @@ async def aangifte_page():
                                   on_click=lambda: _copy_value(f.belastbare_winst, 'Belastbare winst')) \
                             .props('round color=primary size=sm')
 
-    # ============================================================
-    # Tab 2: Prive & aftrek
-    # ============================================================
-
     async def render_prive():
         prive_container.clear()
         jaar = state['jaar']
@@ -569,13 +544,13 @@ async def aangifte_page():
 
             # Auto-save on blur/change for all inputs
             async def save_prive():
-                aov_val = float(aov_input.value or 0)
-                woz_val = float(woz_input.value or 0)
-                hyp_val = float(hyp_input.value or 0)
-                va_ib_val = float(va_ib_input.value or 0)
-                va_zvw_val = float(va_zvw_input.value or 0)
+                aov_val = aov_input.value or 0
+                woz_val = woz_input.value or 0
+                hyp_val = hyp_input.value or 0
+                va_ib_val = va_ib_input.value or 0
+                va_zvw_val = va_zvw_input.value or 0
                 ew_val = ew_partner_check.value
-                lijfrente_val = float(lijfrente_input.value or 0)
+                lijfrente_val = lijfrente_input.value or 0
 
                 await update_ib_inputs(
                     DB_PATH, jaar=jaar,
@@ -588,8 +563,8 @@ async def aangifte_page():
                 await update_ew_naar_partner(DB_PATH, jaar=jaar, value=ew_val)
                 await update_partner_inputs(
                     DB_PATH, jaar=jaar,
-                    bruto_loon=float(partner_loon_input.value or 0),
-                    loonheffing=float(partner_lh_input.value or 0),
+                    bruto_loon=partner_loon_input.value or 0,
+                    loonheffing=partner_lh_input.value or 0,
                 )
 
                 # Invalidate cache and refresh dependent views
@@ -625,10 +600,6 @@ async def aangifte_page():
             else:
                 ui.label('Geen eigen woning opgegeven').classes(
                     'text-caption text-grey-7')
-
-    # ============================================================
-    # Tab 3: Box 3
-    # ============================================================
 
     async def render_box3():
         box3_container.clear()
@@ -677,9 +648,9 @@ async def aangifte_page():
                     'text-caption text-grey-6')
 
                 async def save_and_calc_box3():
-                    bank_val = float(bank_input.value or 0)
-                    overig_val = float(overig_input.value or 0)
-                    schuld_val = float(schuld_input.value or 0)
+                    bank_val = bank_input.value or 0
+                    overig_val = overig_input.value or 0
+                    schuld_val = schuld_input.value or 0
 
                     saved = await update_box3_inputs(
                         DB_PATH, jaar=jaar,
@@ -744,10 +715,6 @@ async def aangifte_page():
                 ui.separator().classes('my-1')
                 _invulhulp_line(BD['box3_belasting'], 'Box 3 belasting',
                                 box3.belasting, bold=True)
-
-    # ============================================================
-    # Tab 4: Overzicht (verification / final summary)
-    # ============================================================
 
     async def render_overzicht():
         overzicht_container.clear()
@@ -837,8 +804,6 @@ async def aangifte_page():
                     'border: 2px solid #0d9488; background: #f0fdfa'):
                 ui.label('Resultaat').classes('text-subtitle1 text-weight-bold')
                 ui.separator().classes('my-1')
-
-                # --- Berekende belasting ---
                 ui.label('Berekende belasting').classes(
                     'text-subtitle2 text-grey-8 q-mt-sm')
                 _line('Netto IB / PVV', f.netto_ib)
@@ -848,8 +813,6 @@ async def aangifte_page():
                 totaal_berekend = f.netto_ib + f.zvw + box3.belasting
                 ui.separator().classes('my-1')
                 _line('Totaal berekend', totaal_berekend, bold=True)
-
-                # --- Reeds betaald (voorlopige aanslagen) ---
                 has_va = (f.voorlopige_aanslag > 0
                           or f.voorlopige_aanslag_zvw > 0)
                 if has_va:
@@ -865,8 +828,6 @@ async def aangifte_page():
                                       + f.voorlopige_aanslag_zvw)
                     ui.separator().classes('my-1')
                     _line('Totaal betaald', -totaal_betaald, bold=True)
-
-                # --- Eindresultaat ---
                 ui.separator().classes('my-2').style(
                     'border-top: 2px solid #0d9488')
 
@@ -902,10 +863,6 @@ async def aangifte_page():
                             'w-full justify-between items-center'):
                         ui.label('Resultaat').classes('text-bold text-h6')
                         ui.label(format_euro(0)).classes('text-bold text-h6')
-
-    # ============================================================
-    # Tab 5: Documenten
-    # ============================================================
 
     async def render_progress(docs):
         progress_container.clear()
@@ -1060,7 +1017,4 @@ async def aangifte_page():
         await render_progress(docs)
         await render_checklist(docs)
 
-    # ============================================================
-    # Initial render
-    # ============================================================
     await refresh_all()

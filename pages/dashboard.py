@@ -224,7 +224,6 @@ async def dashboard_page():
         container.clear()
         with container:
 
-            # === HERO KPI CARDS ===
             with ui.element('div').style(
                     'display: grid; grid-template-columns: repeat(3, 1fr); '
                     'gap: 20px; align-items: stretch'):
@@ -385,7 +384,6 @@ async def dashboard_page():
                         ui.label('Geen gegevens').classes(
                             'context-text').style('margin-top: 8px')
 
-            # === SECONDARY METRICS STRIP ===
             with ui.row().classes('w-full gap-3'):
                 # Uren
                 uren = kpis.get('uren', 0)
@@ -444,7 +442,6 @@ async def dashboard_page():
                             color='positive' if docs_pct >= 100 else 'warning',
                         ).style('margin-top: 6px')
 
-            # === CHARTS ===
             maanden = ['Jan', 'Feb', 'Mrt', 'Apr', 'Mei', 'Jun',
                        'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dec']
             has_kosten = any(d['totaal'] > 0 for d in kosten_per_cat)
@@ -544,7 +541,6 @@ async def dashboard_page():
                     ui.echart(cum_chart_config).style(
                         'height: 300px; width: 100%')
 
-            # === AANDACHTSPUNTEN (only when relevant) ===
             has_ongefact = ongefact and ongefact.get('aantal', 0) > 0
             has_openstaand = len(openstaande) > 0
             if has_ongefact or has_openstaand:

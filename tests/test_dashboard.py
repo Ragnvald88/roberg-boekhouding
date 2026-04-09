@@ -26,7 +26,6 @@ def test_format_euro_negative_zero_decimals():
     assert format_euro(-8177.95, decimals=0) == '\u20ac -8.178'
 
 
-# --- _is_verlopen tests ---
 
 
 def test_verlopen_13_days_ago_not_overdue():
@@ -53,7 +52,6 @@ def test_verlopen_empty_string():
     assert _is_verlopen('') is False
 
 
-# --- generate_csv tests ---
 
 from components.utils import generate_csv
 

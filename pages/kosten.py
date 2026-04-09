@@ -24,12 +24,9 @@ UITGAVEN_DIR = DB_PATH.parent / 'uitgaven'
 
 LEVENSDUUR_OPTIES = {3: '3 jaar', 4: '4 jaar', 5: '5 jaar'}
 
-
 @ui.page('/kosten')
 async def kosten_page():
     create_layout('Kosten', '/kosten')
-
-    # --- State ---
     huidig_jaar = date.today().year
     jaren = year_options()
     filter_jaar = {'value': huidig_jaar}
@@ -52,7 +49,7 @@ async def kosten_page():
          'sortable': True, 'align': 'left'},
         {'name': 'omschrijving', 'label': 'Omschrijving', 'field': 'omschrijving',
          'align': 'left'},
-        {'name': 'bedrag', 'label': 'Bedrag', 'field': 'bedrag_fmt',
+        {'name': 'bedrag', 'label': 'Bedrag', 'field': 'bedrag',
          'sortable': True, 'align': 'right'},
         {'name': 'investering', 'label': 'Inv.', 'field': 'investering',
          'align': 'center'},
@@ -62,9 +59,6 @@ async def kosten_page():
          'align': 'right'},
         {'name': 'acties', 'label': 'Acties', 'field': 'acties', 'align': 'center'},
     ]
-
-    # --- Helpers ---
-
     async def laad_tabel():
         """Reload the expenses table rows (preserves pagination/sort state)."""
         table = kosten_table['ref']
@@ -218,9 +212,6 @@ async def kosten_page():
             ''')
             activa_tbl.on('edit_afschr',
                           lambda e: open_afschrijving_dialog(e.args))
-
-    # --- Afschrijving edit dialog ---
-
     async def open_afschrijving_dialog(row: dict):
         """Open dialog to view/edit per-year depreciation for an investment.
 
@@ -389,8 +380,8 @@ async def kosten_page():
                         val = inp.value
                         if val is not None and val >= 0:
                             await set_afschrijving_override(
-                                DB_PATH, uitgave_id, y, float(val))
-                            overrides[y] = float(val)
+                                DB_PATH, uitgave_id, y, val)
+                            overrides[y] = val
                         elif y in overrides:
                             await delete_afschrijving_override(
                                 DB_PATH, uitgave_id, y)
@@ -409,9 +400,6 @@ async def kosten_page():
         await laad_tabel()
         await laad_summary()
         await laad_activastaat()
-
-    # --- Add dialog ---
-
     async def open_add_uitgave_dialog(prefill: dict | None = None,
                                      on_saved: callable | None = None):
         """Open dialog to add a new expense.
@@ -524,7 +512,7 @@ async def kosten_page():
                         u for u in existing
                         if u.datum == input_datum.value
                         and u.categorie == input_categorie.value
-                        and abs(u.bedrag - float(input_bedrag.value)) < 0.01
+                        and abs(u.bedrag - input_bedrag.value) < 0.01
                     ]
                     if dupes and not getattr(opslaan, '_confirmed_dupe', False):
                         ui.notify(
@@ -543,15 +531,15 @@ async def kosten_page():
                     'datum': input_datum.value,
                     'categorie': input_categorie.value,
                     'omschrijving': input_omschrijving.value,
-                    'bedrag': float(input_bedrag.value),
+                    'bedrag': input_bedrag.value,
                 }
 
-                bedrag = float(input_bedrag.value)
+                bedrag = input_bedrag.value
                 if input_investering.value:
                     kwargs['is_investering'] = 1
                     kwargs['levensduur_jaren'] = input_levensduur.value
-                    kwargs['restwaarde_pct'] = float(input_restwaarde.value or 10)
-                    kwargs['zakelijk_pct'] = float(input_zakelijk.value or 100)
+                    kwargs['restwaarde_pct'] = input_restwaarde.value or 10
+                    kwargs['zakelijk_pct'] = input_zakelijk.value or 100
                     kwargs['aanschaf_bedrag'] = bedrag
 
                 try:
@@ -604,9 +592,6 @@ async def kosten_page():
                 ).props('color=primary')
 
         dialog.open()
-
-    # --- Edit dialog ---
-
     async def open_edit_dialog(row: dict):
         """Open dialog to edit an existing expense."""
         with ui.dialog() as dialog, ui.card().classes('w-full max-w-lg q-pa-md'):
@@ -643,7 +628,6 @@ async def kosten_page():
                 ).classes('w-full')
 
             # Investering fields visibility follows checkbox
-
 
             # Document section
             ui.separator().classes('q-my-sm')
@@ -705,14 +689,14 @@ async def kosten_page():
                         'datum': edit_datum.value,
                         'categorie': edit_categorie.value,
                         'omschrijving': edit_omschrijving.value,
-                        'bedrag': float(edit_bedrag.value),
+                        'bedrag': edit_bedrag.value,
                     }
                     if edit_investering.value:
                         kwargs['is_investering'] = 1
                         kwargs['levensduur_jaren'] = edit_levensduur.value
-                        kwargs['restwaarde_pct'] = float(edit_restwaarde.value or 10)
-                        kwargs['zakelijk_pct'] = float(edit_zakelijk.value or 100)
-                        kwargs['aanschaf_bedrag'] = float(edit_bedrag.value)
+                        kwargs['restwaarde_pct'] = edit_restwaarde.value or 10
+                        kwargs['zakelijk_pct'] = edit_zakelijk.value or 100
+                        kwargs['aanschaf_bedrag'] = edit_bedrag.value
                     else:
                         kwargs['is_investering'] = 0
                         kwargs['levensduur_jaren'] = None
@@ -727,9 +711,6 @@ async def kosten_page():
 
                 ui.button('Opslaan', on_click=bewaar_wijziging).props('color=primary')
         dialog.open()
-
-    # --- Delete confirmation ---
-
     async def confirm_delete(row: dict):
         """Confirm and delete an expense."""
         with ui.dialog() as dialog, ui.card():
@@ -776,9 +757,6 @@ async def kosten_page():
         dest = UITGAVEN_DIR / filename
         await asyncio.to_thread(shutil.copy2, source_path, dest)
         await update_uitgave(DB_PATH, uitgave_id=uitgave_id, pdf_pad=str(dest))
-
-    # --- Import dialog ---
-
     async def open_import_dialog():
         """Open dialog to browse and import expense PDFs from archive."""
         from import_.expense_utils import scan_archive
@@ -926,8 +904,6 @@ async def kosten_page():
         import_dialog.on('hide', lambda: on_import_close())
         import_dialog.open()
 
-    # === PAGE LAYOUT ===
-
     with ui.column().classes('w-full p-6 max-w-7xl mx-auto gap-6'):
 
         # Header row: title + primary action
@@ -984,13 +960,12 @@ async def kosten_page():
 
             jaar_select.on('update:model-value', lambda: on_filter_change())
             cat_select.on('update:model-value', lambda: on_filter_change())
-
-        # --- Table (created once, rows updated via laad_tabel) ---
         with ui.card().classes('w-full'):
             ui.label('Uitgaven').classes('text-subtitle1 text-bold')
             kosten_table['ref'] = ui.table(
                 columns=kosten_columns, rows=[], row_key='id',
-                pagination={'rowsPerPage': 20,
+                pagination={'rowsPerPage': 20, 'sortBy': 'datum',
+                            'descending': True,
                             'rowsPerPageOptions': [10, 20, 50, 0]},
             ).classes('w-full')
             _tbl = kosten_table['ref']
@@ -1004,6 +979,9 @@ async def kosten_page():
             ''')
             _tbl.add_slot('body-cell-datum', '''
                 <q-td :props="props">{{ props.row.datum_fmt }}</q-td>
+            ''')
+            _tbl.add_slot('body-cell-bedrag', '''
+                <q-td :props="props" style="text-align:right">{{ props.row.bedrag_fmt }}</q-td>
             ''')
             _tbl.add_slot('body-cell-acties', '''
                 <q-td :props="props">
@@ -1023,12 +1001,8 @@ async def kosten_page():
             _tbl.on('edit', lambda e: open_edit_dialog(e.args))
             _tbl.on('delete', lambda e: confirm_delete(e.args))
             _tbl.on('viewdoc', lambda e: view_document(e.args))
-
-        # --- Summary ---
         with ui.card().classes('w-full'):
             summary_container['ref'] = ui.column().classes('w-full gap-1')
-
-        # --- Activastaat ---
         with ui.card().classes('w-full'):
             activastaat_container['ref'] = ui.column().classes('w-full gap-1')
 

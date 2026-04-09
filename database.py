@@ -724,7 +724,7 @@ def _row_to_werkdag(r) -> Werkdag:
         klant_naam=r['klant_naam'], code=r['code'] or '',
         activiteit=r['activiteit'] or 'Waarneming dagpraktijk',
         locatie=r['locatie'] or '', uren=r['uren'], km=r['km'] or 0,
-        tarief=r['tarief'], km_tarief=r['km_tarief'] or 0.23,
+        tarief=r['tarief'], km_tarief=r['km_tarief'] if r['km_tarief'] is not None else 0.23,
         factuurnummer=fn,
         status=status,
         opmerking=r['opmerking'] or '',
@@ -1490,7 +1490,15 @@ async def backfill_betaallinks(db_path: Path = DB_PATH) -> int:
 # === Fiscale Parameters ===
 
 def _row_to_fiscale_params(r) -> FiscaleParams:
-    """Convert a database row to FiscaleParams."""
+    """Convert a database row to FiscaleParams.
+
+    Uses explicit None checks (not `or`) for non-zero defaults to avoid
+    silently overriding an intentional 0 value with the fallback.
+    """
+    def _v(val, default):
+        """Return val if not None, else default. Unlike `or`, preserves 0."""
+        return val if val is not None else default
+
     return FiscaleParams(
         jaar=r['jaar'],
         zelfstandigenaftrek=r['zelfstandigenaftrek'] or 0,
@@ -1499,7 +1507,7 @@ def _row_to_fiscale_params(r) -> FiscaleParams:
         kia_ondergrens=r['kia_ondergrens'],
         kia_bovengrens=r['kia_bovengrens'],
         kia_pct=r['kia_pct'],
-        kia_drempel_per_item=r['kia_drempel_per_item'] or 450,
+        kia_drempel_per_item=_v(r['kia_drempel_per_item'], 450),
         km_tarief=r['km_tarief'],
         schijf1_grens=r['schijf1_grens'],
         schijf1_pct=r['schijf1_pct'],
@@ -1512,11 +1520,11 @@ def _row_to_fiscale_params(r) -> FiscaleParams:
         ak_max=r['ak_max'],
         zvw_pct=r['zvw_pct'],
         zvw_max_grondslag=r['zvw_max_grondslag'],
-        repr_aftrek_pct=r['repr_aftrek_pct'] or 80,
-        ew_forfait_pct=r['ew_forfait_pct'] or 0.35,
-        villataks_grens=r['villataks_grens'] or 1_350_000,
-        wet_hillen_pct=r['wet_hillen_pct'] or 0,
-        urencriterium=r['urencriterium'] or 1225,
+        repr_aftrek_pct=_v(r['repr_aftrek_pct'], 80),
+        ew_forfait_pct=_v(r['ew_forfait_pct'], 0.35),
+        villataks_grens=_v(r['villataks_grens'], 1_350_000),
+        wet_hillen_pct=_v(r['wet_hillen_pct'], 0),
+        urencriterium=_v(r['urencriterium'], 1225),
         aov_premie=r['aov_premie'] or 0,
         woz_waarde=r['woz_waarde'] or 0,
         hypotheekrente=r['hypotheekrente'] or 0,
@@ -1527,18 +1535,18 @@ def _row_to_fiscale_params(r) -> FiscaleParams:
         partner_bruto_loon=r['partner_bruto_loon'] or 0,
         partner_loonheffing=r['partner_loonheffing'] or 0,
         arbeidskorting_brackets=r['arbeidskorting_brackets'] or '',
-        pvv_aow_pct=r['pvv_aow_pct'] or 17.90,
-        pvv_anw_pct=r['pvv_anw_pct'] or 0.10,
-        pvv_wlz_pct=r['pvv_wlz_pct'] or 9.65,
+        pvv_aow_pct=_v(r['pvv_aow_pct'], 17.90),
+        pvv_anw_pct=_v(r['pvv_anw_pct'], 0.10),
+        pvv_wlz_pct=_v(r['pvv_wlz_pct'], 9.65),
         box3_bank_saldo=r['box3_bank_saldo'] or 0,
         box3_overige_bezittingen=r['box3_overige_bezittingen'] or 0,
         box3_schulden=r['box3_schulden'] or 0,
-        box3_heffingsvrij_vermogen=r['box3_heffingsvrij_vermogen'] or 57000,
-        box3_rendement_bank_pct=r['box3_rendement_bank_pct'] or 1.03,
-        box3_rendement_overig_pct=r['box3_rendement_overig_pct'] or 6.17,
-        box3_rendement_schuld_pct=r['box3_rendement_schuld_pct'] or 2.46,
-        box3_tarief_pct=r['box3_tarief_pct'] or 36,
-        box3_drempel_schulden=r['box3_drempel_schulden'] or 3700,
+        box3_heffingsvrij_vermogen=_v(r['box3_heffingsvrij_vermogen'], 57000),
+        box3_rendement_bank_pct=_v(r['box3_rendement_bank_pct'], 1.03),
+        box3_rendement_overig_pct=_v(r['box3_rendement_overig_pct'], 6.17),
+        box3_rendement_schuld_pct=_v(r['box3_rendement_schuld_pct'], 2.46),
+        box3_tarief_pct=_v(r['box3_tarief_pct'], 36),
+        box3_drempel_schulden=_v(r['box3_drempel_schulden'], 3700),
         box3_fiscaal_partner=bool(r['box3_fiscaal_partner'] if r['box3_fiscaal_partner'] is not None else 1),
         za_actief=bool(r['za_actief'] if r['za_actief'] is not None else 1),
         sa_actief=bool(r['sa_actief'] if r['sa_actief'] is not None else 0),

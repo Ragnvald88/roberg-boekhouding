@@ -258,8 +258,8 @@ async def open_klant_dialog(klant: dict | None = None,
                     plaats=(f_plaats.value or '').strip(),
                     email=(f_email.value or '').strip(),
                     kvk=(f_kvk.value or '').strip(),
-                    tarief_uur=float(f_tarief.value or 0),
-                    retour_km=float(f_km.value or 0),
+                    tarief_uur=f_tarief.value or 0,
+                    retour_km=f_km.value or 0,
                 )
 
                 if is_edit:

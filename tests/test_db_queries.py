@@ -3,7 +3,7 @@
 import pytest
 from database import (
     add_klant, add_werkdag, add_factuur, add_uitgave,
-    add_banktransacties, mark_betaald,
+    add_banktransacties,
     get_omzet_totaal, get_omzet_per_maand, get_representatie_totaal,
     get_debiteuren_op_peildatum,
     find_factuur_matches, apply_factuur_matches,
@@ -14,9 +14,6 @@ from database import (
 )
 
 
-# ============================================================
-# get_omzet_totaal
-# ============================================================
 
 @pytest.mark.asyncio
 async def test_get_omzet_totaal_empty(db):
@@ -49,9 +46,6 @@ async def test_get_omzet_totaal_filters_by_year(db):
     assert await get_omzet_totaal(db, jaar=2025) == 1000
 
 
-# ============================================================
-# get_representatie_totaal
-# ============================================================
 
 @pytest.mark.asyncio
 async def test_get_representatie_totaal_empty(db):
@@ -81,9 +75,6 @@ async def test_get_representatie_totaal_filters_by_year(db):
     assert await get_representatie_totaal(db, jaar=2026) == 45.00
 
 
-# ============================================================
-# get_nog_te_factureren
-# ============================================================
 
 @pytest.mark.asyncio
 async def test_get_nog_te_factureren_empty(db):
@@ -119,9 +110,6 @@ async def test_get_nog_te_factureren_calculates_correctly(db):
     assert abs(result - 1341.42) < 0.01
 
 
-# ============================================================
-# get_kpis
-# ============================================================
 
 @pytest.mark.asyncio
 async def test_get_kpis_empty(db):
@@ -165,9 +153,6 @@ async def test_get_kpis_with_data(db):
     assert kpis['openstaand'] == 700
 
 
-# ============================================================
-# get_data_counts
-# ============================================================
 
 @pytest.mark.asyncio
 async def test_get_data_counts_empty(db):
@@ -203,9 +188,6 @@ async def test_get_data_counts_with_data(db):
     assert counts['n_werkdagen'] == 3
 
 
-# ============================================================
-# get_debiteuren_op_peildatum (year-end receivables)
-# ============================================================
 
 @pytest.mark.asyncio
 async def test_debiteuren_peildatum_empty(db):
@@ -263,9 +245,6 @@ async def test_debiteuren_peildatum_future_invoices_excluded(db):
     assert await get_debiteuren_op_peildatum(db, peildatum='2026-12-31') == 0.0
 
 
-# ============================================================
-# find_factuur_matches + apply_factuur_matches
-# ============================================================
 
 @pytest.mark.asyncio
 async def test_find_matches_by_nummer(db):
@@ -543,9 +522,6 @@ async def test_find_matches_91_day_upper_bound_fail(db):
     assert len(matches) == 0
 
 
-# ============================================================
-# Afschrijving overrides CRUD
-# ============================================================
 
 @pytest.mark.asyncio
 async def test_set_and_get_override(db):
@@ -627,9 +603,6 @@ async def test_override_cascade_delete(db):
     assert overrides == {}
 
 
-# ============================================================
-# get_va_betalingen (IB/ZVW split from bank transactions)
-# ============================================================
 
 BELASTINGDIENST_IBAN = 'NL86INGB0002445588'
 
@@ -681,9 +654,6 @@ async def test_get_va_betalingen_no_kenmerk_fallback(db):
     assert result['zvw_termijnen'] == 0
 
 
-# ============================================================
-# Vergoeding classification + get_openstaande_facturen
-# ============================================================
 
 CLASSIFY_VERGOEDING_SQL = """
     UPDATE facturen SET type = 'vergoeding'
@@ -776,9 +746,6 @@ async def test_openstaande_facturen_includes_vergoedingen(db):
     assert "2026-100" not in nummers  # betaald excluded
 
 
-# ============================================================
-# Task 1: Concept facturen exclusion
-# ============================================================
 
 @pytest.mark.asyncio
 async def test_debiteuren_peildatum_excludes_concept(db):
@@ -830,9 +797,6 @@ async def test_omzet_excludes_concept_regression(db):
     assert await get_omzet_totaal(db, jaar=2026) == 1000  # concept excluded
 
 
-# ============================================================
-# Task 2: apply_factuur_matches status validation
-# ============================================================
 
 @pytest.mark.asyncio
 async def test_apply_matches_only_verstuurd(db):
@@ -878,9 +842,6 @@ async def test_apply_matches_only_verstuurd(db):
         assert (await cur.fetchone())['status'] == 'betaald'  # changed!
 
 
-# ============================================================
-# get_kpis — concept exclusion
-# ============================================================
 
 @pytest.mark.asyncio
 async def test_kpis_omzet_excludes_concept(db):
@@ -896,9 +857,6 @@ async def test_kpis_omzet_excludes_concept(db):
     assert kpis['omzet'] == 5000.00, f"Concept should be excluded from KPI omzet, got {kpis['omzet']}"
 
 
-# ============================================================
-# Duplicate factuurnummer rejection
-# ============================================================
 
 @pytest.mark.asyncio
 async def test_duplicate_factuurnummer_rejected(db):
@@ -912,9 +870,6 @@ async def test_duplicate_factuurnummer_rejected(db):
                           datum='2024-02-01', totaal_bedrag=200.00)
 
 
-# ============================================================
-# get_kpis_tot_datum (YoY comparison — HIGH priority gap)
-# ============================================================
 
 @pytest.mark.asyncio
 async def test_kpis_tot_datum_basic(db):
@@ -975,9 +930,6 @@ async def test_kpis_tot_datum_includes_kosten(db):
     assert result['kosten'] == 10.00  # only Jan uitgave
 
 
-# ============================================================
-# get_omzet_per_maand (sparkline data — HIGH priority gap)
-# ============================================================
 
 @pytest.mark.asyncio
 async def test_omzet_per_maand_basic(db):
@@ -1023,9 +975,6 @@ async def test_omzet_per_maand_empty_year(db):
     assert months == [0] * 12
 
 
-# ============================================================
-# update_klant
-# ============================================================
 
 from database import update_klant, get_klanten, factuurnummer_exists
 
@@ -1059,9 +1008,6 @@ async def test_update_klant_email(db):
     assert k.naam == "EmailTest"  # unchanged
 
 
-# ============================================================
-# factuurnummer_exists
-# ============================================================
 
 
 @pytest.mark.asyncio

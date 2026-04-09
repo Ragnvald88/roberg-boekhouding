@@ -17,12 +17,9 @@ from database import (
 from components.shared_ui import year_options
 from import_.rabobank_csv import parse_rabobank_csv
 
-
 @ui.page('/bank')
 async def bank_page():
     create_layout('Bank', '/bank')
-
-    # --- State ---
     current_year = datetime.now().year
     selected_jaar = {'value': current_year}
     selected_maand = {'value': 0}  # 0 = alle maanden
@@ -32,9 +29,6 @@ async def bank_page():
     csv_list_container = {'ref': None}
     bulk_bar_ref = {'ref': None}
     bulk_label_ref = {'ref': None}
-
-    # --- Helper functions ---
-
     async def load_transacties() -> list[dict]:
         """Load transactions from DB, apply year/month filter."""
         transacties = await get_banktransacties(DB_PATH, jaar=selected_jaar['value'])
@@ -206,8 +200,6 @@ async def bank_page():
                 ui.button('Verwijderen', on_click=do_bulk) \
                     .props('color=negative')
         dialog.open()
-
-    # --- Page layout ---
     with ui.column().classes('w-full p-6 max-w-7xl mx-auto gap-6'):
         # Header row: title + primary action
         with ui.row().classes('w-full items-center'):
@@ -300,7 +292,7 @@ async def bank_page():
         columns = [
             {'name': 'datum', 'label': 'Datum', 'field': 'datum', 'sortable': True,
              'align': 'left'},
-            {'name': 'bedrag_fmt', 'label': 'Bedrag', 'field': 'bedrag_fmt',
+            {'name': 'bedrag_fmt', 'label': 'Bedrag', 'field': 'bedrag',
              'sortable': True, 'align': 'right'},
             {'name': 'tegenpartij', 'label': 'Tegenpartij', 'field': 'tegenpartij',
              'sortable': True, 'align': 'left'},
@@ -313,7 +305,11 @@ async def bank_page():
             {'name': 'actions', 'label': '', 'field': 'actions', 'align': 'center'},
         ]
 
-        initial_rows = await load_transacties()
+        try:
+            initial_rows = await load_transacties()
+        except Exception as exc:
+            initial_rows = []
+            ui.notify(f'Fout bij laden transacties: {exc}', type='negative')
 
         table = ui.table(
             columns=columns,
@@ -326,7 +322,7 @@ async def bank_page():
         table_ref['table'] = table
 
         # Custom cell rendering for bedrag color, categorie dropdown, actions
-        table.add_slot('body', r'''
+        table.add_slot('body', r"""
             <q-tr :props="props"
                    :class="{
                        'bg-teal-1': props.row.status === 'gekoppeld',
@@ -349,7 +345,7 @@ async def bank_page():
                 <q-td key="categorie" :props="props">
                     <q-select
                         v-model="props.row.categorie"
-                        :options="''' + json.dumps(BANK_CATEGORIEEN) + r'''"
+                        :options='""" + json.dumps(BANK_CATEGORIEEN) + r"""'
                         dense outlined
                         emit-value map-options
                         @update:model-value="(val) => $parent.$emit('cat_change', {id: props.row.id, cat: val})"
@@ -363,7 +359,7 @@ async def bank_page():
                         title="Verwijderen" />
                 </q-td>
             </q-tr>
-        ''')
+        """)
 
         table.add_slot('no-data', '''
             <q-tr><q-td colspan="100%" class="text-center q-pa-lg text-grey">

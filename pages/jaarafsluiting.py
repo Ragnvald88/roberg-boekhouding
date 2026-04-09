@@ -22,10 +22,6 @@ from database import (
     DB_PATH,
 )
 
-
-# === Shared helpers ===
-
-
 def _balans_line(label: str, value: float, bold: bool = False, indent: bool = False):
     """Render a balance sheet line."""
     css = 'text-bold' if bold else ''
@@ -34,9 +30,6 @@ def _balans_line(label: str, value: float, bold: bool = False, indent: bool = Fa
         ui.label(label).classes(css)
         ui.label(format_euro(value)).classes(f'{css} text-right') \
             .style('min-width: 120px; font-variant-numeric: tabular-nums')
-
-
-# === Data loading ===
 
 async def _load_year_data(jaar: int):
     """Load all business data for a year. Returns (data, balans, winst, vorig_jaar_balans) or None."""
@@ -77,17 +70,12 @@ async def _load_year_data(jaar: int):
     vj_w = vj_winst if vorig_jaar_data else None
     return data, balans, winst, vorig_jaar_balans, vorig_jaar_data, vj_w
 
-
-# === Page ===
-
 @ui.page('/jaarafsluiting')
 async def jaarafsluiting_page():
     create_layout('Jaarafsluiting', active_page='/jaarafsluiting')
 
     vorig_jaar = date.today().year - 1
     state = {'jaar': vorig_jaar, 'editing': False}
-
-    # --- Containers ---
     with ui.column().classes('w-full max-w-7xl mx-auto p-6 gap-4'):
         # Header row: title + actions
         with ui.row().classes('w-full items-center'):
@@ -125,9 +113,6 @@ async def jaarafsluiting_page():
             toelichting_panel = ui.tab_panel(tab_toelichting)
             controles_panel = ui.tab_panel(tab_controles)
             document_panel = ui.tab_panel(tab_document)
-
-    # --- Render functions ---
-
     async def render_all():
         """Load data and render all tabs."""
         jaar = state['jaar']
@@ -186,7 +171,6 @@ async def jaarafsluiting_page():
 
         with balans_panel:
             with ui.row().classes('w-full gap-6'):
-                # === Activa ===
                 with ui.column().classes('flex-1'):
                     ui.label('Activa').classes('text-h6 text-primary')
 
@@ -215,7 +199,6 @@ async def jaarafsluiting_page():
                     ui.separator().classes('q-my-sm')
                     _balans_line('Totaal activa', balans['totaal_activa'], bold=True)
 
-                # === Passiva ===
                 with ui.column().classes('flex-1'):
                     ui.label('Passiva').classes('text-h6 text-primary')
 
@@ -464,7 +447,6 @@ async def jaarafsluiting_page():
         jaar = state['jaar']
 
         with controles_panel:
-            # === Section 1: Kengetallen ===
             ui.label('Kengetallen').classes('text-h6 text-primary')
 
             # Kosten/omzet ratio
@@ -513,7 +495,6 @@ async def jaarafsluiting_page():
                     ui.label(f'Verschil: {format_euro(diff)}') \
                         .classes('text-caption text-negative q-mt-xs')
 
-            # === Section 2: Data-integriteit ===
             ui.label('Data-integriteit').classes('text-h6 text-primary q-mt-lg')
 
             issues = []
@@ -726,9 +707,6 @@ async def jaarafsluiting_page():
                 'border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; '
                 'background: white; max-height: 80vh; overflow-y: auto;'
             )
-
-    # --- Actions ---
-
     async def toggle_edit():
         state['editing'] = not state['editing']
         await render_all()
@@ -785,10 +763,6 @@ async def jaarafsluiting_page():
 
     # Initial render
     await render_all()
-
-
-
-# === PDF Template Rendering ===
 
 def _render_pdf_html(jaar, data, balans, winst, vorig_jaar_balans,
                      bedrijfsnaam='', kvk=''):

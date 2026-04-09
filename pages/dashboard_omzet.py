@@ -70,11 +70,11 @@ async def omzet_detail_page():
                 columns = [
                     {'name': 'naam', 'label': 'Klant', 'field': 'naam',
                      'sortable': True, 'align': 'left'},
-                    {'name': 'uren', 'label': 'Uren', 'field': 'uren_fmt',
+                    {'name': 'uren', 'label': 'Uren', 'field': 'uren',
                      'sortable': True, 'align': 'right'},
-                    {'name': 'km', 'label': 'Km', 'field': 'km_fmt',
+                    {'name': 'km', 'label': 'Km', 'field': 'km',
                      'align': 'right'},
-                    {'name': 'bedrag', 'label': 'Bedrag', 'field': 'bedrag_fmt',
+                    {'name': 'bedrag', 'label': 'Bedrag', 'field': 'bedrag',
                      'sortable': True, 'align': 'right'},
                     {'name': 'pct', 'label': '% van totaal', 'field': 'pct',
                      'align': 'right'},
@@ -84,16 +84,27 @@ async def omzet_detail_page():
                     pct = (r['bedrag'] / totaal_bedrag * 100) if totaal_bedrag > 0 else 0
                     rows.append({
                         'naam': r['naam'],
+                        'uren': r['uren'],
                         'uren_fmt': f"{r['uren']:.1f}",
+                        'km': r['km'],
                         'km_fmt': f"{r['km']:.0f}",
+                        'bedrag': r['bedrag'],
                         'bedrag_fmt': format_euro(r['bedrag']),
                         'pct': f"{pct:.1f}%",
-                        'bedrag': r['bedrag'],
                     })
 
-                ui.table(
+                tbl = ui.table(
                     columns=columns, rows=rows, row_key='naam',
                 ).classes('w-full').props('dense flat')
+                tbl.add_slot('body-cell-uren', '''
+                    <q-td :props="props" style="text-align:right">{{ props.row.uren_fmt }}</q-td>
+                ''')
+                tbl.add_slot('body-cell-km', '''
+                    <q-td :props="props" style="text-align:right">{{ props.row.km_fmt }}</q-td>
+                ''')
+                tbl.add_slot('body-cell-bedrag', '''
+                    <q-td :props="props" style="text-align:right">{{ props.row.bedrag_fmt }}</q-td>
+                ''')
 
                 ui.separator()
                 with ui.row().classes('w-full justify-between'):

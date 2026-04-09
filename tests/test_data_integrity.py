@@ -35,7 +35,6 @@ async def test_delete_linked_werkdag_raises(db):
         await delete_werkdag(db, werkdag_id=wid)
 
 
-# --- Factuur deletion guards ---
 
 async def _create_factuur(db, status='concept'):
     """Helper: maak klant + werkdag + factuur met opgegeven status."""
@@ -82,7 +81,6 @@ async def test_delete_verstuurd_factuur_raises(db):
         await delete_factuur(db, factuur_id=fid)
 
 
-# --- Status transition validation ---
 
 @pytest.mark.asyncio
 async def test_invalid_status_transition_raises(db):
@@ -106,7 +104,6 @@ async def test_valid_status_transitions(db):
     # Should not raise
 
 
-# --- Non-werkdag business km (uren=0) ---
 
 @pytest.mark.asyncio
 async def test_add_werkdag_zero_uren_succeeds(db):

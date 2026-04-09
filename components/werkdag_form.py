@@ -29,7 +29,6 @@ CODES = {
 # Codes where uren=0 is expected (non-patient business trips)
 _ZERO_UREN_CODES = {'CONGRES', 'OPLEIDING', 'OVERIG_ZAK'}
 
-
 async def open_werkdag_dialog(on_save=None, werkdag=None):
     """Open dialog for adding or editing a werkdag.
 
@@ -63,9 +62,6 @@ async def open_werkdag_dialog(on_save=None, werkdag=None):
         ui.label(
             'Werkdag bewerken' if is_edit else 'Werkdag toevoegen'
         ).classes('text-h6 q-mb-md')
-
-        # --- Section 1: Datum, Klant, Locatie ---
-
         # Row 1: Datum (full width)
         datum_input = date_input(
             'Datum',
@@ -90,9 +86,6 @@ async def open_werkdag_dialog(on_save=None, werkdag=None):
             ).classes('w-full')
 
         ui.separator().classes('q-my-sm')
-
-        # --- Section 2: Activiteit + Uren ---
-
         # Code options: show human-readable descriptions as labels
         code_options = dict(CODES)  # {code: description}
         if is_edit and werkdag.code and werkdag.code not in code_options:
@@ -113,9 +106,6 @@ async def open_werkdag_dialog(on_save=None, werkdag=None):
             ).classes('w-24')
 
         ui.separator().classes('q-my-sm')
-
-        # --- Section 3: Tarief + Km ---
-
         with ui.row().classes('w-full gap-4 items-end'):
             tarief_input = ui.number(
                 'Tarief (\u20ac/uur)',
@@ -272,9 +262,9 @@ async def open_werkdag_dialog(on_save=None, werkdag=None):
                 locatie=locatie_text,
                 locatie_id=loc_id if loc_id else None,
                 uren=uren_input.value,
-                km=km_input.value,
+                km=km_input.value or 0,
                 tarief=tarief_input.value,
-                km_tarief=km_tarief_input.value,
+                km_tarief=km_tarief_input.value or 0,
                 urennorm=1 if urennorm_check.value else 0,
                 opmerking=opmerking_input.value or '',
             )

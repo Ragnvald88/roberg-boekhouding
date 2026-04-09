@@ -10,13 +10,9 @@ from database import (
     DB_PATH,
 )
 
-
 @ui.page('/klanten')
 async def klanten_page():
     create_layout('Klanten', '/klanten')
-
-    # --- Dialog functions (unchanged) ---
-
     async def open_edit_dialog(row: dict):
         """Open shared klant dialog in edit mode."""
         await open_klant_dialog(
@@ -60,9 +56,6 @@ async def klanten_page():
         await open_klant_dialog(
             on_save=lambda _id, _naam: refresh_klanten(),
         )
-
-    # --- Refresh: only update data ---
-
     async def refresh_klanten():
         """Reload klanten table rows (preserves pagination/sort state)."""
         klanten = await get_klanten(DB_PATH)
@@ -84,13 +77,11 @@ async def klanten_page():
         _tbl.rows = rows
         _tbl.update()
 
-    # === PAGE LAYOUT (created once) ===
-
     columns = [
         {'name': 'naam', 'label': 'Naam', 'field': 'naam',
          'align': 'left', 'sortable': True},
         {'name': 'tarief', 'label': 'Tarief/uur',
-         'field': 'tarief_fmt', 'align': 'right', 'sortable': True},
+         'field': 'tarief_uur', 'align': 'right', 'sortable': True},
         {'name': 'km', 'label': 'Retour km', 'field': 'retour_km',
          'align': 'right', 'sortable': True},
         {'name': 'adres', 'label': 'Adres', 'field': 'adres',
@@ -110,14 +101,15 @@ async def klanten_page():
                 'Nieuwe klant', icon='add',
                 on_click=lambda: open_add_dialog(),
             ).props('color=primary')
-
-        # --- Table (created once, rows updated via refresh_klanten) ---
         _tbl = ui.table(
             columns=columns, rows=[], row_key='id',
             pagination={'rowsPerPage': 20,
                         'rowsPerPageOptions': [10, 20, 50, 0]},
         ).classes('w-full')
 
+        _tbl.add_slot('body-cell-tarief', '''
+            <q-td :props="props" style="text-align:right">{{ props.row.tarief_fmt }}</q-td>
+        ''')
         _tbl.add_slot('body-cell-actions', '''
             <q-td :props="props">
                 <q-btn icon="edit" flat dense round size="sm"

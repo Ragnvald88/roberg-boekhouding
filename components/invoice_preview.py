@@ -46,7 +46,7 @@ def render_invoice_html(nummer: str = '', klant: dict = None,
     # Compute line item bedrag if not provided
     for r in regels:
         if 'bedrag' not in r:
-            r['bedrag'] = r.get('aantal', 0) * r.get('tarief', 0)
+            r['bedrag'] = (r.get('aantal', 0) or 0) * (r.get('tarief', 0) or 0)
 
     # Calculate totals
     subtotaal_werk = sum(r['bedrag'] for r in regels

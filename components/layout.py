@@ -2,7 +2,6 @@
 
 from nicegui import ui
 
-# === Global component defaults ===
 ui.card.default_props('flat bordered')
 ui.card.default_classes('rounded-xl')
 ui.button.default_props('unelevated no-caps')
@@ -11,7 +10,6 @@ ui.number.default_props('outlined dense')
 ui.select.default_props('outlined dense')
 ui.table.default_props('flat bordered separator=horizontal')
 
-# === Global shared CSS ===
 ui.add_css('''
 @layer components {
     /* Table header styling */
@@ -146,7 +144,6 @@ def create_layout(title: str, active_page: str = ''):
     # Off-white page background
     ui.query('body').style('background-color: #F8FAFC')
 
-    # === Header ===
     with ui.header().classes('items-center shadow-sm') \
             .style('background-color: #0F172A'):
         ui.button(icon='menu', on_click=lambda: drawer.toggle()) \
@@ -155,7 +152,6 @@ def create_layout(title: str, active_page: str = ''):
         ui.space()
         ui.label(title).classes('text-subtitle1').style('color: #CBD5E1')
 
-    # === Dark sidebar ===
     drawer = ui.left_drawer(value=True, bordered=False) \
         .style('background-color: #0F172A') \
         .props('width=180')

@@ -18,7 +18,6 @@ AANGIFTE_DIR = DB_PATH.parent / 'aangifte'
 AANGIFTE_DIR.mkdir(parents=True, exist_ok=True)
 app.add_static_files('/aangifte-files', str(AANGIFTE_DIR))
 
-
 @ui.page('/documenten')
 async def documenten_page():
     create_layout('Documenten', '/documenten')
@@ -130,9 +129,6 @@ async def documenten_page():
 
         # Category cards
         cards_container = ui.column().classes('w-full gap-4')
-
-    # --- Helpers ---
-
     async def show_preview(bestandspad: str, bestandsnaam: str):
         """Show document preview in a dialog."""
         with ui.dialog() as dlg, \
@@ -253,10 +249,6 @@ async def documenten_page():
 
     jaar_select.on_value_change(lambda _: refresh())
     await refresh()
-
-
-# --- Row renderers (extracted for readability) ---
-
 def _render_auto_row(spec, auto_done: bool):
     """Render a row for auto-generated documents (jaarafsluiting)."""
     with ui.row().classes('w-full items-center q-py-sm gap-3'):
@@ -272,7 +264,6 @@ def _render_auto_row(spec, auto_done: bool):
             'Jaarafsluiting', icon='link',
             on_click=lambda: ui.navigate.to('/jaarafsluiting'),
         ).props('flat dense color=primary size=sm')
-
 
 def _render_uploaded_rows(spec, existing, jaar, show_preview_fn, refresh_fn):
     """Render rows for uploaded documents."""
@@ -362,7 +353,6 @@ def _render_uploaded_rows(spec, existing, jaar, show_preview_fn, refresh_fn):
                 'flat color=primary dense '
                 'accept=".pdf,.jpg,.jpeg,.png"'
             ).classes('w-40')
-
 
 def _render_missing_row(spec, jaar, refresh_fn):
     """Render a row for a missing (not yet uploaded) document."""

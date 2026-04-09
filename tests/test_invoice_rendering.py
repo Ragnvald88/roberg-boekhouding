@@ -7,9 +7,6 @@ from components.invoice_preview import render_invoice_html
 from components.invoice_builder import _werkdagen_to_line_items, _build_regels
 
 
-# ============================================================
-# render_invoice_html tests (item 18)
-# ============================================================
 
 _BEDRIJF = {
     'bedrijfsnaam': 'TestBedrijf', 'naam': 'J. de Test',
@@ -151,9 +148,6 @@ def test_render_invalid_date_falls_back():
     assert 'FACTUUR' in html
 
 
-# ============================================================
-# _werkdagen_to_line_items tests (item 19)
-# ============================================================
 
 def _make_werkdag(**kwargs):
     """Create a werkdag-like object (SimpleNamespace) with defaults."""
@@ -257,9 +251,6 @@ def test_werkdagen_to_line_items_empty():
     assert items == []
 
 
-# ============================================================
-# Subtotal calculation tests using is_reiskosten (item 20)
-# ============================================================
 
 def test_subtotal_split_with_is_reiskosten():
     """Subtotals correctly split werk vs reiskosten using is_reiskosten flag."""

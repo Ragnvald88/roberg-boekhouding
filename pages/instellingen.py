@@ -13,7 +13,6 @@ from database import (
     get_bedrijfsgegevens, upsert_bedrijfsgegevens, get_db_ctx, DB_PATH,
 )
 
-
 @ui.page('/instellingen')
 async def instellingen_page():
     create_layout('Instellingen', '/instellingen')
@@ -28,7 +27,6 @@ async def instellingen_page():
 
         with ui.tab_panels(tabs, value=tab_bedrijf).classes('w-full'):
 
-            # === TAB: Bedrijfsgegevens ===
             with ui.tab_panel(tab_bedrijf):
                 bedrijf_container = ui.column().classes('w-full')
 
@@ -113,7 +111,6 @@ async def instellingen_page():
 
                 await refresh_bedrijf()
 
-            # === TAB: Fiscale parameters ===
             with ui.tab_panel(tab_fiscaal):
                 fiscaal_container = ui.column().classes('w-full')
 
@@ -237,6 +234,7 @@ async def instellingen_page():
                                             ('AHK max', 'ahk_max'),
                                             ('AHK afbouw %', 'ahk_afbouw_pct'),
                                             ('AHK drempel', 'ahk_drempel'),
+                                            ('AK max', 'ak_max'),
                                         ]),
                                         ('ZVW', [
                                             ('ZVW %', 'zvw_pct'),
@@ -268,8 +266,6 @@ async def instellingen_page():
                                                 format='%.2f'
                                             ).classes('w-full')
                                             inputs[key] = inp
-
-                                # --- ZA/SA toggles ---
                                 ui.label('Ondernemersaftrek toggles').classes(
                                     'text-subtitle2 mt-4')
                                 za_cb = ui.checkbox(
@@ -282,8 +278,6 @@ async def instellingen_page():
                                     value=params.sa_actief,
                                 )
                                 inputs['sa_actief'] = sa_cb
-
-                                # --- PVV premies ---
                                 ui.label('PVV premies').classes(
                                     'text-subtitle2 mt-4')
                                 pvv_fields = [
@@ -300,8 +294,6 @@ async def instellingen_page():
                                             format='%.2f', step=0.01,
                                         )
                                         inputs[key] = inp
-
-                                # --- Box 3 parameters ---
                                 ui.label('Box 3 parameters').classes(
                                     'text-subtitle2 mt-4')
                                 box3_fields = [
@@ -327,8 +319,6 @@ async def instellingen_page():
                                             format=fmt, step=step,
                                         )
                                         inputs[key] = inp
-
-                                # --- Arbeidskorting schijven (read-only) ---
                                 ui.label('Arbeidskorting schijven').classes(
                                     'text-subtitle2 mt-4')
                                 if params.arbeidskorting_brackets:
@@ -379,8 +369,6 @@ async def instellingen_page():
                                     ui.label(
                                         'Brackets uit standaard Python-code'
                                     ).classes('text-grey')
-
-                                # --- Save button ---
                                 # Capture all_fields for save closure
                                 all_fields = (
                                     fields
@@ -416,7 +404,6 @@ async def instellingen_page():
 
                 await refresh_fiscaal()
 
-            # === TAB: Backup ===
             with ui.tab_panel(tab_backup):
                 ui.label('Database backup').classes('text-subtitle1 text-bold q-mb-md')
                 ui.label(

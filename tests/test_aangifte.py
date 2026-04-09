@@ -158,9 +158,6 @@ async def test_upsert_preserves_partner_fields(db):
     assert params.partner_loonheffing == 11000.00
 
 
-# ============================================================
-# DD-MM-YYYY datum migration tests
-# ============================================================
 
 @pytest.mark.asyncio
 async def test_ddmmyyyy_migration_fixes_uitgaven(tmp_path):
@@ -259,9 +256,6 @@ async def test_add_werkdag_rejects_bad_date(db):
             db, datum='27-01-2024', klant_id=klant_id, uren=8, tarief=80)
 
 
-# ============================================================
-# fiscal_utils tests
-# ============================================================
 
 @pytest.mark.asyncio
 async def test_fiscale_params_to_dict(db):
@@ -304,9 +298,6 @@ async def test_fetch_fiscal_data_returns_data(db):
     assert result['omzet'] == 0.0  # no facturen in test DB
 
 
-# ============================================================
-# update_ew_naar_partner tests
-# ============================================================
 
 @pytest.mark.asyncio
 async def test_update_ew_naar_partner_roundtrip(db):
@@ -354,9 +345,6 @@ async def test_upsert_preserves_ew_naar_partner(db):
     assert params.ew_naar_partner is False
 
 
-# ============================================================
-# bereken_balans tests
-# ============================================================
 
 @pytest.mark.asyncio
 async def test_bereken_balans_empty(db):
@@ -460,9 +448,6 @@ async def test_bereken_balans_no_params(db):
     assert result['eigen_vermogen'] == 1000.0
 
 
-# ============================================================
-# fetch_fiscal_data → bereken_volledig pipeline integration test
-# ============================================================
 
 @pytest.mark.asyncio
 async def test_fetch_to_bereken_pipeline(db):
@@ -519,3 +504,53 @@ async def test_fetch_to_bereken_pipeline(db):
     assert f.uren_criterium_gehaald is False
     assert f.zelfstandigenaftrek == 0
     assert f.startersaftrek == 0
+
+
+@pytest.mark.asyncio
+async def test_fiscale_params_preserves_explicit_zero(db):
+    """Explicit zero values must NOT be overridden by non-zero defaults.
+
+    Regression test for the `or non_zero_default` bug in _row_to_fiscale_params:
+    `0 or 17.90` evaluates to 17.90 in Python, silently replacing the intended 0.
+    The fix uses `val if val is not None else default`.
+    """
+    # Start with a complete set of params (2025 seed data), override zeros
+    base = dict(FISCALE_PARAMS[2025])
+    base['jaar'] = 2099
+    # Set all fields that had non-zero defaults to explicit 0
+    base['kia_drempel_per_item'] = 0
+    base['ew_forfait_pct'] = 0
+    base['villataks_grens'] = 0
+    base['pvv_aow_pct'] = 0
+    base['pvv_anw_pct'] = 0
+    base['pvv_wlz_pct'] = 0
+    base['repr_aftrek_pct'] = 0
+    base['box3_rendement_bank_pct'] = 0
+    base['box3_rendement_overig_pct'] = 0
+    base['box3_rendement_schuld_pct'] = 0
+    base['box3_tarief_pct'] = 0
+    base['box3_heffingsvrij_vermogen'] = 0
+    base['box3_drempel_schulden'] = 0
+    base['urencriterium'] = 0
+    base['wet_hillen_pct'] = 0
+
+    await upsert_fiscale_params(db, **base)
+    params = await get_fiscale_params(db, jaar=2099)
+    assert params is not None
+
+    # All these must be 0, NOT the old hardcoded defaults
+    assert params.pvv_aow_pct == 0, f"Expected 0, got {params.pvv_aow_pct} (default 17.90 leak)"
+    assert params.pvv_anw_pct == 0, f"Expected 0, got {params.pvv_anw_pct} (default 0.10 leak)"
+    assert params.pvv_wlz_pct == 0, f"Expected 0, got {params.pvv_wlz_pct} (default 9.65 leak)"
+    assert params.repr_aftrek_pct == 0, f"Expected 0, got {params.repr_aftrek_pct} (default 80 leak)"
+    assert params.box3_rendement_bank_pct == 0, f"Expected 0, got {params.box3_rendement_bank_pct}"
+    assert params.box3_rendement_overig_pct == 0, f"Expected 0, got {params.box3_rendement_overig_pct}"
+    assert params.box3_rendement_schuld_pct == 0, f"Expected 0, got {params.box3_rendement_schuld_pct}"
+    assert params.box3_tarief_pct == 0, f"Expected 0, got {params.box3_tarief_pct} (default 36 leak)"
+    assert params.box3_heffingsvrij_vermogen == 0, f"Expected 0, got {params.box3_heffingsvrij_vermogen}"
+    assert params.box3_drempel_schulden == 0, f"Expected 0, got {params.box3_drempel_schulden}"
+    assert params.urencriterium == 0, f"Expected 0, got {params.urencriterium} (default 1225 leak)"
+    assert params.wet_hillen_pct == 0, f"Expected 0, got {params.wet_hillen_pct}"
+    assert params.kia_drempel_per_item == 0, f"Expected 0, got {params.kia_drempel_per_item} (default 450 leak)"
+    assert params.ew_forfait_pct == 0, f"Expected 0, got {params.ew_forfait_pct} (default 0.35 leak)"
+    assert params.villataks_grens == 0, f"Expected 0, got {params.villataks_grens} (default 1350000 leak)"

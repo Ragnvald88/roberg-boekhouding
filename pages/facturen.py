@@ -353,7 +353,7 @@ async def facturen_page():
                        color="grey-7">
                     <q-menu auto-close>
                         <q-list dense style="min-width: 200px">
-                            <q-item v-if="props.row.status !== 'betaald'" clickable
+                            <q-item v-if="props.row.status === 'concept' && props.row.bron !== 'import'" clickable
                                 @click="() => $parent.$emit('edit', props.row)">
                                 <q-item-section side>
                                     <q-icon name="edit" size="xs"

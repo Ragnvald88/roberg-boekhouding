@@ -124,7 +124,7 @@ def _build_regels(line_items: list[dict]) -> list[dict]:
 
 def _calc_totals(line_items):
     """Calculate totals from line items. Returns (uren, km, bedrag, type)."""
-    uren = sum(li.get('aantal', 0) for li in line_items
+    uren = sum((li.get('aantal', 0) or 0) for li in line_items
                if not li.get('is_reiskosten'))
     km = sum(li.get('km', 0) or 0 for li in line_items)
     bedrag = sum(
@@ -191,7 +191,6 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None,
         if w.tarief > 0 and w.datum[:4] >= str(jaar - 1):
             ongefactureerd_per_klant.setdefault(w.klant_id, []).append(w)
 
-    # --- State ---
     line_items = []  # list of dicts: {datum, omschrijving, aantal, tarief, werkdag_id}
     matched_klant_id = {'value': None}
     preview_timer = {'handle': None}
@@ -219,12 +218,10 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None,
         _logo_b64 = base64.b64encode(logo_files[0].read_bytes()).decode('ascii')
         preview_logo_url = f'data:{_mime_map.get(_ext, "image/png")};base64,{_logo_b64}'
 
-    # --- Dialog ---
     with ui.dialog().props('maximized') as dlg, \
             ui.card().classes('w-full h-full q-pa-none'):
 
         with ui.row().classes('w-full h-full no-wrap'):
-            # ═══════════════ LEFT PANEL ═══════════════
             with ui.column().classes(
                 'q-pa-md builder-panel-border'
             ).style(
@@ -310,14 +307,10 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None,
                     ).props('outlined dense').classes('flex-1')
 
                 def _fill_klant_fields(kl):
-                    if kl.adres:
-                        adres_input.value = kl.adres
-                    if kl.contactpersoon:
-                        contact_input.value = kl.contactpersoon
-                    if kl.postcode:
-                        postcode_input.value = kl.postcode
-                    if kl.plaats:
-                        plaats_input.value = kl.plaats
+                    adres_input.value = kl.adres or ''
+                    contact_input.value = kl.contactpersoon or ''
+                    postcode_input.value = kl.postcode or ''
+                    plaats_input.value = kl.plaats or ''
 
                 # Klant autocomplete match handler
                 def on_klant_match(_=None):
@@ -549,12 +542,12 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None,
                                 line_items[i]['datum'] = d_ref.value or ''
                                 line_items[i]['omschrijving'] = (
                                     o_ref.value or '')
-                                line_items[i]['aantal'] = float(
+                                line_items[i]['aantal'] = (
                                     a_ref.value or 0)
-                                line_items[i]['tarief'] = float(
+                                line_items[i]['tarief'] = (
                                     t_ref.value or 0)
                                 if km_ref is not None:
-                                    line_items[i]['km'] = float(
+                                    line_items[i]['km'] = (
                                         km_ref.value or 0)
                                 uren_b = (line_items[i]['aantal']
                                           * line_items[i]['tarief'])
@@ -919,12 +912,6 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None,
                             f'PDF generatie mislukt: {ex}',
                             type='negative')
                         return
-                    finally:
-                        # Clean up QR temp file
-                        if gen_qr:
-                            qr_p = Path(gen_qr)
-                            if qr_p.exists():
-                                await asyncio.to_thread(qr_p.unlink)
 
                     totaal_uren, totaal_km, totaal_bedrag, factuur_type = (
                         _calc_totals(line_items))
@@ -1086,7 +1073,6 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None,
                             on_click=genereer_factuur,
                         ).props('color=primary no-caps')
 
-            # ═══════════════ RIGHT PANEL (preview) ═══════════════
             with ui.element('div').classes('builder-preview-bg').style(
                 'flex: 1; overflow-y: auto; '
                 'display: flex; justify-content: center; '
@@ -1098,7 +1084,6 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None,
                     'height: calc(100vh - 48px); '
                 )
 
-        # --- Preview update logic ---
         def schedule_preview_update():
             """Debounced preview update (avoids re-render on every keystroke)."""
             if preview_timer['handle']:
@@ -1158,7 +1143,6 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None,
             'update:model-value',
             lambda _=None: schedule_preview_update())
 
-        # --- Restore saved concept state OR reconstruct from werkdagen ---
         if pre_regels_json:
             # Concept with saved builder state — restore exactly
             saved = json.loads(pre_regels_json)
@@ -1211,8 +1195,7 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None,
 
                 render_line_items()
 
-        # --- Handle pre-fill klant (for reopening concept without werkdagen) ---
-        if pre_klant_id and not pre_selected_werkdag_ids:
+        if pre_klant_id and not pre_selected_werkdag_ids and not pre_regels_json:
             klant_obj = next(
                 (k for k in klanten if k.id == pre_klant_id), None)
             if klant_obj:

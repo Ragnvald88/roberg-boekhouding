@@ -3,8 +3,7 @@
 Volledige fiscale waterval van winst tot netto IB, met Decimal precisie.
 Alle tussenwaarden worden bewaard in FiscaalResultaat voor display en tests.
 
-Gebruik: bereken_volledig() voor de complete waterval,
-         bereken_wv() en bereken_ib() als losse functies.
+Gebruik: bereken_volledig() voor de complete waterval.
 """
 
 from dataclasses import dataclass, field
@@ -235,14 +234,14 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
     d_hypotheekrente = D(hypotheekrente)
     d_voorlopige = D(voorlopige_aanslag)
 
-    # === 1. Winst & Verlies ===
+    # 1. Winst & Verlies
     d_winst = d_omzet - d_kosten - d_afschr
     r.omzet = omzet
     r.kosten = kosten
     r.afschrijvingen = afschrijvingen
     r.winst = euro(d_winst)
 
-    # === 2. Fiscale correcties ===
+    # 2. Fiscale correcties
     # Representatie: niet-aftrekbaar deel -> bijtelling
     d_repr_aftrek_pct = D(params.get('repr_aftrek_pct', 80)) / D('100')
     d_repr_bijtelling = d_repr * (D('1') - d_repr_aftrek_pct)
@@ -260,7 +259,7 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
     d_fiscale_winst = d_winst + d_repr_bijtelling - d_kia
     r.fiscale_winst = euro(d_fiscale_winst)
 
-    # === 3. Ondernemersaftrek (alleen bij urencriterium gehaald + toggle actief) ===
+    # 3. Ondernemersaftrek (alleen bij urencriterium gehaald + toggle actief)
     uren_drempel = params.get('urencriterium', 1225)
     za_actief = params.get('za_actief', True)
     sa_actief = params.get('sa_actief', False)
@@ -278,7 +277,7 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
     d_na_oa = d_fiscale_winst - d_za - d_sa
     r.na_ondernemersaftrek = euro(d_na_oa)
 
-    # === 4. MKB-winstvrijstelling ===
+    # 4. MKB-winstvrijstelling
     d_mkb_pct = D(params['mkb_vrijstelling_pct']) / D('100')
     d_mkb = max(D('0'), d_na_oa) * d_mkb_pct
     r.mkb_vrijstelling = euro(d_mkb)
@@ -287,7 +286,7 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
     d_belastbare_winst = max(D('0'), d_na_oa - d_mkb)
     r.belastbare_winst = euro(d_belastbare_winst)
 
-    # === 5. Verzamelinkomen Box 1 ===
+    # 5. Verzamelinkomen Box 1
     # Eigen woning saldo (forfait - rente, usually negative = aftrekpost)
     jaar = params.get('jaar', 0)
     d_ew_forfait = D('0')
@@ -320,7 +319,7 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
     d_verzamelinkomen = max(D('0'), d_verzamelinkomen)
     r.verzamelinkomen = euro(d_verzamelinkomen)
 
-    # === 5b. Tariefsaanpassing (beperking aftrekbare posten) ===
+    # 5b. Tariefsaanpassing (beperking aftrekbare posten)
     # Since 2023: deductions (ZA, SA, MKB) are capped at the basistarief.
     # If income without these deductions exceeds the top bracket boundary,
     # the excess benefit is clawed back at (toptarief - basistarief).
@@ -351,7 +350,7 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
     d_tariefsaanpassing = d_subject * d_ta_pct
     r.tariefsaanpassing = euro(d_tariefsaanpassing)
 
-    # === 6. IB Box 1 (schijventarief) ===
+    # 6. IB Box 1 (schijventarief)
     d_vi = d_verzamelinkomen
 
     # Schijf 1
@@ -374,7 +373,7 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
     d_bruto_ib = d_ib1 + d_ib2 + d_ib3 + d_tariefsaanpassing
     r.bruto_ib = euro(d_bruto_ib)
 
-    # === 6b. IB/PVV split ===
+    # 6b. IB/PVV split
     # PVV = 27.65% over min(verzamelinkomen, premiegrondslag)
     # premiegrondslag differs from schijf1_grens in 2023-2024
     d_premie_grondslag = D(params.get('pvv_premiegrondslag', 0))
@@ -398,7 +397,7 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
     r.pvv_wlz = euro(d_pvv_wlz)
     r.ib_alleen = euro(d_bruto_ib - d_pvv)
 
-    # === 7. Heffingskortingen ===
+    # 7. Heffingskortingen
     # AHK: afbouw op basis van verzamelinkomen (sinds 2025; voor Box-1-only maakt het niet uit)
     ahk = bereken_algemene_heffingskorting(r.verzamelinkomen, jaar, params)
     r.ahk = ahk
@@ -416,18 +415,18 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
                                 brackets_json=params.get('arbeidskorting_brackets', ''))
     r.arbeidskorting = ak
 
-    # === 8. Netto IB ===
+    # 8. Netto IB
     d_netto_ib = max(D('0'), d_bruto_ib - D(str(ahk)) - D(str(ak)))
     r.netto_ib = euro(d_netto_ib)
 
-    # === 9. ZVW-bijdrage (apart van IB, via aanslag) ===
+    # 9. ZVW-bijdrage (apart van IB, via aanslag)
     # Grondslag = belastbare winst (bijdrage-inkomen, gecapped op maximum)
     # Boekhouder 2024 confirms: "Inkomen Zvw = 76.776" (= belastbare winst, not verzamelinkomen)
     d_zvw_grondslag = min(d_belastbare_winst, D(params['zvw_max_grondslag']))
     d_zvw = d_zvw_grondslag * D(params['zvw_pct']) / D('100')
     r.zvw = euro(d_zvw)
 
-    # === 10. Eindresultaat ===
+    # 10. Eindresultaat
     r.voorlopige_aanslag = voorlopige_aanslag
     r.voorlopige_aanslag_zvw = voorlopige_aanslag_zvw
 
@@ -443,7 +442,7 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
     # Total resultaat
     r.resultaat = euro(d_resultaat_ib + d_resultaat_zvw)
 
-    # === Controles ===
+    # Controles
     r.uren_criterium = uren
     r.uren_criterium_gehaald = uren >= uren_drempel
     r.kosten_omzet_ratio = round(kosten / omzet * 100, 1) if omzet > 0 else 0
@@ -466,71 +465,3 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
     return r
 
 
-def bereken_wv(omzet: float, kosten: float, afschrijvingen: float) -> dict:
-    """Winst-en-verliesrekening (simple version).
-
-    Returns:
-        Dict with keys: omzet, kosten, afschrijvingen, winst.
-    """
-    winst = omzet - kosten - afschrijvingen
-    return {
-        'omzet': omzet,
-        'kosten': kosten,
-        'afschrijvingen': afschrijvingen,
-        'winst': round(winst, 2),
-    }
-
-
-def bereken_ib(verzamelinkomen: float, params: dict,
-               arbeidsinkomen: float = None,
-               zvw_grondslag: float = None) -> dict:
-    """IB Box 1 calculation with brackets (uses Decimal internally).
-
-    Args:
-        verzamelinkomen: Taxable income Box 1.
-        params: Fiscal parameters dict with schijf1/2/3 and heffingskorting params.
-        arbeidsinkomen: Income for arbeidskorting (fiscale winst). Defaults to verzamelinkomen.
-        zvw_grondslag: ZVW base (belastbare_winst for ZZP). Defaults to verzamelinkomen.
-
-    Returns:
-        Dict with keys: verzamelinkomen, bruto_ib, ahk, arbeidskorting, netto_ib, zvw.
-    """
-    d_vi = D(verzamelinkomen)
-    jaar = params.get('jaar', 0)
-    if arbeidsinkomen is None:
-        arbeidsinkomen = verzamelinkomen
-    if zvw_grondslag is None:
-        zvw_grondslag = verzamelinkomen
-
-    # Schijf 1
-    d_s1_grens = D(params['schijf1_grens'])
-    d_s1 = min(d_vi, d_s1_grens)
-    d_ib1 = d_s1 * D(params['schijf1_pct']) / D('100')
-
-    # Schijf 2
-    d_s2_grens = D(params['schijf2_grens'])
-    d_s2 = min(max(d_vi - d_s1_grens, D('0')), d_s2_grens - d_s1_grens)
-    d_ib2 = d_s2 * D(params['schijf2_pct']) / D('100')
-
-    # Schijf 3
-    d_s3 = max(d_vi - d_s2_grens, D('0'))
-    d_ib3 = d_s3 * D(params['schijf3_pct']) / D('100')
-
-    d_bruto = d_ib1 + d_ib2 + d_ib3
-
-    ahk = bereken_algemene_heffingskorting(verzamelinkomen, jaar, params)
-    ak = bereken_arbeidskorting(arbeidsinkomen, jaar,
-                                brackets_json=params.get('arbeidskorting_brackets', ''))
-
-    d_netto = max(D('0'), d_bruto - D(str(ahk)) - D(str(ak)))
-    d_zvw_grondslag = D(zvw_grondslag)
-    d_zvw = min(d_zvw_grondslag, D(params['zvw_max_grondslag'])) * D(params['zvw_pct']) / D('100')
-
-    return {
-        'verzamelinkomen': euro(d_vi),
-        'bruto_ib': euro(d_bruto),
-        'ahk': ahk,
-        'arbeidskorting': ak,
-        'netto_ib': euro(d_netto),
-        'zvw': euro(d_zvw),
-    }

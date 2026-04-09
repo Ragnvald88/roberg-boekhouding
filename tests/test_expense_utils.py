@@ -10,9 +10,6 @@ from import_.expense_utils import (
 )
 
 
-# ---------------------------------------------------------------------------
-# extract_date_from_filename
-# ---------------------------------------------------------------------------
 
 
 class TestExtractDateMMYY:
@@ -163,9 +160,6 @@ class TestExtractDateEdgeCases:
         assert extract_date_from_filename('2501_test.pdf', 2025) == '2025-01-01'
 
 
-# ---------------------------------------------------------------------------
-# Real archive file tests (against actual 2025 filenames)
-# ---------------------------------------------------------------------------
 
 
 class TestRealFilenames2025:
@@ -240,9 +234,6 @@ class TestRealFilenames2023:
         assert extract_date_from_filename('12_23_boekhouder_schadeverzekering.pdf', 2023) == '2023-12-01'
 
 
-# ---------------------------------------------------------------------------
-# FOLDER_TO_CATEGORIE mapping
-# ---------------------------------------------------------------------------
 
 
 class TestFolderMapping:
@@ -282,9 +273,6 @@ class TestFolderMapping:
             assert cat in KOSTEN_CATEGORIEEN, f'{folder} → {cat} not in KOSTEN_CATEGORIEEN'
 
 
-# ---------------------------------------------------------------------------
-# scan_archive (integration tests against actual archive)
-# ---------------------------------------------------------------------------
 
 
 archive_2025_exists = (ARCHIVE_BASE / '2025' / 'Uitgaven').exists()

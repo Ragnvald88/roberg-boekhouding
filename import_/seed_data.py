@@ -45,8 +45,6 @@ BOX3_DEFAULTS = {
     2026: {'heffingsvrij': 59357, 'bank': 1.28, 'overig': 6.00, 'schuld': 2.70, 'tarief': 36, 'drempel_schulden': 3800},
 }
 
-# === Fiscale parameters per jaar ===
-
 FISCALE_PARAMS: dict[int, dict] = {
     2023: {
         'jaar': 2023,

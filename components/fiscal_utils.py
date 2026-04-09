@@ -99,7 +99,7 @@ async def fetch_fiscal_data(db_path: Path, jaar: int) -> dict | None:
         totaal_afschrijvingen += result['afschrijving']
 
     # KIA basis — only items above per-item threshold qualify
-    kia_drempel = params.kia_drempel_per_item or 450
+    kia_drempel = params.kia_drempel_per_item if params.kia_drempel_per_item is not None else 450
     inv_totaal_dit_jaar = sum(
         z for u in inv_dit_jaar
         if (z := (u.aanschaf_bedrag or u.bedrag) * ((u.zakelijk_pct if u.zakelijk_pct is not None else 100) / 100))
@@ -260,38 +260,3 @@ async def extrapoleer_jaaromzet(db_path: Path, jaar: int) -> dict:
     }
 
 
-def get_personal_data_with_fallback(params_current, params_prior) -> tuple[dict, list[str]]:
-    """Use current-year data if available, fall back to prior year.
-
-    Returns (result_dict, fallbacks_used_list).
-    result_dict maps short keys to {'value': float, 'source': 'current'|'prior'|'none'}.
-    """
-    fields = {
-        'woz_waarde': 'woz',
-        'hypotheekrente': 'hypotheekrente',
-        'aov_premie': 'aov',
-        'partner_bruto_loon': 'partner_loon',
-        'partner_loonheffing': 'partner_lh',
-        'box3_bank_saldo': 'box3_bank',
-        'box3_overige_bezittingen': 'box3_overig',
-        'box3_schulden': 'box3_schulden',
-    }
-
-    result = {}
-    fallbacks = []
-
-    for attr, key in fields.items():
-        current_val = getattr(params_current, attr, 0) or 0
-        if current_val > 0:
-            result[key] = {'value': current_val, 'source': 'current'}
-        elif params_prior:
-            prior_val = getattr(params_prior, attr, 0) or 0
-            if prior_val > 0:
-                result[key] = {'value': prior_val, 'source': 'prior'}
-                fallbacks.append(attr)
-            else:
-                result[key] = {'value': 0, 'source': 'none'}
-        else:
-            result[key] = {'value': 0, 'source': 'none'}
-
-    return result, fallbacks

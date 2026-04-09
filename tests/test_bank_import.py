@@ -5,7 +5,6 @@ from database import add_banktransacties, get_banktransacties, backfill_betaling
 from import_.rabobank_csv import parse_rabobank_csv
 
 
-# --- CSV Parser tests ---
 
 SAMPLE_CSV_HEADER = (
     '"IBAN/BBAN";"Munt";"BIC";"Volgnr";"Datum";"Rentedatum";"Bedrag";"Saldo na trn";'
@@ -262,7 +261,6 @@ def test_parse_thousands_separator():
     assert result[2]['bedrag'] == pytest.approx(-1000.00)
 
 
-# --- Database integration tests ---
 
 @pytest.mark.asyncio
 async def test_import_and_retrieve(db):
