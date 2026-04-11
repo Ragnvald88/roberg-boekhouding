@@ -705,3 +705,78 @@ def test_edit_router_concept_anw_goes_to_dialog():
     from pages.facturen import _should_use_builder
     assert _should_use_builder(
         {'status': 'concept', 'type': 'anw', 'bron': ''}) is False
+
+
+# === Vergoeding regels_json sync (C.2) ===
+
+def test_rebuild_vergoeding_regels_json_preserves_omschrijving():
+    import json
+    from pages.facturen import _rebuild_vergoeding_regels_json
+
+    old = json.dumps([{'omschrijving': 'Consult spoed', 'bedrag': 100.0}])
+    new = _rebuild_vergoeding_regels_json(old, 150.0)
+    parsed = json.loads(new)
+    assert len(parsed) == 1
+    assert parsed[0]['omschrijving'] == 'Consult spoed'
+    assert parsed[0]['bedrag'] == 150.0
+
+
+def test_rebuild_vergoeding_regels_json_empty_input():
+    import json
+    from pages.facturen import _rebuild_vergoeding_regels_json
+
+    parsed = json.loads(_rebuild_vergoeding_regels_json('', 42.50))
+    assert parsed == [{'omschrijving': 'Vergoeding', 'bedrag': 42.50}]
+
+
+def test_rebuild_vergoeding_regels_json_null_input():
+    import json
+    from pages.facturen import _rebuild_vergoeding_regels_json
+
+    parsed = json.loads(_rebuild_vergoeding_regels_json(None, 42.50))  # type: ignore[arg-type]
+    assert parsed == [{'omschrijving': 'Vergoeding', 'bedrag': 42.50}]
+
+
+def test_rebuild_vergoeding_regels_json_malformed_input():
+    import json
+    from pages.facturen import _rebuild_vergoeding_regels_json
+
+    parsed = json.loads(_rebuild_vergoeding_regels_json('not-json', 75.0))
+    assert parsed == [{'omschrijving': 'Vergoeding', 'bedrag': 75.0}]
+
+
+@pytest.mark.asyncio
+async def test_update_factuur_accepts_regels_json(seeded_db):
+    """update_factuur must allow rewriting regels_json so vergoeding
+    edits keep the PDF regeneration source consistent with totaal_bedrag.
+    """
+    import json as _json
+    from database import get_klanten, get_db_ctx
+    klanten = await get_klanten(seeded_db)
+    kid = klanten[0].id
+
+    old_regels = _json.dumps(
+        [{'omschrijving': 'Reiskosten', 'bedrag': 50.0}])
+    await add_factuur(
+        seeded_db, nummer='2026-V01', klant_id=kid,
+        datum='2026-03-01', totaal_bedrag=50.0, status='concept',
+        type='vergoeding', regels_json=old_regels,
+    )
+    facturen = await get_facturen(seeded_db, jaar=2026)
+    fid = next(f.id for f in facturen if f.nummer == '2026-V01')
+
+    new_regels = _json.dumps(
+        [{'omschrijving': 'Reiskosten', 'bedrag': 75.0}])
+    await update_factuur(seeded_db, factuur_id=fid,
+                         totaal_bedrag=75.0, regels_json=new_regels)
+
+    async with get_db_ctx(seeded_db) as conn:
+        cur = await conn.execute(
+            "SELECT totaal_bedrag, regels_json FROM facturen WHERE id = ?",
+            (fid,))
+        row = await cur.fetchone()
+    assert row is not None
+    assert row['totaal_bedrag'] == 75.0
+    parsed = _json.loads(row['regels_json'])
+    regels_sum = sum(r['bedrag'] for r in parsed)
+    assert abs(regels_sum - row['totaal_bedrag']) < 0.01

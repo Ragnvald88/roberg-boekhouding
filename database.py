@@ -1005,7 +1005,7 @@ async def update_factuur(db_path: Path = DB_PATH, factuur_id: int = 0,
         fields = []
         values = []
         allowed = ('datum', 'klant_id', 'totaal_uren', 'totaal_km',
-                    'totaal_bedrag', 'pdf_pad', 'type')
+                    'totaal_bedrag', 'pdf_pad', 'type', 'regels_json')
         for key in allowed:
             if key in kwargs:
                 fields.append(f'{key} = ?')

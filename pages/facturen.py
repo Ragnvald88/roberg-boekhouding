@@ -47,6 +47,28 @@ def _should_use_builder(row: dict) -> bool:
     )
 
 
+def _rebuild_vergoeding_regels_json(old_regels_json: str,
+                                    new_bedrag: float) -> str:
+    """Return a regels_json string with a single line item at new_bedrag.
+
+    Preserves the omschrijving of the first existing regel if any, else
+    falls back to 'Vergoeding'. Returned JSON is always a flat list with
+    one entry so downstream PDF generation uses the fresh amount.
+    """
+    import json as _json
+    omschrijving = 'Vergoeding'
+    try:
+        existing = _json.loads(old_regels_json or '[]')
+        if isinstance(existing, list) and existing:
+            first = existing[0]
+            if isinstance(first, dict):
+                omschrijving = first.get('omschrijving') or 'Vergoeding'
+    except (ValueError, TypeError):
+        pass
+    return _json.dumps([{'omschrijving': omschrijving,
+                         'bedrag': new_bedrag}])
+
+
 def _build_mail_body(nummer, bedrag, iban, bedrijfsnaam, naam, telefoon, bg_email, betaallink=''):
     """Build email body. Returns (body, is_html) tuple."""
     tel_line = f'Tel: {telefoon}' if telefoon else ''
@@ -925,12 +947,27 @@ async def facturen_page():
 
                     async def _do_opslaan():
                         # Update main fields
+                        new_bedrag = float(edit_bedrag.value or 0)
                         kwargs = {
                             'datum': edit_datum.value,
                             'klant_id': edit_klant.value,
-                            'totaal_bedrag': float(
-                                edit_bedrag.value or 0),
+                            'totaal_bedrag': new_bedrag,
                         }
+                        # Vergoeding: keep regels_json in sync with the
+                        # new total so the PDF regenerated later shows
+                        # the correct amount (bug: stale regels_json
+                        # caused PDFs to diverge from the DB).
+                        if (row.get('type') == 'vergoeding'
+                                and abs(new_bedrag
+                                        - row.get('totaal_bedrag', 0)) > 0.005):
+                            async with get_db_ctx(DB_PATH) as _conn:
+                                _cur = await _conn.execute(
+                                    "SELECT regels_json FROM facturen "
+                                    "WHERE id = ?", (row['id'],))
+                                _rj = await _cur.fetchone()
+                            kwargs['regels_json'] = _rebuild_vergoeding_regels_json(
+                                _rj['regels_json'] if _rj else '',
+                                new_bedrag)
                         await update_factuur(
                             DB_PATH, factuur_id=row['id'], **kwargs)
 
