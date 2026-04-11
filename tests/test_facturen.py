@@ -567,28 +567,41 @@ from pages.facturen import _build_mail_body, _build_herinnering_body
 
 
 def test_build_mail_body_with_betaallink():
-    body, is_html = _build_mail_body(
+    """Body is plain text with betaallink as a literal URL. No HTML tags."""
+    body = _build_mail_body(
         '2026-021', '€ 1.097,34', 'NL00 TEST 0000 0000 00',
         'TestBV huisartswaarnemer', 'Test Gebruiker',
         '06 0000 0000', 'info@testbedrijf.nl',
         betaallink='https://betaalverzoek.rabobank.nl/betaalverzoek/?id=abc',
     )
-    assert is_html is True
-    assert '<a href="https://betaalverzoek.rabobank.nl/betaalverzoek/?id=abc">deze betaallink</a>' in body
-    assert 'eenvoudig betalen via' in body
-    assert 'onder vermelding van factuurnummer 2026-021. U kunt ook' in body
+    assert isinstance(body, str)
+    # No HTML tags — Mail.app breaks on HTML + attachments (CLAUDE.md).
+    assert '<' not in body
+    assert '>' not in body
+    # Betaallink is a literal URL (Mail.app auto-links in plain text).
+    assert 'https://betaalverzoek.rabobank.nl/betaalverzoek/?id=abc' in body
+    assert 'eenvoudig betalen' in body
     assert 'Bijgaand stuur ik u factuur 2026-021' in body
+    assert 'NL00 TEST 0000 0000 00' in body
+    assert '€ 1.097,34' in body
+    assert 'TestBV huisartswaarnemer' in body
+    assert 'Test Gebruiker' in body
 
 
 def test_build_mail_body_without_betaallink():
-    body, is_html = _build_mail_body(
+    """Without betaallink the paragraph is omitted and body stays plain text."""
+    body = _build_mail_body(
         '2026-021', '€ 1.097,34', 'NL00 TEST 0000 0000 00',
         'TestBV huisartswaarnemer', 'Test Gebruiker',
         '06 0000 0000', 'info@testbedrijf.nl',
     )
-    assert is_html is False
-    assert 'betaallink' not in body
+    assert isinstance(body, str)
+    assert '<' not in body
+    assert '>' not in body
+    assert 'betaallink' not in body.lower()
+    assert 'betalen via deze link' not in body
     assert 'Bijgaand stuur ik u factuur 2026-021' in body
+    assert 'NL00 TEST 0000 0000 00' in body
 
 
 # ============================================================

@@ -140,49 +140,35 @@ def _rebuild_vergoeding_regels_json(old_regels_json: str,
 
 
 def _build_mail_body(nummer, bedrag, iban, bedrijfsnaam, naam, telefoon, bg_email, betaallink=''):
-    """Build email body. Returns (body, is_html) tuple."""
-    tel_line = f'Tel: {telefoon}' if telefoon else ''
+    """Build plain text factuur email body. Returns a single string.
 
-    if betaallink:
-        from html import escape as esc
-        body = (
-            f'<div style="font-family: Helvetica, Arial, sans-serif; font-size: 14px; color: #333;">'
-            f'<p>Bijgaand stuur ik u factuur {esc(nummer)}.</p>'
-            f'<p>Het totaalbedrag van {esc(bedrag)} verzoek ik u binnen 14 dagen '
-            f'over te maken op rekeningnummer {esc(iban)} t.n.v. {esc(bedrijfsnaam)}, '
-            f'onder vermelding van factuurnummer {esc(nummer)}. '
-            f'U kunt ook eenvoudig betalen via '
-            f'<a href="{esc(betaallink, quote=True)}">deze betaallink</a>.</p>'
-            f'<p>Mocht u vragen hebben, dan hoor ik het graag.</p>'
-            f'<br>'
-            f'<p>Met vriendelijke groet,</p>'
-            f'<p>{esc(naam)}<br><br>'
-            f'{esc(bedrijfsnaam)}<br>'
-            f'{esc(tel_line) + "<br>" if tel_line else ""}'
-            f'{esc(bg_email)}</p>'
-            f'</div>'
-        )
-        return body, True
-    else:
-        body = (
-            f'Bijgaand stuur ik u factuur {nummer}.\n'
-            f'\n'
-            f'Het totaalbedrag van {bedrag} verzoek ik u binnen 14 dagen '
-            f'over te maken op rekeningnummer {iban} t.n.v. {bedrijfsnaam}, '
-            f'onder vermelding van factuurnummer {nummer}.\n'
-            f'\n'
-            f'Mocht u vragen hebben, dan hoor ik het graag.\n'
-            f'\n'
-            f'\n'
-            f'Met vriendelijke groet,\n'
-            f'\n'
-            f'{naam}\n'
-            f'\n'
-            f'{bedrijfsnaam}\n'
-            f'{f"Tel: {telefoon}" if telefoon else ""}\n'
-            f'{bg_email}'
-        )
-        return body, False
+    Per CLAUDE.md: Mail.app silently breaks HTML content + attachments, so the
+    body must stay plain text. Mail.app auto-links plain URLs in plain-text
+    bodies, so betaallink can be included as a literal URL — no HTML needed.
+    """
+    betaallink_line = (
+        f'U kunt ook eenvoudig betalen via deze link:\n{betaallink}\n'
+        if betaallink else ''
+    )
+    return (
+        f'Bijgaand stuur ik u factuur {nummer}.\n'
+        f'\n'
+        f'Het totaalbedrag van {bedrag} verzoek ik u binnen 14 dagen '
+        f'over te maken op rekeningnummer {iban} t.n.v. {bedrijfsnaam}, '
+        f'onder vermelding van factuurnummer {nummer}.\n'
+        f'\n'
+        f'{betaallink_line}'
+        f'Mocht u vragen hebben, dan hoor ik het graag.\n'
+        f'\n'
+        f'\n'
+        f'Met vriendelijke groet,\n'
+        f'\n'
+        f'{naam}\n'
+        f'\n'
+        f'{bedrijfsnaam}\n'
+        f'{f"Tel: {telefoon}" if telefoon else ""}\n'
+        f'{bg_email}'
+    )
 
 
 def _build_herinnering_body(nummer, bedrag, datum, iban, bedrijfsnaam, naam,
@@ -1215,49 +1201,17 @@ async def facturen_page():
                     betaallink = r['betaallink']
 
             subject = f'Factuur {nummer}'
-            body, is_html = _build_mail_body(
+            body = _build_mail_body(
                 nummer, bedrag, iban, bedrijfsnaam, naam, telefoon, bg_email, betaallink)
 
             pdf_path_abs = str(Path(pdf_path).resolve())
 
-            if is_html:
-                # HTML path retained for now — see CLAUDE.md note: Mail.app
-                # HTML + attachments is broken; this branch is pre-existing
-                # and not touched by the mail_helper extraction.
-                body_osa = body.replace('\\', '\\\\').replace('"', '\\"')
-                subject_osa = subject.replace('"', '\\"')
-                to_line = ''
-                if klant_email:
-                    to_line = f'make new to recipient with properties {{address:"{klant_email}"}}'
-                applescript = (
-                    'tell application "Mail"\n'
-                    f'  set newMsg to make new outgoing message with properties '
-                    f'{{subject:"{subject_osa}", visible:true}}\n'
-                    f'  set html content of newMsg to "{body_osa}"\n'
-                    f'  tell newMsg\n'
-                    f'    {to_line}\n'
-                    f'  end tell\n'
-                    f'  tell content of newMsg\n'
-                    f'    make new attachment with properties '
-                    f'{{file name:POSIX file "{pdf_path_abs}"}} '
-                    f'at after last paragraph\n'
-                    f'  end tell\n'
-                    f'  activate\n'
-                    f'end tell'
-                )
-
             try:
-                if is_html:
-                    result = await asyncio.to_thread(
-                        subprocess.run,
-                        ['osascript', '-e', applescript],
-                        capture_output=True, timeout=15)
-                else:
-                    result = await asyncio.to_thread(
-                        open_mail_with_attachment,
-                        to=klant_email, subject=subject, body=body,
-                        attachment_path=pdf_path_abs,
-                    )
+                result = await asyncio.to_thread(
+                    open_mail_with_attachment,
+                    to=klant_email, subject=subject, body=body,
+                    attachment_path=pdf_path_abs,
+                )
                 if result.returncode != 0:
                     err = result.stderr.decode().strip() if result.stderr else 'onbekende fout'
                     ui.notify(f'Mail.app fout: {err}', type='negative')
