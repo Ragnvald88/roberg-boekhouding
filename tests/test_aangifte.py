@@ -158,6 +158,35 @@ async def test_upsert_preserves_partner_fields(db):
     assert params.partner_loonheffing == 11000.00
 
 
+@pytest.mark.asyncio
+async def test_upsert_fiscale_params_missing_pvv_aow_raises(db):
+    """upsert_fiscale_params must fail loud if a required key is missing — no silent 2024 defaults."""
+    bad_kwargs = dict(FISCALE_PARAMS[2024])
+    bad_kwargs['jaar'] = 2030
+    del bad_kwargs['pvv_aow_pct']
+    with pytest.raises(KeyError, match='pvv_aow_pct'):
+        await upsert_fiscale_params(db, **bad_kwargs)
+
+
+@pytest.mark.asyncio
+async def test_upsert_fiscale_params_missing_repr_aftrek_raises(db):
+    """Missing repr_aftrek_pct must raise KeyError instead of silently writing 80."""
+    bad_kwargs = dict(FISCALE_PARAMS[2024])
+    bad_kwargs['jaar'] = 2030
+    del bad_kwargs['repr_aftrek_pct']
+    with pytest.raises(KeyError, match='repr_aftrek_pct'):
+        await upsert_fiscale_params(db, **bad_kwargs)
+
+
+@pytest.mark.asyncio
+async def test_upsert_fiscale_params_missing_ew_forfait_raises(db):
+    """Missing ew_forfait_pct must raise KeyError instead of silently writing 0.35."""
+    bad_kwargs = dict(FISCALE_PARAMS[2024])
+    bad_kwargs['jaar'] = 2030
+    del bad_kwargs['ew_forfait_pct']
+    with pytest.raises(KeyError, match='ew_forfait_pct'):
+        await upsert_fiscale_params(db, **bad_kwargs)
+
 
 @pytest.mark.asyncio
 async def test_ddmmyyyy_migration_fixes_uitgaven(tmp_path):

@@ -18,43 +18,66 @@ from database import (
 
 
 def _validate_fiscal_params(p: dict) -> list[str]:
-    """Return a list of human-readable Dutch validation errors, or [] if valid."""
+    """Return a list of human-readable Dutch validation errors, or [] if valid.
+
+    Distinguishes missing/None from 0. Percentages that must be > 0 in real
+    practice (IB schijven, PVV, ZVW, EW forfait, representatie, MKB) trigger
+    an error when absent or empty — never silently coerced to 0.
+    """
     errors: list[str] = []
 
-    s1_grens = p.get('schijf1_grens', 0) or 0
-    s2_grens = p.get('schijf2_grens', 0) or 0
-    if s1_grens <= 0:
-        errors.append('Schijf 1 grens moet groter dan 0 zijn')
-    if s2_grens < s1_grens:
-        errors.append('Schijf 2 grens moet groter of gelijk zijn aan schijf 1 grens')
+    # Percentages where 0 is not a legitimate real-world value.
+    # Missing/None/empty is a clear-field mistake; flag it explicitly.
+    required_positive_pct = [
+        'schijf1_pct', 'schijf2_pct', 'schijf3_pct',
+        'mkb_vrijstelling_pct',
+        'pvv_aow_pct', 'pvv_anw_pct', 'pvv_wlz_pct',
+        'zvw_pct', 'ew_forfait_pct', 'repr_aftrek_pct',
+    ]
+    for fld in required_positive_pct:
+        if fld not in p or p[fld] is None:
+            errors.append(f'{fld} is verplicht en mag niet leeg zijn')
+            continue
+        v = p[fld]
+        if not (0 < v <= 100):
+            errors.append(f'{fld} moet > 0 en <= 100 zijn (nu: {v})')
 
-    for fld in ('schijf1_pct', 'schijf2_pct', 'schijf3_pct'):
-        v = p.get(fld, 0) or 0
-        if not (0 < v < 100):
-            errors.append(f'{fld} moet tussen 0 en 100 liggen (nu: {v})')
+    # IB schijf grenzen: verplicht en strikt > 0 (monotonie-check verderop)
+    for fld in ('schijf1_grens', 'schijf2_grens'):
+        if fld not in p or p[fld] is None:
+            errors.append(f'{fld} is verplicht en mag niet leeg zijn')
+            continue
+        if p[fld] <= 0:
+            errors.append(f'{fld} moet groter dan 0 zijn (nu: {p[fld]})')
 
-    for fld in ('mkb_vrijstelling_pct', 'kia_pct'):
-        v = p.get(fld, 0) or 0
-        if not (0 <= v <= 100):
-            errors.append(f'{fld} moet tussen 0 en 100 liggen (nu: {v})')
+    if ('schijf1_grens' in p and p.get('schijf1_grens') is not None
+            and 'schijf2_grens' in p and p.get('schijf2_grens') is not None):
+        if p['schijf2_grens'] < p['schijf1_grens']:
+            errors.append(
+                'Schijf 2 grens moet groter of gelijk zijn aan schijf 1 grens')
 
-    for fld in ('ahk_max', 'ahk_drempel', 'ak_max',
-                'kia_ondergrens', 'kia_bovengrens',
-                'zelfstandigenaftrek'):
-        v = p.get(fld, 0) or 0
-        if v < 0:
-            errors.append(f'{fld} mag niet negatief zijn')
+    # KIA percentage: verplicht aanwezig, mag 0 zijn als KIA-regeling niet van toepassing
+    if 'kia_pct' not in p or p['kia_pct'] is None:
+        errors.append('kia_pct is verplicht en mag niet leeg zijn')
+    elif not (0 <= p['kia_pct'] <= 100):
+        errors.append(f'kia_pct moet tussen 0 en 100 liggen (nu: {p["kia_pct"]})')
 
-    kia_onder = p.get('kia_ondergrens', 0) or 0
-    kia_boven = p.get('kia_bovengrens', 0) or 0
-    if kia_boven < kia_onder:
-        errors.append('KIA bovengrens moet groter of gelijk zijn aan KIA ondergrens')
+    # Bedragen die 0 mogen zijn (bv. geen startersaftrek meer van toepassing)
+    optional_nonneg = [
+        'ahk_max', 'ahk_drempel', 'ak_max',
+        'kia_ondergrens', 'kia_bovengrens',
+        'zelfstandigenaftrek', 'startersaftrek',
+    ]
+    for fld in optional_nonneg:
+        if fld in p and p[fld] is not None and p[fld] < 0:
+            errors.append(f'{fld} mag niet negatief zijn (nu: {p[fld]})')
 
-    for fld in ('pvv_aow_pct', 'pvv_anw_pct', 'pvv_wlz_pct', 'zvw_pct',
-                'ew_forfait_pct', 'repr_aftrek_pct'):
-        v = p.get(fld, 0) or 0
-        if not (0 <= v <= 100):
-            errors.append(f'{fld} moet tussen 0 en 100 liggen (nu: {v})')
+    kia_onder = p.get('kia_ondergrens')
+    kia_boven = p.get('kia_bovengrens')
+    if (kia_onder is not None and kia_boven is not None
+            and kia_boven < kia_onder):
+        errors.append(
+            'KIA bovengrens moet groter of gelijk zijn aan KIA ondergrens')
 
     return errors
 
@@ -427,7 +450,14 @@ async def instellingen_page():
                                     kwargs = {'jaar': jaar}
                                     for _label, key in af:
                                         val = inps[key].value
-                                        kwargs[key] = val if val else 0
+                                        # Pass None/empty through as None so
+                                        # the validator can distinguish
+                                        # "gebruiker heeft veld leeggemaakt"
+                                        # van "gebruiker heeft 0 ingetypt".
+                                        if val is None or val == '':
+                                            kwargs[key] = None
+                                        else:
+                                            kwargs[key] = val
                                     # Pass through AK brackets unchanged
                                     kwargs['arbeidskorting_brackets'] = ak_json
                                     # ZA/SA toggles (checkbox .value is bool)

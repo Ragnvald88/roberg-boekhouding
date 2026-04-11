@@ -23,7 +23,7 @@ def test_validate_fiscal_params_rejects_negative_grens():
     bad = dict(VALID_2024)
     bad['schijf1_grens'] = -100
     errors = _validate_fiscal_params(bad)
-    assert any('Schijf 1' in e for e in errors)
+    assert any('schijf1_grens' in e for e in errors)
 
 
 def test_validate_fiscal_params_rejects_non_monotonic_grenzen():
@@ -61,3 +61,47 @@ def test_validate_fiscal_params_rejects_negative_pvv():
     bad['pvv_aow_pct'] = -1
     errors = _validate_fiscal_params(bad)
     assert any('pvv_aow_pct' in e for e in errors)
+
+
+def test_validate_rejects_missing_repr_aftrek_pct():
+    """Absent required positive-percentage field triggers explicit error,
+    rather than silently being coerced to 0 (which would pass the old
+    `0 <= v <= 100` check and write 0% representatie bijtelling)."""
+    bad = dict(VALID_2024)
+    del bad['repr_aftrek_pct']
+    errors = _validate_fiscal_params(bad)
+    assert any('repr_aftrek_pct' in e for e in errors)
+
+
+def test_validate_rejects_none_repr_aftrek_pct():
+    """Explicit None (user cleared the field) is also a validation error."""
+    bad = dict(VALID_2024)
+    bad['repr_aftrek_pct'] = None
+    errors = _validate_fiscal_params(bad)
+    assert any('repr_aftrek_pct' in e for e in errors)
+
+
+def test_validate_rejects_zero_pvv_aow_pct():
+    """0 is not a legitimate PVV AOW percentage — must flag."""
+    bad = dict(VALID_2024)
+    bad['pvv_aow_pct'] = 0
+    errors = _validate_fiscal_params(bad)
+    assert any('pvv_aow_pct' in e for e in errors)
+
+
+def test_validate_rejects_zero_ew_forfait_pct():
+    """0 is not a legitimate EW forfait percentage — must flag."""
+    bad = dict(VALID_2024)
+    bad['ew_forfait_pct'] = 0
+    errors = _validate_fiscal_params(bad)
+    assert any('ew_forfait_pct' in e for e in errors)
+
+
+def test_validate_accepts_zero_for_optional_aftrekposten():
+    """startersaftrek = 0 is legitimate (user no longer in starter window)."""
+    p = dict(VALID_2024)
+    p['startersaftrek'] = 0
+    p['zelfstandigenaftrek'] = 3500
+    errors = _validate_fiscal_params(p)
+    assert not any('startersaftrek' in e for e in errors)
+    assert not any('zelfstandigenaftrek' in e for e in errors)
