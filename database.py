@@ -1,5 +1,6 @@
 """SQLite database: schema, connectie, en alle queries."""
 
+import asyncio
 import json
 import os
 import re
@@ -1078,7 +1079,7 @@ async def delete_factuur(db_path: Path = DB_PATH, factuur_id: int = 0) -> None:
         if pdf_pad:
             pdf_file = Path(pdf_pad)
             if pdf_file.exists():
-                pdf_file.unlink()
+                await asyncio.to_thread(pdf_file.unlink)
 
 
 async def link_werkdagen_to_factuur(db_path: Path = DB_PATH,
@@ -1165,7 +1166,7 @@ async def save_factuur_atomic(
             if replacing_factuur_id and old and old['pdf_pad']:
                 pdf_file = Path(old['pdf_pad'])
                 if pdf_file.exists():
-                    pdf_file.unlink()
+                    await asyncio.to_thread(pdf_file.unlink)
 
             return cursor.lastrowid
         except Exception:
@@ -1242,7 +1243,7 @@ async def delete_uitgave(db_path: Path = DB_PATH, uitgave_id: int = 0) -> None:
         if row and row['pdf_pad']:
             pdf_file = Path(row['pdf_pad'])
             if pdf_file.exists():
-                pdf_file.unlink()
+                await asyncio.to_thread(pdf_file.unlink)
 
 
 async def get_uitgaven_per_categorie(db_path: Path = DB_PATH,
