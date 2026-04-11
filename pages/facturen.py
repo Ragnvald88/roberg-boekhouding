@@ -11,6 +11,7 @@ from nicegui import app, events, ui
 from components.layout import create_layout, page_title
 from components.invoice_builder import open_invoice_builder, _build_regels
 from components.invoice_generator import generate_invoice
+from components.mail_helper import open_mail_with_attachment
 from components.utils import format_euro, format_datum, generate_csv
 from database import (
     get_facturen, add_factuur,
@@ -1217,18 +1218,17 @@ async def facturen_page():
             body, is_html = _build_mail_body(
                 nummer, bedrag, iban, bedrijfsnaam, naam, telefoon, bg_email, betaallink)
 
-            body_osa = body.replace('\\', '\\\\').replace('"', '\\"')
-            subject_osa = subject.replace('"', '\\"')
             pdf_path_abs = str(Path(pdf_path).resolve())
 
-            # Build AppleScript
-            to_line = ''
-            if klant_email:
-                to_line = f'make new to recipient with properties {{address:"{klant_email}"}}'
-
             if is_html:
-                # HTML path: set html content first, then attach via
-                # content reference so attachment follows the body text
+                # HTML path retained for now — see CLAUDE.md note: Mail.app
+                # HTML + attachments is broken; this branch is pre-existing
+                # and not touched by the mail_helper extraction.
+                body_osa = body.replace('\\', '\\\\').replace('"', '\\"')
+                subject_osa = subject.replace('"', '\\"')
+                to_line = ''
+                if klant_email:
+                    to_line = f'make new to recipient with properties {{address:"{klant_email}"}}'
                 applescript = (
                     'tell application "Mail"\n'
                     f'  set newMsg to make new outgoing message with properties '
@@ -1245,27 +1245,19 @@ async def facturen_page():
                     f'  activate\n'
                     f'end tell'
                 )
-            else:
-                # Plain text path: original working approach
-                applescript = (
-                    'tell application "Mail"\n'
-                    f'  set newMsg to make new outgoing message with properties '
-                    f'{{subject:"{subject_osa}", content:"{body_osa}", visible:true}}\n'
-                    f'  tell newMsg\n'
-                    f'    {to_line}\n'
-                    f'    make new attachment with properties '
-                    f'{{file name:POSIX file "{pdf_path_abs}"}} '
-                    f'at after last paragraph of content\n'
-                    f'  end tell\n'
-                    f'  activate\n'
-                    f'end tell'
-                )
 
             try:
-                result = await asyncio.to_thread(
-                    subprocess.run,
-                    ['osascript', '-e', applescript],
-                    capture_output=True, timeout=15)
+                if is_html:
+                    result = await asyncio.to_thread(
+                        subprocess.run,
+                        ['osascript', '-e', applescript],
+                        capture_output=True, timeout=15)
+                else:
+                    result = await asyncio.to_thread(
+                        open_mail_with_attachment,
+                        to=klant_email, subject=subject, body=body,
+                        attachment_path=pdf_path_abs,
+                    )
                 if result.returncode != 0:
                     err = result.stderr.decode().strip() if result.stderr else 'onbekende fout'
                     ui.notify(f'Mail.app fout: {err}', type='negative')
@@ -1320,33 +1312,14 @@ async def facturen_page():
                 nummer, bedrag, datum_fmt, iban, bedrijfsnaam, naam,
                 telefoon, bg_email_addr, betaallink)
 
-            body_osa = body.replace('\\', '\\\\').replace('"', '\\"')
-            subject_osa = subject.replace('"', '\\"')
             pdf_path_abs = str(Path(pdf_path).resolve())
-
-            to_line = ''
-            if klant_email:
-                to_line = f'make new to recipient with properties {{address:"{klant_email}"}}'
-
-            applescript = (
-                'tell application "Mail"\n'
-                f'  set newMsg to make new outgoing message with properties '
-                f'{{subject:"{subject_osa}", content:"{body_osa}", visible:true}}\n'
-                f'  tell newMsg\n'
-                f'    {to_line}\n'
-                f'    make new attachment with properties '
-                f'{{file name:POSIX file "{pdf_path_abs}"}} '
-                f'at after last paragraph of content\n'
-                f'  end tell\n'
-                f'  activate\n'
-                f'end tell'
-            )
 
             try:
                 result = await asyncio.to_thread(
-                    subprocess.run,
-                    ['osascript', '-e', applescript],
-                    capture_output=True, timeout=15)
+                    open_mail_with_attachment,
+                    to=klant_email, subject=subject, body=body,
+                    attachment_path=pdf_path_abs,
+                )
                 if result.returncode != 0:
                     err = result.stderr.decode().strip() if result.stderr else 'onbekende fout'
                     ui.notify(f'Mail.app fout: {err}', type='negative')
