@@ -173,11 +173,20 @@ async def instellingen_page():
                             async def handle_logo_upload(e):
                                 content = await e.file.read()
                                 ext = e.file.name.rsplit('.', 1)[-1].lower()
-                                # Remove any existing logo files
-                                for f in logo_dir.glob('logo.*'):
-                                    await asyncio.to_thread(f.unlink)
-                                dest = logo_dir / f'logo.{ext}'
-                                await asyncio.to_thread(dest.write_bytes, content)
+                                # Write-then-replace: only delete old logo files
+                                # after the new one is safely on disk. Previous
+                                # version deleted old first → if write failed,
+                                # user lost their logo.
+                                target = logo_dir / f'logo.{ext}'
+                                tmp = logo_dir / f'.logo.new.{ext}'
+                                await asyncio.to_thread(tmp.write_bytes, content)
+                                for old in logo_dir.glob('logo.*'):
+                                    if old != tmp:
+                                        try:
+                                            await asyncio.to_thread(old.unlink)
+                                        except OSError:
+                                            pass
+                                await asyncio.to_thread(tmp.rename, target)
                                 logo_preview.clear()
                                 with logo_preview:
                                     ui.image(
