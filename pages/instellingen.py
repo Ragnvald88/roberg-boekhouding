@@ -426,8 +426,10 @@ async def instellingen_page():
                     zip_path = tmp_dir / f"{stem}.zip"
 
                     # VACUUM INTO produces an atomic, consistent snapshot — no WAL races.
+                    # Escape single quotes in the path for SQL safety (VACUUM INTO can't use bound params)
+                    safe_dump_path = str(dump_path).replace("'", "''")
                     async with get_db_ctx(DB_PATH) as conn:
-                        await conn.execute(f"VACUUM INTO '{dump_path}'")
+                        await conn.execute(f"VACUUM INTO '{safe_dump_path}'")
 
                     def _create_zip():
                         with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:

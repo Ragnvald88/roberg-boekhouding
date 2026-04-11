@@ -36,15 +36,29 @@ def migrate() -> None:
             f"Target DB already exists at {NEW_DB}. "
             "Back it up and remove manually if you are sure."
         )
-    for p in [OLD_DIR / "boekhouding.sqlite3-wal", OLD_DIR / "boekhouding.sqlite3-shm"]:
-        if p.exists() and p.stat().st_size > 0:
-            print(f"Note: non-empty {p.name} found, running checkpoint...")
-            conn = sqlite3.connect(str(OLD_DB))
-            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-            conn.close()
+    wal = OLD_DIR / "boekhouding.sqlite3-wal"
+    if wal.exists() and wal.stat().st_size > 0:
+        print("Note: non-empty WAL found, running checkpoint before migration...")
+        conn = sqlite3.connect(str(OLD_DB))
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        conn.close()
+    # Probe: attempt a write lock to detect a running app holding the DB.
+    probe = sqlite3.connect(str(OLD_DB), timeout=1.0)
+    try:
+        try:
+            probe.execute("BEGIN IMMEDIATE")
+            probe.execute("ROLLBACK")
+        except sqlite3.OperationalError as exc:
+            _refuse(
+                f"Cannot acquire write lock on {OLD_DB}: {exc}. "
+                "Is the app still running? Close it and retry."
+            )
+    finally:
+        probe.close()
     NEW_DIR.mkdir(parents=True, exist_ok=True)
     src = sqlite3.connect(str(OLD_DB))
-    src.execute(f"VACUUM INTO '{NEW_DB}'")
+    safe_new_db = str(NEW_DB).replace("'", "''")
+    src.execute(f"VACUUM INTO '{safe_new_db}'")
     src.close()
     print(f"DB copied via VACUUM INTO → {NEW_DB}")
     for sub in SUBDIRS:
@@ -54,7 +68,7 @@ def migrate() -> None:
             shutil.copytree(old_sub, new_sub)
             print(f"  copied {sub}/")
     print("\nMigration complete. Old directory NOT deleted.")
-    print(f"After verifying the app works, delete the old location:")
+    print("After verifying the app works, delete the old location:")
     print(f"  rm -rf {OLD_DIR}")
 
 
