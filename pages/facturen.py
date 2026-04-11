@@ -47,6 +47,45 @@ def _should_use_builder(row: dict) -> bool:
     )
 
 
+def _line_item_to_werkdag_kwargs(
+    li: dict,
+    inv_type: str,
+    inv_km_tarief: float,
+) -> dict:
+    """Convert a parsed PDF line item into add_werkdag kwargs.
+
+    Centralises the inv_type-specific logic so the import loop can
+    stay readable and the conversion is unit-testable. For ANW the
+    km_tarief is forced to 0 because reiskosten zijn al in het
+    dienst-tarief verdisconteerd (CLAUDE.md).
+    """
+    if inv_type == 'anw':
+        uren = li.get('uren', 0)
+        bedrag_li = li.get('bedrag', 0)
+        tarief = round(bedrag_li / uren, 2) if uren else 0
+        return {
+            'code': li.get('dienst_code', ''),
+            'activiteit': 'Achterwacht',
+            'uren': uren,
+            'km': 0.0,
+            'tarief': tarief,
+            'km_tarief': 0.0,
+            'urennorm': 0,
+        }
+    uren_val = li.get('uren', 0)
+    tarief_val = li.get('tarief', 0)
+    code = f'WDAGPRAKTIJK_{tarief_val:.2f}'.replace('.', ',')
+    return {
+        'code': code,
+        'activiteit': 'Waarneming dagpraktijk',
+        'uren': uren_val,
+        'km': li.get('km', 0),
+        'tarief': tarief_val,
+        'km_tarief': li.get('km_tarief', inv_km_tarief),
+        'urennorm': 1,
+    }
+
+
 def _classify_import_item(
     nummer: str | None,
     klant_id: int | None,
@@ -1775,48 +1814,14 @@ async def facturen_page():
                                             )
                                             werkdagen_linked += 1
                                         else:
-                                            if inv_type == 'anw':
-                                                code = li.get(
-                                                    'dienst_code', '')
-                                                activiteit = 'Achterwacht'
-                                                uren = li.get('uren', 0)
-                                                bedrag_li = li.get(
-                                                    'bedrag', 0)
-                                                tarief = (
-                                                    round(bedrag_li / uren, 2)
-                                                    if uren else 0)
-                                                km = 0.0
-                                                km_tarief = inv_km_tarief
-                                                urennorm = 0
-                                            else:
-                                                uren_val = li.get('uren', 0)
-                                                tarief_val = li.get(
-                                                    'tarief', 0)
-                                                code = (
-                                                    f'WDAGPRAKTIJK_'
-                                                    f'{tarief_val:.2f}'
-                                                    .replace('.', ','))
-                                                activiteit = (
-                                                    'Waarneming dagpraktijk')
-                                                uren = uren_val
-                                                tarief = tarief_val
-                                                km = li.get('km', 0)
-                                                km_tarief = li.get(
-                                                    'km_tarief', inv_km_tarief)
-                                                urennorm = 1
-
+                                            wd_kwargs = _line_item_to_werkdag_kwargs(
+                                                li, inv_type, inv_km_tarief)
                                             await add_werkdag(
                                                 DB_PATH,
                                                 datum=li_datum,
                                                 klant_id=klant_id,
-                                                code=code,
-                                                activiteit=activiteit,
-                                                uren=uren,
-                                                km=km,
-                                                tarief=tarief,
-                                                km_tarief=km_tarief,
                                                 factuurnummer=nummer,
-                                                urennorm=urennorm,
+                                                **wd_kwargs,
                                             )
                                             werkdagen_created += 1
 

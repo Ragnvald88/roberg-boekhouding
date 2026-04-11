@@ -745,6 +745,38 @@ def test_rebuild_vergoeding_regels_json_malformed_input():
     assert parsed == [{'omschrijving': 'Vergoeding', 'bedrag': 75.0}]
 
 
+# === ANW line item km_tarief (C.5) ===
+
+def test_line_item_to_werkdag_anw_forces_km_tarief_zero():
+    from pages.facturen import _line_item_to_werkdag_kwargs
+    li = {'dienst_code': 'ANW-NA',
+          'uren': 10, 'bedrag': 850.0}
+    kw = _line_item_to_werkdag_kwargs(li, 'anw', 0.23)
+    assert kw['km_tarief'] == 0.0
+    assert kw['km'] == 0.0
+    assert kw['tarief'] == 85.00
+    assert kw['urennorm'] == 0
+    assert kw['activiteit'] == 'Achterwacht'
+
+
+def test_line_item_to_werkdag_factuur_keeps_km_tarief():
+    from pages.facturen import _line_item_to_werkdag_kwargs
+    li = {'uren': 8, 'tarief': 77.50, 'km': 52}
+    kw = _line_item_to_werkdag_kwargs(li, 'dagpraktijk', 0.23)
+    assert kw['km_tarief'] == 0.23
+    assert kw['km'] == 52
+    assert kw['tarief'] == 77.50
+    assert kw['urennorm'] == 1
+    assert kw['activiteit'] == 'Waarneming dagpraktijk'
+
+
+def test_line_item_to_werkdag_factuur_per_line_km_tarief_wins():
+    from pages.facturen import _line_item_to_werkdag_kwargs
+    li = {'uren': 8, 'tarief': 77.50, 'km': 52, 'km_tarief': 0.19}
+    kw = _line_item_to_werkdag_kwargs(li, 'dagpraktijk', 0.23)
+    assert kw['km_tarief'] == 0.19
+
+
 # === PDF import classifier (C.4) ===
 
 def test_classify_import_missing_nummer_is_fout():
