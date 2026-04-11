@@ -73,36 +73,67 @@ async def aangifte_page():
     vorig_jaar = huidig_jaar - 1
     jaren = year_options()
     state = {'jaar': vorig_jaar}
-    _cache = {'jaar': None, 'data': None, 'fiscaal': None}
+    _cache = {'jaar': None, 'data': None, 'fiscaal': None, 'error': None}
 
     async def _get_fiscal(jaar: int):
-        """Return (data, fiscaal) from cache or compute fresh."""
-        if _cache['jaar'] == jaar and _cache['data'] is not None:
+        """Return (data, fiscaal) from cache or compute fresh.
+
+        On missing/invalid fiscale_params, catches KeyError/ValueError, stores
+        the error message in the cache and returns (None, None). Render
+        functions then call _render_params_error() to show a friendly card.
+        """
+        if _cache['jaar'] == jaar and (_cache['data'] is not None or _cache['error']):
             return _cache['data'], _cache['fiscaal']
-        data = await fetch_fiscal_data(DB_PATH, jaar)
-        if data is None:
-            _cache.update(jaar=jaar, data=None, fiscaal=None)
+        try:
+            data = await fetch_fiscal_data(DB_PATH, jaar)
+            if data is None:
+                _cache.update(jaar=jaar, data=None, fiscaal=None, error=None)
+                return None, None
+            f = bereken_volledig(
+                omzet=data['omzet'], kosten=data['kosten_excl_inv'],
+                afschrijvingen=data['totaal_afschrijvingen'],
+                representatie=data['representatie'],
+                investeringen_totaal=data['inv_totaal_dit_jaar'],
+                uren=data['uren'], params=data['params_dict'],
+                aov=data['aov'], lijfrente=data.get('lijfrente', 0),
+                woz=data['woz'],
+                hypotheekrente=data['hypotheekrente'],
+                voorlopige_aanslag=data['voorlopige_aanslag'],
+                voorlopige_aanslag_zvw=data['voorlopige_aanslag_zvw'],
+                ew_naar_partner=data['ew_naar_partner'],
+                partner_inkomen=data['params'].partner_bruto_loon or 0,
+            )
+        except (KeyError, ValueError) as exc:
+            _cache.update(jaar=jaar, data=None, fiscaal=None, error=str(exc))
             return None, None
-        f = bereken_volledig(
-            omzet=data['omzet'], kosten=data['kosten_excl_inv'],
-            afschrijvingen=data['totaal_afschrijvingen'],
-            representatie=data['representatie'],
-            investeringen_totaal=data['inv_totaal_dit_jaar'],
-            uren=data['uren'], params=data['params_dict'],
-            aov=data['aov'], lijfrente=data.get('lijfrente', 0),
-            woz=data['woz'],
-            hypotheekrente=data['hypotheekrente'],
-            voorlopige_aanslag=data['voorlopige_aanslag'],
-            voorlopige_aanslag_zvw=data['voorlopige_aanslag_zvw'],
-            ew_naar_partner=data['ew_naar_partner'],
-            partner_inkomen=data['params'].partner_bruto_loon or 0,
-        )
-        _cache.update(jaar=jaar, data=data, fiscaal=f)
+        _cache.update(jaar=jaar, data=data, fiscaal=f, error=None)
         return data, f
 
     def _invalidate_cache():
         """Clear cache so next _get_fiscal() recalculates."""
-        _cache.update(jaar=None, data=None, fiscaal=None)
+        _cache.update(jaar=None, data=None, fiscaal=None, error=None)
+
+    def _render_params_error(container, jaar):
+        """Show a friendly error card when fiscale_params voor jaar zijn incompleet."""
+        err = _cache.get('error')
+        with container:
+            if err:
+                with ui.card().classes('w-full bg-red-50 border border-red-200 q-pa-md'):
+                    with ui.row().classes('items-center gap-2'):
+                        ui.icon('error', color='negative').classes('text-h5')
+                        ui.label(
+                            f'Fiscale parameters voor {jaar} zijn incompleet'
+                        ).classes('text-h6')
+                    ui.label(err).classes('text-body2 text-grey-8 q-mt-sm')
+                    ui.button(
+                        'Open Instellingen',
+                        on_click=lambda: ui.navigate.to('/instellingen'),
+                    ).props('color=primary').classes('q-mt-sm')
+            else:
+                ui.label(
+                    f'Geen fiscale parameters voor {jaar}. '
+                    'Maak deze aan via Instellingen.'
+                ).classes('text-negative text-subtitle1')
     def _copy_value(amount: float, label: str = ''):
         """Copy raw integer value to clipboard (what you type in BD portal)."""
         import json
@@ -236,11 +267,7 @@ async def aangifte_page():
 
         data, f = await _get_fiscal(jaar)
         if data is None:
-            with winst_container:
-                ui.label(
-                    f'Geen fiscale parameters voor {jaar}. '
-                    'Maak deze aan via Instellingen.'
-                ).classes('text-negative text-subtitle1')
+            _render_params_error(winst_container, jaar)
             return
 
         with winst_container:
@@ -400,11 +427,7 @@ async def aangifte_page():
 
         data, f = await _get_fiscal(jaar)
         if data is None:
-            with prive_container:
-                ui.label(
-                    f'Geen fiscale parameters voor {jaar}. '
-                    'Maak deze aan via Instellingen.'
-                ).classes('text-negative text-subtitle1')
+            _render_params_error(prive_container, jaar)
             return
 
         params = data['params']
@@ -591,7 +614,7 @@ async def aangifte_page():
                     'text-caption text-grey-7')
             elif woz > 0:
                 _invulhulp_line(BD['ew_forfait'],
-                                f'Eigenwoningforfait ({params_dict.get("ew_forfait_pct", 0.35)}% van {format_euro(woz)})',
+                                f'Eigenwoningforfait ({params_dict["ew_forfait_pct"]}% van {format_euro(woz)})',
                                 f.ew_forfait)
                 _invulhulp_line(BD['hypotheekrente'], '- Hypotheekrente', hypotheekrente)
                 if f.hillen_aftrek > 0:
@@ -722,11 +745,7 @@ async def aangifte_page():
 
         data, f = await _get_fiscal(jaar)
         if data is None:
-            with overzicht_container:
-                ui.label(
-                    f'Geen fiscale parameters voor {jaar}. '
-                    'Maak deze aan via Instellingen.'
-                ).classes('text-negative text-subtitle1')
+            _render_params_error(overzicht_container, jaar)
             return
 
         params_dict = data['params_dict']
@@ -767,9 +786,9 @@ async def aangifte_page():
                         'w-full text-caption').props('dense'):
                     _line('IB (excl. premies)', f.ib_alleen)
                     _line('PVV premies volksverzekeringen', f.pvv, bold=True)
-                    pvv_aow = params_dict.get('pvv_aow_pct', 17.90)
-                    pvv_anw = params_dict.get('pvv_anw_pct', 0.10)
-                    pvv_wlz = params_dict.get('pvv_wlz_pct', 9.65)
+                    pvv_aow = params_dict['pvv_aow_pct']
+                    pvv_anw = params_dict['pvv_anw_pct']
+                    pvv_wlz = params_dict['pvv_wlz_pct']
                     _line(f'  - AOW premie ({pvv_aow}%)', f.pvv_aow)
                     _line(f'  - Anw premie ({pvv_anw}%)', f.pvv_anw)
                     _line(f'  - Wlz premie ({pvv_wlz}%)', f.pvv_wlz)
@@ -785,9 +804,9 @@ async def aangifte_page():
             with ui.card().classes('w-full'):
                 ui.label('ZVW-bijdrage').classes('text-subtitle1 text-weight-bold')
                 ui.separator().classes('my-1')
-                _line(f'Grondslag (belastbare winst, max {format_euro(params_dict.get("zvw_max_grondslag", 0))})',
-                      min(f.belastbare_winst, params_dict.get('zvw_max_grondslag', 0)))
-                _line(f'Percentage: {params_dict.get("zvw_pct", 0)}%', 0, bold=False)
+                _line(f'Grondslag (belastbare winst, max {format_euro(params_dict["zvw_max_grondslag"])})',
+                      min(f.belastbare_winst, params_dict['zvw_max_grondslag']))
+                _line(f'Percentage: {params_dict["zvw_pct"]}%', 0, bold=False)
                 _invulhulp_line(BD['zvw'], 'ZVW-bijdrage', f.zvw, bold=True)
 
             # Card 4: Box 3

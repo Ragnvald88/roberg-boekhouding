@@ -34,12 +34,6 @@ def bereken_eigenwoningforfait(woz: float, ew_forfait_pct: float = 0.35,
     return villataks_grens * pct + (woz - villataks_grens) * (villataks_pct / 100)
 
 
-# PVV component percentages (premies volksverzekeringen, stable across years)
-PVV_AOW_PCT = Decimal('17.90')
-PVV_ANW_PCT = Decimal('0.10')
-PVV_WLZ_PCT = Decimal('9.65')
-
-
 def D(v) -> Decimal:
     """Convert any numeric value to Decimal via string (avoids float imprecision)."""
     if v is None:
@@ -215,7 +209,9 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
                      'zelfstandigenaftrek', 'mkb_vrijstelling_pct',
                      'schijf1_grens', 'schijf1_pct', 'schijf2_grens',
                      'schijf2_pct', 'schijf3_pct',
-                     'zvw_max_grondslag', 'zvw_pct']
+                     'zvw_max_grondslag', 'zvw_pct',
+                     'pvv_aow_pct', 'pvv_anw_pct', 'pvv_wlz_pct',
+                     'ew_forfait_pct', 'repr_aftrek_pct']
     missing = [k for k in required_keys if k not in params]
     if missing:
         raise ValueError(
@@ -243,7 +239,7 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
 
     # 2. Fiscale correcties
     # Representatie: niet-aftrekbaar deel -> bijtelling
-    d_repr_aftrek_pct = D(params.get('repr_aftrek_pct', 80)) / D('100')
+    d_repr_aftrek_pct = D(params['repr_aftrek_pct']) / D('100')
     d_repr_bijtelling = d_repr * (D('1') - d_repr_aftrek_pct)
     r.repr_bijtelling = euro(d_repr_bijtelling)
 
@@ -295,7 +291,7 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
     if d_woz > 0:
         d_ew_forfait = D(str(bereken_eigenwoningforfait(
             float(d_woz),
-            ew_forfait_pct=params.get('ew_forfait_pct', 0.35),
+            ew_forfait_pct=params['ew_forfait_pct'],
             villataks_grens=params.get('villataks_grens', 1_350_000),
             villataks_pct=params.get('villataks_pct', 2.35),
         )))
@@ -381,10 +377,10 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
         d_premie_grondslag = D(params['schijf1_grens'])  # fallback for older DB
     d_pvv_basis = min(d_vi, d_premie_grondslag)
 
-    # PVV rates from params (DB-driven) with fallback to constants
-    pvv_aow_pct = D(str(params.get('pvv_aow_pct', PVV_AOW_PCT)))
-    pvv_anw_pct = D(str(params.get('pvv_anw_pct', PVV_ANW_PCT)))
-    pvv_wlz_pct = D(str(params.get('pvv_wlz_pct', PVV_WLZ_PCT)))
+    # PVV rates from params (DB-driven); required_keys enforces presence
+    pvv_aow_pct = D(str(params['pvv_aow_pct']))
+    pvv_anw_pct = D(str(params['pvv_anw_pct']))
+    pvv_wlz_pct = D(str(params['pvv_wlz_pct']))
 
     d_pvv_aow = d_pvv_basis * pvv_aow_pct / D('100')
     d_pvv_anw = d_pvv_basis * pvv_anw_pct / D('100')
