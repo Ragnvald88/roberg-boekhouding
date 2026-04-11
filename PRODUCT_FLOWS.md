@@ -54,6 +54,16 @@ Gebruik dit als bron voor `/ux-review`.
 - Opent: full-screen dialog met PDF in iframe
 - Download button beschikbaar
 
+### Aanvullende facturen-acties (row menu)
+- **Markeer als verstuurd**: voor concept facturen — flipt status zonder e-mail te versturen, voor handmatige workflow
+- **Herinnering versturen**: alleen voor verlopen facturen — opent Mail.app met herinnering body en bestaande PDF
+- **Toon in Finder**: macOS reveal van de PDF in Finder
+- **Download PDF**: directe download (alternatief voor preview-dialog)
+
+### Facturen-pagina extra UI
+- KPI-strip bovenaan: Gefactureerd / Openstaand / Verlopen totalen voor het jaar
+- Filter-bar: jaar, klant, status, type — alle combineerbaar
+
 ---
 
 ## Werkdagen
@@ -119,6 +129,7 @@ Gebruik dit als bron voor `/ux-review`.
 ### Transactie categoriseren
 - Inline categorie-dropdown per rij
 - Categorieën: kosten-categorieën + Omzet/Prive/Belasting/AOV
+- **Inline categorie-dropdown** (geen popup-dialog) is bewust: bulk-categoriseren is een hot path en een dialog per rij zou tedious zijn.
 
 ### Bulk acties
 - Selecteer rijen → "Verwijder selectie"
@@ -130,8 +141,9 @@ Gebruik dit als bron voor `/ux-review`.
 
 ### KPI kaarten
 - Bruto omzet (klikbaar → `/werkdagen`)
+- Bedrijfswinst (klikbaar → `/aangifte`)
 - Belasting prognose (klikbaar → `/aangifte`)
-- Uren richting urencriterium
+- Uren richting urencriterium (klikbaar → `/werkdagen`)
 - Sparklijn charts tonen maandelijks verloop
 
 ### Aandachtspunten
@@ -146,7 +158,7 @@ Gebruik dit als bron voor `/ux-review`.
 ### 5 tabs voor belastingaangifte
 1. **Winst**: invulhulp met copy-buttons, ZA/SA toggles
 2. **Prive & aftrek**: WOZ, hypotheek, AOV, lijfrente, VA inputs — auto-save op blur
-3. **Box 3**: vermogensinput, partner toggle, "Opslaan & bereken" button
+3. **Box 3**: vermogensinput, partner toggle, auto-save op blur (consistent met Prive-tab)
 4. **Overzicht**: complete IB/PVV/ZVW berekening met copy-buttons
 5. **Documenten**: upload checklist per documenttype
 

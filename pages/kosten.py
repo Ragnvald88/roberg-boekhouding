@@ -40,6 +40,7 @@ async def kosten_page():
     kosten_table = {'ref': None}
     summary_container = {'ref': None}
     activastaat_container = {'ref': None}
+    update_bulk_bar_ref = {'fn': None}
 
     kosten_columns = [
         {'name': 'bon', 'label': '', 'field': 'has_bon', 'align': 'center'},
@@ -110,7 +111,10 @@ async def kosten_page():
             rows.append(row)
 
         table.rows = rows
+        table.selected.clear()
         table.update()
+        if update_bulk_bar_ref['fn']:
+            update_bulk_bar_ref['fn']()
 
     async def laad_summary():
         """Reload the summary card."""
@@ -962,13 +966,64 @@ async def kosten_page():
             cat_select.on('update:model-value', lambda: on_filter_change())
         with ui.card().classes('w-full'):
             ui.label('Uitgaven').classes('text-subtitle1 text-bold')
+
+            bulk_bar = ui.row().classes('w-full items-center gap-4')
+            bulk_bar.set_visibility(False)
+            with bulk_bar:
+                bulk_label = ui.label('')
+
+                async def verwijder_selectie():
+                    tbl = kosten_table['ref']
+                    if not tbl or not tbl.selected:
+                        return
+                    ids = [r['id'] for r in tbl.selected]
+
+                    async def confirm_bulk_delete():
+                        for uid in ids:
+                            await delete_uitgave(DB_PATH, uitgave_id=uid)
+                        dlg.close()
+                        ui.notify(
+                            f'{len(ids)} uitgave(n) verwijderd',
+                            type='positive')
+                        await ververs()
+
+                    with ui.dialog() as dlg, ui.card():
+                        ui.label(f'{len(ids)} uitgave(n) verwijderen?') \
+                            .classes('text-h6')
+                        with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
+                            ui.button('Annuleren', on_click=dlg.close) \
+                                .props('flat')
+                            ui.button('Ja, verwijderen',
+                                      on_click=confirm_bulk_delete) \
+                                .props('color=negative')
+                    dlg.open()
+
+                ui.button(
+                    'Verwijder selectie', icon='delete',
+                    on_click=verwijder_selectie,
+                ).props('color=negative outline')
+
+            def update_bulk_bar():
+                tbl = kosten_table['ref']
+                selected = tbl.selected if tbl else []
+                n = len(selected) if selected else 0
+                if n > 0:
+                    bulk_bar.set_visibility(True)
+                    bulk_label.text = f'{n} uitgave(n) geselecteerd'
+                else:
+                    bulk_bar.set_visibility(False)
+
+            update_bulk_bar_ref['fn'] = update_bulk_bar
+
             kosten_table['ref'] = ui.table(
                 columns=kosten_columns, rows=[], row_key='id',
+                selection='multiple',
                 pagination={'rowsPerPage': 20, 'sortBy': 'datum',
                             'descending': True,
                             'rowsPerPageOptions': [10, 20, 50, 0]},
             ).classes('w-full')
             _tbl = kosten_table['ref']
+            _tbl.on('selection', lambda _: update_bulk_bar())
             _tbl.add_slot('body-cell-bon', '''
                 <q-td :props="props">
                     <q-btn v-if="props.row.has_bon" icon="attach_file" flat dense

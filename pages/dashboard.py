@@ -252,7 +252,9 @@ async def dashboard_page():
                     kpis['omzet'] - kpis['kosten'])
                 vorig_winst = vorig_ytd_omzet - vorig_ytd_kosten
 
-                with ui.card().classes('q-pa-lg card-hero'):
+                with ui.card().classes('q-pa-lg card-hero') \
+                        .style('cursor: pointer') \
+                        .on('click', lambda: ui.navigate.to('/aangifte')):
                     with ui.row().classes('w-full justify-between items-center'):
                         ui.label('Bedrijfswinst').classes('hero-label')
                         delta = _yoy_delta(ytd_winst, vorig_winst) \
@@ -389,7 +391,8 @@ async def dashboard_page():
                 with ui.card().classes('flex-1 q-pa-sm').style(
                         'border-radius: 10px; border: 1px solid #E2E8F0; '
                         'display: flex; align-items: center; gap: 10px; '
-                        'flex-direction: row'):
+                        'flex-direction: row; cursor: pointer').on(
+                        'click', lambda: ui.navigate.to('/werkdagen')):
                     ui.icon('schedule', size='20px').style('color: #0F766E')
                     with ui.row().classes('items-baseline gap-1'):
                         ui.label(
