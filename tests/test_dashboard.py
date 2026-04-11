@@ -2,6 +2,8 @@
 
 from datetime import date, timedelta
 
+import pytest
+
 from components.utils import format_euro
 from pages.facturen import _is_verlopen
 
@@ -93,3 +95,138 @@ def test_generate_csv_special_chars():
     parsed = list(reader)
     assert parsed[1][0] == 'Lunch, diner & borrel'
     assert parsed[2][0] == 'Item "special"'
+
+
+# ============================================================
+# Dashboard prorata / IB estimate coverage (Workstream I.1)
+#
+# The dashboard's `_compute_ib_estimate` is a closure inside `dashboard_page`
+# that composes three pieces: `fetch_fiscal_data`, `extrapoleer_jaaromzet`, and
+# `bereken_volledig`. Extracting the closure would require passing DB_PATH and
+# async helpers explicitly, a non-trivial refactor for questionable value.
+#
+# Instead we test the actual prorata engine (`extrapoleer_jaaromzet`) directly
+# and wire up the full compose path for a past year to verify the dashboard
+# orchestration produces sensible numbers.
+# ============================================================
+
+
+@pytest.mark.asyncio
+async def test_extrapoleer_jaaromzet_past_year_returns_actual(db):
+    """Past-year extrapolation must return ytd == extrapolated, high confidence."""
+    from components.fiscal_utils import extrapoleer_jaaromzet
+    from database import add_klant, add_factuur
+
+    kid = await add_klant(db, naam='Past', tarief_uur=100)
+    await add_factuur(
+        db, nummer='2020-001', klant_id=kid,
+        datum='2020-06-15', totaal_uren=10, totaal_km=0,
+        totaal_bedrag=5000.00, status='verstuurd',
+    )
+    await add_factuur(
+        db, nummer='2020-002', klant_id=kid,
+        datum='2020-11-01', totaal_uren=10, totaal_km=0,
+        totaal_bedrag=3000.00, status='betaald',
+    )
+
+    result = await extrapoleer_jaaromzet(db, 2020)
+    assert result['ytd_omzet'] == 8000.00
+    assert result['extrapolated_omzet'] == 8000.00
+    assert result['method'] == 'actual'
+    assert result['confidence'] == 'high'
+    assert result['basis_maanden'] == 12
+
+
+@pytest.mark.asyncio
+async def test_extrapoleer_jaaromzet_past_year_no_data(db):
+    """Past year with no data: ytd=0, extrapolated=0, confidence='high' (actual)."""
+    from components.fiscal_utils import extrapoleer_jaaromzet
+
+    result = await extrapoleer_jaaromzet(db, 2020)
+    assert result['ytd_omzet'] == 0
+    assert result['extrapolated_omzet'] == 0
+    # Past years always use actual numbers -> high confidence even when zero
+    assert result['confidence'] == 'high'
+    assert result['method'] == 'actual'
+
+
+@pytest.mark.asyncio
+async def test_extrapoleer_jaaromzet_past_year_excludes_concept(db):
+    """Concept invoices must NOT be counted in extrapolated omzet."""
+    from components.fiscal_utils import extrapoleer_jaaromzet
+    from database import add_klant, add_factuur
+
+    kid = await add_klant(db, naam='ConceptTest', tarief_uur=100)
+    await add_factuur(
+        db, nummer='2021-001', klant_id=kid,
+        datum='2021-06-15', totaal_uren=10, totaal_km=0,
+        totaal_bedrag=1000.00, status='verstuurd',
+    )
+    await add_factuur(
+        db, nummer='2021-002', klant_id=kid,
+        datum='2021-07-01', totaal_uren=10, totaal_km=0,
+        totaal_bedrag=2000.00, status='concept',
+    )
+
+    result = await extrapoleer_jaaromzet(db, 2021)
+    assert result['ytd_omzet'] == 1000.00  # concept excluded
+    assert result['extrapolated_omzet'] == 1000.00
+
+
+@pytest.mark.asyncio
+async def test_fetch_fiscal_data_with_seeded_past_year(db):
+    """fetch_fiscal_data + the composed omzet path produces the number that
+    `_compute_ib_estimate` would feed into `bereken_volledig` for a past year.
+
+    This is the orchestration smoke test for the dashboard IB estimate path:
+    past year branch (no extrapolation), so the result is deterministic and
+    independent of today's date.
+    """
+    from components.fiscal_utils import fetch_fiscal_data
+    from database import (
+        add_klant, add_factuur, add_uitgave, upsert_fiscale_params,
+    )
+    from import_.seed_data import FISCALE_PARAMS
+
+    await upsert_fiscale_params(db, **FISCALE_PARAMS[2024])
+
+    kid = await add_klant(db, naam='OrchestrationTest', tarief_uur=100)
+    # 80k omzet in 2024 — triggers IB in every relevant schijf
+    await add_factuur(
+        db, nummer='2024-X01', klant_id=kid,
+        datum='2024-06-15', totaal_uren=800, totaal_km=0,
+        totaal_bedrag=80000.00, status='betaald',
+    )
+    await add_uitgave(
+        db, datum='2024-06-20', categorie='kantoor',
+        omschrijving='Zakelijk', bedrag=5000.00, is_investering=0,
+    )
+
+    data = await fetch_fiscal_data(db, 2024)
+    assert data is not None
+    assert data['omzet'] == 80000.00
+    assert data['kosten_excl_inv'] == 5000.00
+    assert data['params_dict']['jaar'] == 2024
+
+    # And now verify bereken_volledig produces a positive IB for the
+    # business-only inputs the dashboard closure would pass
+    from fiscal.berekeningen import bereken_volledig
+
+    f = bereken_volledig(
+        omzet=data['omzet'],
+        kosten=data['kosten_excl_inv'],
+        afschrijvingen=data['totaal_afschrijvingen'],
+        representatie=data['representatie'],
+        investeringen_totaal=data['inv_totaal_dit_jaar'],
+        uren=data['uren'],
+        params=data['params_dict'],
+        aov=0, lijfrente=0, woz=0, hypotheekrente=0,
+        voorlopige_aanslag=0,
+        voorlopige_aanslag_zvw=0,
+        ew_naar_partner=True,
+    )
+    # Sanity: business profit ~ 75000 → positive IB expected
+    assert f.winst > 70000
+    assert f.winst < 80000
+    assert f.netto_ib > 0
+    assert f.zvw > 0

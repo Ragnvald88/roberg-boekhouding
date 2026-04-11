@@ -5,6 +5,7 @@ from database import (
     init_db, get_db, get_aangifte_documenten, add_aangifte_document,
     delete_aangifte_document, update_ew_naar_partner,
     get_fiscale_params, upsert_fiscale_params, update_balans_inputs,
+    update_ib_inputs, update_box3_inputs, update_partner_inputs,
     add_uitgave, add_werkdag, add_klant, add_factuur,
     _validate_datum,
 )
@@ -583,3 +584,102 @@ async def test_fiscale_params_preserves_explicit_zero(db):
     assert params.kia_drempel_per_item == 0, f"Expected 0, got {params.kia_drempel_per_item} (default 450 leak)"
     assert params.ew_forfait_pct == 0, f"Expected 0, got {params.ew_forfait_pct} (default 0.35 leak)"
     assert params.villataks_grens == 0, f"Expected 0, got {params.villataks_grens} (default 1350000 leak)"
+
+
+# ============================================================
+# Aangifte partial updaters — auto-save roundtrips (Workstream I.4)
+# ============================================================
+
+@pytest.mark.asyncio
+async def test_update_ib_inputs_roundtrip(db):
+    """update_ib_inputs writes all six IB input fields and get_fiscale_params
+    reads them back unchanged (aangifte auto-save flow)."""
+    await upsert_fiscale_params(db, **FISCALE_PARAMS[2024])
+
+    await update_ib_inputs(
+        db, jaar=2024,
+        aov_premie=4200.00,
+        woz_waarde=415000.00,
+        hypotheekrente=9800.00,
+        voorlopige_aanslag_betaald=12000.00,
+        voorlopige_aanslag_zvw=3200.00,
+        lijfrente_premie=2500.00,
+    )
+
+    params = await get_fiscale_params(db, jaar=2024)
+    assert params.aov_premie == 4200.00
+    assert params.woz_waarde == 415000.00
+    assert params.hypotheekrente == 9800.00
+    assert params.voorlopige_aanslag_betaald == 12000.00
+    assert params.voorlopige_aanslag_zvw == 3200.00
+    assert params.lijfrente_premie == 2500.00
+
+
+@pytest.mark.asyncio
+async def test_update_ib_inputs_overwrites_previous(db):
+    """Second update_ib_inputs call fully replaces prior values — no partial merge."""
+    await upsert_fiscale_params(db, **FISCALE_PARAMS[2024])
+
+    await update_ib_inputs(
+        db, jaar=2024, woz_waarde=300000, hypotheekrente=5000,
+    )
+    params = await get_fiscale_params(db, jaar=2024)
+    assert params.woz_waarde == 300000
+
+    # Second save with different values (defaults for omitted fields)
+    await update_ib_inputs(db, jaar=2024, woz_waarde=400000)
+    params = await get_fiscale_params(db, jaar=2024)
+    assert params.woz_waarde == 400000
+    # hypotheekrente NOT passed this time -> default 0 -> overwritten
+    assert params.hypotheekrente == 0
+
+
+@pytest.mark.asyncio
+async def test_update_box3_inputs_roundtrip(db):
+    """update_box3_inputs writes bank_saldo / overige_bezittingen / schulden
+    and get_fiscale_params reads them back."""
+    await upsert_fiscale_params(db, **FISCALE_PARAMS[2024])
+
+    result = await update_box3_inputs(
+        db, jaar=2024,
+        bank_saldo=52000.00,
+        overige_bezittingen=21000.00,
+        schulden=3000.00,
+    )
+    assert result is True  # row existed + was updated
+
+    params = await get_fiscale_params(db, jaar=2024)
+    assert params.box3_bank_saldo == 52000.00
+    assert params.box3_overige_bezittingen == 21000.00
+    assert params.box3_schulden == 3000.00
+
+
+@pytest.mark.asyncio
+async def test_update_box3_inputs_no_row_returns_false(db):
+    """update_box3_inputs returns False when no fiscale_params row exists."""
+    result = await update_box3_inputs(db, jaar=2099, bank_saldo=1000)
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_update_partner_inputs_roundtrip(db):
+    """update_partner_inputs writes bruto_loon / loonheffing and reads them back."""
+    await upsert_fiscale_params(db, **FISCALE_PARAMS[2024])
+
+    result = await update_partner_inputs(
+        db, jaar=2024,
+        bruto_loon=42000.00,
+        loonheffing=11500.00,
+    )
+    assert result is True
+
+    params = await get_fiscale_params(db, jaar=2024)
+    assert params.partner_bruto_loon == 42000.00
+    assert params.partner_loonheffing == 11500.00
+
+
+@pytest.mark.asyncio
+async def test_update_partner_inputs_no_row_returns_false(db):
+    """update_partner_inputs returns False when no fiscale_params row exists."""
+    result = await update_partner_inputs(db, jaar=2099, bruto_loon=30000)
+    assert result is False

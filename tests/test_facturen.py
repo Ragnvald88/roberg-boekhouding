@@ -899,3 +899,59 @@ async def test_update_factuur_accepts_regels_json(seeded_db):
     parsed = _json.loads(row['regels_json'])
     regels_sum = sum(r['bedrag'] for r in parsed)
     assert abs(regels_sum - row['totaal_bedrag']) < 0.01
+
+
+# ============================================================
+# Invoice lifecycle end-to-end (Workstream I.3)
+# ============================================================
+
+@pytest.mark.asyncio
+async def test_invoice_lifecycle_full_path(db):
+    """End-to-end: concept -> verstuurd -> betaald -> verstuurd; betaald->concept blocked.
+
+    Verifies that get_kpis reflects the correct omzet at each stage and that
+    the status state machine enforces allowed transitions.
+    """
+    from database import get_kpis, update_factuur_status
+
+    kid = await add_klant(db, naam="LifecycleTest", tarief_uur=100)
+    fid = await add_factuur(
+        db, nummer='2025-LC1', klant_id=kid,
+        datum='2025-08-01', totaal_uren=10, totaal_km=0,
+        totaal_bedrag=1500.00, status='concept',
+    )
+
+    # Concept: not counted in omzet
+    kpis = await get_kpis(db, jaar=2025)
+    assert kpis['omzet'] == 0.0
+
+    # -> verstuurd: counted
+    await update_factuur_status(db, factuur_id=fid, status='verstuurd')
+    kpis = await get_kpis(db, jaar=2025)
+    assert kpis['omzet'] == 1500.00
+
+    # -> betaald: still counted
+    await update_factuur_status(
+        db, factuur_id=fid, status='betaald', betaald_datum='2025-08-15')
+    kpis = await get_kpis(db, jaar=2025)
+    assert kpis['omzet'] == 1500.00
+
+    # Escape hatch: betaald -> verstuurd (user fix for mistaken payment mark)
+    await update_factuur_status(db, factuur_id=fid, status='verstuurd')
+    kpis = await get_kpis(db, jaar=2025)
+    assert kpis['omzet'] == 1500.00
+
+    # Verstuurd -> concept (allowed) then re-send cycle still works
+    await update_factuur_status(db, factuur_id=fid, status='concept')
+    kpis = await get_kpis(db, jaar=2025)
+    assert kpis['omzet'] == 0.0  # back off the books
+
+    # concept -> betaald (skipping verstuurd) is allowed per the state table
+    await update_factuur_status(
+        db, factuur_id=fid, status='betaald', betaald_datum='2025-08-16')
+    kpis = await get_kpis(db, jaar=2025)
+    assert kpis['omzet'] == 1500.00
+
+    # betaald -> concept is BLOCKED (data integrity: don't silently lose a payment)
+    with pytest.raises(ValueError, match="niet toegestaan"):
+        await update_factuur_status(db, factuur_id=fid, status='concept')
