@@ -16,6 +16,48 @@ from database import (
     get_bedrijfsgegevens, upsert_bedrijfsgegevens, get_db_ctx, DB_PATH,
 )
 
+
+def _validate_fiscal_params(p: dict) -> list[str]:
+    """Return a list of human-readable Dutch validation errors, or [] if valid."""
+    errors: list[str] = []
+
+    s1_grens = p.get('schijf1_grens', 0) or 0
+    s2_grens = p.get('schijf2_grens', 0) or 0
+    if s1_grens <= 0:
+        errors.append('Schijf 1 grens moet groter dan 0 zijn')
+    if s2_grens < s1_grens:
+        errors.append('Schijf 2 grens moet groter of gelijk zijn aan schijf 1 grens')
+
+    for fld in ('schijf1_pct', 'schijf2_pct', 'schijf3_pct'):
+        v = p.get(fld, 0) or 0
+        if not (0 < v < 100):
+            errors.append(f'{fld} moet tussen 0 en 100 liggen (nu: {v})')
+
+    for fld in ('mkb_vrijstelling_pct', 'kia_pct'):
+        v = p.get(fld, 0) or 0
+        if not (0 <= v <= 100):
+            errors.append(f'{fld} moet tussen 0 en 100 liggen (nu: {v})')
+
+    for fld in ('ahk_max', 'ahk_drempel', 'ak_max',
+                'kia_ondergrens', 'kia_bovengrens',
+                'zelfstandigenaftrek'):
+        v = p.get(fld, 0) or 0
+        if v < 0:
+            errors.append(f'{fld} mag niet negatief zijn')
+
+    kia_onder = p.get('kia_ondergrens', 0) or 0
+    kia_boven = p.get('kia_bovengrens', 0) or 0
+    if kia_boven < kia_onder:
+        errors.append('KIA bovengrens moet groter of gelijk zijn aan KIA ondergrens')
+
+    for fld in ('pvv_aow_pct', 'pvv_anw_pct', 'pvv_wlz_pct', 'zvw_pct',
+                'ew_forfait_pct', 'repr_aftrek_pct'):
+        v = p.get(fld, 0) or 0
+        if not (0 <= v <= 100):
+            errors.append(f'{fld} moet tussen 0 en 100 liggen (nu: {v})')
+
+    return errors
+
 @ui.page('/instellingen')
 async def instellingen_page():
     create_layout('Instellingen', '/instellingen')
@@ -394,6 +436,13 @@ async def instellingen_page():
                                     # ZA/SA toggles (checkbox .value is bool)
                                     kwargs['za_actief'] = int(inps['za_actief'].value)
                                     kwargs['sa_actief'] = int(inps['sa_actief'].value)
+
+                                    validation_errors = _validate_fiscal_params(kwargs)
+                                    if validation_errors:
+                                        for err in validation_errors:
+                                            ui.notify(err, type='negative', timeout=5000)
+                                        return
+
                                     await upsert_fiscale_params(
                                         DB_PATH, **kwargs)
                                     ui.notify(
