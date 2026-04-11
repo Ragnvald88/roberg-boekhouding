@@ -6,7 +6,7 @@ from database import (
     add_banktransacties,
     get_omzet_totaal, get_omzet_per_maand, get_representatie_totaal,
     get_debiteuren_op_peildatum,
-    find_factuur_matches, apply_factuur_matches,
+    find_factuur_matches, apply_factuur_matches, MatchProposal,
     get_nog_te_factureren, get_kpis, get_kpis_tot_datum, get_data_counts,
     get_afschrijving_overrides, get_afschrijving_overrides_batch,
     set_afschrijving_override, delete_afschrijving_override,
@@ -260,9 +260,10 @@ async def test_find_matches_by_nummer(db):
 
     matches = await find_factuur_matches(db)
     assert len(matches) == 1
-    assert matches[0]['factuur_nummer'] == '2026-001'
-    assert matches[0]['bank_datum'] == '2026-01-20'
-    assert matches[0]['match_type'] == 'nummer'
+    assert matches[0].factuur_nummer == '2026-001'
+    assert matches[0].bank_datum == '2026-01-20'
+    assert matches[0].match_type == 'nummer'
+    assert matches[0].confidence == 'high'
 
     # Verify NO changes applied yet (read-only)
     async with get_db_ctx(db) as conn:
@@ -285,8 +286,9 @@ async def test_find_matches_by_amount(db):
 
     matches = await find_factuur_matches(db)
     assert len(matches) == 1
-    assert matches[0]['factuur_nummer'] == '2026-010'
-    assert matches[0]['match_type'] == 'bedrag'
+    assert matches[0].factuur_nummer == '2026-010'
+    assert matches[0].match_type == 'bedrag'
+    assert matches[0].confidence == 'high'
 
 
 @pytest.mark.asyncio
@@ -326,8 +328,14 @@ async def test_find_matches_skips_linked_bank(db):
 
 
 @pytest.mark.asyncio
-async def test_find_matches_same_amount_chronological(db):
-    """Two facturen with same amount: first by date wins."""
+async def test_find_matches_same_amount_flagged_ambiguous(db):
+    """Two facturen with IDENTICAL amount + one bank txn → both flagged ambiguous.
+
+    Old behaviour (pre-best-match refactor): first factuur by date silently
+    won, even though the user should have been asked. New behaviour: both
+    facturen produce a low-confidence proposal referencing the same bank
+    transaction, so the preview dialog surfaces the collision.
+    """
     kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=0)
     await add_factuur(db, nummer='2026-A', klant_id=kid,
                        datum='2026-01-10', totaal_uren=8, totaal_km=0,
@@ -341,8 +349,13 @@ async def test_find_matches_same_amount_chronological(db):
     ], csv_bestand='test.csv')
 
     matches = await find_factuur_matches(db)
-    assert len(matches) == 1
-    assert matches[0]['factuur_nummer'] == '2026-A'
+    # Both facturen get a proposal so the ambiguity is visible.
+    nummers = sorted(m.factuur_nummer for m in matches)
+    assert nummers == ['2026-A', '2026-B']
+    # Both are low confidence (identical amount → same delta on same bank txn).
+    assert all(m.confidence == 'low' for m in matches)
+    # Both point at the same bank transaction (the collision).
+    assert len({m.bank_id for m in matches}) == 1
 
 
 @pytest.mark.asyncio
@@ -359,7 +372,7 @@ async def test_find_matches_anw_nummer(db):
 
     matches = await find_factuur_matches(db)
     assert len(matches) == 1
-    assert matches[0]['match_type'] == 'nummer'
+    assert matches[0].match_type == 'nummer'
 
 
 @pytest.mark.asyncio
@@ -392,7 +405,7 @@ async def test_find_matches_amount_within_rounding_tolerance(db):
 
     matches = await find_factuur_matches(db)
     assert len(matches) == 1
-    assert matches[0]['match_type'] == 'bedrag'
+    assert matches[0].match_type == 'bedrag'
 
 
 @pytest.mark.asyncio
@@ -400,6 +413,62 @@ async def test_find_matches_empty_db(db):
     """No facturen, no bank transactions → empty list."""
     matches = await find_factuur_matches(db)
     assert matches == []
+
+
+@pytest.mark.asyncio
+async def test_find_factuur_matches_flags_ambiguous_pass2(db):
+    """Pass 2: two facturen within tolerance of the same bank txn must be
+    flagged as low-confidence so the user can disambiguate.
+
+    Regression for the 'silent wrong-invoice-paid' bug where the first
+    factuur chronologically would win even if the other was a better match.
+    """
+    klant_id = await add_klant(db, naam="AmbiguityTest", tarief_uur=100, retour_km=0)
+    fid1 = await add_factuur(
+        db, nummer='2025-AMB1', klant_id=klant_id,
+        datum='2025-01-10', totaal_bedrag=640.00,
+        status='verstuurd', type='factuur',
+    )
+    fid2 = await add_factuur(
+        db, nummer='2025-AMB2', klant_id=klant_id,
+        datum='2025-01-12', totaal_bedrag=640.03,
+        status='verstuurd', type='factuur',
+    )
+    await add_banktransacties(db, [{
+        'datum': '2025-01-15', 'bedrag': 640.01,
+        'tegenpartij': 'AmbiguityTest', 'omschrijving': 'betaling',
+    }])
+
+    proposals = await find_factuur_matches(db)
+    amb_proposals = [p for p in proposals if p.factuur_id in (fid1, fid2)]
+    # Both facturen should have a proposal — neither silently dropped.
+    assert len(amb_proposals) >= 1
+    # At least one must be marked low-confidence.
+    low = [p for p in amb_proposals if p.confidence == 'low']
+    assert len(low) >= 1, (
+        f"Expected low-confidence flag for ambiguous match, got: {amb_proposals}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_find_factuur_matches_pass2_high_confidence_when_unambiguous(db):
+    """Pass 2: one factuur in tolerance window → high confidence, no alternatives."""
+    klant_id = await add_klant(db, naam="ClearTest", tarief_uur=100, retour_km=0)
+    fid = await add_factuur(
+        db, nummer='2025-CLEAR', klant_id=klant_id,
+        datum='2025-02-01', totaal_bedrag=500.00,
+        status='verstuurd', type='factuur',
+    )
+    await add_banktransacties(db, [{
+        'datum': '2025-02-03', 'bedrag': 500.00,
+        'tegenpartij': 'ClearTest', 'omschrijving': 'betaling',
+    }])
+
+    proposals = await find_factuur_matches(db)
+    our_prop = [p for p in proposals if p.factuur_id == fid]
+    assert len(our_prop) == 1
+    assert our_prop[0].confidence == 'high'
+    assert our_prop[0].alternatives == []
 
 
 @pytest.mark.asyncio
@@ -467,7 +536,7 @@ async def test_find_matches_14_day_boundary_pass(db):
 
     matches = await find_factuur_matches(db)
     assert len(matches) == 1
-    assert matches[0]['match_type'] == 'bedrag'
+    assert matches[0].match_type == 'bedrag'
 
 
 @pytest.mark.asyncio
@@ -783,7 +852,7 @@ async def test_find_matches_excludes_concept(db):
     matches = await find_factuur_matches(db)
     # Only verstuurd should match, not concept
     assert len(matches) == 1
-    assert matches[0]['factuur_nummer'] == '2026-S01'
+    assert matches[0].factuur_nummer == '2026-S01'
 
 
 @pytest.mark.asyncio
@@ -824,10 +893,16 @@ async def test_apply_matches_only_verstuurd(db):
         bank_rows = await cur.fetchall()
 
     fake_matches = [
-        {'factuur_id': fid_concept, 'bank_id': bank_rows[0]['id'],
-         'bank_datum': '2026-03-10'},
-        {'factuur_id': fid_verstuurd, 'bank_id': bank_rows[1]['id'],
-         'bank_datum': '2026-03-11'},
+        MatchProposal(
+            factuur_id=fid_concept, bank_id=bank_rows[0]['id'],
+            delta=0.0, confidence='high', match_type='bedrag',
+            bank_datum='2026-03-10',
+        ),
+        MatchProposal(
+            factuur_id=fid_verstuurd, bank_id=bank_rows[1]['id'],
+            delta=0.0, confidence='high', match_type='bedrag',
+            bank_datum='2026-03-11',
+        ),
     ]
 
     count = await apply_factuur_matches(db, fake_matches)

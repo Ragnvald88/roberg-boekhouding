@@ -4,6 +4,7 @@ import os
 import re
 import sqlite3
 from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 from datetime import date as _date, timedelta as _timedelta
 
 import aiosqlite
@@ -12,6 +13,37 @@ from models import (
     Bedrijfsgegevens, Klant, KlantLocatie, Werkdag, Factuur, Uitgave,
     Banktransactie, FiscaleParams, AangifteDocument,
 )
+
+
+@dataclass
+class MatchProposal:
+    """Proposal to link a bank transaction to an invoice.
+
+    Returned by ``find_factuur_matches`` — does NOT mutate DB state.
+    Apply via ``apply_factuur_matches``.
+
+    Attributes:
+        factuur_id: The factuur being proposed for payment.
+        bank_id: The banktransactie row to link.
+        delta: abs(bank_bedrag - factuur_bedrag).
+        confidence: 'high' (safe to auto-apply) or 'low' (ambiguous — user must confirm).
+        alternatives: Other bank_ids within tolerance (populated when confidence='low').
+        match_type: 'nummer' (Pass 1: number in omschrijving) or 'bedrag' (Pass 2: amount only).
+        factuur_nummer, factuur_bedrag, factuur_datum: Factuur context for UI.
+        bank_datum, bank_bedrag, bank_tegenpartij: Banktxn context for UI.
+    """
+    factuur_id: int
+    bank_id: int
+    delta: float
+    confidence: str  # 'high' | 'low'
+    match_type: str  # 'nummer' | 'bedrag'
+    factuur_nummer: str = ''
+    factuur_bedrag: float = 0.0
+    factuur_datum: str = ''
+    bank_datum: str = ''
+    bank_bedrag: float = 0.0
+    bank_tegenpartij: str = ''
+    alternatives: list = field(default_factory=list)
 
 _DEFAULT_DB_DIR = Path.home() / "Library" / "Application Support" / "Boekhouding" / "data"
 _ENV_OVERRIDE = os.environ.get("BOEKHOUDING_DB_DIR")
@@ -2111,17 +2143,38 @@ async def get_debiteuren_op_peildatum(db_path: Path = DB_PATH,
         return float(row[0])
 
 
-async def find_factuur_matches(db_path: Path = DB_PATH) -> list[dict]:
+_MATCH_AMOUNT_TOL = 0.05  # EUR — rounding tolerance for Pass 2 amount matching
+_MATCH_NUMMER_TOL = 1.00  # EUR — sanity bound when matching by invoice number
+_MATCH_DAYS_BEFORE = 14
+_MATCH_DAYS_AFTER = 90
+
+
+def _match_date_ok(bank_datum: str, factuur_datum: str) -> bool:
+    """Is bank date within [factuur-14d, factuur+90d]?"""
+    fd = _date.fromisoformat(factuur_datum)
+    earliest = (fd - _timedelta(days=_MATCH_DAYS_BEFORE)).isoformat()
+    latest = (fd + _timedelta(days=_MATCH_DAYS_AFTER)).isoformat()
+    return earliest <= bank_datum <= latest
+
+
+async def find_factuur_matches(db_path: Path = DB_PATH) -> list[MatchProposal]:
     """Find matches between open facturen and incoming bank payments.
 
-    Returns match proposals WITHOUT applying them. Two-pass matching:
-    1. Match by invoice number in bank omschrijving + amount within EUR 1
-    2. Fall back to exact amount matching (within EUR 0.05 rounding tolerance)
+    Returns a list of ``MatchProposal`` WITHOUT applying them. Two-pass matching:
+
+    1. **Pass 1 (nummer)**: invoice number appears in bank omschrijving AND
+       amount within EUR 1. Confidence: always ``'high'``.
+    2. **Pass 2 (bedrag)**: best-match scoring on amount alone, within
+       ``_MATCH_AMOUNT_TOL``. When two facturen are within tolerance of the
+       SAME bank transaction (or a factuur has two bank-txn candidates), the
+       proposal is flagged ``confidence='low'`` and alternative bank_ids are
+       recorded. Low-confidence proposals do NOT reserve the bank txn, so both
+       sides of the ambiguity surface to the caller for manual confirmation.
 
     Date window: 14 days before to 90 days after factuur date.
-    Each bank transaction used at most once (greedy, chronological).
 
-    Returns list of match dicts with factuur and bank details + match_type.
+    Only facturen with status ``'verstuurd'`` are considered. Only bank
+    transactions with ``bedrag > 0`` and no existing koppeling are considered.
     """
     async with get_db_ctx(db_path) as conn:
         cur = await conn.execute(
@@ -2139,99 +2192,178 @@ async def find_factuur_matches(db_path: Path = DB_PATH) -> list[dict]:
                ORDER BY datum""")
         bank_txns = await cur.fetchall()
 
-        used_bank_ids = set()
-        matches = []
+        used_bank_ids: set[int] = set()
+        proposals: list[MatchProposal] = []
 
-        def date_ok(bank_datum, factuur_datum):
-            fd = _date.fromisoformat(factuur_datum)
-            earliest = (fd - _timedelta(days=14)).isoformat()
-            latest = (fd + _timedelta(days=90)).isoformat()
-            return earliest <= bank_datum <= latest
-
-        # Pass 1: Match by invoice number in omschrijving + amount sanity
+        # Pass 1: Match by invoice number in omschrijving + amount sanity.
+        # Always high confidence; reserves the bank_id before Pass 2 runs.
         for f in open_facturen:
             nummer = f['nummer'].lower()
             for b in bank_txns:
                 if b['id'] in used_bank_ids:
                     continue
-                if not date_ok(b['datum'], f['datum']):
+                if not _match_date_ok(b['datum'], f['datum']):
                     continue
                 omschr = (b['omschrijving'] or '').lower()
                 if nummer in omschr:
-                    if abs(b['bedrag'] - f['totaal_bedrag']) > 1.00:
+                    delta = abs(b['bedrag'] - f['totaal_bedrag'])
+                    if delta > _MATCH_NUMMER_TOL:
                         continue
                     used_bank_ids.add(b['id'])
-                    matches.append({
-                        'factuur_id': f['id'],
-                        'factuur_nummer': f['nummer'],
-                        'factuur_bedrag': f['totaal_bedrag'],
-                        'factuur_datum': f['datum'],
-                        'bank_id': b['id'],
-                        'bank_datum': b['datum'],
-                        'bank_bedrag': b['bedrag'],
-                        'bank_tegenpartij': b['tegenpartij'] or '',
-                        'match_type': 'nummer',
-                    })
+                    proposals.append(MatchProposal(
+                        factuur_id=f['id'],
+                        bank_id=b['id'],
+                        delta=delta,
+                        confidence='high',
+                        match_type='nummer',
+                        factuur_nummer=f['nummer'],
+                        factuur_bedrag=f['totaal_bedrag'],
+                        factuur_datum=f['datum'],
+                        bank_datum=b['datum'],
+                        bank_bedrag=b['bedrag'],
+                        bank_tegenpartij=b['tegenpartij'] or '',
+                    ))
                     break
 
-        matched_factuur_ids = {m['factuur_id'] for m in matches}
+        matched_factuur_ids = {p.factuur_id for p in proposals}
 
-        # Pass 2: Amount matching for remaining
-        for f in open_facturen:
-            if f['id'] in matched_factuur_ids:
-                continue
+        # Pass 2: Best-match amount scoring with bidirectional ambiguity flagging.
+        #
+        # The old implementation silently took the first factuur chronologically
+        # when two invoices collided with the same bank txn (e.g. EUR 640.00 and
+        # EUR 640.03 both matching a EUR 640.01 payment) — silent wrong-invoice-
+        # paid. We surface such collisions instead so the user decides.
+        #
+        # Strategy:
+        # 1. Build a pool of (factuur, bank, delta) triples for every pair
+        #    within tolerance and within the date window.
+        # 2. Group by factuur → ambiguous if factuur has >1 candidate whose
+        #    deltas are within TOL of the best.
+        # 3. Group by bank → ambiguous if bank has >1 factuur whose deltas are
+        #    within TOL of the best (this is the collision case the old code
+        #    missed).
+        # 4. Emit proposals:
+        #       - unambiguous on both sides → high confidence, reserve bank_id
+        #       - ambiguous in either direction → low confidence, do NOT
+        #         reserve bank_id (caller sees all sides of the collision)
+        remaining_facturen = [f for f in open_facturen
+                              if f['id'] not in matched_factuur_ids]
+
+        # candidate_pairs[fid] = list of (delta, bank_row) sorted by delta asc
+        candidate_pairs: dict[int, list[tuple[float, dict]]] = {}
+        # bank_candidates[bank_id] = list of (delta, factuur_row) sorted by delta asc
+        bank_candidates: dict[int, list[tuple[float, dict]]] = {}
+
+        for f in remaining_facturen:
             for b in bank_txns:
                 if b['id'] in used_bank_ids:
                     continue
-                if not date_ok(b['datum'], f['datum']):
+                if not _match_date_ok(b['datum'], f['datum']):
                     continue
-                if abs(b['bedrag'] - f['totaal_bedrag']) < 0.05:
-                    used_bank_ids.add(b['id'])
-                    matches.append({
-                        'factuur_id': f['id'],
-                        'factuur_nummer': f['nummer'],
-                        'factuur_bedrag': f['totaal_bedrag'],
-                        'factuur_datum': f['datum'],
-                        'bank_id': b['id'],
-                        'bank_datum': b['datum'],
-                        'bank_bedrag': b['bedrag'],
-                        'bank_tegenpartij': b['tegenpartij'] or '',
-                        'match_type': 'bedrag',
-                    })
-                    break
+                delta = abs(b['bedrag'] - f['totaal_bedrag'])
+                if delta > _MATCH_AMOUNT_TOL:
+                    continue
+                candidate_pairs.setdefault(f['id'], []).append((delta, b))
+                bank_candidates.setdefault(b['id'], []).append((delta, f))
 
-        return matches
+        for lst in candidate_pairs.values():
+            lst.sort(key=lambda x: x[0])
+        for lst in bank_candidates.values():
+            lst.sort(key=lambda x: x[0])
+
+        for f in remaining_facturen:
+            cands = candidate_pairs.get(f['id'])
+            if not cands:
+                continue
+
+            best_delta, best_b = cands[0]
+
+            # Factuur-side ambiguity: multiple bank txns within TOL of this factuur.
+            ambiguous = False
+            alternatives: list[int] = []
+            for alt_delta, alt_b in cands[1:]:
+                if (alt_delta - best_delta) < _MATCH_AMOUNT_TOL:
+                    ambiguous = True
+                    alternatives.append(alt_b['id'])
+
+            # Bank-side ambiguity: multiple facturen contend for best_b.
+            # This is the collision the old code silently resolved chronologically.
+            bank_side = bank_candidates.get(best_b['id'], [])
+            if len(bank_side) > 1:
+                bank_best_delta = bank_side[0][0]
+                for alt_delta, alt_f in bank_side:
+                    if alt_f['id'] == f['id']:
+                        continue
+                    if (alt_delta - bank_best_delta) < _MATCH_AMOUNT_TOL:
+                        ambiguous = True
+                        # Don't record other-factuur ids in bank-txn alternatives;
+                        # the caller can see both proposals share the same bank_id.
+                        break
+
+            proposals.append(MatchProposal(
+                factuur_id=f['id'],
+                bank_id=best_b['id'],
+                delta=best_delta,
+                confidence='low' if ambiguous else 'high',
+                match_type='bedrag',
+                factuur_nummer=f['nummer'],
+                factuur_bedrag=f['totaal_bedrag'],
+                factuur_datum=f['datum'],
+                bank_datum=best_b['datum'],
+                bank_bedrag=best_b['bedrag'],
+                bank_tegenpartij=best_b['tegenpartij'] or '',
+                alternatives=alternatives,
+            ))
+            if not ambiguous:
+                used_bank_ids.add(best_b['id'])
+
+        return proposals
 
 
 async def apply_factuur_matches(db_path: Path = DB_PATH,
-                                 matches: list[dict] = None) -> int:
+                                 proposals: list = None) -> int:
     """Apply confirmed factuur-bank matches.
 
-    For each match: marks factuur as betaald and links bank transaction.
-    Returns count of applied matches.
+    Routes the status transition through ``update_factuur_status`` (the central
+    state-machine validator) rather than a raw UPDATE — this keeps the
+    verstuurd→betaald rule in one place and ensures any future transition
+    tightening applies here too.
+
+    Accepts a list of ``MatchProposal``. Returns count of applied matches.
+    Invalid transitions (e.g. concept→betaald) are skipped silently.
     """
-    if not matches:
+    if not proposals:
         return 0
 
     applied = 0
-    async with get_db_ctx(db_path) as conn:
-        for m in matches:
-            # Defense-in-depth: only allow verstuurd → betaald transition
+    for p in proposals:
+        # Read current status; skip if not 'verstuurd' (defence in depth —
+        # update_factuur_status also rejects, but raising would abort the
+        # whole batch).
+        async with get_db_ctx(db_path) as conn:
             cur = await conn.execute(
-                "SELECT status FROM facturen WHERE id = ?",
-                (m['factuur_id'],))
+                "SELECT status FROM facturen WHERE id = ?", (p.factuur_id,))
             row = await cur.fetchone()
-            if not row or row['status'] not in ('verstuurd',):
+            if not row or row['status'] != 'verstuurd':
                 continue
-            await conn.execute(
-                "UPDATE facturen SET status = 'betaald', betaald_datum = ? WHERE id = ?",
-                (m['bank_datum'], m['factuur_id']))
+
+        # Central state-machine transition.
+        try:
+            await update_factuur_status(
+                db_path, factuur_id=p.factuur_id,
+                status='betaald', betaald_datum=p.bank_datum)
+        except ValueError:
+            continue
+
+        # Link the bank transaction to the factuur.
+        async with get_db_ctx(db_path) as conn:
             await conn.execute(
                 "UPDATE banktransacties SET koppeling_type = 'factuur', "
                 "koppeling_id = ? WHERE id = ?",
-                (m['factuur_id'], m['bank_id']))
-            applied += 1
-        await conn.commit()
+                (p.factuur_id, p.bank_id))
+            await conn.commit()
+        applied += 1
+
     return applied
 
 

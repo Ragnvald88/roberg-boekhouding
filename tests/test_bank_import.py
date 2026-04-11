@@ -1,7 +1,11 @@
 """Tests voor Rabobank CSV parser en bank import."""
 
 import pytest
-from database import add_banktransacties, get_banktransacties, backfill_betalingskenmerken
+from database import (
+    add_banktransacties, get_banktransacties, backfill_betalingskenmerken,
+    add_klant, add_factuur, find_factuur_matches, apply_factuur_matches,
+    get_db_ctx,
+)
 from import_.rabobank_csv import parse_rabobank_csv
 
 
@@ -406,3 +410,46 @@ async def test_backfill_betalingskenmerken(db, tmp_path):
 
     result = await get_banktransacties(db)
     assert result[0].betalingskenmerk == '0124412647060001'
+
+
+@pytest.mark.asyncio
+async def test_auto_match_not_applied_without_explicit_apply(db):
+    """CSV import no longer auto-applies matches.
+
+    After import, ``find_factuur_matches`` surfaces proposals but the factuur
+    stays ``verstuurd`` until ``apply_factuur_matches`` is called explicitly.
+    This is the contract the preview dialog in pages/bank.py relies on —
+    regression test guards against a silent revert to auto-apply.
+    """
+    klant_id = await add_klant(db, naam="PreviewTest", tarief_uur=100, retour_km=0)
+    fid = await add_factuur(
+        db, nummer='2025-PREV', klant_id=klant_id,
+        datum='2025-03-01', totaal_bedrag=750.00,
+        status='verstuurd', type='factuur',
+    )
+    await add_banktransacties(db, [{
+        'datum': '2025-03-03', 'bedrag': 750.00,
+        'tegenpartij': 'PreviewTest', 'omschrijving': 'betaling',
+    }])
+
+    # Simulate find (what the CSV import handler does).
+    proposals = await find_factuur_matches(db)
+    assert len(proposals) == 1
+    assert proposals[0].confidence == 'high'
+
+    # Before apply: factuur still verstuurd.
+    async with get_db_ctx(db) as conn:
+        cur = await conn.execute(
+            'SELECT status, betaald_datum FROM facturen WHERE id = ?', (fid,))
+        row = await cur.fetchone()
+        assert row['status'] == 'verstuurd'
+
+    # After apply: factuur now betaald with correct date.
+    applied = await apply_factuur_matches(db, proposals)
+    assert applied == 1
+    async with get_db_ctx(db) as conn:
+        cur = await conn.execute(
+            'SELECT status, betaald_datum FROM facturen WHERE id = ?', (fid,))
+        row = await cur.fetchone()
+        assert row['status'] == 'betaald'
+        assert row['betaald_datum'] == '2025-03-03'
