@@ -4,7 +4,9 @@ import asyncio
 import base64
 import inspect
 import json
+import logging
 import shutil
+import sqlite3
 import tempfile
 from datetime import date
 from pathlib import Path
@@ -12,6 +14,8 @@ from pathlib import Path
 import cv2
 import numpy as np
 from nicegui import app, ui
+
+log = logging.getLogger(__name__)
 
 from components.invoice_generator import generate_invoice
 from components.invoice_preview import render_invoice_html
@@ -898,6 +902,19 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None,
                         await asyncio.to_thread(
                             qr_tmp.write_bytes, _qr_bytes['data'])
                         gen_qr = str(qr_tmp)
+
+                    totaal_uren, totaal_km, totaal_bedrag, factuur_type = (
+                        _calc_totals(line_items))
+
+                    werkdag_ids = [
+                        li['werkdag_id'] for li in line_items
+                        if li.get('werkdag_id')]
+
+                    # PDF generation + DB save in a single guarded
+                    # block. If save_factuur_atomic raises (e.g. another
+                    # tab already inserted the same nummer), the PDF is
+                    # deleted so the disk stays clean.
+                    pdf_to_cleanup: Path | None = None
                     try:
                         pdf_path = await asyncio.to_thread(
                             generate_invoice,
@@ -907,33 +924,44 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None,
                             pre_regels=regels,
                             qr_path=gen_qr,
                         )
-                    except Exception as ex:
+                        pdf_to_cleanup = pdf_path
+                        await save_factuur_atomic(
+                            DB_PATH,
+                            replacing_factuur_id=replacing_factuur_id,
+                            werkdag_ids=werkdag_ids or None,
+                            nummer=nummer,
+                            klant_id=kid,
+                            datum=factuur_datum,
+                            totaal_uren=totaal_uren,
+                            totaal_km=totaal_km,
+                            totaal_bedrag=totaal_bedrag,
+                            pdf_pad=str(pdf_path),
+                            type=factuur_type,
+                            betaallink=_qr_bytes.get('betaallink', ''),
+                        )
+                        pdf_to_cleanup = None
+                    except sqlite3.IntegrityError:
                         ui.notify(
-                            f'PDF generatie mislukt: {ex}',
+                            f'Factuurnummer {nummer} bestaat al — '
+                            f'kies een ander nummer en probeer opnieuw',
+                            type='negative', timeout=10)
+                        return
+                    except Exception as ex:
+                        log.exception(
+                            "Fout bij opslaan factuur %s", nummer)
+                        ui.notify(
+                            f'Fout bij opslaan: {ex}',
                             type='negative')
                         return
-
-                    totaal_uren, totaal_km, totaal_bedrag, factuur_type = (
-                        _calc_totals(line_items))
-
-                    werkdag_ids = [
-                        li['werkdag_id'] for li in line_items
-                        if li.get('werkdag_id')]
-
-                    await save_factuur_atomic(
-                        DB_PATH,
-                        replacing_factuur_id=replacing_factuur_id,
-                        werkdag_ids=werkdag_ids or None,
-                        nummer=nummer,
-                        klant_id=kid,
-                        datum=factuur_datum,
-                        totaal_uren=totaal_uren,
-                        totaal_km=totaal_km,
-                        totaal_bedrag=totaal_bedrag,
-                        pdf_pad=str(pdf_path),
-                        type=factuur_type,
-                        betaallink=_qr_bytes.get('betaallink', ''),
-                    )
+                    finally:
+                        if pdf_to_cleanup is not None and pdf_to_cleanup.exists():
+                            try:
+                                await asyncio.to_thread(
+                                    pdf_to_cleanup.unlink)
+                            except OSError:
+                                log.warning(
+                                    "Kon orphan PDF niet verwijderen: %s",
+                                    pdf_to_cleanup)
 
                     _builder_saved['done'] = True
                     dlg.close()

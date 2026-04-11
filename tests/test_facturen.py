@@ -746,6 +746,42 @@ def test_rebuild_vergoeding_regels_json_malformed_input():
 
 
 @pytest.mark.asyncio
+async def test_save_factuur_atomic_conflict_preserves_pdf(seeded_db, tmp_path):
+    """save_factuur_atomic must not touch the caller's PDF on failure.
+
+    The invoice_builder.genereer_factuur wraps save_factuur_atomic in a
+    try/finally that deletes the freshly-generated PDF on conflict.
+    That cleanup is correct only if save_factuur_atomic itself leaves
+    the file alone — verify that contract here.
+    """
+    import sqlite3
+    from database import get_klanten
+    klanten = await get_klanten(seeded_db)
+    kid = klanten[0].id
+
+    await add_factuur(
+        seeded_db, nummer='2026-ORP', klant_id=kid,
+        datum='2026-04-01', totaal_bedrag=800.00, status='verstuurd',
+    )
+
+    fake_pdf = tmp_path / '2026-ORP.pdf'
+    fake_pdf.write_bytes(b'%PDF-1.4 fake')
+    assert fake_pdf.exists()
+
+    with pytest.raises(sqlite3.IntegrityError):
+        await save_factuur_atomic(
+            seeded_db,
+            nummer='2026-ORP', klant_id=kid,
+            datum='2026-04-02', totaal_uren=8, totaal_km=0,
+            totaal_bedrag=900.00, status='concept',
+            pdf_pad=str(fake_pdf),
+        )
+    assert fake_pdf.exists(), (
+        "save_factuur_atomic must not delete the PDF on failure — "
+        "the caller owns that lifecycle")
+
+
+@pytest.mark.asyncio
 async def test_update_factuur_accepts_regels_json(seeded_db):
     """update_factuur must allow rewriting regels_json so vergoeding
     edits keep the PDF regeneration source consistent with totaal_bedrag.
