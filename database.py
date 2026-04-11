@@ -1,11 +1,12 @@
 """SQLite database: schema, connectie, en alle queries."""
 
+import json
 import os
 import re
 import sqlite3
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from datetime import date as _date, timedelta as _timedelta
+from datetime import date as _date, datetime as _datetime, timedelta as _timedelta
 
 import aiosqlite
 from pathlib import Path
@@ -242,6 +243,14 @@ CREATE TABLE IF NOT EXISTS afschrijving_overrides (
     UNIQUE(uitgave_id, jaar)
 );
 
+CREATE TABLE IF NOT EXISTS jaarafsluiting_snapshots (
+    jaar INTEGER PRIMARY KEY,
+    snapshot_json TEXT NOT NULL,
+    balans_json TEXT NOT NULL,
+    gesnapshot_op TEXT NOT NULL,
+    fiscale_params_json TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER PRIMARY KEY,
     description TEXT NOT NULL,
@@ -396,6 +405,15 @@ MIGRATIONS = [
     ]),
     (24, "add_herinnering_datum_to_facturen", [
         "ALTER TABLE facturen ADD COLUMN herinnering_datum TEXT DEFAULT ''",
+    ]),
+    (25, "add_jaarafsluiting_snapshots_table", [
+        """CREATE TABLE IF NOT EXISTS jaarafsluiting_snapshots (
+            jaar INTEGER PRIMARY KEY,
+            snapshot_json TEXT NOT NULL,
+            balans_json TEXT NOT NULL,
+            gesnapshot_op TEXT NOT NULL,
+            fiscale_params_json TEXT NOT NULL
+        )""",
     ]),
 ]
 
@@ -2427,6 +2445,57 @@ async def update_jaarafsluiting_status(db_path: Path = DB_PATH, jaar: int = 0,
             (status, jaar))
         await conn.commit()
         return cursor.rowcount > 0
+
+
+async def save_jaarafsluiting_snapshot(
+    db_path: Path,
+    jaar: int,
+    snapshot: dict,
+    balans: dict,
+    fiscale_params: dict,
+) -> None:
+    async with get_db_ctx(db_path) as conn:
+        await conn.execute(
+            """INSERT INTO jaarafsluiting_snapshots
+                   (jaar, snapshot_json, balans_json, gesnapshot_op, fiscale_params_json)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(jaar) DO UPDATE SET
+                   snapshot_json = excluded.snapshot_json,
+                   balans_json = excluded.balans_json,
+                   gesnapshot_op = excluded.gesnapshot_op,
+                   fiscale_params_json = excluded.fiscale_params_json""",
+            (
+                jaar,
+                json.dumps(snapshot, default=str),
+                json.dumps(balans, default=str),
+                _datetime.now().isoformat(),
+                json.dumps(fiscale_params, default=str),
+            ),
+        )
+        await conn.commit()
+
+
+async def load_jaarafsluiting_snapshot(db_path: Path, jaar: int) -> dict | None:
+    async with get_db_ctx(db_path) as conn:
+        async with conn.execute(
+            """SELECT snapshot_json, balans_json, fiscale_params_json, gesnapshot_op
+               FROM jaarafsluiting_snapshots WHERE jaar = ?""",
+            (jaar,),
+        ) as cur:
+            row = await cur.fetchone()
+            if row is None:
+                return None
+            return {
+                'snapshot': json.loads(row[0]),
+                'balans': json.loads(row[1]),
+                'fiscale_params': json.loads(row[2]),
+                'gesnapshot_op': row[3],
+            }
+
+
+async def delete_jaarafsluiting_snapshot(db_path: Path, jaar: int) -> None:
+    """Escape hatch hook; intentionally no-op — we keep the snapshot as audit trail."""
+    return None
 
 
 # --- Klant Locaties ---

@@ -7,7 +7,11 @@ from pathlib import Path
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from nicegui import ui
 
-from components.fiscal_utils import bereken_balans, fetch_fiscal_data
+from components.fiscal_utils import (
+    bereken_balans,
+    fetch_fiscal_data,
+    load_jaarafsluiting_data,
+)
 from components.shared_ui import year_options
 from components.kpi_card import kpi_strip
 from components.layout import create_layout, page_title
@@ -19,6 +23,8 @@ from database import (
     get_fiscale_params,
     get_aangifte_documenten,
     get_db_ctx,
+    load_jaarafsluiting_snapshot,
+    save_jaarafsluiting_snapshot,
     DB_PATH,
 )
 
@@ -32,43 +38,96 @@ def _balans_line(label: str, value: float, bold: bool = False, indent: bool = Fa
             .style('min-width: 120px; font-variant-numeric: tabular-nums')
 
 async def _load_year_data(jaar: int):
-    """Load all business data for a year. Returns (data, balans, winst, vorig_jaar_balans) or None."""
+    """Load all business data for a year. Returns (data, balans, winst,
+    vorig_jaar_balans, vorig_jaar_data, vorig_winst) or None.
+
+    Honors the jaarafsluiting snapshot: definitief years render from their
+    frozen snapshot instead of live data, so later mutations don't rewrite
+    history.
+    """
+    params = await get_fiscale_params(DB_PATH, jaar)
+    status = getattr(params, 'jaarafsluiting_status', 'concept') or 'concept'
+
+    if status == 'definitief':
+        snap = await load_jaarafsluiting_snapshot(DB_PATH, jaar)
+        if snap is not None:
+            data = await load_jaarafsluiting_data(DB_PATH, jaar)
+            if data is None:
+                return None
+            balans = snap['balans']
+            winst = balans.get('winst')
+            if winst is None:
+                winst = (data['omzet'] - data['kosten_excl_inv']
+                         - data['totaal_afschrijvingen'])
+            # Prior-year comparison still uses live snapshot-or-live data
+            vj_result = await _load_prior_year(jaar - 1)
+            if vj_result is None:
+                return data, balans, winst, None, None, None
+            vj_data, vj_balans, vj_winst = vj_result
+            return data, balans, winst, vj_balans, vj_data, vj_winst
+
     data = await fetch_fiscal_data(DB_PATH, jaar)
     if data is None:
         return None
 
-    # Calculate winst (business profit)
     winst = data['omzet'] - data['kosten_excl_inv'] - data['totaal_afschrijvingen']
 
-    # Calculate prior year balans for comparison
-    vorig_jaar_data = await fetch_fiscal_data(DB_PATH, jaar - 1)
-    vorig_jaar_balans = None
+    vj_result = await _load_prior_year(jaar - 1)
     begin_vermogen = 0.0
-    if vorig_jaar_data:
-        vj_winst = (vorig_jaar_data['omzet']
-                     - vorig_jaar_data['kosten_excl_inv']
-                     - vorig_jaar_data['totaal_afschrijvingen'])
-        # For prior year's begin_vermogen, try year before that
-        vvj_data = await fetch_fiscal_data(DB_PATH, jaar - 2)
-        vj_begin = 0.0
-        if vvj_data:
-            vvj_winst = (vvj_data['omzet']
-                         - vvj_data['kosten_excl_inv']
-                         - vvj_data['totaal_afschrijvingen'])
-            vvj_balans = await bereken_balans(
-                DB_PATH, jaar - 2, vvj_data['activastaat'], winst=vvj_winst)
-            vj_begin = vvj_balans['eigen_vermogen']
-        vorig_jaar_balans = await bereken_balans(
-            DB_PATH, jaar - 1, vorig_jaar_data['activastaat'],
-            winst=vj_winst, begin_vermogen=vj_begin)
-        begin_vermogen = vorig_jaar_balans['eigen_vermogen']
+    vorig_jaar_balans = None
+    vorig_jaar_data = None
+    vj_winst = None
+    if vj_result is not None:
+        vorig_jaar_data, vorig_jaar_balans, vj_winst = vj_result
+        if vorig_jaar_balans is not None:
+            begin_vermogen = vorig_jaar_balans.get('eigen_vermogen', 0.0)
 
     balans = await bereken_balans(
         DB_PATH, jaar, data['activastaat'],
         winst=winst, begin_vermogen=begin_vermogen)
 
-    vj_w = vj_winst if vorig_jaar_data else None
-    return data, balans, winst, vorig_jaar_balans, vorig_jaar_data, vj_w
+    return data, balans, winst, vorig_jaar_balans, vorig_jaar_data, vj_winst
+
+
+async def _load_prior_year(jaar: int):
+    """Return (data, balans, winst) for prior year, honoring snapshot if definitief.
+    Returns None if the year has no fiscal data at all.
+    """
+    params = await get_fiscale_params(DB_PATH, jaar)
+    status = getattr(params, 'jaarafsluiting_status', 'concept') or 'concept'
+
+    if status == 'definitief':
+        snap = await load_jaarafsluiting_snapshot(DB_PATH, jaar)
+        if snap is not None:
+            data = await load_jaarafsluiting_data(DB_PATH, jaar)
+            if data is None:
+                return None
+            balans = snap['balans']
+            winst = balans.get('winst')
+            if winst is None:
+                winst = (data['omzet'] - data['kosten_excl_inv']
+                         - data['totaal_afschrijvingen'])
+            return data, balans, winst
+
+    data = await fetch_fiscal_data(DB_PATH, jaar)
+    if data is None:
+        return None
+    winst = data['omzet'] - data['kosten_excl_inv'] - data['totaal_afschrijvingen']
+
+    # Best-effort begin_vermogen from year-before (at most one level of recursion).
+    vvj_data = await fetch_fiscal_data(DB_PATH, jaar - 1)
+    vj_begin = 0.0
+    if vvj_data is not None:
+        vvj_winst = (vvj_data['omzet'] - vvj_data['kosten_excl_inv']
+                     - vvj_data['totaal_afschrijvingen'])
+        vvj_balans = await bereken_balans(
+            DB_PATH, jaar - 1, vvj_data['activastaat'], winst=vvj_winst)
+        vj_begin = vvj_balans.get('eigen_vermogen', 0.0)
+
+    balans = await bereken_balans(
+        DB_PATH, jaar, data['activastaat'],
+        winst=winst, begin_vermogen=vj_begin)
+    return data, balans, winst
 
 @ui.page('/jaarafsluiting')
 async def jaarafsluiting_page():
@@ -719,35 +778,73 @@ async def jaarafsluiting_page():
         if current_status == 'definitief':
             # Reopen
             with ui.dialog() as dlg, ui.card():
-                ui.label('Jaarafsluiting heropenen?').classes('text-h6')
+                ui.label(f'Jaar {jaar} ontgrendelen?').classes('text-h6')
                 ui.label(
-                    'De jaarcijfers worden weer bewerkbaar. '
-                    'De definitieve status wordt ingetrokken.'
+                    'De snapshot blijft bewaard als historisch record. '
+                    'Het jaar wordt weer bewerkbaar. Bij opnieuw markeren als '
+                    'definitief wordt de snapshot overschreven met de actuele '
+                    'cijfers.'
                 ).classes('q-mb-md')
                 with ui.row().classes('w-full justify-end gap-2'):
                     ui.button('Annuleren', on_click=dlg.close).props('flat')
                     async def confirm_reopen():
                         await update_jaarafsluiting_status(DB_PATH, jaar, 'concept')
                         dlg.close()
-                        ui.notify('Jaarafsluiting heropend', type='info')
+                        ui.notify(f'Jaar {jaar} ontgrendeld', type='info')
                         await render_all()
-                    ui.button('Heropenen', on_click=confirm_reopen) \
-                        .props('color=warning')
+                    ui.button('Ontgrendelen', on_click=confirm_reopen) \
+                        .props('color=negative')
             dlg.open()
         else:
-            # Mark as definitief
+            # Mark as definitief — take a real snapshot first
             with ui.dialog() as dlg, ui.card():
                 ui.label('Markeren als definitief?').classes('text-h6')
                 ui.label(
-                    'De jaarcijfers worden vergrendeld. '
+                    'De huidige jaarcijfers worden vastgelegd als snapshot. '
+                    'Latere wijzigingen in onderliggende data (uitgaven, '
+                    'facturen) veranderen deze cijfers niet meer. '
                     'U kunt later heropenen indien nodig.'
                 ).classes('q-mb-md')
                 with ui.row().classes('w-full justify-end gap-2'):
                     ui.button('Annuleren', on_click=dlg.close).props('flat')
                     async def confirm_definitief():
-                        await update_jaarafsluiting_status(DB_PATH, jaar, 'definitief')
+                        # Compute current live data + balans the same way
+                        # render_all would — this is what gets frozen.
+                        live_data = await fetch_fiscal_data(DB_PATH, jaar)
+                        if live_data is None:
+                            ui.notify(
+                                f'Geen fiscale data voor {jaar} — kan niet afsluiten',
+                                type='negative')
+                            dlg.close()
+                            return
+                        live_winst = (live_data['omzet']
+                                      - live_data['kosten_excl_inv']
+                                      - live_data['totaal_afschrijvingen'])
+                        # Begin vermogen uit voorgaand jaar (live of snapshot)
+                        vj_result = await _load_prior_year(jaar - 1)
+                        vj_begin_vermogen = 0.0
+                        if (vj_result is not None
+                                and vj_result[1] is not None):
+                            vj_begin_vermogen = vj_result[1].get(
+                                'eigen_vermogen', 0.0)
+                        live_balans = await bereken_balans(
+                            DB_PATH, jaar, live_data['activastaat'],
+                            winst=live_winst,
+                            begin_vermogen=vj_begin_vermogen)
+                        params_dict = live_data.get('params_dict', {}) or {}
+                        # Snapshot: strip non-serializable dataclass ref, keep
+                        # the dict form in params_dict (authoritative on reload).
+                        snapshot_data = {
+                            k: v for k, v in live_data.items() if k != 'params'
+                        }
+                        await save_jaarafsluiting_snapshot(
+                            DB_PATH, jaar, snapshot_data, live_balans, params_dict)
+                        await update_jaarafsluiting_status(
+                            DB_PATH, jaar, 'definitief')
                         dlg.close()
-                        ui.notify('Jaarafsluiting is nu definitief', type='positive')
+                        ui.notify(
+                            f'Jaar {jaar} definitief gemaakt en vastgelegd',
+                            type='positive')
                         await render_all()
                     ui.button('Markeer definitief', on_click=confirm_definitief) \
                         .props('color=positive')
