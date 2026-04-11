@@ -34,6 +34,19 @@ PDF_DIR.mkdir(parents=True, exist_ok=True)
 app.add_static_files('/facturen-files', str(PDF_DIR))
 
 
+def _should_use_builder(row: dict) -> bool:
+    """Native concept werkdag-facturen go to the invoice builder.
+
+    Everything else (anw, vergoeding, imported concepts, verstuurd,
+    betaald) uses the simple edit dialog.
+    """
+    return (
+        row.get('status') == 'concept'
+        and row.get('type', 'factuur') == 'factuur'
+        and row.get('bron', '') != 'import'
+    )
+
+
 def _build_mail_body(nummer, bedrag, iban, bedrijfsnaam, naam, telefoon, bg_email, betaallink=''):
     """Build email body. Returns (body, is_html) tuple."""
     tel_line = f'Tel: {telefoon}' if telefoon else ''
@@ -353,7 +366,7 @@ async def facturen_page():
                        color="grey-7">
                     <q-menu auto-close>
                         <q-list dense style="min-width: 200px">
-                            <q-item v-if="props.row.status === 'concept' && props.row.bron !== 'import'" clickable
+                            <q-item clickable
                                 @click="() => $parent.$emit('edit', props.row)">
                                 <q-item-section side>
                                     <q-icon name="edit" size="xs"
@@ -762,8 +775,7 @@ async def facturen_page():
 
         async def on_edit(e):
             row = e.args
-            # Concept werkdag-facturen → full invoice builder
-            if row['status'] == 'concept' and row.get('type') == 'factuur':
+            if _should_use_builder(row):
                 await _reopen_concept_in_builder(row)
             else:
                 await open_edit_dialog(row)

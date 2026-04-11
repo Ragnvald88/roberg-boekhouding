@@ -667,3 +667,41 @@ async def test_herinnering_datum_default_empty(seeded_db):
     facturen = await get_facturen(seeded_db)
     f = next(f for f in facturen if f.nummer == '2026-011')
     assert f.herinnering_datum == ''
+
+
+# === Edit router (C.1) ===
+
+def test_edit_router_concept_factuur_native_goes_to_builder():
+    from pages.facturen import _should_use_builder
+    assert _should_use_builder(
+        {'status': 'concept', 'type': 'factuur', 'bron': ''}) is True
+
+
+def test_edit_router_verstuurd_goes_to_dialog():
+    from pages.facturen import _should_use_builder
+    assert _should_use_builder(
+        {'status': 'verstuurd', 'type': 'factuur', 'bron': ''}) is False
+
+
+def test_edit_router_betaald_goes_to_dialog():
+    from pages.facturen import _should_use_builder
+    assert _should_use_builder(
+        {'status': 'betaald', 'type': 'factuur', 'bron': ''}) is False
+
+
+def test_edit_router_imported_concept_goes_to_dialog():
+    from pages.facturen import _should_use_builder
+    assert _should_use_builder(
+        {'status': 'concept', 'type': 'factuur', 'bron': 'import'}) is False
+
+
+def test_edit_router_concept_vergoeding_goes_to_dialog():
+    from pages.facturen import _should_use_builder
+    assert _should_use_builder(
+        {'status': 'concept', 'type': 'vergoeding', 'bron': ''}) is False
+
+
+def test_edit_router_concept_anw_goes_to_dialog():
+    from pages.facturen import _should_use_builder
+    assert _should_use_builder(
+        {'status': 'concept', 'type': 'anw', 'bron': ''}) is False
