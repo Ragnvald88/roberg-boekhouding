@@ -442,6 +442,7 @@ async def test_auto_match_not_applied_without_explicit_apply(db):
         cur = await conn.execute(
             'SELECT status, betaald_datum FROM facturen WHERE id = ?', (fid,))
         row = await cur.fetchone()
+        assert row is not None
         assert row['status'] == 'verstuurd'
 
     # After apply: factuur now betaald with correct date.
@@ -451,5 +452,6 @@ async def test_auto_match_not_applied_without_explicit_apply(db):
         cur = await conn.execute(
             'SELECT status, betaald_datum FROM facturen WHERE id = ?', (fid,))
         row = await cur.fetchone()
+        assert row is not None
         assert row['status'] == 'betaald'
         assert row['betaald_datum'] == '2025-03-03'

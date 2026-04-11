@@ -269,7 +269,9 @@ async def test_find_matches_by_nummer(db):
     async with get_db_ctx(db) as conn:
         cur = await conn.execute('SELECT status FROM facturen WHERE nummer=?',
                                   ('2026-001',))
-        assert (await cur.fetchone())['status'] == 'verstuurd'
+        row = await cur.fetchone()
+        assert row is not None
+        assert row['status'] == 'verstuurd'
 
 
 @pytest.mark.asyncio
@@ -495,12 +497,14 @@ async def test_apply_matches(db):
     async with get_db_ctx(db) as conn:
         cur = await conn.execute('SELECT status, betaald_datum FROM facturen WHERE id=?', (fid,))
         row = await cur.fetchone()
+        assert row is not None
         assert row['status'] == 'betaald'
         assert row['betaald_datum'] == '2026-03-10'
 
         cur = await conn.execute(
             "SELECT koppeling_type, koppeling_id FROM banktransacties WHERE bedrag=640")
         row = await cur.fetchone()
+        assert row is not None
         assert row['koppeling_type'] == 'factuur'
         assert row['koppeling_id'] == fid
 
@@ -510,6 +514,7 @@ async def test_apply_matches(db):
             "JOIN facturen f ON w.factuurnummer = f.nummer "
             "WHERE w.factuurnummer='2026-030'")
         row = await cur.fetchone()
+        assert row is not None
         assert row['status'] == 'betaald'
 
 
@@ -890,7 +895,7 @@ async def test_apply_matches_only_verstuurd(db):
     # Manually craft matches that include both concept and verstuurd
     async with get_db_ctx(db) as conn:
         cur = await conn.execute("SELECT id FROM banktransacties ORDER BY datum")
-        bank_rows = await cur.fetchall()
+        bank_rows = list(await cur.fetchall())
 
     fake_matches = [
         MatchProposal(
@@ -911,10 +916,14 @@ async def test_apply_matches_only_verstuurd(db):
 
     async with get_db_ctx(db) as conn:
         cur = await conn.execute('SELECT status FROM facturen WHERE id=?', (fid_concept,))
-        assert (await cur.fetchone())['status'] == 'concept'  # unchanged!
+        row = await cur.fetchone()
+        assert row is not None
+        assert row['status'] == 'concept'  # unchanged!
 
         cur = await conn.execute('SELECT status FROM facturen WHERE id=?', (fid_verstuurd,))
-        assert (await cur.fetchone())['status'] == 'betaald'  # changed!
+        row = await cur.fetchone()
+        assert row is not None
+        assert row['status'] == 'betaald'  # changed!
 
 
 
