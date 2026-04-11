@@ -996,7 +996,7 @@ async def facturen_page():
                     on_upload=lambda e: upload_file.update({'event': e}),
                     max_file_size=10_000_000,
                 ).classes('w-full').props(
-                    'flat bordered accept=".pdf,.jpg,.jpeg,.png"')
+                    'flat bordered accept=".pdf"')
 
                 # Action buttons
                 with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
