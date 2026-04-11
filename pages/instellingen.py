@@ -180,64 +180,61 @@ async def instellingen_page():
                                 if jaar in existing:
                                     ui.notify(f'{jaar} bestaat al', type='warning')
                                     return
+                                if not params_list:
+                                    ui.notify(
+                                        'Er zijn nog geen fiscale parameters voor enig '
+                                        'jaar. Seed eerst de database via `python -m '
+                                        'import_.seed_data` of voeg handmatig een '
+                                        'volledig parameterjaar toe via SQL.',
+                                        type='negative', timeout=10000,
+                                    )
+                                    return
                                 # Copy from most recent year as template
-                                if params_list:
-                                    latest = params_list[-1]
-                                    kwargs = {
-                                        'jaar': jaar,
-                                        'zelfstandigenaftrek': latest.zelfstandigenaftrek,
-                                        'startersaftrek': latest.startersaftrek,
-                                        'mkb_vrijstelling_pct': latest.mkb_vrijstelling_pct,
-                                        'kia_ondergrens': latest.kia_ondergrens,
-                                        'kia_bovengrens': latest.kia_bovengrens,
-                                        'kia_pct': latest.kia_pct,
-                                        'kia_drempel_per_item': latest.kia_drempel_per_item,
-                                        'km_tarief': latest.km_tarief,
-                                        'schijf1_grens': latest.schijf1_grens,
-                                        'schijf1_pct': latest.schijf1_pct,
-                                        'schijf2_grens': latest.schijf2_grens,
-                                        'schijf2_pct': latest.schijf2_pct,
-                                        'schijf3_pct': latest.schijf3_pct,
-                                        'pvv_premiegrondslag': latest.pvv_premiegrondslag,
-                                        'ahk_max': latest.ahk_max,
-                                        'ahk_afbouw_pct': latest.ahk_afbouw_pct,
-                                        'ahk_drempel': latest.ahk_drempel,
-                                        'ak_max': latest.ak_max,
-                                        'zvw_pct': latest.zvw_pct,
-                                        'zvw_max_grondslag': latest.zvw_max_grondslag,
-                                        'repr_aftrek_pct': latest.repr_aftrek_pct,
-                                        'ew_forfait_pct': latest.ew_forfait_pct,
-                                        'villataks_grens': latest.villataks_grens,
-                                        'wet_hillen_pct': latest.wet_hillen_pct,
-                                        'urencriterium': latest.urencriterium,
-                                        'arbeidskorting_brackets': latest.arbeidskorting_brackets,
-                                        'pvv_aow_pct': latest.pvv_aow_pct,
-                                        'pvv_anw_pct': latest.pvv_anw_pct,
-                                        'pvv_wlz_pct': latest.pvv_wlz_pct,
-                                        'box3_heffingsvrij_vermogen': latest.box3_heffingsvrij_vermogen,
-                                        'box3_rendement_bank_pct': latest.box3_rendement_bank_pct,
-                                        'box3_rendement_overig_pct': latest.box3_rendement_overig_pct,
-                                        'box3_rendement_schuld_pct': latest.box3_rendement_schuld_pct,
-                                        'box3_tarief_pct': latest.box3_tarief_pct,
-                                        'box3_drempel_schulden': latest.box3_drempel_schulden,
-                                        'za_actief': int(latest.za_actief),
-                                        'sa_actief': int(latest.sa_actief),
-                                    }
-                                else:
-                                    kwargs = {'jaar': jaar, 'zelfstandigenaftrek': 0,
-                                              'mkb_vrijstelling_pct': 12.70,
-                                              'kia_ondergrens': 2901, 'kia_bovengrens': 70602,
-                                              'kia_pct': 28, 'kia_drempel_per_item': 450,
-                                              'km_tarief': 0.23,
-                                              'schijf1_grens': 38883, 'schijf1_pct': 35.75,
-                                              'schijf2_grens': 78426, 'schijf2_pct': 37.56,
-                                              'schijf3_pct': 49.50, 'ahk_max': 3115,
-                                              'ahk_afbouw_pct': 6.398, 'ahk_drempel': 29736,
-                                              'ak_max': 5685, 'zvw_pct': 4.85,
-                                              'zvw_max_grondslag': 79409}
+                                latest = params_list[-1]
+                                kwargs = {
+                                    'jaar': jaar,
+                                    'zelfstandigenaftrek': latest.zelfstandigenaftrek,
+                                    'startersaftrek': latest.startersaftrek,
+                                    'mkb_vrijstelling_pct': latest.mkb_vrijstelling_pct,
+                                    'kia_ondergrens': latest.kia_ondergrens,
+                                    'kia_bovengrens': latest.kia_bovengrens,
+                                    'kia_pct': latest.kia_pct,
+                                    'kia_drempel_per_item': latest.kia_drempel_per_item,
+                                    'km_tarief': latest.km_tarief,
+                                    'schijf1_grens': latest.schijf1_grens,
+                                    'schijf1_pct': latest.schijf1_pct,
+                                    'schijf2_grens': latest.schijf2_grens,
+                                    'schijf2_pct': latest.schijf2_pct,
+                                    'schijf3_pct': latest.schijf3_pct,
+                                    'pvv_premiegrondslag': latest.pvv_premiegrondslag,
+                                    'ahk_max': latest.ahk_max,
+                                    'ahk_afbouw_pct': latest.ahk_afbouw_pct,
+                                    'ahk_drempel': latest.ahk_drempel,
+                                    'ak_max': latest.ak_max,
+                                    'zvw_pct': latest.zvw_pct,
+                                    'zvw_max_grondslag': latest.zvw_max_grondslag,
+                                    'repr_aftrek_pct': latest.repr_aftrek_pct,
+                                    'ew_forfait_pct': latest.ew_forfait_pct,
+                                    'villataks_grens': latest.villataks_grens,
+                                    'wet_hillen_pct': latest.wet_hillen_pct,
+                                    'urencriterium': latest.urencriterium,
+                                    'arbeidskorting_brackets': latest.arbeidskorting_brackets,
+                                    'pvv_aow_pct': latest.pvv_aow_pct,
+                                    'pvv_anw_pct': latest.pvv_anw_pct,
+                                    'pvv_wlz_pct': latest.pvv_wlz_pct,
+                                    'box3_heffingsvrij_vermogen': latest.box3_heffingsvrij_vermogen,
+                                    'box3_rendement_bank_pct': latest.box3_rendement_bank_pct,
+                                    'box3_rendement_overig_pct': latest.box3_rendement_overig_pct,
+                                    'box3_rendement_schuld_pct': latest.box3_rendement_schuld_pct,
+                                    'box3_tarief_pct': latest.box3_tarief_pct,
+                                    'box3_drempel_schulden': latest.box3_drempel_schulden,
+                                    'za_actief': int(latest.za_actief),
+                                    'sa_actief': int(latest.sa_actief),
+                                }
                                 await upsert_fiscale_params(DB_PATH, **kwargs)
-                                ui.notify(f'Jaar {jaar} toegevoegd (kopieer van {params_list[-1].jaar if params_list else "standaard"})',
-                                          type='positive')
+                                ui.notify(
+                                    f'Jaar {jaar} toegevoegd (kopie van {latest.jaar})',
+                                    type='positive')
                                 await refresh_fiscaal()
 
                             ui.button('Jaar toevoegen', icon='add',
