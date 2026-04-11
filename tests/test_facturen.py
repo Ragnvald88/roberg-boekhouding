@@ -1,7 +1,6 @@
 """Tests voor facturen functionaliteit."""
 
 import pytest
-from pathlib import Path
 from database import (
     add_klant, add_werkdag, add_factuur, update_factuur,
     get_facturen, get_next_factuurnummer, mark_betaald,
@@ -535,6 +534,7 @@ async def test_concept_regels_json_round_trip(db):
             "SELECT regels_json FROM facturen WHERE id = ?", (fid,))
         row = await cur.fetchone()
 
+    assert row is not None
     saved = json.loads(row['regels_json'])
     assert len(saved['line_items']) == 2
     assert saved['line_items'][0]['tarief'] == 95
@@ -555,6 +555,7 @@ async def test_final_invoice_no_regels_json(db):
         cur = await conn.execute(
             "SELECT regels_json FROM facturen WHERE id = ?", (fid,))
         row = await cur.fetchone()
+    assert row is not None
     assert row['regels_json'] == ''
 
 
