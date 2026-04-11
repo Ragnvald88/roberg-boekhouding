@@ -9,6 +9,7 @@ Gebruik: bereken_volledig() voor de complete waterval.
 from dataclasses import dataclass, field
 from decimal import Decimal, ROUND_HALF_UP
 
+from fiscal.constants import URENCRITERIUM_DEFAULT
 from fiscal.heffingskortingen import (
     bereken_algemene_heffingskorting,
     bereken_arbeidskorting,
@@ -256,7 +257,7 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
     r.fiscale_winst = euro(d_fiscale_winst)
 
     # 3. Ondernemersaftrek (alleen bij urencriterium gehaald + toggle actief)
-    uren_drempel = params.get('urencriterium', 1225)
+    uren_drempel = params.get('urencriterium', URENCRITERIUM_DEFAULT)
     za_actief = params.get('za_actief', True)
     sa_actief = params.get('sa_actief', False)
     if uren >= uren_drempel and za_actief:

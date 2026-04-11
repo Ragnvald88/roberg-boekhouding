@@ -12,6 +12,7 @@ from components.fiscal_utils import (
     fetch_fiscal_data,
     load_jaarafsluiting_data,
 )
+from fiscal.constants import URENCRITERIUM_DEFAULT
 from components.shared_ui import year_options
 from components.kpi_card import kpi_strip
 from components.layout import create_layout, page_title
@@ -523,7 +524,7 @@ async def jaarafsluiting_page():
 
             # Urencriterium
             uren = data['uren']
-            norm = data['params_dict'].get('urencriterium', 1225)
+            norm = data['params_dict'].get('urencriterium', URENCRITERIUM_DEFAULT)
             uren_ok = uren >= norm
             with ui.card().classes('w-full q-pa-md q-mb-md'):
                 with ui.row().classes('items-center gap-3'):

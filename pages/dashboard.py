@@ -22,8 +22,7 @@ from components.document_specs import AANGIFTE_DOCS
 from components.fiscal_utils import fetch_fiscal_data, extrapoleer_jaaromzet
 from components.shared_ui import year_options
 from fiscal.berekeningen import bereken_volledig
-
-URENCRITERIUM_DEFAULT = 1225
+from fiscal.constants import URENCRITERIUM_DEFAULT
 
 
 @ui.page('/')

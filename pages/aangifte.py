@@ -30,6 +30,7 @@ from database import (
 )
 from components.shared_ui import year_options
 from fiscal.berekeningen import bereken_volledig, bereken_box3
+from fiscal.constants import URENCRITERIUM_DEFAULT
 
 AANGIFTE_DIR = DB_PATH.parent / 'aangifte'
 
@@ -392,7 +393,7 @@ async def aangifte_page():
                 # Urencriterium — only warn if not met
                 with ui.row().classes('items-center gap-2'):
                     uc_norm = int(data['params_dict'].get(
-                        'urencriterium', 1225))
+                        'urencriterium', URENCRITERIUM_DEFAULT))
                     ui.label(
                         f'Urencriterium: {f.uren_criterium:.0f}'
                         f' / {uc_norm:,} uur'.replace(',', '.')
