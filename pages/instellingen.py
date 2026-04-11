@@ -128,6 +128,22 @@ async def instellingen_page():
 
                             async def save_bedrijf():
                                 kwargs = {k: v.value or '' for k, v in fields.items()}
+                                if not (kwargs.get('iban') or '').strip():
+                                    ui.notify(
+                                        'IBAN mag niet leeg zijn — QR-betaallink zou '
+                                        'stuk gaan op alle volgende facturen',
+                                        type='negative', timeout=8)
+                                    return
+                                if not (kwargs.get('naam') or '').strip():
+                                    ui.notify(
+                                        'Naam mag niet leeg zijn',
+                                        type='negative')
+                                    return
+                                if not (kwargs.get('kvk') or '').strip():
+                                    ui.notify(
+                                        'KvK-nummer mag niet leeg zijn',
+                                        type='negative')
+                                    return
                                 await upsert_bedrijfsgegevens(DB_PATH, **kwargs)
                                 ui.notify('Bedrijfsgegevens opgeslagen', type='positive')
 
