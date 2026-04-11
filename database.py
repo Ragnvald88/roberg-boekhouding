@@ -1,5 +1,6 @@
 """SQLite database: schema, connectie, en alle queries."""
 
+import os
 import re
 import sqlite3
 from contextlib import asynccontextmanager
@@ -12,8 +13,11 @@ from models import (
     Banktransactie, FiscaleParams, AangifteDocument,
 )
 
-_PROJECT_ROOT = Path(__file__).resolve().parent
-DB_PATH = _PROJECT_ROOT / "data" / "boekhouding.sqlite3"
+_DEFAULT_DB_DIR = Path.home() / "Library" / "Application Support" / "Boekhouding" / "data"
+_ENV_OVERRIDE = os.environ.get("BOEKHOUDING_DB_DIR")
+_DB_DIR = Path(_ENV_OVERRIDE).expanduser() if _ENV_OVERRIDE else _DEFAULT_DB_DIR
+_DB_DIR.mkdir(parents=True, exist_ok=True)
+DB_PATH = _DB_DIR / "boekhouding.sqlite3"
 
 SCHEMA_SQL = """
 PRAGMA journal_mode = WAL;

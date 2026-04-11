@@ -3,7 +3,10 @@
 import asyncio
 from datetime import date
 import json
+import shutil
+import tempfile
 import zipfile
+from pathlib import Path
 
 from nicegui import ui
 
@@ -407,27 +410,28 @@ async def instellingen_page():
             with ui.tab_panel(tab_backup):
                 ui.label('Database backup').classes('text-subtitle1 text-bold q-mb-md')
                 ui.label(
-                    'Download een kopie van de database en alle bijbehorende bestanden. '
-                    'De database wordt ook automatisch gesynchroniseerd via SynologyDrive.'
+                    'Download een atomaire snapshot van de database en alle bijbehorende bestanden. '
+                    'Bewaar backups buiten deze machine (externe schijf, NAS, of cloudmap). '
+                    'NB: deze snapshot is veilig tijdens gebruik — geen WAL races.'
                 ).classes('text-body2 text-grey q-mb-md')
 
                 async def download_backup():
-                    """Create a ZIP with the SQLite database."""
                     if not DB_PATH.exists():
                         ui.notify('Database niet gevonden', type='warning')
                         return
 
-                    backup_name = f"boekhouding_backup_{date.today().isoformat()}.zip"
-                    backup_path = DB_PATH.parent / backup_name
+                    stem = f"boekhouding_backup_{date.today().isoformat()}"
+                    tmp_dir = Path(tempfile.mkdtemp(prefix='boekhouding_backup_'))
+                    dump_path = tmp_dir / f"{stem}.sqlite3"
+                    zip_path = tmp_dir / f"{stem}.zip"
 
-                    # Flush WAL to ensure consistent backup
+                    # VACUUM INTO produces an atomic, consistent snapshot — no WAL races.
                     async with get_db_ctx(DB_PATH) as conn:
-                        await conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                        await conn.execute(f"VACUUM INTO '{dump_path}'")
 
                     def _create_zip():
-                        with zipfile.ZipFile(backup_path, 'w', zipfile.ZIP_DEFLATED) as zf:
-                            if DB_PATH.exists():
-                                zf.write(DB_PATH, 'boekhouding.sqlite3')
+                        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+                            zf.write(dump_path, 'boekhouding.sqlite3')
                             for subdir in ['facturen', 'uitgaven', 'jaarafsluiting', 'bank_csv', 'aangifte', 'logo']:
                                 dir_path = DB_PATH.parent / subdir
                                 if dir_path.exists():
@@ -436,16 +440,12 @@ async def instellingen_page():
                                             zf.write(f, f"{subdir}/{f.relative_to(dir_path)}")
 
                     await asyncio.to_thread(_create_zip)
-                    ui.download(str(backup_path))
-                    ui.notify(f'Backup {backup_name} aangemaakt', type='positive')
+                    ui.download(str(zip_path))
+                    ui.notify(f'Backup {zip_path.name} aangemaakt', type='positive')
 
-                    # Clean up ZIP after download starts
                     async def _cleanup():
-                        await asyncio.sleep(120)
-                        try:
-                            backup_path.unlink(missing_ok=True)
-                        except OSError:
-                            pass
+                        await asyncio.sleep(300)
+                        shutil.rmtree(tmp_dir, ignore_errors=True)
                     asyncio.create_task(_cleanup())
 
                 ui.button('Download backup', icon='download',
