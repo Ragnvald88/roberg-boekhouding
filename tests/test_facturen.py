@@ -745,6 +745,56 @@ def test_rebuild_vergoeding_regels_json_malformed_input():
     assert parsed == [{'omschrijving': 'Vergoeding', 'bedrag': 75.0}]
 
 
+# === PDF import classifier (C.4) ===
+
+def test_classify_import_missing_nummer_is_fout():
+    from pages.facturen import _classify_import_item
+    status, reason = _classify_import_item(
+        None, 1, '2026-05-01', 500.0, set(), set())
+    assert status == 'fout'
+    assert 'factuurnummer' in reason
+
+
+def test_classify_import_empty_nummer_is_fout():
+    from pages.facturen import _classify_import_item
+    status, _ = _classify_import_item(
+        '', 1, '2026-05-01', 500.0, set(), set())
+    assert status == 'fout'
+
+
+def test_classify_import_known_nummer_is_duplicaat():
+    from pages.facturen import _classify_import_item
+    status, reason = _classify_import_item(
+        '2026-001', 1, '2026-05-01', 500.0, {'2026-001'}, set())
+    assert status == 'duplicaat'
+    assert '2026-001' in reason
+
+
+def test_classify_import_fuzzy_match_is_duplicaat():
+    from pages.facturen import _classify_import_item
+    sig = (1, '2026-05-01', 500.00)
+    status, reason = _classify_import_item(
+        '2026-999', 1, '2026-05-01', 500.00, set(), {sig})
+    assert status == 'duplicaat'
+    assert 'klant' in reason
+
+
+def test_classify_import_fuzzy_rounds_to_cents():
+    from pages.facturen import _classify_import_item
+    sig = (1, '2026-05-01', 500.12)
+    status, _ = _classify_import_item(
+        '2026-999', 1, '2026-05-01', 500.123456, set(), {sig})
+    assert status == 'duplicaat'
+
+
+def test_classify_import_new_nummer_is_nieuw():
+    from pages.facturen import _classify_import_item
+    status, reason = _classify_import_item(
+        '2026-100', 1, '2026-05-01', 500.0, {'2026-001'}, set())
+    assert status == 'nieuw'
+    assert reason == ''
+
+
 @pytest.mark.asyncio
 async def test_save_factuur_atomic_conflict_preserves_pdf(seeded_db, tmp_path):
     """save_factuur_atomic must not touch the caller's PDF on failure.

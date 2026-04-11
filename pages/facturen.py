@@ -47,6 +47,36 @@ def _should_use_builder(row: dict) -> bool:
     )
 
 
+def _classify_import_item(
+    nummer: str | None,
+    klant_id: int | None,
+    datum: str | None,
+    totaal_bedrag: float | None,
+    existing_nummers: set[str],
+    existing_signatures: set[tuple],
+) -> tuple[str, str]:
+    """Classify a parsed PDF import as nieuw/duplicaat/fout.
+
+    Returns (status, reason). reason is '' for nieuw, else a short
+    Dutch label for why the import was rejected. Rules:
+    - no factuurnummer → 'fout' (parser couldn't identify the invoice)
+    - nummer already in DB → 'duplicaat'
+    - (klant_id, datum, round(bedrag, 2)) already seen → 'duplicaat'
+      (fuzzy match for PDFs that differ in layout but represent the
+      same invoice)
+    - otherwise → 'nieuw'
+    """
+    if not nummer:
+        return 'fout', 'factuurnummer niet herkend'
+    if nummer in existing_nummers:
+        return 'duplicaat', f'nummer {nummer} bestaat al'
+    if klant_id and datum and totaal_bedrag is not None:
+        sig = (klant_id, datum, round(float(totaal_bedrag), 2))
+        if sig in existing_signatures:
+            return 'duplicaat', 'zelfde klant/datum/bedrag'
+    return 'nieuw', ''
+
+
 def _rebuild_vergoeding_regels_json(old_regels_json: str,
                                     new_bedrag: float) -> str:
     """Return a regels_json string with a single line item at new_bedrag.
@@ -1318,10 +1348,21 @@ async def facturen_page():
             klant_lookup = {k.naam: k.id for k in klanten}
             klant_options = {k.id: k.naam for k in klanten}
 
-            # Load existing factuurnummers for dedup
+            # Load existing factuurnummers + (klant, datum, bedrag)
+            # fingerprints for dedup. The fingerprint catches PDFs
+            # re-exported with a different layout or invoices re-sent
+            # under a new nummer (rare but possible).
             async with get_db_ctx(DB_PATH) as conn:
-                cursor = await conn.execute("SELECT nummer FROM facturen")
-                existing_nummers = {row[0] for row in await cursor.fetchall()}
+                cursor = await conn.execute(
+                    "SELECT nummer, klant_id, datum, totaal_bedrag "
+                    "FROM facturen")
+                _existing_rows = await cursor.fetchall()
+            existing_nummers = {r['nummer'] for r in _existing_rows}
+            existing_signatures: set[tuple] = {
+                (r['klant_id'], r['datum'],
+                 round(float(r['totaal_bedrag'] or 0), 2))
+                for r in _existing_rows
+            }
 
             with ui.dialog() as dlg, ui.card().classes(
                 'w-full max-w-2xl q-pa-none'
@@ -1374,14 +1415,8 @@ async def facturen_page():
                             parsed['_filename'] = filename
                             parsed['_content'] = content
 
-                            # Dedup check
-                            nummer = parsed.get('factuurnummer')
-                            if nummer and nummer in existing_nummers:
-                                parsed['_status'] = 'duplicaat'
-                            else:
-                                parsed['_status'] = 'nieuw'
-
-                            # Klant resolution
+                            # Klant resolution first — we need klant_id
+                            # to compute the fuzzy dedup signature.
                             if inv_type == 'dagpraktijk':
                                 suffix = (
                                     filename.split('_', 1)[1]
@@ -1396,6 +1431,20 @@ async def facturen_page():
 
                             parsed['_klant_naam'] = db_naam
                             parsed['_klant_id'] = klant_id
+
+                            # Dedup: reject missing nummer, known nummer,
+                            # or matching (klant,datum,bedrag) fingerprint
+                            status_, reason = _classify_import_item(
+                                parsed.get('factuurnummer'),
+                                klant_id,
+                                parsed.get('factuurdatum'),
+                                parsed.get('totaal_bedrag'),
+                                existing_nummers,
+                                existing_signatures,
+                            )
+                            parsed['_status'] = status_
+                            if reason:
+                                parsed['_error'] = reason
 
                             parsed_items.append(parsed)
                             render_preview()
@@ -1642,6 +1691,12 @@ async def facturen_page():
 
                         nummer = item.get('factuurnummer', '')
 
+                        # Belt-and-braces: reject empty nummer even if
+                        # the classifier would have caught it. Prevents
+                        # an accidental future regression from writing
+                        # a factuur with nummer=''.
+                        if not nummer:
+                            continue
                         # Guard: skip if already imported (double-click / dup)
                         if nummer in existing_nummers:
                             continue
@@ -1693,6 +1748,8 @@ async def facturen_page():
 
                             # Track for dedup
                             existing_nummers.add(nummer)
+                            existing_signatures.add(
+                                (klant_id, datum, round(float(bedrag), 2)))
                             imported += 1
 
                             # Create or link werkdagen
