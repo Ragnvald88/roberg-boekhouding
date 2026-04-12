@@ -1,7 +1,6 @@
 """Tests voor facturen functionaliteit."""
 
 import pytest
-from pathlib import Path
 from database import (
     add_klant, add_werkdag, add_factuur, update_factuur,
     get_facturen, get_next_factuurnummer, mark_betaald,
@@ -535,6 +534,7 @@ async def test_concept_regels_json_round_trip(db):
             "SELECT regels_json FROM facturen WHERE id = ?", (fid,))
         row = await cur.fetchone()
 
+    assert row is not None
     saved = json.loads(row['regels_json'])
     assert len(saved['line_items']) == 2
     assert saved['line_items'][0]['tarief'] == 95
@@ -555,6 +555,7 @@ async def test_final_invoice_no_regels_json(db):
         cur = await conn.execute(
             "SELECT regels_json FROM facturen WHERE id = ?", (fid,))
         row = await cur.fetchone()
+    assert row is not None
     assert row['regels_json'] == ''
 
 
@@ -566,28 +567,41 @@ from pages.facturen import _build_mail_body, _build_herinnering_body
 
 
 def test_build_mail_body_with_betaallink():
-    body, is_html = _build_mail_body(
+    """Body is plain text with betaallink as a literal URL. No HTML tags."""
+    body = _build_mail_body(
         '2026-021', '€ 1.097,34', 'NL00 TEST 0000 0000 00',
         'TestBV huisartswaarnemer', 'Test Gebruiker',
         '06 0000 0000', 'info@testbedrijf.nl',
         betaallink='https://betaalverzoek.rabobank.nl/betaalverzoek/?id=abc',
     )
-    assert is_html is True
-    assert '<a href="https://betaalverzoek.rabobank.nl/betaalverzoek/?id=abc">deze betaallink</a>' in body
-    assert 'eenvoudig betalen via' in body
-    assert 'onder vermelding van factuurnummer 2026-021. U kunt ook' in body
+    assert isinstance(body, str)
+    # No HTML tags — Mail.app breaks on HTML + attachments (CLAUDE.md).
+    assert '<' not in body
+    assert '>' not in body
+    # Betaallink is a literal URL (Mail.app auto-links in plain text).
+    assert 'https://betaalverzoek.rabobank.nl/betaalverzoek/?id=abc' in body
+    assert 'eenvoudig betalen' in body
     assert 'Bijgaand stuur ik u factuur 2026-021' in body
+    assert 'NL00 TEST 0000 0000 00' in body
+    assert '€ 1.097,34' in body
+    assert 'TestBV huisartswaarnemer' in body
+    assert 'Test Gebruiker' in body
 
 
 def test_build_mail_body_without_betaallink():
-    body, is_html = _build_mail_body(
+    """Without betaallink the paragraph is omitted and body stays plain text."""
+    body = _build_mail_body(
         '2026-021', '€ 1.097,34', 'NL00 TEST 0000 0000 00',
         'TestBV huisartswaarnemer', 'Test Gebruiker',
         '06 0000 0000', 'info@testbedrijf.nl',
     )
-    assert is_html is False
-    assert 'betaallink' not in body
+    assert isinstance(body, str)
+    assert '<' not in body
+    assert '>' not in body
+    assert 'betaallink' not in body.lower()
+    assert 'betalen via deze link' not in body
     assert 'Bijgaand stuur ik u factuur 2026-021' in body
+    assert 'NL00 TEST 0000 0000 00' in body
 
 
 # ============================================================
@@ -667,3 +681,290 @@ async def test_herinnering_datum_default_empty(seeded_db):
     facturen = await get_facturen(seeded_db)
     f = next(f for f in facturen if f.nummer == '2026-011')
     assert f.herinnering_datum == ''
+
+
+# === Edit router (C.1) ===
+
+def test_edit_router_concept_factuur_native_goes_to_builder():
+    from pages.facturen import _should_use_builder
+    assert _should_use_builder(
+        {'status': 'concept', 'type': 'factuur', 'bron': ''}) is True
+
+
+def test_edit_router_verstuurd_goes_to_dialog():
+    from pages.facturen import _should_use_builder
+    assert _should_use_builder(
+        {'status': 'verstuurd', 'type': 'factuur', 'bron': ''}) is False
+
+
+def test_edit_router_betaald_goes_to_dialog():
+    from pages.facturen import _should_use_builder
+    assert _should_use_builder(
+        {'status': 'betaald', 'type': 'factuur', 'bron': ''}) is False
+
+
+def test_edit_router_imported_concept_goes_to_dialog():
+    from pages.facturen import _should_use_builder
+    assert _should_use_builder(
+        {'status': 'concept', 'type': 'factuur', 'bron': 'import'}) is False
+
+
+def test_edit_router_concept_vergoeding_goes_to_dialog():
+    from pages.facturen import _should_use_builder
+    assert _should_use_builder(
+        {'status': 'concept', 'type': 'vergoeding', 'bron': ''}) is False
+
+
+def test_edit_router_concept_anw_goes_to_dialog():
+    from pages.facturen import _should_use_builder
+    assert _should_use_builder(
+        {'status': 'concept', 'type': 'anw', 'bron': ''}) is False
+
+
+# === Vergoeding regels_json sync (C.2) ===
+
+def test_rebuild_vergoeding_regels_json_preserves_omschrijving():
+    import json
+    from pages.facturen import _rebuild_vergoeding_regels_json
+
+    old = json.dumps([{'omschrijving': 'Consult spoed', 'bedrag': 100.0}])
+    new = _rebuild_vergoeding_regels_json(old, 150.0)
+    parsed = json.loads(new)
+    assert len(parsed) == 1
+    assert parsed[0]['omschrijving'] == 'Consult spoed'
+    assert parsed[0]['bedrag'] == 150.0
+
+
+def test_rebuild_vergoeding_regels_json_empty_input():
+    import json
+    from pages.facturen import _rebuild_vergoeding_regels_json
+
+    parsed = json.loads(_rebuild_vergoeding_regels_json('', 42.50))
+    assert parsed == [{'omschrijving': 'Vergoeding', 'bedrag': 42.50}]
+
+
+def test_rebuild_vergoeding_regels_json_null_input():
+    import json
+    from pages.facturen import _rebuild_vergoeding_regels_json
+
+    parsed = json.loads(_rebuild_vergoeding_regels_json(None, 42.50))  # type: ignore[arg-type]
+    assert parsed == [{'omschrijving': 'Vergoeding', 'bedrag': 42.50}]
+
+
+def test_rebuild_vergoeding_regels_json_malformed_input():
+    import json
+    from pages.facturen import _rebuild_vergoeding_regels_json
+
+    parsed = json.loads(_rebuild_vergoeding_regels_json('not-json', 75.0))
+    assert parsed == [{'omschrijving': 'Vergoeding', 'bedrag': 75.0}]
+
+
+# === ANW line item km_tarief (C.5) ===
+
+def test_line_item_to_werkdag_anw_forces_km_tarief_zero():
+    from pages.facturen import _line_item_to_werkdag_kwargs
+    li = {'dienst_code': 'ANW-NA',
+          'uren': 10, 'bedrag': 850.0}
+    kw = _line_item_to_werkdag_kwargs(li, 'anw', 0.23)
+    assert kw['km_tarief'] == 0.0
+    assert kw['km'] == 0.0
+    assert kw['tarief'] == 85.00
+    assert kw['urennorm'] == 0
+    assert kw['activiteit'] == 'Achterwacht'
+
+
+def test_line_item_to_werkdag_factuur_keeps_km_tarief():
+    from pages.facturen import _line_item_to_werkdag_kwargs
+    li = {'uren': 8, 'tarief': 77.50, 'km': 52}
+    kw = _line_item_to_werkdag_kwargs(li, 'dagpraktijk', 0.23)
+    assert kw['km_tarief'] == 0.23
+    assert kw['km'] == 52
+    assert kw['tarief'] == 77.50
+    assert kw['urennorm'] == 1
+    assert kw['activiteit'] == 'Waarneming dagpraktijk'
+
+
+def test_line_item_to_werkdag_factuur_per_line_km_tarief_wins():
+    from pages.facturen import _line_item_to_werkdag_kwargs
+    li = {'uren': 8, 'tarief': 77.50, 'km': 52, 'km_tarief': 0.19}
+    kw = _line_item_to_werkdag_kwargs(li, 'dagpraktijk', 0.23)
+    assert kw['km_tarief'] == 0.19
+
+
+# === PDF import classifier (C.4) ===
+
+def test_classify_import_missing_nummer_is_fout():
+    from pages.facturen import _classify_import_item
+    status, reason = _classify_import_item(
+        None, 1, '2026-05-01', 500.0, set(), set())
+    assert status == 'fout'
+    assert 'factuurnummer' in reason
+
+
+def test_classify_import_empty_nummer_is_fout():
+    from pages.facturen import _classify_import_item
+    status, _ = _classify_import_item(
+        '', 1, '2026-05-01', 500.0, set(), set())
+    assert status == 'fout'
+
+
+def test_classify_import_known_nummer_is_duplicaat():
+    from pages.facturen import _classify_import_item
+    status, reason = _classify_import_item(
+        '2026-001', 1, '2026-05-01', 500.0, {'2026-001'}, set())
+    assert status == 'duplicaat'
+    assert '2026-001' in reason
+
+
+def test_classify_import_fuzzy_match_is_duplicaat():
+    from pages.facturen import _classify_import_item
+    sig = (1, '2026-05-01', 500.00)
+    status, reason = _classify_import_item(
+        '2026-999', 1, '2026-05-01', 500.00, set(), {sig})
+    assert status == 'duplicaat'
+    assert 'klant' in reason
+
+
+def test_classify_import_fuzzy_rounds_to_cents():
+    from pages.facturen import _classify_import_item
+    sig = (1, '2026-05-01', 500.12)
+    status, _ = _classify_import_item(
+        '2026-999', 1, '2026-05-01', 500.123456, set(), {sig})
+    assert status == 'duplicaat'
+
+
+def test_classify_import_new_nummer_is_nieuw():
+    from pages.facturen import _classify_import_item
+    status, reason = _classify_import_item(
+        '2026-100', 1, '2026-05-01', 500.0, {'2026-001'}, set())
+    assert status == 'nieuw'
+    assert reason == ''
+
+
+@pytest.mark.asyncio
+async def test_save_factuur_atomic_conflict_preserves_pdf(seeded_db, tmp_path):
+    """save_factuur_atomic must not touch the caller's PDF on failure.
+
+    The invoice_builder.genereer_factuur wraps save_factuur_atomic in a
+    try/finally that deletes the freshly-generated PDF on conflict.
+    That cleanup is correct only if save_factuur_atomic itself leaves
+    the file alone — verify that contract here.
+    """
+    import sqlite3
+    from database import get_klanten
+    klanten = await get_klanten(seeded_db)
+    kid = klanten[0].id
+
+    await add_factuur(
+        seeded_db, nummer='2026-ORP', klant_id=kid,
+        datum='2026-04-01', totaal_bedrag=800.00, status='verstuurd',
+    )
+
+    fake_pdf = tmp_path / '2026-ORP.pdf'
+    fake_pdf.write_bytes(b'%PDF-1.4 fake')
+    assert fake_pdf.exists()
+
+    with pytest.raises(sqlite3.IntegrityError):
+        await save_factuur_atomic(
+            seeded_db,
+            nummer='2026-ORP', klant_id=kid,
+            datum='2026-04-02', totaal_uren=8, totaal_km=0,
+            totaal_bedrag=900.00, status='concept',
+            pdf_pad=str(fake_pdf),
+        )
+    assert fake_pdf.exists(), (
+        "save_factuur_atomic must not delete the PDF on failure — "
+        "the caller owns that lifecycle")
+
+
+@pytest.mark.asyncio
+async def test_update_factuur_accepts_regels_json(seeded_db):
+    """update_factuur must allow rewriting regels_json so vergoeding
+    edits keep the PDF regeneration source consistent with totaal_bedrag.
+    """
+    import json as _json
+    from database import get_klanten, get_db_ctx
+    klanten = await get_klanten(seeded_db)
+    kid = klanten[0].id
+
+    old_regels = _json.dumps(
+        [{'omschrijving': 'Reiskosten', 'bedrag': 50.0}])
+    await add_factuur(
+        seeded_db, nummer='2026-V01', klant_id=kid,
+        datum='2026-03-01', totaal_bedrag=50.0, status='concept',
+        type='vergoeding', regels_json=old_regels,
+    )
+    facturen = await get_facturen(seeded_db, jaar=2026)
+    fid = next(f.id for f in facturen if f.nummer == '2026-V01')
+
+    new_regels = _json.dumps(
+        [{'omschrijving': 'Reiskosten', 'bedrag': 75.0}])
+    await update_factuur(seeded_db, factuur_id=fid,
+                         totaal_bedrag=75.0, regels_json=new_regels)
+
+    async with get_db_ctx(seeded_db) as conn:
+        cur = await conn.execute(
+            "SELECT totaal_bedrag, regels_json FROM facturen WHERE id = ?",
+            (fid,))
+        row = await cur.fetchone()
+    assert row is not None
+    assert row['totaal_bedrag'] == 75.0
+    parsed = _json.loads(row['regels_json'])
+    regels_sum = sum(r['bedrag'] for r in parsed)
+    assert abs(regels_sum - row['totaal_bedrag']) < 0.01
+
+
+# ============================================================
+# Invoice lifecycle end-to-end (Workstream I.3)
+# ============================================================
+
+@pytest.mark.asyncio
+async def test_invoice_lifecycle_full_path(db):
+    """End-to-end: concept -> verstuurd -> betaald -> verstuurd; betaald->concept blocked.
+
+    Verifies that get_kpis reflects the correct omzet at each stage and that
+    the status state machine enforces allowed transitions.
+    """
+    from database import get_kpis, update_factuur_status
+
+    kid = await add_klant(db, naam="LifecycleTest", tarief_uur=100)
+    fid = await add_factuur(
+        db, nummer='2025-LC1', klant_id=kid,
+        datum='2025-08-01', totaal_uren=10, totaal_km=0,
+        totaal_bedrag=1500.00, status='concept',
+    )
+
+    # Concept: not counted in omzet
+    kpis = await get_kpis(db, jaar=2025)
+    assert kpis['omzet'] == 0.0
+
+    # -> verstuurd: counted
+    await update_factuur_status(db, factuur_id=fid, status='verstuurd')
+    kpis = await get_kpis(db, jaar=2025)
+    assert kpis['omzet'] == 1500.00
+
+    # -> betaald: still counted
+    await update_factuur_status(
+        db, factuur_id=fid, status='betaald', betaald_datum='2025-08-15')
+    kpis = await get_kpis(db, jaar=2025)
+    assert kpis['omzet'] == 1500.00
+
+    # Escape hatch: betaald -> verstuurd (user fix for mistaken payment mark)
+    await update_factuur_status(db, factuur_id=fid, status='verstuurd')
+    kpis = await get_kpis(db, jaar=2025)
+    assert kpis['omzet'] == 1500.00
+
+    # Verstuurd -> concept (allowed) then re-send cycle still works
+    await update_factuur_status(db, factuur_id=fid, status='concept')
+    kpis = await get_kpis(db, jaar=2025)
+    assert kpis['omzet'] == 0.0  # back off the books
+
+    # concept -> betaald (skipping verstuurd) is allowed per the state table
+    await update_factuur_status(
+        db, factuur_id=fid, status='betaald', betaald_datum='2025-08-16')
+    kpis = await get_kpis(db, jaar=2025)
+    assert kpis['omzet'] == 1500.00
+
+    # betaald -> concept is BLOCKED (data integrity: don't silently lose a payment)
+    with pytest.raises(ValueError, match="niet toegestaan"):
+        await update_factuur_status(db, factuur_id=fid, status='concept')

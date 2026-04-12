@@ -12,7 +12,7 @@ from database import (
     get_banktransacties, get_imported_csv_bestanden,
     add_banktransacties, update_banktransactie,
     delete_banktransacties, find_factuur_matches, apply_factuur_matches,
-    DB_PATH,
+    get_db_ctx, DB_PATH,
 )
 from components.shared_ui import year_options
 from import_.rabobank_csv import parse_rabobank_csv
@@ -133,16 +133,104 @@ async def bank_page():
 
         ui.notify(f"{count} transacties geimporteerd uit {filename}", type='positive')
 
-        # Auto-match incoming payments to open facturen
-        matches = await find_factuur_matches(DB_PATH)
-        if matches:
-            n = await apply_factuur_matches(DB_PATH, matches)
-            nummers = ', '.join(m['factuur_nummer'] for m in matches)
-            ui.notify(f'{n} facturen als betaald gemarkeerd: {nummers}',
-                      type='positive')
-
+        # Find potential matches and present preview dialog — do NOT auto-apply.
+        # Ambiguous (low-confidence) matches require explicit user confirmation
+        # to prevent silent wrong-invoice-paid.
+        proposals = await find_factuur_matches(DB_PATH)
         await refresh_table()
         await refresh_csv_list()
+        if proposals:
+            await _show_match_preview_dialog(proposals, count, refresh_table)
+
+    async def _show_match_preview_dialog(proposals, imported_count, on_applied):
+        """Present match proposals to the user; apply only ticked rows."""
+        rows = await _build_match_preview_rows(proposals)
+        n_low = sum(1 for r in rows if r['confidence'] == 'low')
+
+        with ui.dialog() as dialog, ui.card().classes('w-full').style('max-width: 900px'):
+            ui.label(
+                f'{imported_count} transacties geimporteerd - '
+                f'{len(proposals)} mogelijke koppelingen gevonden'
+            ).classes('text-h6')
+            subtitle = ('Vink aan welke koppelingen je wilt toepassen. '
+                        'Dubbelzinnige matches moet je zelf controleren.')
+            if n_low:
+                subtitle += f' ({n_low} dubbelzinnig)'
+            ui.label(subtitle).classes('text-body2 q-mb-sm text-grey-8')
+
+            columns = [
+                {'name': 'confidence_icon', 'label': '', 'field': 'confidence_icon',
+                 'align': 'center'},
+                {'name': 'factuur', 'label': 'Factuur', 'field': 'factuur',
+                 'align': 'left'},
+                {'name': 'factuur_bedrag', 'label': 'Bedrag', 'field': 'factuur_bedrag',
+                 'align': 'right'},
+                {'name': 'bank', 'label': 'Bank tegenpartij', 'field': 'bank',
+                 'align': 'left'},
+                {'name': 'bank_datum', 'label': 'Bank datum', 'field': 'bank_datum',
+                 'align': 'left'},
+                {'name': 'bank_bedrag', 'label': 'Bank bedrag', 'field': 'bank_bedrag',
+                 'align': 'right'},
+                {'name': 'delta', 'label': 'Verschil', 'field': 'delta',
+                 'align': 'right'},
+            ]
+            preview_table = ui.table(
+                columns=columns, rows=rows, row_key='id',
+                selection='multiple',
+            ).props('flat bordered dense').classes('w-full')
+            # Pre-select only high-confidence proposals. Low-confidence rows
+            # require explicit user action.
+            preview_table.selected = [r for r in rows if r['confidence'] == 'high']
+
+            async def apply_selected():
+                chosen_ids = {r['id'] for r in preview_table.selected}
+                # MatchProposal objects are indexed by row['id'] (enumerate index).
+                chosen = [p for idx, p in enumerate(proposals) if idx in chosen_ids]
+                if not chosen:
+                    ui.notify('Geen koppelingen geselecteerd', type='warning')
+                    return
+                applied = await apply_factuur_matches(DB_PATH, chosen)
+                nummers = ', '.join(p.factuur_nummer for p in chosen)
+                ui.notify(
+                    f'{applied} facturen als betaald gemarkeerd: {nummers}',
+                    type='positive')
+                dialog.close()
+                await on_applied()
+
+            with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
+                ui.button('Annuleren', on_click=dialog.close).props('flat')
+                ui.button('Geselecteerde toepassen', on_click=apply_selected) \
+                    .props('color=primary')
+        dialog.open()
+
+    async def _build_match_preview_rows(proposals):
+        """Enrich proposals with display data for the preview table."""
+        rows = []
+        async with get_db_ctx(DB_PATH) as conn:
+            for idx, p in enumerate(proposals):
+                f_cur = await conn.execute(
+                    "SELECT nummer, totaal_bedrag FROM facturen WHERE id = ?",
+                    (p.factuur_id,))
+                f_row = await f_cur.fetchone()
+                b_cur = await conn.execute(
+                    "SELECT tegenpartij, bedrag, datum FROM banktransacties "
+                    "WHERE id = ?", (p.bank_id,))
+                b_row = await b_cur.fetchone()
+                if not f_row or not b_row:
+                    continue
+                icon = '!' if p.confidence == 'low' else 'OK'
+                rows.append({
+                    'id': idx,  # row key, not DB id
+                    'confidence': p.confidence,
+                    'confidence_icon': icon,
+                    'factuur': f_row['nummer'],
+                    'factuur_bedrag': format_euro(f_row['totaal_bedrag']),
+                    'bank': b_row['tegenpartij'] or '',
+                    'bank_datum': format_datum(b_row['datum']),
+                    'bank_bedrag': format_euro(b_row['bedrag']),
+                    'delta': format_euro(p.delta),
+                })
+        return rows
 
     async def handle_categorie_change(row_id: int, new_cat: str):
         """Update category for a bank transaction."""

@@ -11,6 +11,7 @@ from nicegui import app, events, ui
 from components.layout import create_layout, page_title
 from components.invoice_builder import open_invoice_builder, _build_regels
 from components.invoice_generator import generate_invoice
+from components.mail_helper import open_mail_with_attachment
 from components.utils import format_euro, format_datum, generate_csv
 from database import (
     get_facturen, add_factuur,
@@ -34,50 +35,140 @@ PDF_DIR.mkdir(parents=True, exist_ok=True)
 app.add_static_files('/facturen-files', str(PDF_DIR))
 
 
-def _build_mail_body(nummer, bedrag, iban, bedrijfsnaam, naam, telefoon, bg_email, betaallink=''):
-    """Build email body. Returns (body, is_html) tuple."""
-    tel_line = f'Tel: {telefoon}' if telefoon else ''
+def _should_use_builder(row: dict) -> bool:
+    """Native concept werkdag-facturen go to the invoice builder.
 
-    if betaallink:
-        from html import escape as esc
-        body = (
-            f'<div style="font-family: Helvetica, Arial, sans-serif; font-size: 14px; color: #333;">'
-            f'<p>Bijgaand stuur ik u factuur {esc(nummer)}.</p>'
-            f'<p>Het totaalbedrag van {esc(bedrag)} verzoek ik u binnen 14 dagen '
-            f'over te maken op rekeningnummer {esc(iban)} t.n.v. {esc(bedrijfsnaam)}, '
-            f'onder vermelding van factuurnummer {esc(nummer)}. '
-            f'U kunt ook eenvoudig betalen via '
-            f'<a href="{esc(betaallink, quote=True)}">deze betaallink</a>.</p>'
-            f'<p>Mocht u vragen hebben, dan hoor ik het graag.</p>'
-            f'<br>'
-            f'<p>Met vriendelijke groet,</p>'
-            f'<p>{esc(naam)}<br><br>'
-            f'{esc(bedrijfsnaam)}<br>'
-            f'{esc(tel_line) + "<br>" if tel_line else ""}'
-            f'{esc(bg_email)}</p>'
-            f'</div>'
-        )
-        return body, True
-    else:
-        body = (
-            f'Bijgaand stuur ik u factuur {nummer}.\n'
-            f'\n'
-            f'Het totaalbedrag van {bedrag} verzoek ik u binnen 14 dagen '
-            f'over te maken op rekeningnummer {iban} t.n.v. {bedrijfsnaam}, '
-            f'onder vermelding van factuurnummer {nummer}.\n'
-            f'\n'
-            f'Mocht u vragen hebben, dan hoor ik het graag.\n'
-            f'\n'
-            f'\n'
-            f'Met vriendelijke groet,\n'
-            f'\n'
-            f'{naam}\n'
-            f'\n'
-            f'{bedrijfsnaam}\n'
-            f'{f"Tel: {telefoon}" if telefoon else ""}\n'
-            f'{bg_email}'
-        )
-        return body, False
+    Everything else (anw, vergoeding, imported concepts, verstuurd,
+    betaald) uses the simple edit dialog.
+    """
+    return (
+        row.get('status') == 'concept'
+        and row.get('type', 'factuur') == 'factuur'
+        and row.get('bron', '') != 'import'
+    )
+
+
+def _line_item_to_werkdag_kwargs(
+    li: dict,
+    inv_type: str,
+    inv_km_tarief: float,
+) -> dict:
+    """Convert a parsed PDF line item into add_werkdag kwargs.
+
+    Centralises the inv_type-specific logic so the import loop can
+    stay readable and the conversion is unit-testable. For ANW the
+    km_tarief is forced to 0 because reiskosten zijn al in het
+    dienst-tarief verdisconteerd (CLAUDE.md).
+    """
+    if inv_type == 'anw':
+        uren = li.get('uren', 0)
+        bedrag_li = li.get('bedrag', 0)
+        tarief = round(bedrag_li / uren, 2) if uren else 0
+        return {
+            'code': li.get('dienst_code', ''),
+            'activiteit': 'Achterwacht',
+            'uren': uren,
+            'km': 0.0,
+            'tarief': tarief,
+            'km_tarief': 0.0,
+            'urennorm': 0,
+        }
+    uren_val = li.get('uren', 0)
+    tarief_val = li.get('tarief', 0)
+    code = f'WDAGPRAKTIJK_{tarief_val:.2f}'.replace('.', ',')
+    return {
+        'code': code,
+        'activiteit': 'Waarneming dagpraktijk',
+        'uren': uren_val,
+        'km': li.get('km', 0),
+        'tarief': tarief_val,
+        'km_tarief': li.get('km_tarief', inv_km_tarief),
+        'urennorm': 1,
+    }
+
+
+def _classify_import_item(
+    nummer: str | None,
+    klant_id: int | None,
+    datum: str | None,
+    totaal_bedrag: float | None,
+    existing_nummers: set[str],
+    existing_signatures: set[tuple],
+) -> tuple[str, str]:
+    """Classify a parsed PDF import as nieuw/duplicaat/fout.
+
+    Returns (status, reason). reason is '' for nieuw, else a short
+    Dutch label for why the import was rejected. Rules:
+    - no factuurnummer → 'fout' (parser couldn't identify the invoice)
+    - nummer already in DB → 'duplicaat'
+    - (klant_id, datum, round(bedrag, 2)) already seen → 'duplicaat'
+      (fuzzy match for PDFs that differ in layout but represent the
+      same invoice)
+    - otherwise → 'nieuw'
+    """
+    if not nummer:
+        return 'fout', 'factuurnummer niet herkend'
+    if nummer in existing_nummers:
+        return 'duplicaat', f'nummer {nummer} bestaat al'
+    if klant_id and datum and totaal_bedrag is not None:
+        sig = (klant_id, datum, round(float(totaal_bedrag), 2))
+        if sig in existing_signatures:
+            return 'duplicaat', 'zelfde klant/datum/bedrag'
+    return 'nieuw', ''
+
+
+def _rebuild_vergoeding_regels_json(old_regels_json: str,
+                                    new_bedrag: float) -> str:
+    """Return a regels_json string with a single line item at new_bedrag.
+
+    Preserves the omschrijving of the first existing regel if any, else
+    falls back to 'Vergoeding'. Returned JSON is always a flat list with
+    one entry so downstream PDF generation uses the fresh amount.
+    """
+    import json as _json
+    omschrijving = 'Vergoeding'
+    try:
+        existing = _json.loads(old_regels_json or '[]')
+        if isinstance(existing, list) and existing:
+            first = existing[0]
+            if isinstance(first, dict):
+                omschrijving = first.get('omschrijving') or 'Vergoeding'
+    except (ValueError, TypeError):
+        pass
+    return _json.dumps([{'omschrijving': omschrijving,
+                         'bedrag': new_bedrag}])
+
+
+def _build_mail_body(nummer, bedrag, iban, bedrijfsnaam, naam, telefoon, bg_email, betaallink=''):
+    """Build plain text factuur email body. Returns a single string.
+
+    Per CLAUDE.md: Mail.app silently breaks HTML content + attachments, so the
+    body must stay plain text. Mail.app auto-links plain URLs in plain-text
+    bodies, so betaallink can be included as a literal URL — no HTML needed.
+    """
+    betaallink_line = (
+        f'U kunt ook eenvoudig betalen via deze link:\n{betaallink}\n'
+        if betaallink else ''
+    )
+    return (
+        f'Bijgaand stuur ik u factuur {nummer}.\n'
+        f'\n'
+        f'Het totaalbedrag van {bedrag} verzoek ik u binnen 14 dagen '
+        f'over te maken op rekeningnummer {iban} t.n.v. {bedrijfsnaam}, '
+        f'onder vermelding van factuurnummer {nummer}.\n'
+        f'\n'
+        f'{betaallink_line}'
+        f'Mocht u vragen hebben, dan hoor ik het graag.\n'
+        f'\n'
+        f'\n'
+        f'Met vriendelijke groet,\n'
+        f'\n'
+        f'{naam}\n'
+        f'\n'
+        f'{bedrijfsnaam}\n'
+        f'{f"Tel: {telefoon}" if telefoon else ""}\n'
+        f'{bg_email}'
+    )
 
 
 def _build_herinnering_body(nummer, bedrag, datum, iban, bedrijfsnaam, naam,
@@ -353,7 +444,7 @@ async def facturen_page():
                        color="grey-7">
                     <q-menu auto-close>
                         <q-list dense style="min-width: 200px">
-                            <q-item v-if="props.row.status === 'concept' && props.row.bron !== 'import'" clickable
+                            <q-item clickable
                                 @click="() => $parent.$emit('edit', props.row)">
                                 <q-item-section side>
                                     <q-icon name="edit" size="xs"
@@ -762,8 +853,7 @@ async def facturen_page():
 
         async def on_edit(e):
             row = e.args
-            # Concept werkdag-facturen → full invoice builder
-            if row['status'] == 'concept' and row.get('type') == 'factuur':
+            if _should_use_builder(row):
                 await _reopen_concept_in_builder(row)
             else:
                 await open_edit_dialog(row)
@@ -893,7 +983,7 @@ async def facturen_page():
                     on_upload=lambda e: upload_file.update({'event': e}),
                     max_file_size=10_000_000,
                 ).classes('w-full').props(
-                    'flat bordered accept=".pdf,.jpg,.jpeg,.png"')
+                    'flat bordered accept=".pdf"')
 
                 # Action buttons
                 with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
@@ -913,12 +1003,27 @@ async def facturen_page():
 
                     async def _do_opslaan():
                         # Update main fields
+                        new_bedrag = float(edit_bedrag.value or 0)
                         kwargs = {
                             'datum': edit_datum.value,
                             'klant_id': edit_klant.value,
-                            'totaal_bedrag': float(
-                                edit_bedrag.value or 0),
+                            'totaal_bedrag': new_bedrag,
                         }
+                        # Vergoeding: keep regels_json in sync with the
+                        # new total so the PDF regenerated later shows
+                        # the correct amount (bug: stale regels_json
+                        # caused PDFs to diverge from the DB).
+                        if (row.get('type') == 'vergoeding'
+                                and abs(new_bedrag
+                                        - row.get('totaal_bedrag', 0)) > 0.005):
+                            async with get_db_ctx(DB_PATH) as _conn:
+                                _cur = await _conn.execute(
+                                    "SELECT regels_json FROM facturen "
+                                    "WHERE id = ?", (row['id'],))
+                                _rj = await _cur.fetchone()
+                            kwargs['regels_json'] = _rebuild_vergoeding_regels_json(
+                                _rj['regels_json'] if _rj else '',
+                                new_bedrag)
                         await update_factuur(
                             DB_PATH, factuur_id=row['id'], **kwargs)
 
@@ -1096,58 +1201,17 @@ async def facturen_page():
                     betaallink = r['betaallink']
 
             subject = f'Factuur {nummer}'
-            body, is_html = _build_mail_body(
+            body = _build_mail_body(
                 nummer, bedrag, iban, bedrijfsnaam, naam, telefoon, bg_email, betaallink)
 
-            body_osa = body.replace('\\', '\\\\').replace('"', '\\"')
-            subject_osa = subject.replace('"', '\\"')
             pdf_path_abs = str(Path(pdf_path).resolve())
-
-            # Build AppleScript
-            to_line = ''
-            if klant_email:
-                to_line = f'make new to recipient with properties {{address:"{klant_email}"}}'
-
-            if is_html:
-                # HTML path: set html content first, then attach via
-                # content reference so attachment follows the body text
-                applescript = (
-                    'tell application "Mail"\n'
-                    f'  set newMsg to make new outgoing message with properties '
-                    f'{{subject:"{subject_osa}", visible:true}}\n'
-                    f'  set html content of newMsg to "{body_osa}"\n'
-                    f'  tell newMsg\n'
-                    f'    {to_line}\n'
-                    f'  end tell\n'
-                    f'  tell content of newMsg\n'
-                    f'    make new attachment with properties '
-                    f'{{file name:POSIX file "{pdf_path_abs}"}} '
-                    f'at after last paragraph\n'
-                    f'  end tell\n'
-                    f'  activate\n'
-                    f'end tell'
-                )
-            else:
-                # Plain text path: original working approach
-                applescript = (
-                    'tell application "Mail"\n'
-                    f'  set newMsg to make new outgoing message with properties '
-                    f'{{subject:"{subject_osa}", content:"{body_osa}", visible:true}}\n'
-                    f'  tell newMsg\n'
-                    f'    {to_line}\n'
-                    f'    make new attachment with properties '
-                    f'{{file name:POSIX file "{pdf_path_abs}"}} '
-                    f'at after last paragraph of content\n'
-                    f'  end tell\n'
-                    f'  activate\n'
-                    f'end tell'
-                )
 
             try:
                 result = await asyncio.to_thread(
-                    subprocess.run,
-                    ['osascript', '-e', applescript],
-                    capture_output=True, timeout=15)
+                    open_mail_with_attachment,
+                    to=klant_email, subject=subject, body=body,
+                    attachment_path=pdf_path_abs,
+                )
                 if result.returncode != 0:
                     err = result.stderr.decode().strip() if result.stderr else 'onbekende fout'
                     ui.notify(f'Mail.app fout: {err}', type='negative')
@@ -1202,33 +1266,14 @@ async def facturen_page():
                 nummer, bedrag, datum_fmt, iban, bedrijfsnaam, naam,
                 telefoon, bg_email_addr, betaallink)
 
-            body_osa = body.replace('\\', '\\\\').replace('"', '\\"')
-            subject_osa = subject.replace('"', '\\"')
             pdf_path_abs = str(Path(pdf_path).resolve())
-
-            to_line = ''
-            if klant_email:
-                to_line = f'make new to recipient with properties {{address:"{klant_email}"}}'
-
-            applescript = (
-                'tell application "Mail"\n'
-                f'  set newMsg to make new outgoing message with properties '
-                f'{{subject:"{subject_osa}", content:"{body_osa}", visible:true}}\n'
-                f'  tell newMsg\n'
-                f'    {to_line}\n'
-                f'    make new attachment with properties '
-                f'{{file name:POSIX file "{pdf_path_abs}"}} '
-                f'at after last paragraph of content\n'
-                f'  end tell\n'
-                f'  activate\n'
-                f'end tell'
-            )
 
             try:
                 result = await asyncio.to_thread(
-                    subprocess.run,
-                    ['osascript', '-e', applescript],
-                    capture_output=True, timeout=15)
+                    open_mail_with_attachment,
+                    to=klant_email, subject=subject, body=body,
+                    attachment_path=pdf_path_abs,
+                )
                 if result.returncode != 0:
                     err = result.stderr.decode().strip() if result.stderr else 'onbekende fout'
                     ui.notify(f'Mail.app fout: {err}', type='negative')
@@ -1269,10 +1314,21 @@ async def facturen_page():
             klant_lookup = {k.naam: k.id for k in klanten}
             klant_options = {k.id: k.naam for k in klanten}
 
-            # Load existing factuurnummers for dedup
+            # Load existing factuurnummers + (klant, datum, bedrag)
+            # fingerprints for dedup. The fingerprint catches PDFs
+            # re-exported with a different layout or invoices re-sent
+            # under a new nummer (rare but possible).
             async with get_db_ctx(DB_PATH) as conn:
-                cursor = await conn.execute("SELECT nummer FROM facturen")
-                existing_nummers = {row[0] for row in await cursor.fetchall()}
+                cursor = await conn.execute(
+                    "SELECT nummer, klant_id, datum, totaal_bedrag "
+                    "FROM facturen")
+                _existing_rows = await cursor.fetchall()
+            existing_nummers = {r['nummer'] for r in _existing_rows}
+            existing_signatures: set[tuple] = {
+                (r['klant_id'], r['datum'],
+                 round(float(r['totaal_bedrag'] or 0), 2))
+                for r in _existing_rows
+            }
 
             with ui.dialog() as dlg, ui.card().classes(
                 'w-full max-w-2xl q-pa-none'
@@ -1325,14 +1381,8 @@ async def facturen_page():
                             parsed['_filename'] = filename
                             parsed['_content'] = content
 
-                            # Dedup check
-                            nummer = parsed.get('factuurnummer')
-                            if nummer and nummer in existing_nummers:
-                                parsed['_status'] = 'duplicaat'
-                            else:
-                                parsed['_status'] = 'nieuw'
-
-                            # Klant resolution
+                            # Klant resolution first — we need klant_id
+                            # to compute the fuzzy dedup signature.
                             if inv_type == 'dagpraktijk':
                                 suffix = (
                                     filename.split('_', 1)[1]
@@ -1347,6 +1397,20 @@ async def facturen_page():
 
                             parsed['_klant_naam'] = db_naam
                             parsed['_klant_id'] = klant_id
+
+                            # Dedup: reject missing nummer, known nummer,
+                            # or matching (klant,datum,bedrag) fingerprint
+                            status_, reason = _classify_import_item(
+                                parsed.get('factuurnummer'),
+                                klant_id,
+                                parsed.get('factuurdatum'),
+                                parsed.get('totaal_bedrag'),
+                                existing_nummers,
+                                existing_signatures,
+                            )
+                            parsed['_status'] = status_
+                            if reason:
+                                parsed['_error'] = reason
 
                             parsed_items.append(parsed)
                             render_preview()
@@ -1593,6 +1657,12 @@ async def facturen_page():
 
                         nummer = item.get('factuurnummer', '')
 
+                        # Belt-and-braces: reject empty nummer even if
+                        # the classifier would have caught it. Prevents
+                        # an accidental future regression from writing
+                        # a factuur with nummer=''.
+                        if not nummer:
+                            continue
                         # Guard: skip if already imported (double-click / dup)
                         if nummer in existing_nummers:
                             continue
@@ -1644,6 +1714,8 @@ async def facturen_page():
 
                             # Track for dedup
                             existing_nummers.add(nummer)
+                            existing_signatures.add(
+                                (klant_id, datum, round(float(bedrag), 2)))
                             imported += 1
 
                             # Create or link werkdagen
@@ -1669,48 +1741,14 @@ async def facturen_page():
                                             )
                                             werkdagen_linked += 1
                                         else:
-                                            if inv_type == 'anw':
-                                                code = li.get(
-                                                    'dienst_code', '')
-                                                activiteit = 'Achterwacht'
-                                                uren = li.get('uren', 0)
-                                                bedrag_li = li.get(
-                                                    'bedrag', 0)
-                                                tarief = (
-                                                    round(bedrag_li / uren, 2)
-                                                    if uren else 0)
-                                                km = 0.0
-                                                km_tarief = inv_km_tarief
-                                                urennorm = 0
-                                            else:
-                                                uren_val = li.get('uren', 0)
-                                                tarief_val = li.get(
-                                                    'tarief', 0)
-                                                code = (
-                                                    f'WDAGPRAKTIJK_'
-                                                    f'{tarief_val:.2f}'
-                                                    .replace('.', ','))
-                                                activiteit = (
-                                                    'Waarneming dagpraktijk')
-                                                uren = uren_val
-                                                tarief = tarief_val
-                                                km = li.get('km', 0)
-                                                km_tarief = li.get(
-                                                    'km_tarief', inv_km_tarief)
-                                                urennorm = 1
-
+                                            wd_kwargs = _line_item_to_werkdag_kwargs(
+                                                li, inv_type, inv_km_tarief)
                                             await add_werkdag(
                                                 DB_PATH,
                                                 datum=li_datum,
                                                 klant_id=klant_id,
-                                                code=code,
-                                                activiteit=activiteit,
-                                                uren=uren,
-                                                km=km,
-                                                tarief=tarief,
-                                                km_tarief=km_tarief,
                                                 factuurnummer=nummer,
-                                                urennorm=urennorm,
+                                                **wd_kwargs,
                                             )
                                             werkdagen_created += 1
 

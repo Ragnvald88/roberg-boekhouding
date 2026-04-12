@@ -18,6 +18,7 @@ from database import (
     get_representatie_totaal,
     get_uitgaven_per_categorie,
     get_uren_totaal,
+    load_jaarafsluiting_snapshot,
 )
 from fiscal.afschrijvingen import bereken_afschrijving
 
@@ -130,6 +131,42 @@ async def fetch_fiscal_data(db_path: Path, jaar: int) -> dict | None:
         'n_uitgaven': counts['n_uitgaven'],
         'n_werkdagen': counts['n_werkdagen'],
     }
+
+
+async def load_jaarafsluiting_data(db_path: Path, jaar: int) -> dict | None:
+    """Return snapshot if year is definitief, else live fetch.
+
+    IMPORTANT — schema tolerance: callers MUST treat the returned dict as
+    schema-tolerant. Old snapshots may lack fields added to fetch_fiscal_data
+    after they were taken. Always use data.get('field', default) in render code
+    for any field that could have been added later. Never raise on a missing
+    field in a definitief snapshot — that would retroactively break historical
+    data.
+
+    The rehydrated snapshot reconstructs `data['params']` as a SimpleNamespace
+    from `params_dict` so render code using `params.foo` attribute access keeps
+    working. The original live `params` dataclass is NOT JSON-serializable in a
+    roundtrip-safe way.
+    """
+    import logging
+    from types import SimpleNamespace
+    log = logging.getLogger(__name__)
+
+    params = await get_fiscale_params(db_path, jaar)
+    status = getattr(params, 'jaarafsluiting_status', 'concept') or 'concept'
+    if status == 'definitief':
+        snap = await load_jaarafsluiting_snapshot(db_path, jaar)
+        if snap is not None:
+            data = snap['snapshot']
+            params_dict = data.get('params_dict') or {}
+            if params_dict:
+                data['params'] = SimpleNamespace(**params_dict)
+            return data
+        log.warning(
+            "Year %s is definitief but has no snapshot — falling back to live",
+            jaar,
+        )
+    return await fetch_fiscal_data(db_path, jaar)
 
 
 async def bereken_balans(db_path: Path, jaar: int, activastaat: list[dict],

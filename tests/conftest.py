@@ -1,5 +1,16 @@
 """Shared test fixtures."""
 
+import os
+import tempfile
+
+# Redirect the per-user default DB dir to a throw-away temp location BEFORE
+# importing database — otherwise `database.py` would create
+# ~/Library/Application Support/Boekhouding/data on every test run.
+os.environ.setdefault(
+    "BOEKHOUDING_DB_DIR",
+    tempfile.mkdtemp(prefix="boekhouding_test_default_"),
+)
+
 import pytest
 from database import init_db
 

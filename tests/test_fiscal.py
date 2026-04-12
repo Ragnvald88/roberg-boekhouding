@@ -175,10 +175,10 @@ class TestHeffingskortingen:
         # 5052 + (-0.0651) * (45801 - 37691) = 5052 - 527.76 = 4524.24
         assert abs(ak - 4524) < 2
 
-    def test_arbeidskorting_no_brackets_returns_zero(self):
-        """Without brackets_json, returns 0."""
-        ak = bereken_arbeidskorting(50000, 2027)
-        assert ak == 0.0
+    def test_arbeidskorting_no_brackets_raises(self):
+        """Without brackets_json, raise loud error instead of silent zero."""
+        with pytest.raises(ValueError, match='arbeidskorting_brackets'):
+            bereken_arbeidskorting(50000, 2027)
 
 
 
@@ -751,10 +751,10 @@ class TestDBDrivenArbeidskorting:
         result = bereken_arbeidskorting(5000, 2099, brackets_json=brackets_json)
         assert result == 500.0  # 5000 * 0.10
 
-    def test_empty_brackets_json_returns_zero(self):
-        """Empty brackets_json returns 0 (no fallback to hardcoded data)."""
-        result = bereken_arbeidskorting(50000, 2024, brackets_json='')
-        assert result == 0.0
+    def test_empty_brackets_json_raises(self):
+        """Empty brackets_json raises loud error instead of silent zero."""
+        with pytest.raises(ValueError, match='arbeidskorting_brackets'):
+            bereken_arbeidskorting(50000, 2024, brackets_json='')
 
 
 class TestIBPVVSplit:
@@ -1967,3 +1967,55 @@ class TestMissingParamsValidation:
             bereken_volledig(omzet=100000, kosten=10000, afschrijvingen=0,
                              representatie=0, investeringen_totaal=0,
                              uren=1400, params={'jaar': 2024})
+
+
+class TestRequiredKeysExtended:
+    """Previously silent-fallback keys must now be loudly required."""
+
+    def test_missing_pvv_aow_pct_raises(self):
+        params = dict(FISCALE_PARAMS[2024])
+        del params['pvv_aow_pct']
+        with pytest.raises(ValueError, match='pvv_aow_pct'):
+            bereken_volledig(omzet=50000, kosten=0, afschrijvingen=0,
+                             representatie=0, investeringen_totaal=0,
+                             uren=1400, params=params)
+
+    def test_missing_pvv_anw_pct_raises(self):
+        params = dict(FISCALE_PARAMS[2024])
+        del params['pvv_anw_pct']
+        with pytest.raises(ValueError, match='pvv_anw_pct'):
+            bereken_volledig(omzet=50000, kosten=0, afschrijvingen=0,
+                             representatie=0, investeringen_totaal=0,
+                             uren=1400, params=params)
+
+    def test_missing_pvv_wlz_pct_raises(self):
+        params = dict(FISCALE_PARAMS[2024])
+        del params['pvv_wlz_pct']
+        with pytest.raises(ValueError, match='pvv_wlz_pct'):
+            bereken_volledig(omzet=50000, kosten=0, afschrijvingen=0,
+                             representatie=0, investeringen_totaal=0,
+                             uren=1400, params=params)
+
+    def test_missing_ew_forfait_pct_raises(self):
+        params = dict(FISCALE_PARAMS[2024])
+        del params['ew_forfait_pct']
+        with pytest.raises(ValueError, match='ew_forfait_pct'):
+            bereken_volledig(omzet=50000, kosten=0, afschrijvingen=0,
+                             representatie=0, investeringen_totaal=0,
+                             uren=1400, params=params)
+
+    def test_missing_repr_aftrek_pct_raises(self):
+        params = dict(FISCALE_PARAMS[2024])
+        del params['repr_aftrek_pct']
+        with pytest.raises(ValueError, match='repr_aftrek_pct'):
+            bereken_volledig(omzet=50000, kosten=0, afschrijvingen=0,
+                             representatie=550, investeringen_totaal=0,
+                             uren=1400, params=params)
+
+    def test_empty_arbeidskorting_brackets_raises(self):
+        params = dict(FISCALE_PARAMS[2024])
+        params['arbeidskorting_brackets'] = '[]'
+        with pytest.raises(ValueError, match='arbeidskorting'):
+            bereken_volledig(omzet=50000, kosten=0, afschrijvingen=0,
+                             representatie=0, investeringen_totaal=0,
+                             uren=1400, params=params)

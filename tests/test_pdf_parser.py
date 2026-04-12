@@ -4,6 +4,7 @@ import pytest
 from import_.pdf_parser import (
     parse_dutch_amount, parse_dutch_date,
     parse_dagpraktijk_text, parse_anw_text,
+    _extract_factuurnummer,
 )
 from import_.klant_mapping import resolve_klant, resolve_anw_klant
 
@@ -744,3 +745,87 @@ class TestResolveANWKlant:
         name, kid = resolve_anw_klant('2512_Gr_Factuur.pdf', MOCK_KLANTEN)
         assert name == 'HAP NoordOost'
         assert kid == MOCK_KLANTEN['HAP NoordOost']
+
+
+# ============================================================
+# Factuurnummer extraction variants (Workstream I.5)
+# ============================================================
+
+class TestExtractFactuurnummerVariants:
+    """Document and lock down the factuurnummer regex behavior across formats.
+
+    Split invoices in this app use sequential numbering (2024-024, 2024-025,
+    2024-027), NOT letter-suffix variants like '2024-024b'. These tests lock
+    down the current regex so any future change is surfaced.
+    """
+
+    def test_factuurnummer_colon_format_2024(self):
+        """'Factuurnummer: YYYY-NNN' — the Dagpraktijk 2024 format."""
+        text = (
+            'Factuur\n'
+            'Factuurnummer : 2024-009\n'
+            'Factuurdatum : 01-10-2024\n'
+            'Totaalbedrag € 1.234,56\n'
+        )
+        assert _extract_factuurnummer(text) == '2024-009'
+
+    def test_factuurnummer_app_generated_2025(self):
+        """'Nummer: YYYY-NNN' — app-generated 2025 format."""
+        text = (
+            'Factuur\n'
+            'Nummer: 2025-045\n'
+            'Datum: 15-08-2025\n'
+        )
+        assert _extract_factuurnummer(text) == '2025-045'
+
+    def test_factuurnummer_bare_factuur_prefix(self):
+        """'Factuur YYYY-NNN' on its own line (2025-002 Klant6 format)."""
+        text = (
+            'Factuur 2025-002\n'
+            'Datum: 2025-02-01\n'
+        )
+        assert _extract_factuurnummer(text) == '2025-002'
+
+    def test_factuurnummer_ignores_factuuradres(self):
+        """'Factuuradres' lines must NOT be matched by the bare 'Factuur YYYY-NNN' pattern."""
+        text = (
+            'Factuuradres 2025-002\n'
+            'Factuurnummer : 2025-099\n'
+        )
+        assert _extract_factuurnummer(text) == '2025-099'
+
+    def test_factuurnummer_ignores_factuurdatum(self):
+        """'Factuurdatum' lines must NOT be matched by the bare prefix pattern."""
+        text = (
+            'Factuurdatum 2025-001\n'
+            'Factuurnummer : 2025-050\n'
+        )
+        assert _extract_factuurnummer(text) == '2025-050'
+
+    def test_factuurnummer_returns_none_when_missing(self):
+        text = 'Some invoice\nDatum: 2025-01-01\nTotaal: €100\n'
+        assert _extract_factuurnummer(text) is None
+
+    def test_factuurnummer_split_invoice_sequential(self):
+        """Split invoices use sequential numbers (2024-024, 2024-025), not letter suffixes.
+
+        This documents the real-world split-invoice convention used by Klant6
+        and others (see MEMORY.md). The parser handles them as plain sequential
+        factuurnummers — no special suffix logic needed.
+        """
+        text = 'Factuurnummer : 2024-024\nFactuurdatum : 01-10-2024\n'
+        assert _extract_factuurnummer(text) == '2024-024'
+        text = 'Factuurnummer : 2024-025\nFactuurdatum : 02-10-2024\n'
+        assert _extract_factuurnummer(text) == '2024-025'
+
+    def test_factuurnummer_letter_suffix_not_supported(self):
+        """Regression lock: the regex `\\d{4}-\\d{2,5}` does NOT match letter suffixes.
+
+        If someone ever needs to support '2024-024b' style numbering, this test
+        will fail and force the change to be conscious (update the regex,
+        confirm DB collation, re-seed, etc). Do NOT "fix" this by loosening
+        the regex without a matching workflow change.
+        """
+        text = 'Factuurnummer : 2024-024b\n'
+        # Current behavior: captures the digit prefix, strips the 'b' suffix.
+        assert _extract_factuurnummer(text) == '2024-024'

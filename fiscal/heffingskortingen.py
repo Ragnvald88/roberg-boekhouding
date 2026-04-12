@@ -44,9 +44,17 @@ def bereken_arbeidskorting(arbeidsinkomen: float, jaar: int,
         Arbeidskorting in euros (rounded to 2 decimals, minimum 0).
     """
     if not brackets_json:
-        return 0.0
+        raise ValueError(
+            "arbeidskorting_brackets is leeg of ontbreekt voor dit jaar. "
+            "Vul de parameters aan via Instellingen -> Fiscale parameters."
+        )
 
     brackets = json.loads(brackets_json)
+    if not brackets:
+        raise ValueError(
+            "arbeidskorting_brackets bevat geen schijven voor dit jaar. "
+            "Vul de parameters aan via Instellingen -> Fiscale parameters."
+        )
     for b in brackets:
         lower, upper, rate, base = b['lower'], b['upper'], b['rate'], b['base']
         if upper is None or arbeidsinkomen <= upper:
