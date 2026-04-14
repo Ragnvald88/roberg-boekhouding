@@ -8,6 +8,8 @@ from database import (
     add_klant, add_werkdag, update_werkdag, delete_werkdag,
     get_werkdagen,
     add_uitgave, update_uitgave, delete_uitgave, get_uitgaven,
+    add_factuur, update_factuur, update_factuur_status, delete_factuur,
+    save_factuur_atomic, get_facturen,
 )
 
 
@@ -169,3 +171,98 @@ async def test_delete_uitgave_rejected_in_definitief_year(db):
         await delete_uitgave(db, uitgave_id=uid)
     rows = await get_uitgaven(db)
     assert any(x.id == uid for x in rows)
+
+
+@pytest.mark.asyncio
+async def test_add_factuur_rejected_in_definitief_year(db):
+    kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=0)
+    await _seed_fiscale_params_row(db, 2025)
+    await update_jaarafsluiting_status(db, 2025, 'definitief')
+    with pytest.raises(YearLockedError):
+        await add_factuur(db, nummer='2025-999', klant_id=kid,
+                          datum='2025-06-10', totaal_bedrag=100.00,
+                          status='concept')
+    facturen = await get_facturen(db)
+    assert all(f.nummer != '2025-999' for f in facturen)
+
+
+@pytest.mark.asyncio
+async def test_update_factuur_status_rejected_in_definitief_year(db):
+    kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=0)
+    await _seed_fiscale_params_row(db, 2025)
+    fid = await add_factuur(db, nummer='2025-998', klant_id=kid,
+                            datum='2025-06-10', totaal_bedrag=100.00,
+                            status='verstuurd')
+    await update_jaarafsluiting_status(db, 2025, 'definitief')
+    with pytest.raises(YearLockedError):
+        await update_factuur_status(db, factuur_id=fid, status='betaald',
+                                     betaald_datum='2026-02-01')
+    facturen = await get_facturen(db)
+    f = next(x for x in facturen if x.id == fid)
+    assert f.status == 'verstuurd'
+
+
+@pytest.mark.asyncio
+async def test_update_factuur_rejected_in_definitief_year(db):
+    kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=0)
+    await _seed_fiscale_params_row(db, 2025)
+    fid = await add_factuur(db, nummer='2025-997', klant_id=kid,
+                            datum='2025-06-10', totaal_bedrag=100.00,
+                            status='concept')
+    await update_jaarafsluiting_status(db, 2025, 'definitief')
+    with pytest.raises(YearLockedError):
+        await update_factuur(db, factuur_id=fid, totaal_bedrag=200.00)
+    facturen = await get_facturen(db)
+    f = next(x for x in facturen if x.id == fid)
+    assert f.totaal_bedrag == 100.00
+
+
+@pytest.mark.asyncio
+async def test_delete_factuur_rejected_in_definitief_year(db):
+    kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=0)
+    await _seed_fiscale_params_row(db, 2025)
+    fid = await add_factuur(db, nummer='2025-996', klant_id=kid,
+                            datum='2025-06-10', totaal_bedrag=100.00,
+                            status='concept')
+    await update_jaarafsluiting_status(db, 2025, 'definitief')
+    with pytest.raises(YearLockedError):
+        await delete_factuur(db, factuur_id=fid)
+    facturen = await get_facturen(db)
+    assert any(f.id == fid for f in facturen)
+
+
+@pytest.mark.asyncio
+async def test_save_factuur_atomic_rejected_when_new_datum_in_definitief_year(db):
+    kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=0)
+    await _seed_fiscale_params_row(db, 2025)
+    await update_jaarafsluiting_status(db, 2025, 'definitief')
+    with pytest.raises(YearLockedError):
+        await save_factuur_atomic(
+            db, nummer='2025-995', klant_id=kid, datum='2025-06-10',
+            totaal_bedrag=100.00, regels_json='[]', werkdag_ids=[],
+        )
+    facturen = await get_facturen(db)
+    assert all(f.nummer != '2025-995' for f in facturen)
+
+
+@pytest.mark.asyncio
+async def test_save_factuur_atomic_rejected_when_replacing_factuur_in_definitief_year(db):
+    """Rewriting an existing factuur whose old datum is locked is blocked,
+    even if the new datum is in a writable year."""
+    kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=0)
+    await _seed_fiscale_params_row(db, 2025)
+    await _seed_fiscale_params_row(db, 2026)
+    fid = await add_factuur(db, nummer='2025-994', klant_id=kid,
+                            datum='2025-06-10', totaal_bedrag=100.00,
+                            status='concept')
+    await update_jaarafsluiting_status(db, 2025, 'definitief')
+    with pytest.raises(YearLockedError):
+        await save_factuur_atomic(
+            db, nummer='2025-994', klant_id=kid, datum='2026-01-15',
+            totaal_bedrag=200.00, regels_json='[]', werkdag_ids=[],
+            replacing_factuur_id=fid,
+        )
+    facturen = await get_facturen(db)
+    f = next(x for x in facturen if x.id == fid)
+    assert f.datum == '2025-06-10'
+    assert f.totaal_bedrag == 100.00

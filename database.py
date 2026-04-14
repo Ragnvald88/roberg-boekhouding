@@ -989,6 +989,7 @@ async def get_facturen(db_path: Path = DB_PATH, jaar: int = None) -> list[Factuu
 
 async def add_factuur(db_path: Path = DB_PATH, **kwargs) -> int:
     _validate_datum(kwargs['datum'])
+    await assert_year_writable(db_path, kwargs['datum'])
     async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
             """INSERT INTO facturen
@@ -1042,15 +1043,18 @@ async def update_factuur_status(db_path: Path = DB_PATH, factuur_id: int = 0,
     }
     if betaald_datum:
         _validate_datum(betaald_datum)
+    # Fetch current row (status + datum) and validate transition before guarding year-lock.
     async with get_db_ctx(db_path) as conn:
         cur = await conn.execute(
-            "SELECT status FROM facturen WHERE id = ?", (factuur_id,))
+            "SELECT status, datum FROM facturen WHERE id = ?", (factuur_id,))
         current_row = await cur.fetchone()
-        if current_row:
-            current = current_row['status']
-            if status != current and status not in VALID_TRANSITIONS.get(current, set()):
-                raise ValueError(
-                    f"Status overgang '{current}' → '{status}' niet toegestaan")
+    if current_row:
+        current = current_row['status']
+        if status != current and status not in VALID_TRANSITIONS.get(current, set()):
+            raise ValueError(
+                f"Status overgang '{current}' → '{status}' niet toegestaan")
+        await assert_year_writable(db_path, current_row['datum'])
+    async with get_db_ctx(db_path) as conn:
         await conn.execute(
             "UPDATE facturen SET status = ?, betaald_datum = ? WHERE id = ?",
             (status, betaald_datum, factuur_id))
@@ -1069,6 +1073,15 @@ async def update_factuur(db_path: Path = DB_PATH, factuur_id: int = 0,
     """Update factuur fields (datum, klant_id, totaal_bedrag, type, pdf_pad)."""
     if 'datum' in kwargs:
         _validate_datum(kwargs['datum'])
+    # Fetch current datum to enforce year-lock on the existing row
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            "SELECT datum FROM facturen WHERE id = ?", (factuur_id,))
+        row = await cur.fetchone()
+    if row:
+        await assert_year_writable(db_path, row[0])
+    if 'datum' in kwargs:
+        await assert_year_writable(db_path, kwargs['datum'])
     async with get_db_ctx(db_path) as conn:
         fields = []
         values = []
@@ -1095,25 +1108,31 @@ async def delete_factuur(db_path: Path = DB_PATH, factuur_id: int = 0) -> None:
     verstuurd or betaald facturen to prevent data loss.
     """
     async with get_db_ctx(db_path) as conn:
-        # Get factuur nummer, pdf_pad, and status
+        # Get factuur nummer, pdf_pad, status, and datum
         cursor = await conn.execute(
-            "SELECT nummer, pdf_pad, status FROM facturen WHERE id = ?",
+            "SELECT nummer, pdf_pad, status, datum FROM facturen WHERE id = ?",
             (factuur_id,)
         )
         row = await cursor.fetchone()
-        if not row:
-            return
-        nummer = row['nummer']
-        pdf_pad = row['pdf_pad']
-        status = row['status']
+    if not row:
+        return
+    nummer = row['nummer']
+    pdf_pad = row['pdf_pad']
+    status = row['status']
+    datum = row['datum']
 
-        if status in ('verstuurd', 'betaald'):
-            raise ValueError(
-                f"Factuur {nummer} heeft status '{status}' en kan niet "
-                f"verwijderd worden. Alleen concept-facturen mogen verwijderd "
-                f"worden."
-            )
+    # Concept-only guard runs BEFORE year-lock so users get the more
+    # specific error message when they try to delete a sent/paid invoice.
+    if status in ('verstuurd', 'betaald'):
+        raise ValueError(
+            f"Factuur {nummer} heeft status '{status}' en kan niet "
+            f"verwijderd worden. Alleen concept-facturen mogen verwijderd "
+            f"worden."
+        )
 
+    await assert_year_writable(db_path, datum)
+
+    async with get_db_ctx(db_path) as conn:
         # Unlink werkdagen
         await conn.execute(
             "UPDATE werkdagen SET factuurnummer = '' "
@@ -1124,11 +1143,11 @@ async def delete_factuur(db_path: Path = DB_PATH, factuur_id: int = 0) -> None:
         await conn.execute("DELETE FROM facturen WHERE id = ?", (factuur_id,))
         await conn.commit()
 
-        # Remove PDF file if it exists
-        if pdf_pad:
-            pdf_file = Path(pdf_pad)
-            if pdf_file.exists():
-                await asyncio.to_thread(pdf_file.unlink)
+    # Remove PDF file if it exists
+    if pdf_pad:
+        pdf_file = Path(pdf_pad)
+        if pdf_file.exists():
+            await asyncio.to_thread(pdf_file.unlink)
 
 
 async def link_werkdagen_to_factuur(db_path: Path = DB_PATH,
@@ -1160,6 +1179,18 @@ async def save_factuur_atomic(
     Returns the new factuur row ID.
     """
     _validate_datum(factuur_kwargs['datum'])
+    # Year-lock guards run BEFORE the atomic connection opens so we never
+    # nest get_db_ctx calls. If replacing, we also check the old row's
+    # datum in a short read-only connection.
+    await assert_year_writable(db_path, factuur_kwargs['datum'])
+    if replacing_factuur_id:
+        async with get_db_ctx(db_path) as conn:
+            cur = await conn.execute(
+                "SELECT datum FROM facturen WHERE id = ?",
+                (replacing_factuur_id,))
+            old_row = await cur.fetchone()
+        if old_row:
+            await assert_year_writable(db_path, old_row['datum'])
     async with get_db_ctx(db_path) as conn:
         try:
             # Step 1: Delete old concept (if replacing)

@@ -48,8 +48,16 @@ async def test_snapshot_missing_returns_none(db):
 
 
 @pytest.mark.asyncio
-async def test_mark_definitief_snapshots_current_state(db):
-    """End-to-end: freeze data, mutate, verify snapshot is unchanged."""
+async def test_mark_definitief_blocks_mutations_and_keeps_snapshot(db):
+    """After K6 (review): mutations in a definitief year are BLOCKED at the
+    write layer, not merely hidden by the snapshot. Both the snapshot AND
+    the live data must therefore remain identical to the initial state.
+
+    (Pre-K6 this test allowed the mutation through and asserted that only
+    the snapshot stayed stable — that weaker contract is obsolete.)
+    """
+    from database import YearLockedError
+
     await upsert_fiscale_params(db, **FISCALE_PARAMS[2024])
     kid = await add_klant(db, naam="SnapTest", tarief_uur=100, retour_km=0)
     await add_factuur(
@@ -62,20 +70,26 @@ async def test_mark_definitief_snapshots_current_state(db):
     await save_jaarafsluiting_snapshot(db, 2024, initial, {}, {'schijf1_pct': 35.75})
     await update_jaarafsluiting_status(db, 2024, 'definitief')
 
-    await add_factuur(
-        db, nummer='2024-SNAP2', klant_id=kid,
-        datum='2024-07-01', totaal_uren=20, totaal_km=0,
-        totaal_bedrag=2000.00, status='betaald', betaald_datum='2024-07-05',
-    )
+    # Attempting to add a factuur in the definitief year must raise.
+    with pytest.raises(YearLockedError):
+        await add_factuur(
+            db, nummer='2024-SNAP2', klant_id=kid,
+            datum='2024-07-01', totaal_uren=20, totaal_km=0,
+            totaal_bedrag=2000.00, status='betaald', betaald_datum='2024-07-05',
+        )
 
+    # Snapshot-read path unchanged.
     frozen = await load_jaarafsluiting_data(db, 2024)
     assert frozen['omzet'] == initial['omzet'], (
         "Snapshot moet bevroren zijn — mutaties na save mogen geen effect hebben"
     )
 
+    # Live data must ALSO be unchanged now: the guard blocked the mutation.
     live = await fetch_fiscal_data(db, 2024)
     assert live is not None
-    assert live['omzet'] != initial['omzet'], "sanity: live data moet de nieuwe factuur zien"
+    assert live['omzet'] == initial['omzet'], (
+        "K6: year-lock moet mutaties blokkeren zodat live == snapshot blijft"
+    )
 
 
 @pytest.mark.asyncio
