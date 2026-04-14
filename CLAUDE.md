@@ -62,6 +62,12 @@ Concept (grey) → Verstuurd (blue/info) → Betaald (green/positive)
 - Revenue queries (`get_omzet_*`, `get_kpis`) exclude concept invoices
 - `update_factuur_status()` cascades to linked werkdagen
 
+### Edit-menu visibiliteitsregels (factuur row-menu)
+- **Bewerken** is zichtbaar alleen voor concept + niet-geïmporteerd (`type != 'anw'` EN `bron != 'import'`). Altijd route naar de invoice builder; er is GEEN tweede legacy-dialog.
+- **Markeer als concept** is zichtbaar voor verstuurd/betaald + niet-geïmporteerd. Toont waarschuwingspopup; bij betaald: twee-staps-transitie (betaald→verstuurd→concept) omdat `update_factuur_status` een directe `betaald→concept` weigert met ValueError.
+- Geïmporteerde facturen (ANW of `bron='import'`) zijn **bevroren**: nooit Bewerken, nooit Markeer-als-concept.
+- Helpers in `pages/facturen.py`: `_is_editable(row)` en `_can_revert_to_concept(row)` spiegelen de Vue `v-if` regels en zijn unit-getest.
+
 ### Kwaliteitseisen
 - Bij NiceGUI upload events: ALTIJD `await e.file.read()` en `e.file.name`. NOOIT `e.content.read()` of `e.name`.
 - Bij SQL queries op `facturen`: controleer altijd of `status != 'concept'` filtering nodig is
@@ -71,6 +77,10 @@ Concept (grey) → Verstuurd (blue/info) → Betaald (green/positive)
 - **Fiscale params**: alle jaar-afhankelijke waarden uit DB (`fiscale_params`), GEEN hardcoded fallbacks. Ontbrekende keys → loud ValueError, aangifte-pagina toont error-card met link naar Instellingen.
 - **Jaarafsluiting definitief**: maakt een echte JSON snapshot (`jaarafsluiting_snapshots` tabel). Render-pad leest snapshot voor definitief-jaren, live data voor concept. Snapshot is schema-tolerant (altijd `dict.get(key, default)` in render code).
 - **Bank matching**: `find_factuur_matches` retourneert `MatchProposal` met `confidence='high'|'low'`. Preview-dialoog gating: user bevestigt matches vóór toepassing. `apply_factuur_matches` gaat via `update_factuur_status`.
+- **PDF-pad resolutie**: lees `pdf_pad` nooit direct — gebruik `_resolve_pdf_pad(row)` uit `pages/facturen.py`. Die probeert de stored path, valt terug op basename-lookup in `PDF_DIR` en `PDF_DIR/imports/`, en update de DB stilletjes bij fallback-hit (self-healing bij data-dir moves). Pure variant `_find_pdf_by_filename(stored, base)` is unit-getest met tmp_path.
+- **Category suggestions op bank**: `get_categorie_suggestions(db)` bouwt een lowercase `tegenpartij → most-used categorie` map. Tie-breaker: `cnt DESC, MAX(datum) DESC`. UI toont toverstaf-knop (`auto_fix_high`) naast q-select voor one-click toepassing op ongecategoriseerde rijen.
+- **Dashboard health alerts**: `get_health_alerts(db, jaar)` geeft `list[dict]` met keys `key/severity/message/count/link`. Types: `uncategorized_bank`, `overdue_invoices`, `concept_invoices`, `missing_fiscal_params`. Rendered in `pages/dashboard.py` onder de AANDACHTSPUNTEN-sectie.
+- **Jaarafsluiting pre-flight**: `compute_checklist_issues(db_path, jaar)` in `pages/jaarafsluiting.py` geeft `list[tuple[severity, message, link]]`. Gebruikt door zowel de Controles-tab als de definitief-gate (soft gate, user kan doorgaan).
 
 ### YAGNI
 Geen: user auth, BTW-administratie, loon/voorraad, real-time bank-API, auto-matching, CI/CD, multi-language

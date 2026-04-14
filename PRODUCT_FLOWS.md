@@ -17,16 +17,22 @@ Gebruik dit als bron voor `/ux-review`.
 - "Genereer factuur" maakt PDF + factuurrecord, linkt werkdagen
 
 ### Concept factuur bewerken
-- Trigger: "Bewerken" in row-menu op een concept factuur (type=factuur)
-- Opent: **Volledige invoice_builder** met werkdagen pre-loaded en factuurnummer behouden
-- NIET de simpele edit popup — die is alleen voor metadata-wijzigingen
-- Concept vergoeding/ANW: simpele edit dialog (geen werkdagen om te laden)
-- Consistentie: zelfde builder voor aanmaken en bewerken van werkdag-concepts
-
-### Verstuurd/betaald factuur bewerken
 - Trigger: "Bewerken" in row-menu
-- Opent: **Simpele edit dialog** (datum, klant, bedrag, status, PDF upload/verwijder)
-- Geen invoice builder — verstuurde facturen mogen niet structureel gewijzigd worden
+- Voorwaarde: status=concept EN niet geïmporteerd (type≠anw EN bron≠import)
+- Opent: **ALTIJD de volledige invoice_builder**. Er is geen tweede edit-pad meer.
+- Werkdag-concepts: werkdagen pre-loaded, factuurnummer behouden
+- Vergoeding-concepts: regels_json pre-loaded voor vrije line-item bewerking
+
+### Verstuurd/betaald factuur "bewerken"
+- "Bewerken" is verborgen voor verstuurd/betaald facturen — de invoice builder is alleen voor concepts.
+- Om toch te kunnen aanpassen: klik "Markeer als concept" in het row-menu. Dit zet de factuur terug naar concept (met waarschuwingspopup; bij betaald wordt de betaaldatum gewist) via een twee-staps-transitie onder water (betaald → verstuurd → concept).
+- Daarna verschijnt "Bewerken" weer en gaat de factuur naar de invoice builder.
+- Rationale: voorkomt per-ongeluk aanpassen van afgeronde facturen, terwijl flexibiliteit behouden blijft.
+
+### Geïmporteerde facturen (type=anw of bron=import)
+- **Bevroren**: geen "Bewerken" en geen "Markeer als concept" — ongeacht status.
+- Wel beschikbaar: Preview, Download PDF, Toon in Finder, Markeer betaald/onbetaald, Verwijderen.
+- Rationale: imports weerspiegelen externe facturen — structurele mutatie zou de waarheid vertekenen.
 
 ### Factuur versturen
 - Trigger: "Verstuur via e-mail" in row-menu (alle statussen met PDF)
@@ -41,7 +47,8 @@ Gebruik dit als bron voor `/ux-review`.
 - verstuurd → betaald (handmatig of auto-match via bank import)
 - verstuurd → concept (escape hatch voor per-ongeluk versturen; status is advisory, niet authoritative)
 - betaald → verstuurd (terugdraaien, "markeer onbetaald")
-- Ongeldige transitie: betaald → concept (ValueError)
+- Ongeldige DB-transitie: betaald → concept (ValueError in `update_factuur_status`)
+- "Markeer als concept" UI: wrapt betaald → verstuurd → concept achter één klik met waarschuwingspopup
 
 De state machine is bewust los. Een `verstuurd` flag betekent niet dat de factuur écht verstuurd is — het kan een mis-klik zijn. De gebruiker moet altijd terug kunnen naar concept om te corrigeren. NIET aanscherpen zonder expliciete vraag.
 
@@ -60,6 +67,7 @@ De state machine is bewust los. Een `verstuurd` flag betekent niet dat de factuu
 
 ### Aanvullende facturen-acties (row menu)
 - **Markeer als verstuurd**: voor concept facturen — flipt status zonder e-mail te versturen, voor handmatige workflow
+- **Markeer als concept**: voor verstuurd/betaald facturen (niet voor imports) — terugzetten naar bewerkbaar met waarschuwingspopup
 - **Herinnering versturen**: alleen voor verlopen facturen — opent Mail.app met herinnering body en bestaande PDF
 - **Toon in Finder**: macOS reveal van de PDF in Finder
 - **Download PDF**: directe download (alternatief voor preview-dialog)
@@ -135,6 +143,7 @@ De state machine is bewust los. Een `verstuurd` flag betekent niet dat de factuu
 - Inline categorie-dropdown per rij
 - Categorieën: kosten-categorieën + Omzet/Prive/Belasting/AOV
 - **Inline categorie-dropdown** (geen popup-dialog) is bewust: bulk-categoriseren is een hot path en een dialog per rij zou tedious zijn.
+- **Suggesties**: ongecategoriseerde transacties van een eerder gecategoriseerde tegenpartij tonen een toverstaf-knop (`auto_fix_high`) naast de dropdown. Een klik past de meest-gebruikte categorie toe. Bij gelijke counts wint de meest recente (`MAX(datum) DESC`). Bron: `get_categorie_suggestions` in `database.py`.
 
 ### Bulk acties
 - Selecteer rijen → "Verwijder selectie"
@@ -153,7 +162,8 @@ De state machine is bewust los. Een `verstuurd` flag betekent niet dat de factuu
 
 ### Aandachtspunten
 - Ongefactureerde werkdagen alert → link naar `/werkdagen`
-- Openstaande facturen alert → link naar `/facturen`
+- Openstaande facturen alert (met oudste-dagen teller) → link naar `/facturen`
+- **Health alerts** (uit `get_health_alerts`): uncategorized banktransacties, verlopen facturen (>14 dagen), concept facturen, ontbrekende fiscale parameters. Ieder met severity (warning/info) en "Bekijk"-knop naar relevante pagina.
 - VA betalingen tracking via betalingskenmerk
 
 ---
@@ -179,6 +189,7 @@ De state machine is bewust los. Een `verstuurd` flag betekent niet dat de factuu
 - 5 tabs: Balans, W&V, Toelichting, Controles, Document
 - "Bewerken" toggle voor handmatige balans-aanpassingen
 - "Markeer als definitief" maakt een echte snapshot (JSON) van alle fiscale data + balans + parameters. Latere wijzigingen aan werkdagen/facturen/uitgaven muteren de definitieve cijfers niet
+- **Pre-flight checklist**: bij klik op "Markeer als definitief" verschijnt eerst een dialoog met data-integriteit warnings (ongefactureerde werkdagen, facturen zonder werkdagen, ontbrekende VA-beschikking, etc.). Bron: `compute_checklist_issues` in `pages/jaarafsluiting.py`. Gebruiker kan doorgaan ("Toch markeren als definitief") — soft gate, geen harde blok.
 - "Open vergrendeling" knop: maakt het jaar weer bewerkbaar, historische snapshot blijft bewaard. Bij opnieuw markeren wordt de snapshot overschreven
 - "Exporteer PDF" genereert jaarcijfers PDF
 
