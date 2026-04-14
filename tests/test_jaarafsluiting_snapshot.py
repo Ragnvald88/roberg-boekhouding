@@ -6,6 +6,7 @@ from components.fiscal_utils import fetch_fiscal_data, load_jaarafsluiting_data
 from database import (
     add_factuur,
     add_klant,
+    add_uitgave,
     load_jaarafsluiting_snapshot,
     save_jaarafsluiting_snapshot,
     update_jaarafsluiting_status,
@@ -104,3 +105,34 @@ async def test_load_jaarafsluiting_data_definitief_without_snapshot_falls_back(d
     data = await load_jaarafsluiting_data(db, 2024)
     assert data is not None
     assert 'omzet' in data
+
+
+@pytest.mark.asyncio
+async def test_compute_checklist_issues_empty_db(db):
+    """Empty DB for a year should return issues for missing data."""
+    from pages.jaarafsluiting import compute_checklist_issues
+    issues = await compute_checklist_issues(db, 2026)
+    assert isinstance(issues, list)
+    # No facturen, no uitgaven → should flag these
+    assert any('facturen' in i[1].lower() for i in issues)
+
+
+@pytest.mark.asyncio
+async def test_compute_checklist_issues_clean_year(db):
+    """Year with complete data should return fewer/no issues."""
+    from pages.jaarafsluiting import compute_checklist_issues
+    # Seed fiscal params using real seed data (upsert needs all keys)
+    seed = {**FISCALE_PARAMS[max(FISCALE_PARAMS.keys())], 'jaar': 2026}
+    await upsert_fiscale_params(db, **seed)
+    kid = await add_klant(db, naam='Test', tarief_uur=100)
+    await add_factuur(
+        db, nummer='2026-001', klant_id=kid,
+        datum='2026-06-15', totaal_uren=8, totaal_km=0,
+        totaal_bedrag=800.0, status='betaald',
+    )
+    await add_uitgave(db, datum='2026-03-01', omschrijving='Pennen',
+                      bedrag=25.0, categorie='Kantoorkosten')
+    issues = await compute_checklist_issues(db, 2026)
+    # Should NOT flag missing facturen or uitgaven
+    assert not any('geen facturen' in i[1].lower() for i in issues)
+    assert not any('geen uitgaven' in i[1].lower() for i in issues)

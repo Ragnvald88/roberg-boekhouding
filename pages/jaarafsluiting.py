@@ -127,6 +127,128 @@ async def _load_prior_year(jaar: int):
         winst=winst, begin_vermogen=vj_begin)
     return data, balans, winst
 
+
+async def compute_checklist_issues(db_path, jaar: int) -> list[tuple[str, str, str | None]]:
+    """Compute data-integrity issues for a given year.
+
+    Returns list of (severity, message, link) tuples — same format as
+    render_controles uses internally. Empty list = year is clean.
+    """
+    from components.document_specs import AANGIFTE_DOCS  # noqa: F401
+
+    issues: list[tuple[str, str, str | None]] = []
+    async with get_db_ctx(db_path) as conn:
+        # 1. Ongefactureerde werkdagen
+        cur = await conn.execute(
+            "SELECT COUNT(*) FROM werkdagen "
+            "WHERE substr(datum,1,4)=? "
+            "AND (factuurnummer = '' OR factuurnummer IS NULL) "
+            "AND tarief > 0", (str(jaar),))
+        ongefact = (await cur.fetchone())[0]
+        if ongefact > 0:
+            issues.append((
+                'warning',
+                f'{ongefact} ongefactureerde werkdagen met tarief > 0',
+                '/werkdagen'))
+
+        # 2. Facturen zonder werkdagen
+        cur = await conn.execute(
+            "SELECT nummer, totaal_bedrag FROM facturen "
+            "WHERE substr(datum,1,4)=? AND type='factuur' "
+            "AND NOT EXISTS ("
+            "  SELECT 1 FROM werkdagen w "
+            "  WHERE w.factuurnummer = facturen.nummer"
+            ")", (str(jaar),))
+        orphans = await cur.fetchall()
+        if orphans:
+            nrs = ', '.join(r[0] for r in orphans[:5])
+            issues.append((
+                'warning',
+                f'{len(orphans)} facturen zonder werkdagen: {nrs}',
+                '/facturen'))
+
+        # 3. Betaalde facturen zonder betaald_datum
+        cur = await conn.execute(
+            "SELECT COUNT(*) FROM facturen "
+            "WHERE substr(datum,1,4)=? AND status = 'betaald' "
+            "AND (betaald_datum IS NULL OR betaald_datum='')",
+            (str(jaar),))
+        no_date = (await cur.fetchone())[0]
+        if no_date > 0:
+            issues.append((
+                'info',
+                f'{no_date} betaalde facturen zonder betaaldatum',
+                '/facturen'))
+
+        # 4. Niet-gecategoriseerde banktransacties
+        cur = await conn.execute(
+            "SELECT COUNT(*) FROM banktransacties "
+            "WHERE substr(datum,1,4)=? "
+            "AND (categorie IS NULL OR categorie='') "
+            "AND koppeling_type IS NULL",
+            (str(jaar),))
+        uncat = (await cur.fetchone())[0]
+        if uncat > 0:
+            issues.append((
+                'info',
+                f'{uncat} banktransacties niet gecategoriseerd',
+                '/bank'))
+
+    # 5. VA bedragen zonder beschikking PDF
+    params = await get_fiscale_params(db_path, jaar)
+    if params:
+        va_total = (params.voorlopige_aanslag_betaald or 0) + \
+                   (params.voorlopige_aanslag_zvw or 0)
+        docs = await get_aangifte_documenten(db_path, jaar)
+        doc_types = {d.documenttype for d in docs}
+        has_va_docs = ('va_ib_beschikking' in doc_types or
+                       'va_zvw_beschikking' in doc_types)
+        if va_total > 0 and not has_va_docs:
+            issues.append((
+                'warning',
+                f'VA bedragen ingevuld ({format_euro(va_total)}) '
+                f'maar geen beschikking PDF geüpload',
+                '/documenten'))
+        elif va_total == 0:
+            issues.append((
+                'warning',
+                'Voorlopige aanslag niet ingevuld',
+                '/aangifte'))
+
+        # 6. Persoonlijke gegevens
+        missing_personal = []
+        if (params.woz_waarde or 0) == 0:
+            missing_personal.append('WOZ-waarde')
+        if (params.hypotheekrente or 0) == 0:
+            missing_personal.append('Hypotheekrente')
+        if (params.aov_premie or 0) == 0:
+            missing_personal.append('AOV premie')
+        if missing_personal:
+            issues.append((
+                'info',
+                f'Persoonlijke gegevens ontbreken: '
+                f'{", ".join(missing_personal)}',
+                '/aangifte'))
+
+    # 7. Missing data
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            "SELECT COUNT(*) FROM uitgaven WHERE substr(datum,1,4)=?",
+            (str(jaar),))
+        n_uitgaven = (await cur.fetchone())[0]
+        if n_uitgaven == 0:
+            issues.append(('warning', 'Geen uitgaven ingevoerd', '/kosten'))
+
+        cur = await conn.execute(
+            "SELECT COUNT(*) FROM facturen WHERE substr(datum,1,4)=?",
+            (str(jaar),))
+        n_facturen = (await cur.fetchone())[0]
+        if n_facturen == 0:
+            issues.append(('warning', 'Geen facturen gevonden', '/facturen'))
+
+    return issues
+
+
 @ui.page('/jaarafsluiting')
 async def jaarafsluiting_page():
     create_layout('Jaarafsluiting', active_page='/jaarafsluiting')
@@ -554,73 +676,40 @@ async def jaarafsluiting_page():
 
             ui.label('Data-integriteit').classes('text-h6 text-primary q-mt-lg')
 
-            issues = []
-            ok_checks = []
+            # Core issue detection (shared with definitief gate)
+            issues = await compute_checklist_issues(DB_PATH, jaar)
 
+            # OK checks — computed here from the same queries so the "Goedgekeurd"
+            # card can mirror the issue detection. Kept in render_controles because
+            # ok_checks is UI-only (not used by the gate).
+            ok_checks = []
             async with get_db_ctx(DB_PATH) as conn:
-                # 1. Ongefactureerde werkdagen
                 cur = await conn.execute(
                     "SELECT COUNT(*) FROM werkdagen "
                     "WHERE substr(datum,1,4)=? "
                     "AND (factuurnummer = '' OR factuurnummer IS NULL) "
                     "AND tarief > 0", (str(jaar),))
-                ongefact = (await cur.fetchone())[0]
-                if ongefact > 0:
-                    issues.append((
-                        'warning',
-                        f'{ongefact} ongefactureerde werkdagen met tarief > 0',
-                        '/werkdagen'))
-                else:
+                if (await cur.fetchone())[0] == 0:
                     ok_checks.append('Alle werkdagen gefactureerd')
 
-                # 2. Facturen zonder werkdagen
                 cur = await conn.execute(
-                    "SELECT nummer, totaal_bedrag FROM facturen "
+                    "SELECT COUNT(*) FROM facturen "
                     "WHERE substr(datum,1,4)=? AND type='factuur' "
                     "AND NOT EXISTS ("
                     "  SELECT 1 FROM werkdagen w "
                     "  WHERE w.factuurnummer = facturen.nummer"
                     ")", (str(jaar),))
-                orphans = await cur.fetchall()
-                if orphans:
-                    nrs = ', '.join(r[0] for r in orphans[:5])
-                    issues.append((
-                        'warning',
-                        f'{len(orphans)} facturen zonder werkdagen: {nrs}',
-                        '/facturen'))
-                else:
+                if (await cur.fetchone())[0] == 0:
                     ok_checks.append('Alle facturen gekoppeld aan werkdagen')
 
-                # 3. Betaalde facturen zonder betaald_datum
                 cur = await conn.execute(
                     "SELECT COUNT(*) FROM facturen "
                     "WHERE substr(datum,1,4)=? AND status = 'betaald' "
                     "AND (betaald_datum IS NULL OR betaald_datum='')",
                     (str(jaar),))
-                no_date = (await cur.fetchone())[0]
-                if no_date > 0:
-                    issues.append((
-                        'info',
-                        f'{no_date} betaalde facturen zonder betaaldatum',
-                        '/facturen'))
-                else:
+                if (await cur.fetchone())[0] == 0:
                     ok_checks.append('Alle betaalde facturen hebben betaaldatum')
 
-                # 4. Niet-gecategoriseerde banktransacties
-                cur = await conn.execute(
-                    "SELECT COUNT(*) FROM banktransacties "
-                    "WHERE substr(datum,1,4)=? "
-                    "AND (categorie IS NULL OR categorie='') "
-                    "AND koppeling_type IS NULL",
-                    (str(jaar),))
-                uncat = (await cur.fetchone())[0]
-                if uncat > 0:
-                    issues.append((
-                        'info',
-                        f'{uncat} banktransacties niet gecategoriseerd',
-                        '/bank'))
-
-            # 5. VA bedragen zonder beschikking PDF
             params = data['params']
             va_total = (params.voorlopige_aanslag_betaald or 0) + \
                        (params.voorlopige_aanslag_zvw or 0)
@@ -628,38 +717,16 @@ async def jaarafsluiting_page():
             doc_types = {d.documenttype for d in docs}
             has_va_docs = ('va_ib_beschikking' in doc_types or
                            'va_zvw_beschikking' in doc_types)
-            if va_total > 0 and not has_va_docs:
-                issues.append((
-                    'warning',
-                    f'VA bedragen ingevuld ({format_euro(va_total)}) '
-                    f'maar geen beschikking PDF geüpload',
-                    '/documenten'))
-            elif va_total == 0:
-                issues.append((
-                    'warning',
-                    'Voorlopige aanslag niet ingevuld',
-                    '/aangifte'))
-            else:
+            if va_total > 0 and has_va_docs:
                 ok_checks.append('VA bedragen + beschikking PDF aanwezig')
 
-            # 6. Persoonlijke gegevens
-            missing_personal = []
-            if (params.woz_waarde or 0) == 0:
-                missing_personal.append('WOZ-waarde')
-            if (params.hypotheekrente or 0) == 0:
-                missing_personal.append('Hypotheekrente')
-            if (params.aov_premie or 0) == 0:
-                missing_personal.append('AOV premie')
-            if missing_personal:
-                issues.append((
-                    'info',
-                    f'Persoonlijke gegevens ontbreken: '
-                    f'{", ".join(missing_personal)}',
-                    '/aangifte'))
-            else:
+            if ((params.woz_waarde or 0) != 0
+                    and (params.hypotheekrente or 0) != 0
+                    and (params.aov_premie or 0) != 0):
                 ok_checks.append('Persoonlijke gegevens compleet')
 
-            # 7. Document completeness
+            # Document completeness — stays here: drives ok_checks AND adds an
+            # info issue when incomplete. Not in the shared gate function.
             from components.document_specs import AANGIFTE_DOCS
             total_docs = len(AANGIFTE_DOCS)
             done_docs = len({d.documenttype for d in docs})
@@ -671,11 +738,7 @@ async def jaarafsluiting_page():
             else:
                 ok_checks.append(f'Alle {total_docs} documenten geüpload')
 
-            # 8. Missing data warnings (existing)
-            if data['n_uitgaven'] == 0:
-                issues.append(('warning', 'Geen uitgaven ingevoerd', '/kosten'))
-            if data['n_facturen'] == 0:
-                issues.append(('warning', 'Geen facturen gevonden', '/facturen'))
+            # Bank saldo informational (not a gate-worthy issue)
             if balans['bank_saldo'] == 0:
                 issues.append((
                     'info', 'Bank saldo is €0 — vul in via Balans tab', None))
