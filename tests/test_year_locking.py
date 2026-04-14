@@ -13,6 +13,8 @@ from database import (
     add_banktransacties, update_banktransactie, delete_banktransacties,
     get_banktransacties,
     upsert_fiscale_params,
+    update_ib_inputs, update_za_sa_toggles, update_ew_naar_partner,
+    update_box3_fiscaal_partner, update_box3_inputs, update_partner_inputs,
 )
 from import_.seed_data import FISCALE_PARAMS
 
@@ -395,3 +397,64 @@ async def test_update_jaarafsluiting_status_refreeze_always_succeeds(db):
     await update_jaarafsluiting_status(db, 2025, 'definitief')
     # Re-freeze via the same path must not self-block.
     await update_jaarafsluiting_status(db, 2025, 'definitief')  # idempotent, no raise
+
+
+# === A6b: guard the remaining fiscale_params update helpers ===
+
+
+@pytest.mark.asyncio
+async def test_update_ib_inputs_rejected_in_definitief_year(db):
+    await _seed_fiscale_params_row(db, 2025)
+    await update_jaarafsluiting_status(db, 2025, 'definitief')
+    with pytest.raises(YearLockedError):
+        await update_ib_inputs(db, jaar=2025, aov_premie=1234)
+
+
+@pytest.mark.asyncio
+async def test_update_za_sa_toggles_rejected_in_definitief_year(db):
+    await _seed_fiscale_params_row(db, 2025)
+    await update_jaarafsluiting_status(db, 2025, 'definitief')
+    with pytest.raises(YearLockedError):
+        await update_za_sa_toggles(db, jaar=2025, za_actief=False, sa_actief=False)
+
+
+@pytest.mark.asyncio
+async def test_update_ew_naar_partner_rejected_in_definitief_year(db):
+    await _seed_fiscale_params_row(db, 2025)
+    await update_jaarafsluiting_status(db, 2025, 'definitief')
+    with pytest.raises(YearLockedError):
+        await update_ew_naar_partner(db, jaar=2025, value=False)
+
+
+@pytest.mark.asyncio
+async def test_update_box3_fiscaal_partner_rejected_in_definitief_year(db):
+    await _seed_fiscale_params_row(db, 2025)
+    await update_jaarafsluiting_status(db, 2025, 'definitief')
+    with pytest.raises(YearLockedError):
+        await update_box3_fiscaal_partner(db, jaar=2025, fiscaal_partner=False)
+
+
+@pytest.mark.asyncio
+async def test_update_box3_inputs_rejected_in_definitief_year(db):
+    await _seed_fiscale_params_row(db, 2025)
+    await update_jaarafsluiting_status(db, 2025, 'definitief')
+    with pytest.raises(YearLockedError):
+        await update_box3_inputs(db, jaar=2025, bank_saldo=10000)
+
+
+@pytest.mark.asyncio
+async def test_update_partner_inputs_rejected_in_definitief_year(db):
+    await _seed_fiscale_params_row(db, 2025)
+    await update_jaarafsluiting_status(db, 2025, 'definitief')
+    with pytest.raises(YearLockedError):
+        await update_partner_inputs(db, jaar=2025, bruto_loon=50000)
+
+
+@pytest.mark.asyncio
+async def test_update_balans_inputs_rejected_in_definitief_year(db):
+    """Regression: balans-sheet helper is the 7th fiscale_params update path."""
+    from database import update_balans_inputs
+    await _seed_fiscale_params_row(db, 2025)
+    await update_jaarafsluiting_status(db, 2025, 'definitief')
+    with pytest.raises(YearLockedError):
+        await update_balans_inputs(db, jaar=2025, balans_bank_saldo=12345)

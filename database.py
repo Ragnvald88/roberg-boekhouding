@@ -1958,6 +1958,7 @@ async def update_ib_inputs(db_path: Path = DB_PATH, jaar: int = 0,
                            voorlopige_aanslag_zvw: float = 0,
                            lijfrente_premie: float = 0) -> None:
     """Update only the IB-input columns for a specific year."""
+    await assert_year_writable(db_path, jaar)
     async with get_db_ctx(db_path) as conn:
         await conn.execute(
             """UPDATE fiscale_params
@@ -1978,6 +1979,7 @@ async def update_za_sa_toggles(db_path: Path = DB_PATH, jaar: int = 0,
 
     Returns True if a row was updated, False if no fiscale_params row exists.
     """
+    await assert_year_writable(db_path, jaar)
     async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
             "UPDATE fiscale_params SET za_actief = ?, sa_actief = ? WHERE jaar = ?",
@@ -1992,6 +1994,7 @@ async def update_ew_naar_partner(db_path: Path = DB_PATH, jaar: int = 0,
 
     Returns True if a row was updated, False if no fiscale_params row exists.
     """
+    await assert_year_writable(db_path, jaar)
     async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
             "UPDATE fiscale_params SET ew_naar_partner = ? WHERE jaar = ?",
@@ -2003,6 +2006,7 @@ async def update_ew_naar_partner(db_path: Path = DB_PATH, jaar: int = 0,
 async def update_box3_fiscaal_partner(db_path: Path = DB_PATH, jaar: int = 0,
                                       fiscaal_partner: bool = False) -> None:
     """Update Box 3 fiscaal partner flag."""
+    await assert_year_writable(db_path, jaar)
     async with get_db_ctx(db_path) as conn:
         await conn.execute(
             "UPDATE fiscale_params SET box3_fiscaal_partner = ? WHERE jaar = ?",
@@ -2018,6 +2022,7 @@ async def update_box3_inputs(db_path: Path = DB_PATH, jaar: int = 0,
 
     Returns True if a row was updated, False if no fiscale_params row exists.
     """
+    await assert_year_writable(db_path, jaar)
     async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
             """UPDATE fiscale_params
@@ -2037,6 +2042,7 @@ async def update_partner_inputs(db_path: Path = DB_PATH, jaar: int = 0,
 
     Returns True if a row was updated, False if no fiscale_params row exists.
     """
+    await assert_year_writable(db_path, jaar)
     async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
             """UPDATE fiscale_params
@@ -2766,6 +2772,7 @@ async def update_balans_inputs(db_path: Path = DB_PATH, jaar: int = 0,
                                 balans_overige_vorderingen: float = 0,
                                 balans_overige_schulden: float = 0) -> bool:
     """Update balance sheet manual input fields for a specific year."""
+    await assert_year_writable(db_path, jaar)
     async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
             """UPDATE fiscale_params
