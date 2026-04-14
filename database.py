@@ -1417,6 +1417,10 @@ async def add_banktransacties(db_path: Path = DB_PATH,
     if not items:
         return 0
 
+    # Year-lock guard: reject batch if ANY row falls in a definitief jaar.
+    for t in items:
+        await assert_year_writable(db_path, t['datum'])
+
     # Count how many times each key appears in this batch
     def make_key(t):
         return (t['datum'], t['bedrag'], t.get('tegenpartij', ''),
@@ -1455,6 +1459,15 @@ async def add_banktransacties(db_path: Path = DB_PATH,
 
 async def update_banktransactie(db_path: Path = DB_PATH, transactie_id: int = 0,
                                  **kwargs) -> None:
+    # Read current datum to guard against year-lock.
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            "SELECT datum FROM banktransacties WHERE id = ?", (transactie_id,))
+        row = await cur.fetchone()
+    if row is None:
+        return
+    await assert_year_writable(db_path, row['datum'])
+
     async with get_db_ctx(db_path) as conn:
         fields = []
         values = []
@@ -1507,9 +1520,18 @@ async def delete_banktransacties(db_path: Path = DB_PATH,
     """
     if not transactie_ids:
         return 0, []
-    async with get_db_ctx(db_path) as conn:
-        placeholders = ','.join('?' for _ in transactie_ids)
+    placeholders = ','.join('?' for _ in transactie_ids)
 
+    # Year-lock guard: check every affected row's datum.
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            f"SELECT DISTINCT datum FROM banktransacties "
+            f"WHERE id IN ({placeholders})", transactie_ids)
+        datum_rows = await cur.fetchall()
+    for r in datum_rows:
+        await assert_year_writable(db_path, r[0])
+
+    async with get_db_ctx(db_path) as conn:
         # Find linked facturen before deletion
         cur = await conn.execute(
             f"SELECT koppeling_id FROM banktransacties "

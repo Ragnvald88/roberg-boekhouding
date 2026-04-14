@@ -10,6 +10,8 @@ from database import (
     add_uitgave, update_uitgave, delete_uitgave, get_uitgaven,
     add_factuur, update_factuur, update_factuur_status, delete_factuur,
     save_factuur_atomic, get_facturen,
+    add_banktransacties, update_banktransactie, delete_banktransacties,
+    get_banktransacties,
 )
 
 
@@ -266,3 +268,92 @@ async def test_save_factuur_atomic_rejected_when_replacing_factuur_in_definitief
     f = next(x for x in facturen if x.id == fid)
     assert f.datum == '2025-06-10'
     assert f.totaal_bedrag == 100.00
+
+
+@pytest.mark.asyncio
+async def test_add_banktransacties_rejected_if_any_row_in_definitief_year(db):
+    """Bulk import: ANY row in a locked year rejects the WHOLE batch."""
+    await _seed_fiscale_params_row(db, 2025)
+    await update_jaarafsluiting_status(db, 2025, 'definitief')
+    with pytest.raises(YearLockedError, match='2025'):
+        await add_banktransacties(db, [
+            {'datum': '2026-01-10', 'bedrag': 100, 'tegenpartij': 'X',
+             'omschrijving': 'ok', 'categorie': ''},
+            {'datum': '2025-12-28', 'bedrag': 200, 'tegenpartij': 'Y',
+             'omschrijving': 'locked year', 'categorie': ''},
+        ], csv_bestand='mix.csv')
+    # Neither row was inserted — whole-batch rejection.
+    rows = await get_banktransacties(db)
+    assert len(rows) == 0
+
+
+@pytest.mark.asyncio
+async def test_add_banktransacties_passes_when_all_rows_writable(db):
+    """Sanity: batch with all concept/unseeded years imports normally."""
+    await _seed_fiscale_params_row(db, 2025)  # concept status
+    await add_banktransacties(db, [
+        {'datum': '2025-05-10', 'bedrag': 100, 'tegenpartij': 'X',
+         'omschrijving': 'ok', 'categorie': ''},
+        {'datum': '2026-01-10', 'bedrag': 200, 'tegenpartij': 'Y',
+         'omschrijving': 'ok', 'categorie': ''},
+    ], csv_bestand='ok.csv')
+    rows = await get_banktransacties(db)
+    assert len(rows) == 2
+
+
+@pytest.mark.asyncio
+async def test_update_banktransactie_rejected_in_definitief_year(db):
+    await _seed_fiscale_params_row(db, 2026)
+    await add_banktransacties(db, [
+        {'datum': '2026-05-10', 'bedrag': 100, 'tegenpartij': 'X',
+         'omschrijving': 'x', 'categorie': ''},
+    ], csv_bestand='ok.csv')
+    rows_before = await get_banktransacties(db)
+    bank_id = rows_before[0].id
+    await update_jaarafsluiting_status(db, 2026, 'definitief')
+    with pytest.raises(YearLockedError):
+        await update_banktransactie(db, transactie_id=bank_id,
+                                     categorie='Bankkosten')
+    # Categorie unchanged.
+    rows_after = await get_banktransacties(db)
+    b = next(x for x in rows_after if x.id == bank_id)
+    assert b.categorie == ''
+
+
+@pytest.mark.asyncio
+async def test_delete_banktransacties_rejected_in_definitief_year(db):
+    await _seed_fiscale_params_row(db, 2026)
+    await add_banktransacties(db, [
+        {'datum': '2026-05-10', 'bedrag': 100, 'tegenpartij': 'X',
+         'omschrijving': 'x', 'categorie': ''},
+    ], csv_bestand='ok.csv')
+    rows_before = await get_banktransacties(db)
+    bank_id = rows_before[0].id
+    await update_jaarafsluiting_status(db, 2026, 'definitief')
+    with pytest.raises(YearLockedError):
+        await delete_banktransacties(db, [bank_id])
+    # Row still exists.
+    rows_after = await get_banktransacties(db)
+    assert any(x.id == bank_id for x in rows_after)
+
+
+@pytest.mark.asyncio
+async def test_delete_banktransacties_rejected_if_any_row_in_definitief_year(db):
+    """Bulk delete: ANY row in a locked year rejects the whole delete."""
+    await _seed_fiscale_params_row(db, 2025)
+    await _seed_fiscale_params_row(db, 2026)
+    await add_banktransacties(db, [
+        {'datum': '2025-12-10', 'bedrag': 100, 'tegenpartij': 'X',
+         'omschrijving': 'locked', 'categorie': ''},
+        {'datum': '2026-01-10', 'bedrag': 200, 'tegenpartij': 'Y',
+         'omschrijving': 'free', 'categorie': ''},
+    ], csv_bestand='mix.csv')
+    rows_before = await get_banktransacties(db)
+    assert len(rows_before) == 2
+    await update_jaarafsluiting_status(db, 2025, 'definitief')
+    ids = [x.id for x in rows_before]
+    with pytest.raises(YearLockedError, match='2025'):
+        await delete_banktransacties(db, ids)
+    # Both still present.
+    rows_after = await get_banktransacties(db)
+    assert len(rows_after) == 2
