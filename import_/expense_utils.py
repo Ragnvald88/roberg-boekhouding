@@ -8,11 +8,7 @@ detects already-imported files.
 import re
 from pathlib import Path
 
-# Base path of the bookkeeping archive
-ARCHIVE_BASE = (
-    Path.home() / 'Library' / 'CloudStorage' / 'SynologyDrive-Main'
-    / '02_Financieel' / 'Boekhouding_Waarneming'
-)
+from components.archive_paths import ARCHIVE_BASE
 
 # Mapping: archive folder name → app KOSTEN_CATEGORIEEN value
 # Note: 'AoV' is deliberately excluded — AOV is not a business expense,

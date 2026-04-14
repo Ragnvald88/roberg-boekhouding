@@ -5,6 +5,7 @@ import shutil
 from pathlib import Path
 from datetime import datetime, timedelta
 
+from components.archive_paths import ARCHIVE_BASE
 from components.template_env import TEMPLATE_DIR, _env
 from components.utils import format_datum
 from database import DB_PATH
@@ -12,10 +13,6 @@ from database import DB_PATH
 DATA_DIR = DB_PATH.parent
 
 log = logging.getLogger(__name__)
-
-# SynologyDrive archief — facturen worden hier automatisch gekopieerd per type/jaar
-ARCHIVE_BASE = Path.home() / 'Library' / 'CloudStorage' / 'SynologyDrive-Main' / \
-    '02_Financieel' / 'Boekhouding_Waarneming' / 'Inkomen en Uitgaven'
 
 _TYPE_TO_SUBDIR = {
     'factuur': 'Inkomsten/Dagpraktijk',
@@ -39,7 +36,7 @@ def archive_factuur_pdf(
         return None
     jaar = factuur_datum[:4] if factuur_datum and len(factuur_datum) >= 4 else str(datetime.now().year)
     subdir = _TYPE_TO_SUBDIR.get(factuur_type, 'Inkomsten')
-    target_dir = ARCHIVE_BASE / jaar / subdir
+    target_dir = ARCHIVE_BASE / 'Inkomen en Uitgaven' / jaar / subdir
     try:
         target_dir.mkdir(parents=True, exist_ok=True)
         target = target_dir / pdf_path.name
