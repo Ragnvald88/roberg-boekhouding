@@ -12,7 +12,9 @@ from database import (
     save_factuur_atomic, get_facturen,
     add_banktransacties, update_banktransactie, delete_banktransacties,
     get_banktransacties,
+    upsert_fiscale_params,
 )
+from import_.seed_data import FISCALE_PARAMS
 
 
 async def _seed_fiscale_params_row(db_path, jaar: int) -> None:
@@ -357,3 +359,39 @@ async def test_delete_banktransacties_rejected_if_any_row_in_definitief_year(db)
     # Both still present.
     rows_after = await get_banktransacties(db)
     assert len(rows_after) == 2
+
+
+@pytest.mark.asyncio
+async def test_upsert_fiscale_params_rejected_in_definitief_year(db):
+    """Full-upsert to a definitief jaar is blocked."""
+    await _seed_fiscale_params_row(db, 2025)
+    await update_jaarafsluiting_status(db, 2025, 'definitief')
+    with pytest.raises(YearLockedError):
+        # Use a seeded FISCALE_PARAMS row for 2025 — it has all required keys.
+        await upsert_fiscale_params(db, **FISCALE_PARAMS[2025])
+
+
+@pytest.mark.asyncio
+async def test_update_jaarafsluiting_status_unfreeze_always_succeeds(db):
+    """Escape hatch: setting status back to 'concept' must always work.
+
+    This is what the 'Heropenen' button on /jaarafsluiting calls.
+    """
+    await _seed_fiscale_params_row(db, 2025)
+    await update_jaarafsluiting_status(db, 2025, 'definitief')
+    # Must NOT raise even though year is definitief — this IS the unfreeze.
+    await update_jaarafsluiting_status(db, 2025, 'concept')
+    # After unfreezing, mutations succeed again.
+    kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=0)
+    await add_werkdag(db, datum='2025-06-10', klant_id=kid,
+                      uren=8, tarief=80, km=0, km_tarief=0)  # no raise
+
+
+@pytest.mark.asyncio
+async def test_update_jaarafsluiting_status_refreeze_always_succeeds(db):
+    """Re-setting status to 'definitief' via the dedicated function must work
+    (it's the same escape path — one-column update)."""
+    await _seed_fiscale_params_row(db, 2025)
+    await update_jaarafsluiting_status(db, 2025, 'definitief')
+    # Re-freeze via the same path must not self-block.
+    await update_jaarafsluiting_status(db, 2025, 'definitief')  # idempotent, no raise

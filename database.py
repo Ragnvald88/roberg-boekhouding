@@ -1798,6 +1798,15 @@ async def get_all_fiscale_params(db_path: Path = DB_PATH) -> list[FiscaleParams]
 
 
 async def upsert_fiscale_params(db_path: Path = DB_PATH, **kwargs) -> None:
+    # Year-lock guard (A6): block full upserts on a definitief jaar.
+    # Exception: if caller is passing only jaarafsluiting_status (plus jaar),
+    # allow it through as a re-freeze path. In practice status changes go
+    # through update_jaarafsluiting_status (raw one-column UPDATE), which
+    # bypasses this function entirely and is therefore not subject to this
+    # guard — that is the dedicated unfreeze/re-freeze escape hatch.
+    jaar = kwargs.get('jaar')
+    if jaar is not None and (set(kwargs) - {'jaar', 'jaarafsluiting_status'}):
+        await assert_year_writable(db_path, jaar)
     async with get_db_ctx(db_path) as conn:
         # Preserve IB-input, partner, box3 input, balans, and ew_naar_partner when overwriting from Instellingen
         cur = await conn.execute(
