@@ -2084,6 +2084,87 @@ async def get_werkdagen_ongefactureerd_summary(
         return {'aantal': r['aantal'], 'bedrag': r['bedrag']}
 
 
+async def get_health_alerts(db_path: Path = DB_PATH, jaar: int = 2026) -> list[dict]:
+    """Return actionable health alerts for the dashboard.
+
+    Each alert is a dict with keys:
+      key: str         — identifier (e.g. 'uncategorized_bank')
+      severity: str    — 'warning' or 'info'
+      message: str     — human-readable Dutch description
+      count: int       — number of items (for display)
+      link: str        — page route to navigate to
+    Returns empty list when everything is healthy.
+    """
+    from datetime import date, timedelta
+    alerts = []
+    jaar_start = f'{jaar}-01-01'
+    jaar_end = f'{jaar + 1}-01-01'
+    overdue_cutoff = (date.today() - timedelta(days=14)).isoformat()
+
+    async with get_db_ctx(db_path) as conn:
+        # 1. Uncategorized bank transactions (no category, no koppeling)
+        cur = await conn.execute(
+            "SELECT COUNT(*) FROM banktransacties "
+            "WHERE datum >= ? AND datum < ? "
+            "AND (categorie IS NULL OR categorie = '') "
+            "AND (koppeling_type IS NULL OR koppeling_type = '')",
+            (jaar_start, jaar_end))
+        uncat = (await cur.fetchone())[0]
+        if uncat > 0:
+            alerts.append({
+                'key': 'uncategorized_bank',
+                'severity': 'info',
+                'message': f'{uncat} banktransacties niet gecategoriseerd',
+                'count': uncat,
+                'link': '/bank',
+            })
+
+        # 2. Overdue invoices (verstuurd + datum > 14 days ago)
+        cur = await conn.execute(
+            "SELECT COUNT(*) FROM facturen "
+            "WHERE status = 'verstuurd' AND datum < ? "
+            "AND datum >= ? AND datum < ?",
+            (overdue_cutoff, jaar_start, jaar_end))
+        overdue = (await cur.fetchone())[0]
+        if overdue > 0:
+            alerts.append({
+                'key': 'overdue_invoices',
+                'severity': 'warning',
+                'message': f'{overdue} facturen verlopen (> 14 dagen)',
+                'count': overdue,
+                'link': '/facturen',
+            })
+
+        # 3. Concept invoices still in draft
+        cur = await conn.execute(
+            "SELECT COUNT(*) FROM facturen "
+            "WHERE status = 'concept' "
+            "AND datum >= ? AND datum < ?",
+            (jaar_start, jaar_end))
+        concepts = (await cur.fetchone())[0]
+        if concepts > 0:
+            alerts.append({
+                'key': 'concept_invoices',
+                'severity': 'info',
+                'message': f'{concepts} facturen nog in concept',
+                'count': concepts,
+                'link': '/facturen',
+            })
+
+    # 4. Missing fiscal params (outside connection — uses own)
+    params = await get_fiscale_params(db_path, jaar)
+    if params is None:
+        alerts.append({
+            'key': 'missing_fiscal_params',
+            'severity': 'warning',
+            'message': f'Fiscale parameters {jaar} niet ingesteld',
+            'count': 0,
+            'link': '/instellingen',
+        })
+
+    return alerts
+
+
 async def get_km_totaal(db_path: Path = DB_PATH, jaar: int = 2026) -> dict:
     """Get total km and km-vergoeding for a year."""
     async with get_db_ctx(db_path) as conn:
