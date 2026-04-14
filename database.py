@@ -660,6 +660,41 @@ def _validate_datum(datum: str) -> str:
     return datum
 
 
+class YearLockedError(ValueError):
+    """Raised when attempting to mutate data in a definitief (locked) jaar.
+
+    Subclasses ValueError so existing `except ValueError:` sites that catch
+    invalid-input errors also catch this; callers that specifically want to
+    handle the year-lock case can catch YearLockedError directly.
+
+    Unfreeze path: call `update_jaarafsluiting_status(db, jaar, 'concept')`.
+    """
+
+
+async def assert_year_writable(db_path, jaar_or_datum) -> None:
+    """Raise YearLockedError if the year is marked 'definitief'.
+
+    Accepts either an int year (2025) or an ISO datum string ('2025-06-01').
+    A year with no fiscale_params row yet is considered writable (no lock
+    has been set).
+    """
+    if isinstance(jaar_or_datum, int):
+        jaar = jaar_or_datum
+    else:
+        jaar = int(str(jaar_or_datum)[:4])
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            "SELECT jaarafsluiting_status FROM fiscale_params WHERE jaar = ?",
+            (jaar,),
+        )
+        row = await cur.fetchone()
+    if row and (row[0] or 'concept') == 'definitief':
+        raise YearLockedError(
+            f"Jaar {jaar} is definitief afgesloten en mag niet gewijzigd "
+            f"worden. Heropen eerst via Jaarafsluiting → Heropenen."
+        )
+
+
 # === Bedrijfsgegevens ===
 
 async def get_bedrijfsgegevens(db_path: Path = DB_PATH) -> Bedrijfsgegevens | None:
