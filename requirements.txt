@@ -3,6 +3,8 @@ aiosqlite
 openpyxl
 jinja2
 weasyprint
+opencv-python-headless
+numpy
 pytest
 pytest-asyncio
 uvicorn>=0.34,<0.41
