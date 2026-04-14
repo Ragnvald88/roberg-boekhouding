@@ -7,6 +7,7 @@ from database import (
     update_jaarafsluiting_status,
     add_klant, add_werkdag, update_werkdag, delete_werkdag,
     get_werkdagen,
+    add_uitgave, update_uitgave, delete_uitgave, get_uitgaven,
 )
 
 
@@ -115,3 +116,56 @@ async def test_delete_werkdag_rejected_in_definitief_year(db):
     # Row must still exist.
     rows = await get_werkdagen(db)
     assert any(w.id == wid for w in rows)
+
+
+@pytest.mark.asyncio
+async def test_add_uitgave_rejected_in_definitief_year(db):
+    await _seed_fiscale_params_row(db, 2025)
+    await update_jaarafsluiting_status(db, 2025, 'definitief')
+    with pytest.raises(YearLockedError):
+        await add_uitgave(db, datum='2025-03-10', categorie='Bankkosten',
+                          omschrijving='Rabo', bedrag=12.50)
+    # No row slipped through.
+    rows = await get_uitgaven(db)
+    assert all(u.datum != '2025-03-10' for u in rows)
+
+
+@pytest.mark.asyncio
+async def test_update_uitgave_rejected_in_definitief_year(db):
+    await _seed_fiscale_params_row(db, 2025)
+    uid = await add_uitgave(db, datum='2025-03-10', categorie='Bankkosten',
+                            omschrijving='Rabo', bedrag=12.50)
+    await update_jaarafsluiting_status(db, 2025, 'definitief')
+    with pytest.raises(YearLockedError):
+        await update_uitgave(db, uitgave_id=uid, bedrag=15.00)
+    # Amount unchanged.
+    rows = await get_uitgaven(db)
+    u = next(x for x in rows if x.id == uid)
+    assert u.bedrag == 12.50
+
+
+@pytest.mark.asyncio
+async def test_update_uitgave_rejected_when_new_datum_in_definitief_year(db):
+    """Moving an uitgave INTO a definitief year is blocked."""
+    await _seed_fiscale_params_row(db, 2025)
+    await _seed_fiscale_params_row(db, 2026)
+    uid = await add_uitgave(db, datum='2026-02-01', categorie='Bankkosten',
+                            omschrijving='Rabo', bedrag=12.50)
+    await update_jaarafsluiting_status(db, 2025, 'definitief')
+    with pytest.raises(YearLockedError):
+        await update_uitgave(db, uitgave_id=uid, datum='2025-12-31')
+    rows = await get_uitgaven(db)
+    u = next(x for x in rows if x.id == uid)
+    assert u.datum == '2026-02-01'
+
+
+@pytest.mark.asyncio
+async def test_delete_uitgave_rejected_in_definitief_year(db):
+    await _seed_fiscale_params_row(db, 2025)
+    uid = await add_uitgave(db, datum='2025-03-10', categorie='Bankkosten',
+                            omschrijving='Rabo', bedrag=12.50)
+    await update_jaarafsluiting_status(db, 2025, 'definitief')
+    with pytest.raises(YearLockedError):
+        await delete_uitgave(db, uitgave_id=uid)
+    rows = await get_uitgaven(db)
+    assert any(x.id == uid for x in rows)

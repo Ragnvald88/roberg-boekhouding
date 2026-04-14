@@ -1244,6 +1244,7 @@ async def get_uitgaven(db_path: Path = DB_PATH, jaar: int = None,
 
 async def add_uitgave(db_path: Path = DB_PATH, **kwargs) -> int:
     _validate_datum(kwargs['datum'])
+    await assert_year_writable(db_path, kwargs['datum'])
     async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
             """INSERT INTO uitgaven
@@ -1264,6 +1265,16 @@ async def add_uitgave(db_path: Path = DB_PATH, **kwargs) -> int:
 async def update_uitgave(db_path: Path = DB_PATH, uitgave_id: int = 0, **kwargs) -> None:
     if 'datum' in kwargs:
         _validate_datum(kwargs['datum'])
+    # Fetch current datum to enforce year-lock on the existing row
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            "SELECT datum FROM uitgaven WHERE id = ?", (uitgave_id,)
+        )
+        row = await cur.fetchone()
+    if row:
+        await assert_year_writable(db_path, row[0])
+    if 'datum' in kwargs:
+        await assert_year_writable(db_path, kwargs['datum'])
     async with get_db_ctx(db_path) as conn:
         fields = []
         values = []
@@ -1285,14 +1296,17 @@ async def update_uitgave(db_path: Path = DB_PATH, uitgave_id: int = 0, **kwargs)
 async def delete_uitgave(db_path: Path = DB_PATH, uitgave_id: int = 0) -> None:
     async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
-            "SELECT pdf_pad FROM uitgaven WHERE id = ?", (uitgave_id,))
+            "SELECT pdf_pad, datum FROM uitgaven WHERE id = ?", (uitgave_id,))
         row = await cursor.fetchone()
+    if row:
+        await assert_year_writable(db_path, row['datum'])
+    async with get_db_ctx(db_path) as conn:
         await conn.execute("DELETE FROM uitgaven WHERE id = ?", (uitgave_id,))
         await conn.commit()
-        if row and row['pdf_pad']:
-            pdf_file = Path(row['pdf_pad'])
-            if pdf_file.exists():
-                await asyncio.to_thread(pdf_file.unlink)
+    if row and row['pdf_pad']:
+        pdf_file = Path(row['pdf_pad'])
+        if pdf_file.exists():
+            await asyncio.to_thread(pdf_file.unlink)
 
 
 async def get_uitgaven_per_categorie(db_path: Path = DB_PATH,
