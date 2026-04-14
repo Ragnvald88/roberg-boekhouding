@@ -159,6 +159,6 @@ async def test_compute_checklist_issues_ongefactureerd_werkdag(db):
     issues = await compute_checklist_issues(db, 2026)
     matching = [i for i in issues if 'ongefactureerde werkdagen' in i[1].lower()]
     assert matching, f"Expected 'ongefactureerde werkdagen' issue, got: {issues}"
-    severity, message, link = matching[0]
+    severity, _message, link = matching[0]
     assert severity == 'warning'
     assert link == '/werkdagen'
