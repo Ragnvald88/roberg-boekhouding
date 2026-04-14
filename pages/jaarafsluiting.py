@@ -857,15 +857,34 @@ async def jaarafsluiting_page():
                         .props('color=negative')
             dlg.open()
         else:
-            # Mark as definitief — take a real snapshot first
-            with ui.dialog() as dlg, ui.card():
+            # Pre-flight checklist
+            preflight_issues = await compute_checklist_issues(DB_PATH, jaar)
+            warnings = [i for i in preflight_issues if i[0] == 'warning']
+
+            with ui.dialog() as dlg, ui.card().style('min-width: 500px'):
                 ui.label('Markeren als definitief?').classes('text-h6')
+
+                if warnings:
+                    with ui.card().classes('w-full q-pa-sm q-mb-md').style(
+                            'background: #FEF3C7; border: 1px solid #FDE68A'):
+                        with ui.row().classes('items-center gap-2 q-mb-xs'):
+                            ui.icon('warning', color='warning')
+                            ui.label(f'{len(warnings)} aandachtspunten') \
+                                .classes('text-subtitle2 text-weight-bold')
+                        for _sev, msg, link in warnings:
+                            with ui.row().classes('items-center gap-1'):
+                                ui.icon('chevron_right', size='xs',
+                                        color='warning')
+                                ui.label(msg).classes(
+                                    'text-caption text-grey-8')
+
                 ui.label(
                     'De huidige jaarcijfers worden vastgelegd als snapshot. '
                     'Latere wijzigingen in onderliggende data (uitgaven, '
                     'facturen) veranderen deze cijfers niet meer. '
                     'U kunt later heropenen indien nodig.'
                 ).classes('q-mb-md')
+
                 with ui.row().classes('w-full justify-end gap-2'):
                     ui.button('Annuleren', on_click=dlg.close).props('flat')
                     async def confirm_definitief():
@@ -907,7 +926,9 @@ async def jaarafsluiting_page():
                             f'Jaar {jaar} definitief gemaakt en vastgelegd',
                             type='positive')
                         await render_all()
-                    ui.button('Markeer definitief', on_click=confirm_definitief) \
+                    btn_label = ('Toch markeren als definitief' if warnings
+                                 else 'Markeer definitief')
+                    ui.button(btn_label, on_click=confirm_definitief) \
                         .props('color=positive')
             dlg.open()
 
