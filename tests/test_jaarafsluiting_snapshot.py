@@ -7,6 +7,7 @@ from database import (
     add_factuur,
     add_klant,
     add_uitgave,
+    add_werkdag,
     load_jaarafsluiting_snapshot,
     save_jaarafsluiting_snapshot,
     update_jaarafsluiting_status,
@@ -136,3 +137,28 @@ async def test_compute_checklist_issues_clean_year(db):
     # Should NOT flag missing facturen or uitgaven
     assert not any('geen facturen' in i[1].lower() for i in issues)
     assert not any('geen uitgaven' in i[1].lower() for i in issues)
+
+
+@pytest.mark.asyncio
+async def test_compute_checklist_issues_ongefactureerd_werkdag(db):
+    """Werkdag met tarief > 0 en lege factuurnummer moet als warning verschijnen."""
+    from pages.jaarafsluiting import compute_checklist_issues
+    kid = await add_klant(db, naam='OngefactTest', tarief_uur=100)
+    await add_werkdag(
+        db,
+        datum='2026-05-10',
+        klant_id=kid,
+        uren=8,
+        tarief=100.0,
+        km=0,
+        km_tarief=0.23,
+        urennorm=1,
+        activiteit='Waarneming dagpraktijk',
+        factuurnummer='',
+    )
+    issues = await compute_checklist_issues(db, 2026)
+    matching = [i for i in issues if 'ongefactureerde werkdagen' in i[1].lower()]
+    assert matching, f"Expected 'ongefactureerde werkdagen' issue, got: {issues}"
+    severity, message, link = matching[0]
+    assert severity == 'warning'
+    assert link == '/werkdagen'
