@@ -886,6 +886,7 @@ async def get_werkdagen(db_path: Path = DB_PATH, jaar: int = None,
 
 async def add_werkdag(db_path: Path = DB_PATH, **kwargs) -> int:
     _validate_datum(kwargs['datum'])
+    await assert_year_writable(db_path, kwargs['datum'])
     async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
             """INSERT INTO werkdagen
@@ -908,6 +909,16 @@ async def add_werkdag(db_path: Path = DB_PATH, **kwargs) -> int:
 async def update_werkdag(db_path: Path = DB_PATH, werkdag_id: int = 0, **kwargs) -> None:
     if 'datum' in kwargs:
         _validate_datum(kwargs['datum'])
+    # Fetch current datum to enforce year-lock on the existing row
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            "SELECT datum FROM werkdagen WHERE id = ?", (werkdag_id,)
+        )
+        row = await cur.fetchone()
+    if row:
+        await assert_year_writable(db_path, row[0])
+    if 'datum' in kwargs:
+        await assert_year_writable(db_path, kwargs['datum'])
     async with get_db_ctx(db_path) as conn:
         fields = []
         values = []
@@ -929,13 +940,16 @@ async def update_werkdag(db_path: Path = DB_PATH, werkdag_id: int = 0, **kwargs)
 async def delete_werkdag(db_path: Path = DB_PATH, werkdag_id: int = 0) -> None:
     async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
-            "SELECT factuurnummer FROM werkdagen WHERE id = ?", (werkdag_id,)
+            "SELECT factuurnummer, datum FROM werkdagen WHERE id = ?", (werkdag_id,)
         )
         row = await cursor.fetchone()
-        if row and row[0]:
-            raise ValueError(
-                f"Werkdag kan niet verwijderd worden: gekoppeld aan factuur '{row[0]}'"
-            )
+    if row and row[0]:
+        raise ValueError(
+            f"Werkdag kan niet verwijderd worden: gekoppeld aan factuur '{row[0]}'"
+        )
+    if row:
+        await assert_year_writable(db_path, row[1])
+    async with get_db_ctx(db_path) as conn:
         await conn.execute("DELETE FROM werkdagen WHERE id = ?", (werkdag_id,))
         await conn.commit()
 

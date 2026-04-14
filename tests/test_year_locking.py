@@ -5,6 +5,8 @@ import pytest
 from database import (
     YearLockedError, assert_year_writable,
     update_jaarafsluiting_status,
+    add_klant, add_werkdag, update_werkdag, delete_werkdag,
+    get_werkdagen,
 )
 
 
@@ -53,3 +55,63 @@ def test_year_locked_error_is_value_error():
     """Backward compat: existing catch(ValueError) sites still catch this."""
     exc = YearLockedError('test')
     assert isinstance(exc, ValueError)
+
+
+@pytest.mark.asyncio
+async def test_add_werkdag_rejected_in_definitief_year(db):
+    kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=0)
+    await _seed_fiscale_params_row(db, 2025)
+    await update_jaarafsluiting_status(db, 2025, 'definitief')
+    with pytest.raises(YearLockedError):
+        await add_werkdag(db, datum='2025-06-10', klant_id=kid,
+                          uren=8, tarief=80, km=0, km_tarief=0)
+    # Verify the INSERT did not slip through before the raise.
+    rows = await get_werkdagen(db)
+    assert all(w.datum != '2025-06-10' for w in rows)
+
+
+@pytest.mark.asyncio
+async def test_update_werkdag_rejected_in_definitief_year(db):
+    """Updating a werkdag whose current datum is in a definitief year is blocked."""
+    kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=0)
+    await _seed_fiscale_params_row(db, 2025)
+    wid = await add_werkdag(db, datum='2025-06-10', klant_id=kid,
+                            uren=8, tarief=80, km=0, km_tarief=0)
+    await update_jaarafsluiting_status(db, 2025, 'definitief')
+    with pytest.raises(YearLockedError):
+        await update_werkdag(db, werkdag_id=wid, uren=9)
+    # Guard-before-write contract: row unchanged.
+    rows = await get_werkdagen(db)
+    wd = next(w for w in rows if w.id == wid)
+    assert wd.uren == 8
+
+
+@pytest.mark.asyncio
+async def test_update_werkdag_rejected_when_new_datum_in_definitief_year(db):
+    """Moving a werkdag INTO a definitief year is also blocked."""
+    kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=0)
+    await _seed_fiscale_params_row(db, 2025)
+    await _seed_fiscale_params_row(db, 2026)
+    wid = await add_werkdag(db, datum='2026-01-05', klant_id=kid,
+                            uren=8, tarief=80, km=0, km_tarief=0)
+    await update_jaarafsluiting_status(db, 2025, 'definitief')
+    with pytest.raises(YearLockedError):
+        await update_werkdag(db, werkdag_id=wid, datum='2025-12-31')
+    # Row must not have moved into the locked year.
+    rows = await get_werkdagen(db)
+    wd = next(w for w in rows if w.id == wid)
+    assert wd.datum == '2026-01-05'
+
+
+@pytest.mark.asyncio
+async def test_delete_werkdag_rejected_in_definitief_year(db):
+    kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=0)
+    await _seed_fiscale_params_row(db, 2025)
+    wid = await add_werkdag(db, datum='2025-06-10', klant_id=kid,
+                            uren=8, tarief=80, km=0, km_tarief=0)
+    await update_jaarafsluiting_status(db, 2025, 'definitief')
+    with pytest.raises(YearLockedError):
+        await delete_werkdag(db, werkdag_id=wid)
+    # Row must still exist.
+    rows = await get_werkdagen(db)
+    assert any(w.id == wid for w in rows)
