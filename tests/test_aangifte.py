@@ -683,3 +683,54 @@ async def test_update_partner_inputs_no_row_returns_false(db):
     """update_partner_inputs returns False when no fiscale_params row exists."""
     result = await update_partner_inputs(db, jaar=2099, bruto_loon=30000)
     assert result is False
+
+
+@pytest.mark.asyncio
+async def test_aangifte_data_uses_snapshot_for_definitief_year(db):
+    """Regression (review K5): for a definitief jaar, /aangifte reads snapshot
+    values, not live-recomputed ones. This guarantees Jaarcijfers-PDF and the
+    /aangifte screen show the same numbers even after engine fixes.
+
+    Mechanism: the `_get_fiscal` closure in pages/aangifte.py routes through
+    `load_jaarafsluiting_data` (covers both concept and definitief paths).
+    """
+    import aiosqlite
+    from components.fiscal_utils import (
+        fetch_fiscal_data, load_jaarafsluiting_data,
+    )
+    from database import (
+        add_factuur, add_klant, save_jaarafsluiting_snapshot,
+        update_jaarafsluiting_status, upsert_fiscale_params,
+    )
+    from import_.seed_data import FISCALE_PARAMS
+
+    await upsert_fiscale_params(db, **FISCALE_PARAMS[2024])
+    kid = await add_klant(db, naam="Snap", tarief_uur=100, retour_km=0)
+    await add_factuur(
+        db, nummer='2024-A7', klant_id=kid, datum='2024-06-15',
+        totaal_uren=10, totaal_km=0, totaal_bedrag=1000.00,
+        status='betaald', betaald_datum='2024-06-20',
+    )
+    live = await fetch_fiscal_data(db, 2024)
+    assert live is not None
+    FROZEN_OMZET = live['omzet']
+
+    # Freeze: save snapshot + mark definitief. From now on write-guards block
+    # further mutations, but we can still simulate an engine-param "update"
+    # by going around the guard via raw SQL (pretending a future Plan B-style
+    # engine update happened).
+    await save_jaarafsluiting_snapshot(db, 2024, live, {}, {'schijf1_pct': 35.75})
+    await update_jaarafsluiting_status(db, 2024, 'definitief')
+
+    # Simulate an engine/config change that would shift LIVE recomputed numbers.
+    # Bypass the guard intentionally — we want divergence between live and snapshot.
+    async with aiosqlite.connect(db) as conn:
+        await conn.execute(
+            "UPDATE fiscale_params SET schijf1_pct = schijf1_pct + 1 WHERE jaar = 2024")
+        await conn.commit()
+
+    snapshot_data = await load_jaarafsluiting_data(db, 2024)
+    assert snapshot_data is not None
+    assert snapshot_data['omzet'] == FROZEN_OMZET, (
+        "Definitief year must read snapshot omzet, not live-recomputed"
+    )

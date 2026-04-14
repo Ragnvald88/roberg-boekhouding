@@ -17,7 +17,9 @@ from pathlib import Path
 
 from nicegui import events, ui
 
-from components.fiscal_utils import fetch_fiscal_data, fiscale_params_to_dict
+from components.fiscal_utils import (
+    fetch_fiscal_data, fiscale_params_to_dict, load_jaarafsluiting_data,
+)
 from components.layout import create_layout, page_title
 from components.utils import format_euro
 from database import (
@@ -86,7 +88,9 @@ async def aangifte_page():
         if _cache['jaar'] == jaar and (_cache['data'] is not None or _cache['error']):
             return _cache['data'], _cache['fiscaal']
         try:
-            data = await fetch_fiscal_data(DB_PATH, jaar)
+            # K5: for definitief jaren, load_jaarafsluiting_data returns the snapshot;
+            # for concept it falls back to fetch_fiscal_data. Drop-in safe.
+            data = await load_jaarafsluiting_data(DB_PATH, jaar)
             if data is None:
                 _cache.update(jaar=jaar, data=None, fiscaal=None, error=None)
                 return None, None
@@ -102,7 +106,9 @@ async def aangifte_page():
                 voorlopige_aanslag=data['voorlopige_aanslag'],
                 voorlopige_aanslag_zvw=data['voorlopige_aanslag_zvw'],
                 ew_naar_partner=data['ew_naar_partner'],
-                partner_inkomen=data['params'].partner_bruto_loon or 0,
+                # getattr for snapshot compatibility: SimpleNamespace from old
+                # snapshots may lack later-added attributes.
+                partner_inkomen=getattr(data.get('params'), 'partner_bruto_loon', None) or 0,
             )
         except (KeyError, ValueError) as exc:
             _cache.update(jaar=jaar, data=None, fiscaal=None, error=str(exc))
