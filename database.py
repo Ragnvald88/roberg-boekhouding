@@ -2689,6 +2689,11 @@ async def apply_factuur_matches(db_path: Path = DB_PATH,
 
     Accepts a list of ``MatchProposal``. Returns count of applied matches.
     Non-verstuurd facturen are skipped silently.
+
+    Year-lock (K6): if ANY proposal's factuur-datum or bank-datum falls in
+    a definitief jaar, the whole batch is rejected with YearLockedError —
+    applying matches would silently mutate status and koppeling fields of a
+    frozen jaar. Heropen het jaar eerst via /jaarafsluiting.
     """
     if not proposals:
         return 0
@@ -2696,6 +2701,26 @@ async def apply_factuur_matches(db_path: Path = DB_PATH,
     applied = 0
     seen_bank_ids: set[int] = set()
     seen_factuur_ids: set[int] = set()
+
+    # Year-lock guard (review gap): fetch factuur datums up-front and assert
+    # both sides of every proposal are in writable years BEFORE opening the
+    # atomic batch. Failing fast here means no partial application.
+    factuur_ids = list({p.factuur_id for p in proposals})
+    if factuur_ids:
+        placeholders = ','.join('?' for _ in factuur_ids)
+        async with get_db_ctx(db_path) as _ycheck:
+            cur = await _ycheck.execute(
+                f"SELECT datum FROM facturen WHERE id IN ({placeholders})",
+                factuur_ids,
+            )
+            factuur_datums = [r[0] for r in await cur.fetchall()]
+    else:
+        factuur_datums = []
+    for d in factuur_datums:
+        await assert_year_writable(db_path, d)
+    for p in proposals:
+        if p.bank_datum:
+            await assert_year_writable(db_path, p.bank_datum)
 
     async with get_db_ctx(db_path) as conn:
         for p in proposals:

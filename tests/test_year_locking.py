@@ -458,3 +458,44 @@ async def test_update_balans_inputs_rejected_in_definitief_year(db):
     await update_jaarafsluiting_status(db, 2025, 'definitief')
     with pytest.raises(YearLockedError):
         await update_balans_inputs(db, jaar=2025, balans_bank_saldo=12345)
+
+
+@pytest.mark.asyncio
+async def test_apply_factuur_matches_rejected_in_definitief_year(db):
+    """Final-review gap: apply_factuur_matches was the most-used mutation
+    path and bypassed the year-lock via raw UPDATE on status + koppeling.
+
+    Both the factuur-datum side and the bank-datum side must be guarded —
+    applying matches in a locked year would silently mutate a frozen jaar.
+    """
+    from database import (
+        apply_factuur_matches, find_factuur_matches, get_banktransacties,
+    )
+
+    await _seed_fiscale_params_row(db, 2025)
+    kid = await add_klant(db, naam="AM", tarief_uur=100, retour_km=0)
+    fid = await add_factuur(
+        db, nummer='2025-AM1', klant_id=kid, datum='2025-06-15',
+        totaal_bedrag=500.00, status='verstuurd', type='factuur',
+    )
+    await add_banktransacties(db, [
+        {'datum': '2025-06-20', 'bedrag': 500.00, 'tegenpartij': 'AM',
+         'omschrijving': '2025-AM1 payment', 'categorie': ''},
+    ], csv_bestand='am.csv')
+    proposals = await find_factuur_matches(db)
+    assert len(proposals) == 1
+
+    # Freeze the year AFTER matches are found but BEFORE apply.
+    await update_jaarafsluiting_status(db, 2025, 'definitief')
+
+    with pytest.raises(YearLockedError):
+        await apply_factuur_matches(db, proposals)
+
+    # Factuur still 'verstuurd', bank still uncoupled.
+    facturen = await get_facturen(db)
+    f = next(x for x in facturen if x.id == fid)
+    assert f.status == 'verstuurd', "apply must not have mutated status"
+    bank_rows = await get_banktransacties(db)
+    assert all((b.koppeling_type or '') == '' for b in bank_rows), (
+        "apply must not have created bank koppeling in a locked year"
+    )
