@@ -63,3 +63,35 @@ async def test_health_alerts_all_clear(db):
     await upsert_fiscale_params(db, **seed)
     alerts = await get_health_alerts(db, jaar)
     assert not any(a['key'] == 'missing_fiscal_params' for a in alerts)
+
+
+@pytest.mark.asyncio
+async def test_health_alerts_concept_invoices(db):
+    """Concept invoices in the current year should produce an info alert."""
+    from datetime import date
+    jaar = date.today().year
+    kid = await add_klant(db, naam='Test', tarief_uur=100)
+    await add_factuur(
+        db, nummer=f'{jaar}-101', klant_id=kid,
+        datum=f'{jaar}-06-01', totaal_uren=8, totaal_km=0,
+        totaal_bedrag=800.0, status='concept',
+    )
+    alerts = await get_health_alerts(db, jaar)
+    concept = next((a for a in alerts if a['key'] == 'concept_invoices'), None)
+    assert concept is not None
+    assert concept['severity'] == 'info'
+    assert concept['count'] == 1
+    assert concept['link'] == '/facturen'
+
+
+@pytest.mark.asyncio
+async def test_health_alerts_year_scoping(db):
+    """Uncategorized bank txns outside the target year should not leak into alerts."""
+    await add_banktransacties(db, [
+        {'datum': '2024-12-31', 'bedrag': -50.0,
+         'tegenpartij': 'Albert Heijn', 'omschrijving': 'Boodschappen'},
+        {'datum': '2026-01-01', 'bedrag': -50.0,
+         'tegenpartij': 'Albert Heijn', 'omschrijving': 'Boodschappen'},
+    ])
+    alerts = await get_health_alerts(db, 2025)
+    assert not any(a['key'] == 'uncategorized_bank' for a in alerts)
