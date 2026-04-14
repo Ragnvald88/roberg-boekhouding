@@ -905,7 +905,7 @@ async def kosten_page():
         async def on_import_close():
             await ververs()
 
-        import_dialog.on('hide', lambda: on_import_close())
+        import_dialog.on('hide', on_import_close)
         import_dialog.open()
 
     with ui.column().classes('w-full p-6 max-w-7xl mx-auto gap-6'):

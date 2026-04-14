@@ -2,9 +2,6 @@
 
 import asyncio
 from datetime import date
-from pathlib import Path
-
-from jinja2 import Environment, FileSystemLoader, select_autoescape
 from nicegui import ui
 
 from components.fiscal_utils import (
@@ -865,19 +862,9 @@ async def jaarafsluiting_page():
 def _render_pdf_html(jaar, data, balans, winst, vorig_jaar_balans,
                      bedrijfsnaam='', kvk=''):
     """Render the jaarcijfers PDF HTML — pure business report."""
-    env = Environment(
-        loader=FileSystemLoader(str(Path(__file__).parent.parent / 'templates')),
-        autoescape=select_autoescape(['html']),
-    )
+    from components.template_env import _env
 
-    def euro_filter(value):
-        if value is None:
-            return '€ 0'
-        return f"€ {value:,.0f}".replace(',', '.')
-
-    env.filters['euro'] = euro_filter
-
-    template = env.get_template('jaarafsluiting.html')
+    template = _env.get_template('jaarafsluiting.html')
     return template.render(
         jaar=jaar,
         bedrijfsnaam=bedrijfsnaam,

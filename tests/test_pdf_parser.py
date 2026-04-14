@@ -279,6 +279,16 @@ class TestDagpraktijk2024IBANFooter:
         r = parse_dagpraktijk_text(TEXT_2024_IBAN_FOOTER, '2024-009_Winsum.pdf')
         assert r['factuurnummer'] == '2024-009'
 
+    def test_line_items_no_footer_ghost(self):
+        # Footer line "NL00 TEST 0000 0000 00  2024-009  € 5.120,96" must not
+        # be picked up as a werkdag. Previously, the parser extracted "009"
+        # from the factuurnummer as uren and the total as tarief.
+        r = parse_dagpraktijk_text(TEXT_2024_IBAN_FOOTER, '2024-009_Winsum.pdf')
+        assert len(r['line_items']) == 1
+        assert r['line_items'][0]['datum'] == '2024-03-04'
+        assert r['line_items'][0]['uren'] == 9.0
+        assert r['line_items'][0]['tarief'] == 70.0
+
 
 # ── Dagpraktijk parsing: 2024-2025 late format ──────────────────────
 

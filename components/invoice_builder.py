@@ -17,7 +17,7 @@ from nicegui import app, ui
 
 log = logging.getLogger(__name__)
 
-from components.invoice_generator import generate_invoice
+from components.invoice_generator import generate_invoice, archive_factuur_pdf
 from components.invoice_preview import render_invoice_html
 from components.shared_ui import date_input, open_klant_dialog
 from components.utils import format_euro, format_datum
@@ -859,7 +859,7 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None,
 
                                     async def do_create_and_save():
                                         new_id = await add_klant(
-                                            DB_PATH, naam=naam)
+                                            DB_PATH, **_read_klant_fields())
                                         new_kl = await get_klanten(
                                             DB_PATH,
                                             alleen_actief=True)
@@ -963,6 +963,11 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None,
                                     "Kon orphan PDF niet verwijderen: %s",
                                     pdf_to_cleanup)
 
+                    # Archive to SynologyDrive (best-effort, non-blocking)
+                    await asyncio.to_thread(
+                        archive_factuur_pdf, pdf_path,
+                        factuur_type=factuur_type, factuur_datum=factuur_datum)
+
                     _builder_saved['done'] = True
                     dlg.close()
                     ui.notify(
@@ -1015,7 +1020,8 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None,
                             ui.notify(
                                 f'Klant "{naam}" aangemaakt',
                                 type='info')
-                            kid = await add_klant(DB_PATH, naam=naam)
+                            kid = await add_klant(
+                                DB_PATH, **_read_klant_fields())
 
                     totaal_uren, totaal_km, totaal_bedrag, factuur_type = (
                         _calc_totals(line_items))

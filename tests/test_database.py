@@ -246,3 +246,18 @@ async def test_facturen_herinnering_datum_column(db):
         cols = {row['name']: row for row in await cur.fetchall()}
         assert 'herinnering_datum' in cols
         assert cols['herinnering_datum']['dflt_value'] == "''"
+
+
+@pytest.mark.asyncio
+async def test_add_klant_persists_all_fields(db):
+    """add_klant with full kwargs persists address/contact fields."""
+    kid = await add_klant(
+        db, naam='Testpraktijk', adres='Dorpsstraat 1',
+        contactpersoon='Dr. Test', postcode='1234AB', plaats='Testdorp')
+    klanten = await get_klanten(db)
+    kl = next(k for k in klanten if k.id == kid)
+    assert kl.naam == 'Testpraktijk'
+    assert kl.adres == 'Dorpsstraat 1'
+    assert kl.contactpersoon == 'Dr. Test'
+    assert kl.postcode == '1234AB'
+    assert kl.plaats == 'Testdorp'

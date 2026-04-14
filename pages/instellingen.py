@@ -62,6 +62,18 @@ def _validate_fiscal_params(p: dict) -> list[str]:
     elif not (0 <= p['kia_pct'] <= 100):
         errors.append(f'kia_pct moet tussen 0 en 100 liggen (nu: {p["kia_pct"]})')
 
+    # Required positive amounts: crash if None because fiscal engine accesses directly
+    required_positive_amt = [
+        'ahk_afbouw_pct',  # heffingskortingen.py uses params['ahk_afbouw_pct']
+        'zvw_max_grondslag',  # berekeningen.py uses params['zvw_max_grondslag']
+        'pvv_premiegrondslag',  # berekeningen.py PVV calculation
+    ]
+    for fld in required_positive_amt:
+        if fld not in p or p[fld] is None:
+            errors.append(f'{fld} is verplicht en mag niet leeg zijn')
+        elif p[fld] <= 0:
+            errors.append(f'{fld} moet groter dan 0 zijn (nu: {p[fld]})')
+
     # Bedragen die 0 mogen zijn (bv. geen startersaftrek meer van toepassing)
     optional_nonneg = [
         'ahk_max', 'ahk_drempel', 'ak_max',

@@ -286,7 +286,7 @@ async def aangifte_page():
                 kosten_per_cat = data['kosten_per_cat']
                 for r in kosten_per_cat:
                     cat = r['categorie']
-                    if cat.lower() == 'investering':
+                    if cat.lower() == 'investeringen':
                         continue
                     _invulhulp_line(
                         f'Winst > Kosten > {cat}', cat, r['totaal'])
@@ -379,6 +379,7 @@ async def aangifte_page():
                     )
                     _invalidate_cache()
                     await render_winst()
+                    await render_overzicht()
 
                 with ui.row().classes('items-center gap-4'):
                     za_check = ui.checkbox(
@@ -594,6 +595,8 @@ async def aangifte_page():
                 # Invalidate cache and refresh dependent views
                 _invalidate_cache()
                 new_data, new_f = await _get_fiscal(jaar)
+                if new_data is None:
+                    return
                 _render_ew_results(ew_results_ref['container'], new_f, woz_val, hyp_val,
                                     ew_val, new_data['params_dict'])
                 await render_overzicht()
@@ -697,6 +700,8 @@ async def aangifte_page():
 
                     box3_results_container.clear()
                     _render_box3_results(box3_results_container, box3, pd)
+                    _invalidate_cache()
+                    await render_overzicht()
                     ui.notify('Box 3 opgeslagen', type='positive')
 
                 # Auto-save on blur (matches Prive tab pattern)
@@ -1026,11 +1031,11 @@ async def aangifte_page():
         dialog.open()
 
     async def do_delete(doc, dialog):
-        # Delete file first, then DB record (if file fails, DB stays consistent)
+        # Delete DB record first, then file (if DB fails, file survives)
+        await delete_aangifte_document(DB_PATH, doc.id)
         file_path = Path(doc.bestandspad)
         if file_path.exists():
             await asyncio.to_thread(file_path.unlink)
-        await delete_aangifte_document(DB_PATH, doc.id)
         dialog.close()
         ui.notify(f'{doc.bestandsnaam} verwijderd', type='warning')
         docs = await get_aangifte_documenten(DB_PATH, state['jaar'])

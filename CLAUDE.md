@@ -1,6 +1,6 @@
 # Boekhouding App
 
-Standalone boekhoudapplicatie (NiceGUI + Python) voor een eenmanszaak huisartswaarnemer. Draait lokaal op macOS, opent in browser. Data in `data/` (niet in git).
+Standalone boekhoudapplicatie (NiceGUI + Python) voor een eenmanszaak huisartswaarnemer. Draait lokaal op macOS, opent in browser. Data in `~/Library/Application Support/Boekhouding/data/` (niet in git, niet op cloud-sync).
 
 ## Tech Stack
 - **UI**: NiceGUI >=3.0 (Quasar/Vue), browser mode (`ui.run(host='127.0.0.1', port=8085)`)
@@ -21,7 +21,7 @@ DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib .venv/bin/python -m pytest tests/ -
 ```
 
 ## Database
-10 tabellen: `klanten`, `klant_locaties`, `werkdagen`, `facturen`, `uitgaven`, `banktransacties`, `fiscale_params`, `bedrijfsgegevens`, `aangifte_documenten`, `afschrijving_overrides`
+11 tabellen: `klanten`, `klant_locaties`, `werkdagen`, `facturen`, `uitgaven`, `banktransacties`, `fiscale_params`, `bedrijfsgegevens`, `aangifte_documenten`, `afschrijving_overrides`, `jaarafsluiting_snapshots`
 
 - Raw SQL, `?` placeholders — GEEN f-strings in SQL
 - Bedragen REAL, datums TEXT (YYYY-MM-DD)
@@ -30,7 +30,9 @@ DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib .venv/bin/python -m pytest tests/ -
 - `werkdagen.status`: derived at query time from `factuurnummer` + `facturen.status`
 - `facturen.status` TEXT: `'concept'`, `'verstuurd'`, `'betaald'`
 - `facturen.type` TEXT: `'factuur'` (werkdag-backed), `'anw'` (imported ANW), `'vergoeding'` (ad-hoc)
-- SQLite op lokaal filesystem, NIET via SMB (WAL faalt)
+- SQLite op lokaal filesystem (`~/Library/Application Support/Boekhouding/data/`), NIET op cloud-sync (WAL+SynologyDrive/iCloud = silent corruption). Override via `BOEKHOUDING_DB_DIR` env var voor tests.
+- **Backup**: `VACUUM INTO` (atomair), NOOIT live-file copy van `.sqlite3`
+- **PDF archivering**: factuur-PDFs worden automatisch gekopieerd naar SynologyDrive financieel archief (`Inkomen en Uitgaven/{jaar}/Inkomsten/Dagpraktijk|ANW_Diensten/`). Best-effort, niet-blokkerend.
 
 ## Ontwikkelregels
 
@@ -65,7 +67,10 @@ Concept (grey) → Verstuurd (blue/info) → Betaald (green/positive)
 - Bij SQL queries op `facturen`: controleer altijd of `status != 'concept'` filtering nodig is
 - Bij `werkdagen` data: `factuurnummer = ''` = ongefactureerd. Oude werkdagen kunnen extern gefactureerd zijn.
 - **Gebruiker boven data**: als de gebruiker zegt dat data niet klopt, onderzoek root cause — vertrouw niet blindelings op DB-waarden.
-- **AppleScript email**: altijd plain text (HTML content + attachments is broken in Mail.app). Betaallink als URL in tekst.
+- **AppleScript email**: altijd plain text (HTML content + attachments is broken in Mail.app). Betaallink als URL in tekst. `_build_mail_body` geeft één string terug, geen tuple. Helper in `components/mail_helper.py`.
+- **Fiscale params**: alle jaar-afhankelijke waarden uit DB (`fiscale_params`), GEEN hardcoded fallbacks. Ontbrekende keys → loud ValueError, aangifte-pagina toont error-card met link naar Instellingen.
+- **Jaarafsluiting definitief**: maakt een echte JSON snapshot (`jaarafsluiting_snapshots` tabel). Render-pad leest snapshot voor definitief-jaren, live data voor concept. Snapshot is schema-tolerant (altijd `dict.get(key, default)` in render code).
+- **Bank matching**: `find_factuur_matches` retourneert `MatchProposal` met `confidence='high'|'low'`. Preview-dialoog gating: user bevestigt matches vóór toepassing. `apply_factuur_matches` gaat via `update_factuur_status`.
 
 ### YAGNI
 Geen: user auth, BTW-administratie, loon/voorraad, real-time bank-API, auto-matching, CI/CD, multi-language

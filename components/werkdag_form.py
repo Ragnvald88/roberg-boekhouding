@@ -9,7 +9,7 @@ from database import (
 )
 from datetime import date
 
-_KM_TARIEF_FALLBACK = 0.23
+_KM_TARIEF_FALLBACK = 0
 
 # Activiteitscodes
 CODES = {

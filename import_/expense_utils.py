@@ -9,9 +9,9 @@ import re
 from pathlib import Path
 
 # Base path of the bookkeeping archive
-ARCHIVE_BASE = Path(
-    '/Users/macbookpro_test/Library/CloudStorage/SynologyDrive-Main'
-    '/02_Financieel/Boekhouding_Waarneming'
+ARCHIVE_BASE = (
+    Path.home() / 'Library' / 'CloudStorage' / 'SynologyDrive-Main'
+    / '02_Financieel' / 'Boekhouding_Waarneming'
 )
 
 # Mapping: archive folder name → app KOSTEN_CATEGORIEEN value

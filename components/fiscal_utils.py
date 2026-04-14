@@ -59,10 +59,7 @@ async def fetch_fiscal_data(db_path: Path, jaar: int) -> dict | None:
     km_vergoeding = round(km_data['vergoeding'], 2)
 
     totaal_kosten_alle = sum(r['totaal'] for r in kosten_per_cat)
-    inv_dit_jaar_bedrag = sum(
-        (u.aanschaf_bedrag or u.bedrag) for u in inv_dit_jaar
-    )
-    kosten_excl_inv = totaal_kosten_alle - inv_dit_jaar_bedrag + km_vergoeding
+    kosten_excl_inv = totaal_kosten_alle + km_vergoeding
 
     # Fetch depreciation overrides for all investments
     all_overrides = await get_afschrijving_overrides_batch(

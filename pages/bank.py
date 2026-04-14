@@ -253,14 +253,22 @@ async def bank_page():
             ui.label('Transactie verwijderen?').classes('text-h6')
             ui.label(f"{row['datum']} — {row['tegenpartij']} — "
                      f"{row['bedrag_fmt']}").classes('text-grey')
+            if row.get('koppeling'):
+                ui.label(
+                    'Gekoppelde factuur wordt teruggezet naar verstuurd.'
+                ).classes('text-caption text-warning q-mt-sm')
             with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
                 ui.button('Annuleren', on_click=dialog.close).props('flat')
 
                 async def do_delete():
-                    await delete_banktransacties(DB_PATH,
-                                                 transactie_ids=[row['id']])
+                    _count, reverted = await delete_banktransacties(
+                        DB_PATH, transactie_ids=[row['id']])
                     dialog.close()
                     ui.notify('Transactie verwijderd', type='positive')
+                    if reverted:
+                        ui.notify(
+                            f'{len(reverted)} factuur/facturen teruggezet '
+                            f'naar verstuurd', type='info')
                     await refresh_table()
 
                 ui.button('Verwijderen', on_click=do_delete) \
@@ -272,16 +280,27 @@ async def bank_page():
         ids = [r['id'] for r in selected]
         if not ids:
             return
+        n_linked = sum(1 for r in selected if r.get('koppeling'))
         with ui.dialog() as dialog, ui.card():
             ui.label(f'{len(ids)} transacties verwijderen?').classes('text-h6')
+            if n_linked:
+                ui.label(
+                    f'{n_linked} gekoppelde facturen worden teruggezet '
+                    f'naar verstuurd.'
+                ).classes('text-caption text-warning q-mt-sm')
             with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
                 ui.button('Annuleren', on_click=dialog.close).props('flat')
 
                 async def do_bulk():
-                    await delete_banktransacties(DB_PATH, transactie_ids=ids)
+                    _count, reverted = await delete_banktransacties(
+                        DB_PATH, transactie_ids=ids)
                     dialog.close()
                     ui.notify(f'{len(ids)} transacties verwijderd',
                               type='positive')
+                    if reverted:
+                        ui.notify(
+                            f'{len(reverted)} factuur/facturen teruggezet '
+                            f'naar verstuurd', type='info')
                     await refresh_table()
                     await refresh_csv_list()
 

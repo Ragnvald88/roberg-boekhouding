@@ -93,6 +93,41 @@ async def test_uitgaven_per_categorie(db):
 
 
 @pytest.mark.asyncio
+async def test_uitgaven_per_categorie_excludes_investments(db):
+    """Investment items (is_investering=1) must not appear in category totals."""
+    await add_uitgave(
+        db, datum="2026-01-15", categorie="Bankkosten",
+        omschrijving="Rabo jan", bedrag=12.50,
+    )
+    # Investment categorised as 'Investeringen'
+    await add_uitgave(
+        db, datum="2026-02-01", categorie="Investeringen",
+        omschrijving="MacBook", bedrag=1499.00,
+        is_investering=1, levensduur_jaren=5,
+        restwaarde_pct=10, zakelijk_pct=100,
+        aanschaf_bedrag=1499.00,
+    )
+    # Investment with a DIFFERENT category (the tricky case)
+    await add_uitgave(
+        db, datum="2026-03-01", categorie="Automatisering",
+        omschrijving="Monitor", bedrag=600.00,
+        is_investering=1, levensduur_jaren=5,
+        restwaarde_pct=10, zakelijk_pct=100,
+        aanschaf_bedrag=600.00,
+    )
+
+    result = await get_uitgaven_per_categorie(db, jaar=2026)
+    cats = {r['categorie']: r['totaal'] for r in result}
+
+    # Only the non-investment expense should appear
+    assert 'Bankkosten' in cats
+    assert cats['Bankkosten'] == 12.50
+    assert 'Investeringen' not in cats
+    assert 'Automatisering' not in cats
+    assert len(cats) == 1
+
+
+@pytest.mark.asyncio
 async def test_investering_flag(db):
     """Add expense >= 450 with is_investering=1, verify get_investeringen returns it."""
     # Normal expense (< 450)

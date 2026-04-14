@@ -8,10 +8,13 @@ VALID_2024 = {
     'schijf1_pct': 35.75, 'schijf2_pct': 37.56, 'schijf3_pct': 49.50,
     'mkb_vrijstelling_pct': 12.70, 'kia_pct': 28,
     'kia_ondergrens': 2901, 'kia_bovengrens': 70602,
-    'ahk_max': 3115, 'ahk_drempel': 29736, 'ak_max': 5685,
+    'ahk_max': 3115, 'ahk_drempel': 29736, 'ahk_afbouw_pct': 6.095,
+    'ak_max': 5685,
     'zelfstandigenaftrek': 3750,
     'pvv_aow_pct': 17.90, 'pvv_anw_pct': 0.10, 'pvv_wlz_pct': 9.65,
-    'zvw_pct': 4.85, 'ew_forfait_pct': 0.35, 'repr_aftrek_pct': 80,
+    'pvv_premiegrondslag': 38098,
+    'zvw_pct': 4.85, 'zvw_max_grondslag': 66956,
+    'ew_forfait_pct': 0.35, 'repr_aftrek_pct': 80,
 }
 
 
@@ -95,6 +98,30 @@ def test_validate_rejects_zero_ew_forfait_pct():
     bad['ew_forfait_pct'] = 0
     errors = _validate_fiscal_params(bad)
     assert any('ew_forfait_pct' in e for e in errors)
+
+
+def test_validate_rejects_missing_ahk_afbouw_pct():
+    """ahk_afbouw_pct is required — fiscal engine crashes on None."""
+    bad = dict(VALID_2024)
+    del bad['ahk_afbouw_pct']
+    errors = _validate_fiscal_params(bad)
+    assert any('ahk_afbouw_pct' in e for e in errors)
+
+
+def test_validate_rejects_missing_zvw_max_grondslag():
+    """zvw_max_grondslag is required — fiscal engine crashes on None."""
+    bad = dict(VALID_2024)
+    del bad['zvw_max_grondslag']
+    errors = _validate_fiscal_params(bad)
+    assert any('zvw_max_grondslag' in e for e in errors)
+
+
+def test_validate_rejects_missing_pvv_premiegrondslag():
+    """pvv_premiegrondslag is required — wrong PVV if zero."""
+    bad = dict(VALID_2024)
+    del bad['pvv_premiegrondslag']
+    errors = _validate_fiscal_params(bad)
+    assert any('pvv_premiegrondslag' in e for e in errors)
 
 
 def test_validate_accepts_zero_for_optional_aftrekposten():

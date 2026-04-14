@@ -3,7 +3,7 @@
 import pytest
 from database import (
     add_klant, add_werkdag, add_factuur, add_uitgave,
-    add_banktransacties,
+    add_banktransacties, delete_banktransacties,
     get_omzet_totaal, get_omzet_per_maand, get_representatie_totaal,
     get_debiteuren_op_peildatum,
     find_factuur_matches, apply_factuur_matches, MatchProposal,
@@ -11,6 +11,7 @@ from database import (
     get_afschrijving_overrides, get_afschrijving_overrides_batch,
     set_afschrijving_override, delete_afschrijving_override,
     get_db_ctx, get_va_betalingen, get_openstaande_facturen,
+    update_factuur_status,
 )
 
 
@@ -1107,5 +1108,230 @@ async def test_factuurnummer_exists_true(db):
 async def test_factuurnummer_exists_false(db):
     """Verify non-existent nummer returns False."""
     assert await factuurnummer_exists(db, nummer="9999-ZZZ") is False
+
+
+# ── Bank-match dedup tests ──────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_apply_matches_dedup_bank_id(db):
+    """Two proposals sharing one bank_id → only first applied, second skipped."""
+    kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=0)
+    fid_a = await add_factuur(db, nummer='2026-DA', klant_id=kid,
+                               datum='2026-01-10', totaal_bedrag=640.00,
+                               status='verstuurd')
+    fid_b = await add_factuur(db, nummer='2026-DB', klant_id=kid,
+                               datum='2026-01-20', totaal_bedrag=640.00,
+                               status='verstuurd')
+    await add_banktransacties(db, [
+        {'datum': '2026-01-25', 'bedrag': 640.00, 'tegenpartij': 'Test',
+         'omschrijving': 'payment', 'categorie': ''},
+    ], csv_bestand='test.csv')
+
+    async with get_db_ctx(db) as conn:
+        cur = await conn.execute("SELECT id FROM banktransacties")
+        bank_id = (await cur.fetchone())['id']
+
+    # Craft two proposals pointing at the same bank_id (the ambiguous case)
+    proposals = [
+        MatchProposal(factuur_id=fid_a, bank_id=bank_id, delta=0.0,
+                      confidence='low', match_type='bedrag',
+                      bank_datum='2026-01-25'),
+        MatchProposal(factuur_id=fid_b, bank_id=bank_id, delta=0.0,
+                      confidence='low', match_type='bedrag',
+                      bank_datum='2026-01-25'),
+    ]
+    count = await apply_factuur_matches(db, proposals)
+    assert count == 1  # only one applied
+
+    async with get_db_ctx(db) as conn:
+        cur = await conn.execute("SELECT status FROM facturen WHERE id=?", (fid_a,))
+        assert (await cur.fetchone())['status'] == 'betaald'
+        cur = await conn.execute("SELECT status FROM facturen WHERE id=?", (fid_b,))
+        assert (await cur.fetchone())['status'] == 'verstuurd'  # unchanged
+        # Bank row linked to first factuur only
+        cur = await conn.execute(
+            "SELECT koppeling_id FROM banktransacties WHERE id=?", (bank_id,))
+        assert (await cur.fetchone())['koppeling_id'] == fid_a
+
+
+@pytest.mark.asyncio
+async def test_apply_matches_dedup_factuur_id(db):
+    """Two proposals sharing one factuur_id → only first applied."""
+    kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=0)
+    fid = await add_factuur(db, nummer='2026-DF', klant_id=kid,
+                             datum='2026-01-10', totaal_bedrag=640.00,
+                             status='verstuurd')
+    await add_banktransacties(db, [
+        {'datum': '2026-01-25', 'bedrag': 640.00, 'tegenpartij': 'Test',
+         'omschrijving': 'pay1', 'categorie': ''},
+        {'datum': '2026-01-26', 'bedrag': 640.00, 'tegenpartij': 'Test',
+         'omschrijving': 'pay2', 'categorie': ''},
+    ], csv_bestand='test.csv')
+
+    async with get_db_ctx(db) as conn:
+        cur = await conn.execute("SELECT id FROM banktransacties ORDER BY datum")
+        rows = await cur.fetchall()
+        bid1, bid2 = rows[0]['id'], rows[1]['id']
+
+    proposals = [
+        MatchProposal(factuur_id=fid, bank_id=bid1, delta=0.0,
+                      confidence='high', match_type='bedrag',
+                      bank_datum='2026-01-25'),
+        MatchProposal(factuur_id=fid, bank_id=bid2, delta=0.0,
+                      confidence='high', match_type='bedrag',
+                      bank_datum='2026-01-26'),
+    ]
+    count = await apply_factuur_matches(db, proposals)
+    assert count == 1
+
+    async with get_db_ctx(db) as conn:
+        # Only first bank row should be linked
+        cur = await conn.execute(
+            "SELECT koppeling_type FROM banktransacties WHERE id=?", (bid1,))
+        assert (await cur.fetchone())['koppeling_type'] == 'factuur'
+        cur = await conn.execute(
+            "SELECT koppeling_type FROM banktransacties WHERE id=?", (bid2,))
+        assert (await cur.fetchone())['koppeling_type'] == ''  # unlinked
+
+
+@pytest.mark.asyncio
+async def test_apply_matches_atomic_consistency(db):
+    """After apply, every betaald factuur has a corresponding bank link."""
+    kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=0)
+    fid = await add_factuur(db, nummer='2026-AT', klant_id=kid,
+                             datum='2026-01-10', totaal_bedrag=640.00,
+                             status='verstuurd')
+    await add_banktransacties(db, [
+        {'datum': '2026-01-25', 'bedrag': 640.00, 'tegenpartij': 'Test',
+         'omschrijving': 'payment', 'categorie': ''},
+    ], csv_bestand='test.csv')
+
+    async with get_db_ctx(db) as conn:
+        cur = await conn.execute("SELECT id FROM banktransacties")
+        bank_id = (await cur.fetchone())['id']
+
+    proposals = [
+        MatchProposal(factuur_id=fid, bank_id=bank_id, delta=0.0,
+                      confidence='high', match_type='bedrag',
+                      bank_datum='2026-01-25'),
+    ]
+    await apply_factuur_matches(db, proposals)
+
+    # Consistency check: betaald factuur must have a bank link
+    async with get_db_ctx(db) as conn:
+        cur = await conn.execute("SELECT status FROM facturen WHERE id=?", (fid,))
+        assert (await cur.fetchone())['status'] == 'betaald'
+        cur = await conn.execute(
+            "SELECT koppeling_type, koppeling_id FROM banktransacties WHERE id=?",
+            (bank_id,))
+        row = await cur.fetchone()
+        assert row['koppeling_type'] == 'factuur'
+        assert row['koppeling_id'] == fid
+
+
+# ── Bank deletion revert tests ──────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_delete_linked_reverts_factuur(db):
+    """Deleting a linked bank txn reverts the factuur to verstuurd."""
+    kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=0)
+    fid = await add_factuur(db, nummer='2026-DL', klant_id=kid,
+                             datum='2026-01-10', totaal_bedrag=640.00,
+                             status='verstuurd')
+    await add_banktransacties(db, [
+        {'datum': '2026-01-25', 'bedrag': 640.00, 'tegenpartij': 'Test',
+         'omschrijving': 'payment', 'categorie': ''},
+    ], csv_bestand='test.csv')
+
+    async with get_db_ctx(db) as conn:
+        cur = await conn.execute("SELECT id FROM banktransacties")
+        bank_id = (await cur.fetchone())['id']
+
+    # Apply match (factuur becomes betaald)
+    proposals = [
+        MatchProposal(factuur_id=fid, bank_id=bank_id, delta=0.0,
+                      confidence='high', match_type='bedrag',
+                      bank_datum='2026-01-25'),
+    ]
+    await apply_factuur_matches(db, proposals)
+
+    # Delete the linked bank transaction
+    deleted, reverted = await delete_banktransacties(db, transactie_ids=[bank_id])
+    assert deleted == 1
+    assert reverted == [fid]
+
+    # Factuur should be back to verstuurd with cleared betaald_datum
+    async with get_db_ctx(db) as conn:
+        cur = await conn.execute(
+            "SELECT status, betaald_datum FROM facturen WHERE id=?", (fid,))
+        row = await cur.fetchone()
+        assert row['status'] == 'verstuurd'
+        assert row['betaald_datum'] == ''
+
+
+@pytest.mark.asyncio
+async def test_delete_unlinked_no_revert(db):
+    """Deleting an unlinked bank txn does not affect any factuur."""
+    kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=0)
+    fid = await add_factuur(db, nummer='2026-UL', klant_id=kid,
+                             datum='2026-01-10', totaal_bedrag=640.00,
+                             status='verstuurd')
+    await add_banktransacties(db, [
+        {'datum': '2026-01-25', 'bedrag': 640.00, 'tegenpartij': 'Test',
+         'omschrijving': 'payment', 'categorie': ''},
+    ], csv_bestand='test.csv')
+
+    async with get_db_ctx(db) as conn:
+        cur = await conn.execute("SELECT id FROM banktransacties")
+        bank_id = (await cur.fetchone())['id']
+
+    deleted, reverted = await delete_banktransacties(db, transactie_ids=[bank_id])
+    assert deleted == 1
+    assert reverted == []
+
+    # Factuur still verstuurd
+    async with get_db_ctx(db) as conn:
+        cur = await conn.execute("SELECT status FROM facturen WHERE id=?", (fid,))
+        assert (await cur.fetchone())['status'] == 'verstuurd'
+
+
+@pytest.mark.asyncio
+async def test_bulk_delete_mixed_linked_unlinked(db):
+    """Bulk delete: only linked facturen are reverted."""
+    kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=0)
+    fid = await add_factuur(db, nummer='2026-BM', klant_id=kid,
+                             datum='2026-01-10', totaal_bedrag=640.00,
+                             status='verstuurd')
+    await add_banktransacties(db, [
+        {'datum': '2026-01-25', 'bedrag': 640.00, 'tegenpartij': 'Test',
+         'omschrijving': 'linked payment', 'categorie': ''},
+        {'datum': '2026-01-26', 'bedrag': 100.00, 'tegenpartij': 'Other',
+         'omschrijving': 'unrelated', 'categorie': ''},
+    ], csv_bestand='test.csv')
+
+    async with get_db_ctx(db) as conn:
+        cur = await conn.execute("SELECT id FROM banktransacties ORDER BY datum")
+        rows = await cur.fetchall()
+        bid_linked, bid_unlinked = rows[0]['id'], rows[1]['id']
+
+    # Link only the first bank txn
+    proposals = [
+        MatchProposal(factuur_id=fid, bank_id=bid_linked, delta=0.0,
+                      confidence='high', match_type='bedrag',
+                      bank_datum='2026-01-25'),
+    ]
+    await apply_factuur_matches(db, proposals)
+
+    # Bulk delete both
+    deleted, reverted = await delete_banktransacties(
+        db, transactie_ids=[bid_linked, bid_unlinked])
+    assert deleted == 2
+    assert reverted == [fid]
+
+    async with get_db_ctx(db) as conn:
+        cur = await conn.execute("SELECT status FROM facturen WHERE id=?", (fid,))
+        assert (await cur.fetchone())['status'] == 'verstuurd'
 
 

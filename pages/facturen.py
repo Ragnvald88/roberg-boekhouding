@@ -10,7 +10,7 @@ from nicegui import app, events, ui
 
 from components.layout import create_layout, page_title
 from components.invoice_builder import open_invoice_builder, _build_regels
-from components.invoice_generator import generate_invoice
+from components.invoice_generator import generate_invoice, archive_factuur_pdf
 from components.mail_helper import open_mail_with_attachment
 from components.utils import format_euro, format_datum, generate_csv
 from database import (
@@ -345,18 +345,20 @@ async def facturen_page():
         # Facturen table
         columns = [
             {'name': 'nummer', 'label': 'Nummer', 'field': 'nummer',
-             'sortable': True, 'align': 'left'},
+             'sortable': True, 'align': 'left', 'style': 'width: 100px'},
             {'name': 'datum', 'label': 'Datum', 'field': 'datum',
-             'sortable': True, 'align': 'left'},
+             'sortable': True, 'align': 'left', 'style': 'width: 100px'},
             {'name': 'klant', 'label': 'Klant', 'field': 'klant_naam',
-             'sortable': True, 'align': 'left'},
+             'sortable': True, 'align': 'left',
+             'style': 'max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap'},
             {'name': 'uren', 'label': 'Uren', 'field': 'totaal_uren',
-             'align': 'right'},
+             'align': 'right', 'style': 'width: 50px'},
             {'name': 'bedrag', 'label': 'Bedrag', 'field': 'totaal_bedrag',
-             'sortable': True, 'align': 'right'},
+             'sortable': True, 'align': 'right', 'style': 'width: 90px'},
             {'name': 'status', 'label': 'Status', 'field': 'status',
-             'sortable': True, 'align': 'center'},
-            {'name': 'actions', 'label': '', 'field': 'actions', 'align': 'center'},
+             'sortable': True, 'align': 'center', 'style': 'width: 90px'},
+            {'name': 'actions', 'label': '', 'field': 'actions',
+             'align': 'center', 'style': 'width: 40px'},
         ]
 
         table = ui.table(
@@ -410,6 +412,15 @@ async def facturen_page():
         table.add_slot('body-cell-datum', '''
             <q-td :props="props">
                 {{ props.row.datum_fmt }}
+            </q-td>
+        ''')
+
+        table.add_slot('body-cell-klant', '''
+            <q-td :props="props" style="max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">
+                {{ props.row.klant_naam }}
+                <q-tooltip v-if="props.row.klant_naam && props.row.klant_naam.length > 25">
+                    {{ props.row.klant_naam }}
+                </q-tooltip>
             </q-td>
         ''')
 
@@ -1114,6 +1125,10 @@ async def facturen_page():
             pdf_path = row.get('pdf_pad', '')
             nummer = row['nummer']
 
+            # Fetch shared data once (used for both PDF generation and email)
+            all_klanten = await get_klanten(DB_PATH, alleen_actief=False)
+            bg = await get_bedrijfsgegevens(DB_PATH)
+
             # Auto-generate PDF for concepts that don't have one yet
             if not pdf_path or not Path(pdf_path).exists():
                 async with get_db_ctx(DB_PATH) as conn:
@@ -1131,7 +1146,6 @@ async def facturen_page():
                 regels = _build_regels(line_items)
 
                 # Get klant info for PDF
-                all_klanten = await get_klanten(DB_PATH, alleen_actief=False)
                 klant_obj = next(
                     (k for k in all_klanten if k.id == row.get('klant_id')), None)
                 klant_fields = regels_data.get('klant_fields', {})
@@ -1142,7 +1156,6 @@ async def facturen_page():
                         'plaats': getattr(klant_obj, 'plaats', ''),
                     }
 
-                bg = await get_bedrijfsgegevens(DB_PATH)
                 bg_dict = {}
                 if bg:
                     for fld in ('bedrijfsnaam', 'naam', 'adres',
@@ -1166,8 +1179,12 @@ async def facturen_page():
                         qr_path=gen_qr,
                     )
                     pdf_path = str(pdf_path_obj)
-                    # Update factuur with generated PDF path
                     await update_factuur(DB_PATH, row['id'], pdf_pad=pdf_path)
+                    # Archive to SynologyDrive (best-effort)
+                    await asyncio.to_thread(
+                        archive_factuur_pdf, pdf_path_obj,
+                        factuur_type=row.get('type', 'factuur'),
+                        factuur_datum=row.get('datum', ''))
                 except Exception as ex:
                     ui.notify(f'PDF generatie mislukt: {ex}', type='negative')
                     return
@@ -1176,13 +1193,9 @@ async def facturen_page():
             klant_id = row.get('klant_id')
             klant_email = ''
             if klant_id:
-                all_klanten = await get_klanten(DB_PATH, alleen_actief=False)
                 klant = next((k for k in all_klanten if k.id == klant_id), None)
                 if klant and hasattr(klant, 'email'):
                     klant_email = klant.email or ''
-
-            # Get business info for email body
-            bg = await get_bedrijfsgegevens(DB_PATH)
 
             bedrag = format_euro(row['totaal_bedrag'])
             iban = bg.iban if bg else ''

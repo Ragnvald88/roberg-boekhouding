@@ -29,17 +29,21 @@ Gebruik dit als bron voor `/ux-review`.
 - Geen invoice builder — verstuurde facturen mogen niet structureel gewijzigd worden
 
 ### Factuur versturen
-- Trigger: "Verstuur via e-mail" in row-menu (concept factuur)
-- Opent Mail.app via AppleScript met pre-filled email + PDF bijlage
-- Status wordt automatisch 'verstuurd'
-- Werkt alleen als er een PDF is gegenereerd
+- Trigger: "Verstuur via e-mail" in row-menu (alle statussen met PDF)
+- Opent Mail.app via AppleScript met pre-filled **plain-text** body + PDF bijlage
+- Body is altijd plain text (HTML content + attachments is kapot in Mail.app). Betaallink wordt als URL in de tekst opgenomen, Mail.app maakt er automatisch een clickbare link van.
+- Als er nog geen PDF bestaat, wordt deze automatisch gegenereerd vóór versturen
+- Status wordt automatisch 'verstuurd' als factuur concept was
 
 ### Factuur status lifecycle
 - concept → verstuurd (via email of handmatig markeren)
-- verstuurd → betaald (handmatig of auto-match via bank import)
-- betaald → verstuurd (terugdraaien, "markeer onbetaald")
 - concept → betaald (direct, voor imports)
-- Ongeldige transities: betaald→concept, verstuurd→concept (ValueError)
+- verstuurd → betaald (handmatig of auto-match via bank import)
+- verstuurd → concept (escape hatch voor per-ongeluk versturen; status is advisory, niet authoritative)
+- betaald → verstuurd (terugdraaien, "markeer onbetaald")
+- Ongeldige transitie: betaald → concept (ValueError)
+
+De state machine is bewust los. Een `verstuurd` flag betekent niet dat de factuur écht verstuurd is — het kan een mis-klik zijn. De gebruiker moet altijd terug kunnen naar concept om te corrigeren. NIET aanscherpen zonder expliciete vraag.
 
 ### PDF import
 - Trigger: "Importeer" button op `/facturen`
@@ -123,8 +127,9 @@ Gebruik dit als bron voor `/ux-review`.
 - Accepteert Rabobank CSV formaat
 - Auto-archiveert CSV naar `data/bank_csv/`
 - Duplicaat-detectie op (datum, bedrag, tegenpartij, omschrijving)
-- **Auto-match**: matcht automatisch facturen aan banktransacties (op factuurnummer in omschrijving of bedrag-match)
-- Toont notificatie met aantal geïmporteerd + gematcht
+- **Match-voorstel**: na import toont een preview-dialoog met voorgestelde factuur↔banktransactie matches
+- Hoge-zekerheid matches (nummer-match) staan default aangevinkt; lage-zekerheid (bedrag-only, ambiguïteit) tonen ⚠ en moeten expliciet worden aangevinkt
+- Pas na klik "Toepassen" worden matches doorgevoerd via `update_factuur_status`
 
 ### Transactie categoriseren
 - Inline categorie-dropdown per rij
@@ -173,7 +178,8 @@ Gebruik dit als bron voor `/ux-review`.
 ### Jaarcijfers rapport
 - 5 tabs: Balans, W&V, Toelichting, Controles, Document
 - "Bewerken" toggle voor handmatige balans-aanpassingen
-- "Markeer als definitief" lockt alles
+- "Markeer als definitief" maakt een echte snapshot (JSON) van alle fiscale data + balans + parameters. Latere wijzigingen aan werkdagen/facturen/uitgaven muteren de definitieve cijfers niet
+- "Open vergrendeling" knop: maakt het jaar weer bewerkbaar, historische snapshot blijft bewaard. Bij opnieuw markeren wordt de snapshot overschreven
 - "Exporteer PDF" genereert jaarcijfers PDF
 
 ### Controles tab
@@ -190,10 +196,18 @@ Gebruik dit als bron voor `/ux-review`.
 
 ### Fiscale parameters
 - Per jaar bewerkbaar (IB schijven, ZA/SA/MKB, KIA, heffingskortingen, etc.)
-- "Jaar toevoegen" kopieert van meest recente jaar
+- Input-validatie: percentages moeten > 0, schijfgrenzen monotoon, ontbrekende verplichte velden worden geweigerd
+- "Jaar toevoegen" kopieert van meest recente jaar (vereist minstens één bestaand jaar)
 
 ### Backup
-- Download ZIP van database + alle bestanden
+- Download ZIP met atomaire database-snapshot (`VACUUM INTO`) + alle bestanden
+- Snapshot is veilig tijdens gebruik — geen WAL races
+- Database locatie: `~/Library/Application Support/Boekhouding/data/` (lokaal, niet cloud-sync)
+
+### PDF archivering
+- Factuur-PDFs worden bij generatie automatisch gekopieerd naar SynologyDrive financieel archief
+- Locatie: `~/Library/CloudStorage/SynologyDrive-Main/02_Financieel/Boekhouding_Waarneming/Inkomen en Uitgaven/{jaar}/Inkomsten/{Dagpraktijk|ANW_Diensten}/`
+- Best-effort: als SynologyDrive offline is, werkt de app normaal door (alleen warning in log)
 
 ---
 

@@ -13,3 +13,13 @@ _env = Environment(
 )
 _env.filters['format_euro'] = format_euro
 _env.filters['format_datum'] = format_datum
+
+
+def _euro_no_decimals(value):
+    """Euro format without decimals, for year-end reports."""
+    if value is None:
+        return '€ 0'
+    return f"€ {value:,.0f}".replace(',', '.')
+
+
+_env.filters['euro'] = _euro_no_decimals

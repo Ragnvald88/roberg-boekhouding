@@ -1249,10 +1249,10 @@ async def delete_uitgave(db_path: Path = DB_PATH, uitgave_id: int = 0) -> None:
 async def get_uitgaven_per_categorie(db_path: Path = DB_PATH,
                                       jaar: int = None) -> list[dict]:
     async with get_db_ctx(db_path) as conn:
-        sql = "SELECT categorie, SUM(bedrag) as totaal FROM uitgaven"
+        sql = "SELECT categorie, SUM(bedrag) as totaal FROM uitgaven WHERE is_investering = 0"
         params = []
         if jaar:
-            sql += " WHERE datum >= ? AND datum < ?"
+            sql += " AND datum >= ? AND datum < ?"
             params.extend([f'{jaar}-01-01', f'{jaar+1}-01-01'])
         sql += " GROUP BY categorie ORDER BY totaal DESC"
         cursor = await conn.execute(sql, params)
@@ -1377,18 +1377,43 @@ async def update_banktransactie(db_path: Path = DB_PATH, transactie_id: int = 0,
 
 
 async def delete_banktransacties(db_path: Path = DB_PATH,
-                                  transactie_ids: list[int] = None) -> int:
-    """Delete bank transactions by IDs. Returns count deleted."""
+                                  transactie_ids: list[int] = None) -> tuple[int, list[int]]:
+    """Delete bank transactions by IDs.
+
+    Linked facturen (koppeling_type='factuur') are automatically reverted
+    from betaald to verstuurd in the same transaction.
+
+    Returns (deleted_count, reverted_factuur_ids).
+    """
     if not transactie_ids:
-        return 0
+        return 0, []
     async with get_db_ctx(db_path) as conn:
         placeholders = ','.join('?' for _ in transactie_ids)
+
+        # Find linked facturen before deletion
+        cur = await conn.execute(
+            f"SELECT koppeling_id FROM banktransacties "
+            f"WHERE id IN ({placeholders}) AND koppeling_type = 'factuur' "
+            f"AND koppeling_id IS NOT NULL",
+            transactie_ids,
+        )
+        linked = await cur.fetchall()
+        linked_factuur_ids = [r['koppeling_id'] for r in linked]
+
+        # Revert linked facturen betaald → verstuurd (same transaction)
+        for fid in linked_factuur_ids:
+            await conn.execute(
+                "UPDATE facturen SET status = 'verstuurd', betaald_datum = '' "
+                "WHERE id = ? AND status = 'betaald'",
+                (fid,))
+
+        # Delete the bank transactions
         cursor = await conn.execute(
             f"DELETE FROM banktransacties WHERE id IN ({placeholders})",
             transactie_ids,
         )
         await conn.commit()
-        return cursor.rowcount
+        return cursor.rowcount, linked_factuur_ids
 
 
 BELASTINGDIENST_IBAN = 'NL86INGB0002445588'
@@ -2399,46 +2424,54 @@ async def apply_factuur_matches(db_path: Path = DB_PATH,
                                  proposals: list = None) -> int:
     """Apply confirmed factuur-bank matches.
 
-    Routes the status transition through ``update_factuur_status`` (the central
-    state-machine validator) rather than a raw UPDATE — this keeps the
-    verstuurd→betaald rule in one place and ensures any future transition
-    tightening applies here too.
+    Uses a single connection for the entire batch so the factuur status
+    update and bank-transaction link are committed atomically.  Duplicate
+    bank_id or factuur_id entries in *proposals* are silently skipped
+    (first-seen wins) to prevent one bank payment marking two invoices.
 
     Accepts a list of ``MatchProposal``. Returns count of applied matches.
-    Invalid transitions (e.g. concept→betaald) are skipped silently.
+    Non-verstuurd facturen are skipped silently.
     """
     if not proposals:
         return 0
 
     applied = 0
-    for p in proposals:
-        # Read current status; skip if not 'verstuurd' (defence in depth —
-        # update_factuur_status also rejects, but raising would abort the
-        # whole batch).
-        async with get_db_ctx(db_path) as conn:
+    seen_bank_ids: set[int] = set()
+    seen_factuur_ids: set[int] = set()
+
+    async with get_db_ctx(db_path) as conn:
+        for p in proposals:
+            # Deduplicate: one bank row → one invoice, one invoice → one bank row
+            if p.bank_id in seen_bank_ids or p.factuur_id in seen_factuur_ids:
+                continue
+
+            # Only transition verstuurd → betaald
             cur = await conn.execute(
                 "SELECT status FROM facturen WHERE id = ?", (p.factuur_id,))
             row = await cur.fetchone()
             if not row or row['status'] != 'verstuurd':
                 continue
 
-        # Central state-machine transition.
-        try:
-            await update_factuur_status(
-                db_path, factuur_id=p.factuur_id,
-                status='betaald', betaald_datum=p.bank_datum)
-        except ValueError:
-            continue
+            if p.bank_datum:
+                _validate_datum(p.bank_datum)
 
-        # Link the bank transaction to the factuur.
-        async with get_db_ctx(db_path) as conn:
+            # Mark factuur as betaald
+            await conn.execute(
+                "UPDATE facturen SET status = 'betaald', betaald_datum = ? "
+                "WHERE id = ?",
+                (p.bank_datum, p.factuur_id))
+
+            # Link bank transaction to factuur
             await conn.execute(
                 "UPDATE banktransacties SET koppeling_type = 'factuur', "
                 "koppeling_id = ? WHERE id = ?",
                 (p.factuur_id, p.bank_id))
-            await conn.commit()
-        applied += 1
 
+            seen_bank_ids.add(p.bank_id)
+            seen_factuur_ids.add(p.factuur_id)
+            applied += 1
+
+        await conn.commit()
     return applied
 
 

@@ -343,6 +343,10 @@ def extract_dagpraktijk_line_items(text: str) -> list[dict]:
             'betaaltermijn', 'rekeningnummer',
         )):
             continue
+        # Skip footer "IBAN | Factuurnummer | Totaal" line: a bank IBAN on
+        # the line means this is the summary row, not a werkdag.
+        if re.search(r'\bNL\d{2}\s*[A-Z]{4}\b', stripped):
+            continue
 
         # Check for a date anywhere in the line
         date_match = re.search(r'(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})', stripped)

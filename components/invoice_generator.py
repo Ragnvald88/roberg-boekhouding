@@ -1,5 +1,7 @@
-"""WeasyPrint PDF factuur generator."""
+"""WeasyPrint PDF factuur generator + SynologyDrive archivering."""
 
+import logging
+import shutil
 from pathlib import Path
 from datetime import datetime, timedelta
 
@@ -8,6 +10,45 @@ from components.utils import format_datum
 from database import DB_PATH
 
 DATA_DIR = DB_PATH.parent
+
+log = logging.getLogger(__name__)
+
+# SynologyDrive archief — facturen worden hier automatisch gekopieerd per type/jaar
+ARCHIVE_BASE = Path.home() / 'Library' / 'CloudStorage' / 'SynologyDrive-Main' / \
+    '02_Financieel' / 'Boekhouding_Waarneming' / 'Inkomen en Uitgaven'
+
+_TYPE_TO_SUBDIR = {
+    'factuur': 'Inkomsten/Dagpraktijk',
+    'anw': 'Inkomsten/ANW_Diensten',
+    'vergoeding': 'Inkomsten',
+}
+
+
+def archive_factuur_pdf(
+    pdf_path: Path,
+    factuur_type: str = 'factuur',
+    factuur_datum: str = '',
+) -> Path | None:
+    """Copy a factuur PDF to the SynologyDrive financial archive.
+
+    Target: ARCHIVE_BASE / {jaar} / {type_subdir} / {filename}
+    Returns the archive path on success, None on failure (offline, permissions, etc).
+    Never raises — archiving failure must not block the main workflow.
+    """
+    if not pdf_path.exists():
+        return None
+    jaar = factuur_datum[:4] if factuur_datum and len(factuur_datum) >= 4 else str(datetime.now().year)
+    subdir = _TYPE_TO_SUBDIR.get(factuur_type, 'Inkomsten')
+    target_dir = ARCHIVE_BASE / jaar / subdir
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = target_dir / pdf_path.name
+        shutil.copy2(str(pdf_path), str(target))
+        log.info("Factuur gearchiveerd: %s", target)
+        return target
+    except OSError as exc:
+        log.warning("Archivering mislukt (SynologyDrive offline?): %s", exc)
+        return None
 
 
 def generate_invoice(factuur_nummer: str, klant: dict, werkdagen: list[dict],
@@ -67,7 +108,7 @@ def generate_invoice(factuur_nummer: str, klant: dict, werkdagen: list[dict],
             subtotaal_werk += bedrag
 
             km = wd.get('km', 0) or 0
-            km_tarief = wd.get('km_tarief', 0.23)
+            km_tarief = wd.get('km_tarief', 0)
             if km > 0 and km_tarief > 0:
                 km_bedrag = km * km_tarief
                 locatie = wd.get('locatie', '')

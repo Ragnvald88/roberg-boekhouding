@@ -396,11 +396,13 @@ async def dashboard_page():
                     ui.icon('schedule', size='20px').style('color: #0F766E')
                     with ui.row().classes('items-baseline gap-1'):
                         ui.label(
-                            f'{uren:,.0f} uur'.replace(',', '.')
+                            f'{uren:,.0f} / {uren_criterium:,} uur'.replace(',', '.')
                         ).classes('strip-value')
+                        uren_pct = uren / uren_criterium * 100 if uren_criterium else 0
+                        color = 'text-positive' if uren_pct >= 100 else 'text-grey-6'
                         with ui.element('span').classes(
-                                'text-caption text-grey-6'):
-                            ui.label('(urencriterium)')
+                                f'text-caption {color}'):
+                            ui.label(f'({uren_pct:.0f}% urencriterium)')
                             ui.tooltip(
                                 'Exclusief achterwacht (urennorm=0)')
 
