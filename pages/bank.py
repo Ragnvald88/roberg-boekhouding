@@ -472,7 +472,6 @@ async def bank_page():
                             emit-value map-options
                             @update:model-value="(val) => $parent.$emit('cat_change', {id: props.row.id, cat: val})"
                             style="min-width: 160px"
-                            :hint="props.row.suggested_categorie && !props.row.categorie ? 'Suggestie: ' + props.row.suggested_categorie : ''"
                         />
                         <q-btn v-if="props.row.suggested_categorie && !props.row.categorie"
                             icon="auto_fix_high" flat dense round size="xs" color="primary"

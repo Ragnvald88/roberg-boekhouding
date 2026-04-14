@@ -65,3 +65,31 @@ async def test_suggestions_ignores_uncategorized(db):
     result = await get_categorie_suggestions(db)
     assert 'Bol.com' not in result
     assert 'bol.com' not in result
+
+
+@pytest.mark.asyncio
+async def test_suggestions_tie_breaker_prefers_recent(db):
+    """When two categories tie in count, the more recent one wins."""
+    from database import get_banktransacties
+    # 2 old as Representatie, 2 new as Kantoorkosten (tie on count)
+    await add_banktransacties(db, [
+        {'datum': '2025-01-15', 'bedrag': -10.0,
+         'tegenpartij': 'Tie-Party', 'omschrijving': 'old'},
+        {'datum': '2025-02-15', 'bedrag': -10.0,
+         'tegenpartij': 'Tie-Party', 'omschrijving': 'old'},
+        {'datum': '2026-01-15', 'bedrag': -10.0,
+         'tegenpartij': 'Tie-Party', 'omschrijving': 'new'},
+        {'datum': '2026-02-15', 'bedrag': -10.0,
+         'tegenpartij': 'Tie-Party', 'omschrijving': 'new'},
+    ])
+    txns = await get_banktransacties(db)
+    # Sort by datum so we can categorize old-2 + new-2
+    txns_sorted = sorted(txns, key=lambda t: t.datum)
+    await update_banktransactie(db, txns_sorted[0].id, categorie='Representatie')
+    await update_banktransactie(db, txns_sorted[1].id, categorie='Representatie')
+    await update_banktransactie(db, txns_sorted[2].id, categorie='Kantoorkosten')
+    await update_banktransactie(db, txns_sorted[3].id, categorie='Kantoorkosten')
+
+    result = await get_categorie_suggestions(db)
+    # Tie on count (2-2), but Kantoorkosten has the more recent MAX(datum)
+    assert result['tie-party'] == 'Kantoorkosten'

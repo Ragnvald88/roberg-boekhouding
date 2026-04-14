@@ -1385,12 +1385,12 @@ async def get_categorie_suggestions(db_path: Path = DB_PATH) -> dict[str, str]:
     """
     async with get_db_ctx(db_path) as conn:
         cur = await conn.execute(
-            """SELECT LOWER(tegenpartij) as tp, categorie, COUNT(*) as cnt
+            """SELECT LOWER(tegenpartij) as tp, categorie, COUNT(*) as cnt, MAX(datum) as recent
                FROM banktransacties
                WHERE categorie IS NOT NULL AND categorie != ''
                  AND tegenpartij IS NOT NULL AND tegenpartij != ''
                GROUP BY LOWER(tegenpartij), categorie
-               ORDER BY LOWER(tegenpartij), cnt DESC""")
+               ORDER BY LOWER(tegenpartij), cnt DESC, recent DESC""")
         rows = await cur.fetchall()
 
     # For each tegenpartij, take the first row (highest count due to ORDER BY)
