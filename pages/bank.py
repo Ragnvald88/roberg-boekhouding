@@ -12,7 +12,7 @@ from database import (
     get_banktransacties, get_imported_csv_bestanden,
     add_banktransacties, update_banktransactie,
     delete_banktransacties, find_factuur_matches, apply_factuur_matches,
-    get_db_ctx, DB_PATH,
+    get_categorie_suggestions, get_db_ctx, DB_PATH,
 )
 from components.shared_ui import year_options
 from import_.rabobank_csv import parse_rabobank_csv
@@ -29,6 +29,11 @@ async def bank_page():
     csv_list_container = {'ref': None}
     bulk_bar_ref = {'ref': None}
     bulk_label_ref = {'ref': None}
+    cat_suggestions = {'map': {}}  # lowercase tegenpartij → category
+
+    async def load_suggestions():
+        cat_suggestions['map'] = await get_categorie_suggestions(DB_PATH)
+
     async def load_transacties() -> list[dict]:
         """Load transactions from DB, apply year/month filter."""
         transacties = await get_banktransacties(DB_PATH, jaar=selected_jaar['value'])
@@ -52,6 +57,12 @@ async def bank_page():
             else:
                 status = 'niet-gekoppeld'
 
+            # Default: no suggestion
+            suggested = ''
+            # Apply suggestion for uncategorized rows with known counterparty
+            if not t.categorie and t.tegenpartij:
+                suggested = cat_suggestions['map'].get(t.tegenpartij.lower(), '')
+
             rows.append({
                 'id': t.id,
                 'datum': t.datum,
@@ -62,6 +73,7 @@ async def bank_page():
                 'omschrijving': t.omschrijving[:80] + ('...' if len(t.omschrijving) > 80 else ''),
                 'omschrijving_full': t.omschrijving,
                 'categorie': t.categorie,
+                'suggested_categorie': suggested,
                 'koppeling': f"{t.koppeling_type} #{t.koppeling_id}" if t.koppeling_type else '',
                 'status': status,
                 'csv_bestand': t.csv_bestand,
@@ -78,6 +90,7 @@ async def bank_page():
 
     async def refresh_table():
         """Reload data and update the table."""
+        await load_suggestions()
         rows = await load_transacties()
         if table_ref['table']:
             table_ref['table'].rows = rows
@@ -413,6 +426,7 @@ async def bank_page():
         ]
 
         try:
+            await load_suggestions()
             initial_rows = await load_transacties()
         except Exception as exc:
             initial_rows = []
@@ -450,14 +464,22 @@ async def bank_page():
                     <span :title="props.row.omschrijving_full">{{ props.row.omschrijving }}</span>
                 </q-td>
                 <q-td key="categorie" :props="props">
-                    <q-select
-                        v-model="props.row.categorie"
-                        :options='""" + json.dumps(BANK_CATEGORIEEN) + r"""'
-                        dense outlined
-                        emit-value map-options
-                        @update:model-value="(val) => $parent.$emit('cat_change', {id: props.row.id, cat: val})"
-                        style="min-width: 160px"
-                    />
+                    <div style="display:flex; align-items:center; gap:4px">
+                        <q-select
+                            v-model="props.row.categorie"
+                            :options='""" + json.dumps(BANK_CATEGORIEEN) + r"""'
+                            dense outlined
+                            emit-value map-options
+                            @update:model-value="(val) => $parent.$emit('cat_change', {id: props.row.id, cat: val})"
+                            style="min-width: 160px"
+                            :hint="props.row.suggested_categorie && !props.row.categorie ? 'Suggestie: ' + props.row.suggested_categorie : ''"
+                        />
+                        <q-btn v-if="props.row.suggested_categorie && !props.row.categorie"
+                            icon="auto_fix_high" flat dense round size="xs" color="primary"
+                            :title="'Toepassen: ' + props.row.suggested_categorie"
+                            @click="() => { props.row.categorie = props.row.suggested_categorie; $parent.$emit('cat_change', {id: props.row.id, cat: props.row.suggested_categorie}) }"
+                        />
+                    </div>
                 </q-td>
                 <q-td key="koppeling" :props="props">{{ props.row.koppeling }}</q-td>
                 <q-td key="actions" :props="props">
