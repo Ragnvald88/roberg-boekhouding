@@ -683,80 +683,78 @@ async def test_herinnering_datum_default_empty(seeded_db):
     assert f.herinnering_datum == ''
 
 
-# === Edit router (C.1) ===
+# === Edit-menu visibility rules ===
 
-def test_edit_router_concept_factuur_native_goes_to_builder():
-    from pages.facturen import _should_use_builder
-    assert _should_use_builder(
+def test_editable_concept_native_shown():
+    from pages.facturen import _is_editable
+    assert _is_editable(
         {'status': 'concept', 'type': 'factuur', 'bron': ''}) is True
 
 
-def test_edit_router_verstuurd_goes_to_dialog():
-    from pages.facturen import _should_use_builder
-    assert _should_use_builder(
+def test_editable_concept_vergoeding_shown():
+    """Vergoeding concepts are editable in the builder (free-form regels)."""
+    from pages.facturen import _is_editable
+    assert _is_editable(
+        {'status': 'concept', 'type': 'vergoeding', 'bron': ''}) is True
+
+
+def test_editable_verstuurd_hidden():
+    from pages.facturen import _is_editable
+    assert _is_editable(
         {'status': 'verstuurd', 'type': 'factuur', 'bron': ''}) is False
 
 
-def test_edit_router_betaald_goes_to_dialog():
-    from pages.facturen import _should_use_builder
-    assert _should_use_builder(
+def test_editable_betaald_hidden():
+    from pages.facturen import _is_editable
+    assert _is_editable(
         {'status': 'betaald', 'type': 'factuur', 'bron': ''}) is False
 
 
-def test_edit_router_imported_concept_goes_to_dialog():
-    from pages.facturen import _should_use_builder
-    assert _should_use_builder(
-        {'status': 'concept', 'type': 'factuur', 'bron': 'import'}) is False
-
-
-def test_edit_router_concept_vergoeding_goes_to_dialog():
-    from pages.facturen import _should_use_builder
-    assert _should_use_builder(
-        {'status': 'concept', 'type': 'vergoeding', 'bron': ''}) is False
-
-
-def test_edit_router_concept_anw_goes_to_dialog():
-    from pages.facturen import _should_use_builder
-    assert _should_use_builder(
+def test_editable_concept_anw_hidden():
+    """Imported ANW facturen are frozen — never editable."""
+    from pages.facturen import _is_editable
+    assert _is_editable(
         {'status': 'concept', 'type': 'anw', 'bron': ''}) is False
 
 
-# === Vergoeding regels_json sync (C.2) ===
-
-def test_rebuild_vergoeding_regels_json_preserves_omschrijving():
-    import json
-    from pages.facturen import _rebuild_vergoeding_regels_json
-
-    old = json.dumps([{'omschrijving': 'Consult spoed', 'bedrag': 100.0}])
-    new = _rebuild_vergoeding_regels_json(old, 150.0)
-    parsed = json.loads(new)
-    assert len(parsed) == 1
-    assert parsed[0]['omschrijving'] == 'Consult spoed'
-    assert parsed[0]['bedrag'] == 150.0
+def test_editable_concept_imported_hidden():
+    """Facturen with bron='import' are frozen — never editable."""
+    from pages.facturen import _is_editable
+    assert _is_editable(
+        {'status': 'concept', 'type': 'factuur', 'bron': 'import'}) is False
 
 
-def test_rebuild_vergoeding_regels_json_empty_input():
-    import json
-    from pages.facturen import _rebuild_vergoeding_regels_json
-
-    parsed = json.loads(_rebuild_vergoeding_regels_json('', 42.50))
-    assert parsed == [{'omschrijving': 'Vergoeding', 'bedrag': 42.50}]
+def test_revert_betaald_native_shown():
+    from pages.facturen import _can_revert_to_concept
+    assert _can_revert_to_concept(
+        {'status': 'betaald', 'type': 'factuur', 'bron': ''}) is True
 
 
-def test_rebuild_vergoeding_regels_json_null_input():
-    import json
-    from pages.facturen import _rebuild_vergoeding_regels_json
-
-    parsed = json.loads(_rebuild_vergoeding_regels_json(None, 42.50))  # type: ignore[arg-type]
-    assert parsed == [{'omschrijving': 'Vergoeding', 'bedrag': 42.50}]
+def test_revert_verstuurd_native_shown():
+    from pages.facturen import _can_revert_to_concept
+    assert _can_revert_to_concept(
+        {'status': 'verstuurd', 'type': 'factuur', 'bron': ''}) is True
 
 
-def test_rebuild_vergoeding_regels_json_malformed_input():
-    import json
-    from pages.facturen import _rebuild_vergoeding_regels_json
+def test_revert_concept_hidden():
+    """Concept is already the terminal revert state — no revert option."""
+    from pages.facturen import _can_revert_to_concept
+    assert _can_revert_to_concept(
+        {'status': 'concept', 'type': 'factuur', 'bron': ''}) is False
 
-    parsed = json.loads(_rebuild_vergoeding_regels_json('not-json', 75.0))
-    assert parsed == [{'omschrijving': 'Vergoeding', 'bedrag': 75.0}]
+
+def test_revert_betaald_anw_hidden():
+    """Imported ANW facturen stay frozen — not revertable to concept."""
+    from pages.facturen import _can_revert_to_concept
+    assert _can_revert_to_concept(
+        {'status': 'betaald', 'type': 'anw', 'bron': ''}) is False
+
+
+def test_revert_betaald_imported_hidden():
+    """bron='import' facturen stay frozen regardless of status."""
+    from pages.facturen import _can_revert_to_concept
+    assert _can_revert_to_concept(
+        {'status': 'betaald', 'type': 'factuur', 'bron': 'import'}) is False
 
 
 # === ANW line item km_tarief (C.5) ===

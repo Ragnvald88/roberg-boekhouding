@@ -21,7 +21,7 @@ from database import (
     link_werkdagen_to_factuur, get_db_ctx, add_werkdag,
     get_fiscale_params, DB_PATH,
 )
-from components.shared_ui import year_options, date_input
+from components.shared_ui import year_options
 from import_.pdf_parser import (
     extract_pdf_text, detect_invoice_type,
     parse_dagpraktijk_text, parse_anw_text,
@@ -35,15 +35,30 @@ PDF_DIR.mkdir(parents=True, exist_ok=True)
 app.add_static_files('/facturen-files', str(PDF_DIR))
 
 
-def _should_use_builder(row: dict) -> bool:
-    """Native concept werkdag-facturen go to the invoice builder.
+def _is_editable(row: dict) -> bool:
+    """Can this factuur show 'Bewerken' in the menu?
 
-    Everything else (anw, vergoeding, imported concepts, verstuurd,
-    betaald) uses the simple edit dialog.
+    Only concept facturen that are NOT imported (ANW or bron='import')
+    are editable. All edits go through the invoice builder. Imported
+    facturen are frozen once created.
     """
     return (
         row.get('status') == 'concept'
-        and row.get('type', 'factuur') == 'factuur'
+        and row.get('type', 'factuur') != 'anw'
+        and row.get('bron', '') != 'import'
+    )
+
+
+def _can_revert_to_concept(row: dict) -> bool:
+    """Can this factuur show 'Markeer als concept' in the menu?
+
+    Any non-concept, non-imported factuur can be reverted to concept
+    (with a user confirmation) to re-enable editing. Imports stay frozen
+    regardless of status.
+    """
+    return (
+        row.get('status') != 'concept'
+        and row.get('type', 'factuur') != 'anw'
         and row.get('bron', '') != 'import'
     )
 
@@ -115,28 +130,6 @@ def _classify_import_item(
         if sig in existing_signatures:
             return 'duplicaat', 'zelfde klant/datum/bedrag'
     return 'nieuw', ''
-
-
-def _rebuild_vergoeding_regels_json(old_regels_json: str,
-                                    new_bedrag: float) -> str:
-    """Return a regels_json string with a single line item at new_bedrag.
-
-    Preserves the omschrijving of the first existing regel if any, else
-    falls back to 'Vergoeding'. Returned JSON is always a flat list with
-    one entry so downstream PDF generation uses the fresh amount.
-    """
-    import json as _json
-    omschrijving = 'Vergoeding'
-    try:
-        existing = _json.loads(old_regels_json or '[]')
-        if isinstance(existing, list) and existing:
-            first = existing[0]
-            if isinstance(first, dict):
-                omschrijving = first.get('omschrijving') or 'Vergoeding'
-    except (ValueError, TypeError):
-        pass
-    return _json.dumps([{'omschrijving': omschrijving,
-                         'bedrag': new_bedrag}])
 
 
 def _build_mail_body(nummer, bedrag, iban, bedrijfsnaam, naam, telefoon, bg_email, betaallink=''):
@@ -455,7 +448,7 @@ async def facturen_page():
                        color="grey-7">
                     <q-menu auto-close>
                         <q-list dense style="min-width: 200px">
-                            <q-item clickable
+                            <q-item v-if="props.row.status === 'concept' && props.row.type !== 'anw' && props.row.bron !== 'import'" clickable
                                 @click="() => $parent.$emit('edit', props.row)">
                                 <q-item-section side>
                                     <q-icon name="edit" size="xs"
@@ -531,6 +524,17 @@ async def facturen_page():
                                 </q-item-section>
                                 <q-item-section>
                                     Markeer onbetaald
+                                </q-item-section>
+                            </q-item>
+                            <q-item v-if="props.row.status !== 'concept' && props.row.type !== 'anw' && props.row.bron !== 'import'" clickable
+                                @click="() => $parent.$emit('markconcept',
+                                    props.row)">
+                                <q-item-section side>
+                                    <q-icon name="restore" size="xs"
+                                            color="warning" />
+                                </q-item-section>
+                                <q-item-section>
+                                    Markeer als concept
                                 </q-item-section>
                             </q-item>
                             <q-separator />
@@ -863,11 +867,65 @@ async def facturen_page():
             dlg.open()
 
         async def on_edit(e):
+            """Always route edit to the invoice builder.
+
+            The menu already hides 'Bewerken' for non-editable rows
+            (_is_editable). Any edit event that reaches here is by
+            definition a concept, non-imported factuur.
+            """
             row = e.args
-            if _should_use_builder(row):
-                await _reopen_concept_in_builder(row)
-            else:
-                await open_edit_dialog(row)
+            await _reopen_concept_in_builder(row)
+
+        async def on_mark_concept(e):
+            """Revert a non-concept factuur to concept with a warning popup.
+
+            For betaald facturen, performs a two-step state transition
+            (betaald → verstuurd → concept) because the state machine
+            forbids betaald → concept directly.
+            """
+            row = e.args
+            nummer = row['nummer']
+            was_betaald = row['status'] == 'betaald'
+
+            with ui.dialog() as dlg, ui.card().style('min-width: 420px'):
+                ui.label(f'Factuur {nummer} terugzetten naar concept?') \
+                    .classes('text-h6')
+                ui.label(
+                    'De factuur wordt weer volledig bewerkbaar via de '
+                    'invoice builder. Bankkoppelingen blijven bestaan.'
+                ).classes('q-mb-sm')
+                if was_betaald:
+                    with ui.row().classes('items-center gap-1 q-mb-sm'):
+                        ui.icon('warning', color='warning', size='sm')
+                        ui.label('De betaaldatum wordt gewist.') \
+                            .classes('text-caption text-warning')
+                with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
+                    ui.button('Annuleren', on_click=dlg.close).props('flat')
+
+                    async def confirm():
+                        try:
+                            if was_betaald:
+                                # Two-step: betaald → verstuurd → concept
+                                await update_factuur_status(
+                                    DB_PATH, factuur_id=row['id'],
+                                    status='verstuurd')
+                            await update_factuur_status(
+                                DB_PATH, factuur_id=row['id'],
+                                status='concept')
+                            dlg.close()
+                            ui.notify(
+                                f'Factuur {nummer} teruggezet naar concept',
+                                type='positive')
+                            await refresh_table()
+                        except ValueError as exc:
+                            ui.notify(
+                                f'Kon niet terugzetten: {exc}',
+                                type='negative')
+
+                    ui.button(
+                        'Ja, terug naar concept', on_click=confirm,
+                    ).props('color=warning')
+            dlg.open()
 
         async def _reopen_concept_in_builder(row):
             """Reopen a concept factuur in the invoice builder for editing.
@@ -900,202 +958,6 @@ async def facturen_page():
                 replacing_factuur_id=row['id'],
                 pre_regels_json=regels_json,
             )
-
-        async def open_edit_dialog(row):
-            """Open dialog to edit factuur details."""
-            klanten = await get_klanten(DB_PATH, alleen_actief=False)
-            klant_options = {k.id: k.naam for k in klanten}
-            upload_file = {}
-
-            with ui.dialog() as dialog, \
-                    ui.card().classes('w-full max-w-lg q-pa-md'):
-                ui.label('Factuur bewerken').classes('text-h6 q-mb-md')
-
-                # Nummer (read-only)
-                with ui.row().classes('w-full items-center gap-2'):
-                    ui.label('Factuurnummer:').classes(
-                        'text-subtitle2 text-grey-8')
-                    ui.label(row['nummer']).classes('text-subtitle2')
-                    type_labels = {'factuur': 'Werkdag', 'anw': 'ANW',
-                                   'vergoeding': 'Vergoeding'}
-                    type_colors = {'factuur': 'teal', 'anw': 'info',
-                                   'vergoeding': 'amber-8'}
-                    type_val = row.get('type', 'factuur')
-                    ui.badge(type_labels.get(type_val, type_val),
-                             color=type_colors.get(type_val, 'grey')).classes('q-ml-sm')
-
-                ui.separator().classes('q-my-sm')
-
-                # Datum
-                edit_datum = date_input('Factuurdatum', value=row['datum'])
-
-                # Klant
-                edit_klant = ui.select(
-                    klant_options, label='Klant',
-                    value=row.get('klant_id'),
-                    with_input=True,
-                ).classes('w-full')
-
-                # Bedrag
-                edit_bedrag = ui.number(
-                    'Totaalbedrag (€)', value=row['totaal_bedrag'],
-                    format='%.2f',
-                ).classes('w-full')
-
-                # Status
-                ui.separator().classes('q-my-sm')
-                with ui.row().classes('w-full items-center gap-4'):
-                    edit_status = ui.select(
-                        {'concept': 'Concept', 'verstuurd': 'Verstuurd',
-                         'betaald': 'Betaald'},
-                        label='Status', value=row['status'],
-                    ).classes('w-40')
-                    edit_betaald_datum = date_input(
-                        'Betaaldatum',
-                        value=row.get('betaald_datum', ''),
-                    ).classes('w-40')
-                    edit_betaald_datum.bind_visibility_from(
-                        edit_status, 'value',
-                        backward=lambda v: v == 'betaald')
-
-                # PDF section
-                ui.separator().classes('q-my-sm')
-                ui.label('Document').classes(
-                    'text-caption').style('color: #64748B')
-                existing_pdf = row.get('pdf_pad', '')
-                pdf_removed = {'value': False}
-
-                if existing_pdf and Path(existing_pdf).exists():
-                    pdf_row = ui.row().classes('items-center gap-2')
-                    with pdf_row:
-                        ui.icon('attach_file', color='primary')
-                        ui.label(
-                            Path(existing_pdf).name
-                        ).classes('text-body2')
-                        ui.button(
-                            'Download', icon='download',
-                            on_click=lambda: ui.download(existing_pdf),
-                        ).props('flat dense size=sm')
-
-                        def remove_pdf():
-                            pdf_removed['value'] = True
-                            pdf_row.set_visibility(False)
-                            ui.notify(
-                                'PDF wordt verwijderd bij opslaan',
-                                type='info')
-
-                        ui.button(
-                            'Verwijder', icon='delete',
-                            on_click=remove_pdf,
-                        ).props('flat dense size=sm color=negative')
-
-                ui.upload(
-                    label='Nieuwe PDF uploaden', auto_upload=True,
-                    on_upload=lambda e: upload_file.update({'event': e}),
-                    max_file_size=10_000_000,
-                ).classes('w-full').props(
-                    'flat bordered accept=".pdf"')
-
-                # Action buttons
-                with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
-                    ui.button(
-                        'Annuleren', on_click=dialog.close,
-                    ).props('flat')
-
-                    async def opslaan():
-                        if not edit_klant.value:
-                            ui.notify('Selecteer een klant', type='warning')
-                            return
-                        try:
-                            await _do_opslaan()
-                        except Exception as exc:
-                            ui.notify(f'Fout bij opslaan: {exc}',
-                                      type='negative')
-
-                    async def _do_opslaan():
-                        # Update main fields
-                        new_bedrag = float(edit_bedrag.value or 0)
-                        kwargs = {
-                            'datum': edit_datum.value,
-                            'klant_id': edit_klant.value,
-                            'totaal_bedrag': new_bedrag,
-                        }
-                        # Vergoeding: keep regels_json in sync with the
-                        # new total so the PDF regenerated later shows
-                        # the correct amount (bug: stale regels_json
-                        # caused PDFs to diverge from the DB).
-                        if (row.get('type') == 'vergoeding'
-                                and abs(new_bedrag
-                                        - row.get('totaal_bedrag', 0)) > 0.005):
-                            async with get_db_ctx(DB_PATH) as _conn:
-                                _cur = await _conn.execute(
-                                    "SELECT regels_json FROM facturen "
-                                    "WHERE id = ?", (row['id'],))
-                                _rj = await _cur.fetchone()
-                            kwargs['regels_json'] = _rebuild_vergoeding_regels_json(
-                                _rj['regels_json'] if _rj else '',
-                                new_bedrag)
-                        await update_factuur(
-                            DB_PATH, factuur_id=row['id'], **kwargs)
-
-                        # Handle status change (cascades to werkdagen)
-                        new_status = edit_status.value
-                        try:
-                            if new_status != row['status']:
-                                betaald_datum = ''
-                                if new_status == 'betaald':
-                                    betaald_datum = (edit_betaald_datum.value
-                                                     or date.today().isoformat())
-                                await update_factuur_status(
-                                    DB_PATH, factuur_id=row['id'],
-                                    status=new_status,
-                                    betaald_datum=betaald_datum)
-                            elif (new_status == 'betaald'
-                                  and edit_betaald_datum.value
-                                  != row.get('betaald_datum', '')):
-                                await update_factuur_status(
-                                    DB_PATH, factuur_id=row['id'],
-                                    status='betaald',
-                                    betaald_datum=edit_betaald_datum.value)
-                        except ValueError as ex:
-                            ui.notify(str(ex), type='negative')
-                            return
-
-                        # Handle PDF removal
-                        if pdf_removed['value'] and existing_pdf:
-                            await update_factuur(
-                                DB_PATH, factuur_id=row['id'],
-                                pdf_pad='')
-                            p = Path(existing_pdf)
-                            if p.exists():
-                                await asyncio.to_thread(p.unlink)
-
-                        # Handle PDF upload
-                        if upload_file.get('event'):
-                            evt = upload_file['event']
-                            import_dir = PDF_DIR / 'imports'
-                            import_dir.mkdir(parents=True, exist_ok=True)
-                            safe_name = Path(
-                                evt.file.name).name.replace(' ', '_')
-                            filename = (
-                                f'factuur_{row["id"]}_{safe_name}')
-                            filepath = import_dir / filename
-                            content = await evt.file.read()
-                            await asyncio.to_thread(filepath.write_bytes, content)
-                            await update_factuur(
-                                DB_PATH, factuur_id=row['id'],
-                                pdf_pad=str(filepath))
-
-                        ui.notify(
-                            f'Factuur {row["nummer"]} bijgewerkt',
-                            type='positive')
-                        dialog.close()
-                        await refresh_table()
-
-                    ui.button(
-                        'Opslaan', on_click=opslaan,
-                    ).props('color=primary')
-            dialog.open()
 
         async def on_mark_verstuurd(e):
             row = e.args
@@ -1311,6 +1173,7 @@ async def facturen_page():
         table.on('markbetaald', on_mark_betaald)
         table.on('markonbetaald', on_mark_onbetaald)
         table.on('markverstuurd', on_mark_verstuurd)
+        table.on('markconcept', on_mark_concept)
         table.on('sendmail', on_send_mail)
         table.on('sendherinnering', on_send_herinnering)
         table.on('deletefactuur', on_delete_factuur)
