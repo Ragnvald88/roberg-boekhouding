@@ -11,8 +11,6 @@ import tempfile
 from datetime import date
 from pathlib import Path
 
-import cv2
-import numpy as np
 from nicegui import app, ui
 
 log = logging.getLogger(__name__)
@@ -34,10 +32,17 @@ app.add_static_files('/logo-files', str(LOGO_DIR))
 
 
 def _decode_qr_url(image_bytes: bytes) -> str:
-    """Decode a QR image and return the URL, or '' if decoding fails."""
+    """Decode a QR image and return the URL, or '' if decoding fails.
+
+    Imports cv2 and numpy lazily — these libraries are only needed when a user
+    uploads a QR image in the invoice builder, a rare operation. Keeping them
+    out of the top-level import path saves ~500-1500 ms on app cold-start.
+    """
     if not image_bytes:
         return ''
     try:
+        import cv2  # noqa: PLC0415 — lazy import (startup performance)
+        import numpy as np  # noqa: PLC0415 — lazy import (startup performance)
         arr = np.frombuffer(image_bytes, dtype=np.uint8)
         img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
         if img is None:
@@ -229,7 +234,7 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None,
             with ui.column().classes(
                 'q-pa-md builder-panel-border'
             ).style(
-                'width: 480px; min-width: 480px; overflow-y: auto; '
+                'width: 420px; min-width: 420px; overflow-y: auto; '
                 'height: 100vh;'
             ):
                 # Header — factuurnummer + datum
@@ -1114,8 +1119,9 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None,
                 'padding: 24px 32px; height: 100vh;'
             ):
                 preview_iframe = ui.html('', sanitize=False).style(
-                    'width: 100%; max-width: 820px; '
-                    'height: calc(100vh - 48px); '
+                    'width: 100%; max-width: 794px; '
+                    'aspect-ratio: 210 / 297; '
+                    'max-height: calc(100vh - 48px); '
                 )
 
         def schedule_preview_update():

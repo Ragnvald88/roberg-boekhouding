@@ -76,6 +76,26 @@ async def test_get_representatie_totaal_filters_by_year(db):
     assert await get_representatie_totaal(db, jaar=2026) == 45.00
 
 
+@pytest.mark.asyncio
+async def test_get_representatie_totaal_excludes_investments(db):
+    """Regression (review K1): a representatie-categorised investment must NOT
+    be summed into the representation total.
+
+    If it were, the 20% bijtelling on fiscale winst would double-count: once
+    via this sum AND once via depreciation in activastaat.
+    """
+    # Ordinary representation expense — counts.
+    await add_uitgave(db, datum="2026-01-10", categorie="Representatie",
+                      omschrijving="Lunch relaties", bedrag=120.00)
+    # Representation-category investment (e.g. a zakelijk kunstwerk that
+    # will be depreciated over multiple years) — must be excluded.
+    await add_uitgave(db, datum="2026-03-01", categorie="Representatie",
+                      omschrijving="Kunstwerk wachtkamer", bedrag=3000.00,
+                      is_investering=1, levensduur_jaren=10,
+                      aanschaf_bedrag=3000.00, zakelijk_pct=100)
+    assert await get_representatie_totaal(db, jaar=2026) == 120.00
+
+
 
 @pytest.mark.asyncio
 async def test_get_nog_te_factureren_empty(db):
@@ -276,6 +296,57 @@ async def test_find_matches_by_nummer(db):
 
 
 @pytest.mark.asyncio
+async def test_find_matches_by_nummer_rejects_substring_collision(db):
+    """Regression (review K3): Pass 1 must NOT substring-match longer numbers.
+
+    Factuur 2026-001 should NOT match a bank line whose omschrijving contains
+    only 2026-0012 (an unrelated longer invoice number). Otherwise the user
+    gets a 'high confidence' pre-selected match pointing to the wrong factuur
+    — a silent wrong-invoice-paid bug.
+    """
+    kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=0)
+    # Two invoices whose numbers differ only by trailing digits.
+    await add_factuur(db, nummer='2026-001', klant_id=kid,
+                      datum='2026-01-15', totaal_uren=8, totaal_km=0,
+                      totaal_bedrag=640.00, status='verstuurd')
+    await add_factuur(db, nummer='2026-0012', klant_id=kid,
+                      datum='2026-01-16', totaal_uren=8, totaal_km=0,
+                      totaal_bedrag=640.00, status='verstuurd')
+    # Bank line mentions ONLY 2026-0012.
+    await add_banktransacties(db, [
+        {'datum': '2026-01-20', 'bedrag': 640.00, 'tegenpartij': 'Test BV',
+         'omschrijving': 'factuur 2026-0012 betaald', 'categorie': ''},
+    ], csv_bestand='test.csv')
+
+    matches = await find_factuur_matches(db)
+    # Only 2026-0012 should match via Pass 1 (nummer). 2026-001 must NOT.
+    nummer_matches = [m for m in matches if m.match_type == 'nummer']
+    assert len(nummer_matches) == 1
+    assert nummer_matches[0].factuur_nummer == '2026-0012'
+
+
+@pytest.mark.asyncio
+async def test_find_matches_by_nummer_rejects_prefix_collision(db):
+    """Regression (review K3): Pass 1 must NOT match when nummer appears as
+    prefix of a longer digit run (reverse case of the substring test)."""
+    kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=0)
+    await add_factuur(db, nummer='2024-01', klant_id=kid,
+                      datum='2024-01-15', totaal_uren=8, totaal_km=0,
+                      totaal_bedrag=640.00, status='verstuurd')
+    # Omschrijving accidentally contains "2024-010" (longer digit sequence
+    # sharing the 2024-01 prefix).
+    await add_banktransacties(db, [
+        {'datum': '2024-01-20', 'bedrag': 640.00, 'tegenpartij': 'Test BV',
+         'omschrijving': 'ref 2024-010 jan', 'categorie': ''},
+    ], csv_bestand='test.csv')
+
+    matches = await find_factuur_matches(db)
+    nummer_matches = [m for m in matches if m.match_type == 'nummer']
+    # 2024-01 must NOT substring-match 2024-010.
+    assert len(nummer_matches) == 0
+
+
+@pytest.mark.asyncio
 async def test_find_matches_by_amount(db):
     """Pass 2: match by amount when no nummer found in omschrijving."""
     kid = await add_klant(db, naam="Test", tarief_uur=77.50, retour_km=52)
@@ -450,6 +521,50 @@ async def test_find_factuur_matches_flags_ambiguous_pass2(db):
     low = [p for p in amb_proposals if p.confidence == 'low']
     assert len(low) >= 1, (
         f"Expected low-confidence flag for ambiguous match, got: {amb_proposals}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_find_factuur_matches_ambiguous_at_exact_tolerance_boundary(
+        db, monkeypatch):
+    """Regression (review K4): two facturen whose delta-difference equals
+    _MATCH_AMOUNT_TOL exactly must BOTH be flagged ambiguous.
+
+    Uses a monkeypatched TOL of 0.125 (exactly representable in IEEE-754
+    float, unlike 0.05) so the boundary is hit without FP rounding drift.
+
+    Old code used strict `<`: two matches 0.125 apart were deemed
+    unambiguous and silently disambiguated. `<=` surfaces both.
+    """
+    import database
+    monkeypatch.setattr(database, '_MATCH_AMOUNT_TOL', 0.125)
+
+    klant_id = await add_klant(db, naam="BoundaryTest", tarief_uur=100, retour_km=0)
+    # A exactly matches bank. B is 0.125 away. alt_delta - best_delta == 0.125.
+    fid_a = await add_factuur(
+        db, nummer='2025-BND-A', klant_id=klant_id,
+        datum='2025-06-10', totaal_bedrag=500.00,
+        status='verstuurd', type='factuur',
+    )
+    fid_b = await add_factuur(
+        db, nummer='2025-BND-B', klant_id=klant_id,
+        datum='2025-06-11', totaal_bedrag=500.125,
+        status='verstuurd', type='factuur',
+    )
+    await add_banktransacties(db, [{
+        'datum': '2025-06-15', 'bedrag': 500.00,
+        'tegenpartij': 'BoundaryTest', 'omschrijving': 'betaling',
+    }])
+
+    proposals = await find_factuur_matches(db)
+    ours = [p for p in proposals if p.factuur_id in (fid_a, fid_b)]
+    assert len(ours) == 2, (
+        f"Both facturen within TOL of bank must surface; got {ours}"
+    )
+    # Neither may be silently marked high-confidence at the boundary.
+    low = [p for p in ours if p.confidence == 'low']
+    assert len(low) >= 1, (
+        f"Exact-TOL boundary must flag ambiguity; got {ours}"
     )
 
 

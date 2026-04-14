@@ -116,12 +116,15 @@ def test_render_kvk_iban_shown_when_set():
 
 
 def test_render_btw_legal_citation():
-    """BTW notice includes art. 11 legal citation."""
+    """BTW notice includes art. 11 legal citation (Wet OB 1968)."""
     html = render_invoice_html(
         nummer='2026-008', factuur_datum='2026-02-15',
         bedrijfsgegevens=_BEDRIJF)
 
     assert 'Vrijgesteld van BTW' in html
+    # Belastingdienst requires explicit vrijstellingsgrond on the invoice.
+    assert 'art. 11' in html
+    assert 'Wet op de omzetbelasting' in html or 'Wet OB' in html
 
 
 def test_render_bedrag_computed_if_missing():

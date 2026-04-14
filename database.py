@@ -2086,10 +2086,19 @@ async def get_data_counts(db_path: Path = DB_PATH, jaar: int = 2026) -> dict:
 
 
 async def get_representatie_totaal(db_path: Path = DB_PATH, jaar: int = 2026) -> float:
+    """Sum of representatiekosten in a year, excluding investments.
+
+    Investments in categorie 'Representatie' (rare: a business artwork, for
+    example) are depreciated separately via activastaat; including their
+    full purchase price here would double-count against fiscale winst (the
+    20% bijtelling on the representation deduction would apply twice).
+    """
     async with get_db_ctx(db_path) as conn:
         cur = await conn.execute(
             "SELECT COALESCE(SUM(bedrag), 0) FROM uitgaven "
-            "WHERE datum >= ? AND datum < ? AND categorie = 'Representatie'",
+            "WHERE datum >= ? AND datum < ? "
+            "AND categorie = 'Representatie' "
+            "AND is_investering = 0",
             (f'{jaar}-01-01', f'{jaar+1}-01-01')
         )
         return (await cur.fetchone())[0]
@@ -2404,15 +2413,22 @@ async def find_factuur_matches(db_path: Path = DB_PATH) -> list[MatchProposal]:
 
         # Pass 1: Match by invoice number in omschrijving + amount sanity.
         # Always high confidence; reserves the bank_id before Pass 2 runs.
+        #
+        # Number match uses non-digit boundaries so that invoice "2026-001"
+        # does NOT match omschrijving containing "2026-0012" or "2026-00123"
+        # (review K3 — silent wrong-invoice-paid via substring collision).
         for f in open_facturen:
             nummer = f['nummer'].lower()
+            nummer_re = re.compile(
+                r'(?<!\d)' + re.escape(nummer) + r'(?!\d)'
+            )
             for b in bank_txns:
                 if b['id'] in used_bank_ids:
                     continue
                 if not _match_date_ok(b['datum'], f['datum']):
                     continue
                 omschr = (b['omschrijving'] or '').lower()
-                if nummer in omschr:
+                if nummer_re.search(omschr):
                     delta = abs(b['bedrag'] - f['totaal_bedrag'])
                     if delta > _MATCH_NUMMER_TOL:
                         continue
@@ -2486,10 +2502,14 @@ async def find_factuur_matches(db_path: Path = DB_PATH) -> list[MatchProposal]:
             best_delta, best_b = cands[0]
 
             # Factuur-side ambiguity: multiple bank txns within TOL of this factuur.
+            # Uses `<=` (not `<`) so that two candidates exactly _MATCH_AMOUNT_TOL
+            # apart are ALSO flagged ambiguous (review K4 — silent-collision-at-
+            # exact-boundary bug: both are within tolerance of the factuur, yet
+            # the old strict `<` said "not ambiguous" and silently chose one).
             ambiguous = False
             alternatives: list[int] = []
             for alt_delta, alt_b in cands[1:]:
-                if (alt_delta - best_delta) < _MATCH_AMOUNT_TOL:
+                if (alt_delta - best_delta) <= _MATCH_AMOUNT_TOL:
                     ambiguous = True
                     alternatives.append(alt_b['id'])
 
@@ -2501,7 +2521,7 @@ async def find_factuur_matches(db_path: Path = DB_PATH) -> list[MatchProposal]:
                 for alt_delta, alt_f in bank_side:
                     if alt_f['id'] == f['id']:
                         continue
-                    if (alt_delta - bank_best_delta) < _MATCH_AMOUNT_TOL:
+                    if (alt_delta - bank_best_delta) <= _MATCH_AMOUNT_TOL:
                         ambiguous = True
                         # Don't record other-factuur ids in bank-txn alternatives;
                         # the caller can see both proposals share the same bank_id.

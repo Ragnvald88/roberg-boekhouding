@@ -120,6 +120,24 @@
   .betaal-tbl tbody tr:last-child td.bl,
   .betaal-tbl tbody tr:last-child td.bv { border-bottom: none; }
 </style>
+{% if pin_betaal is not defined %}
+<script>
+  // Browser preview only: fit the A4 page (~794px) to the iframe width.
+  // `zoom` scales layout boxes (unlike transform:scale, which leaves empty
+  // space). WeasyPrint strips scripts, so this never runs in PDF generation,
+  // and the Jinja guard above keeps it out of the rendered PDF HTML entirely.
+  (function () {
+    var TARGET = 794; // 210mm ≈ 794px (exact A4 width)
+    function fit() {
+      var w = document.documentElement.clientWidth;
+      document.body.style.zoom = w < TARGET ? (w / TARGET) : '';
+    }
+    window.addEventListener('resize', fit);
+    window.addEventListener('DOMContentLoaded', fit);
+    fit();
+  })();
+</script>
+{% endif %}
 </head>
 <body>
 <div class="page">
@@ -211,7 +229,7 @@
     <span class="totaal-amount">{{ totaal | format_euro }}</span>
   </div>
 </div>
-<p class="vat-notice">* Vrijgesteld van BTW</p>
+<p class="vat-notice">* Vrijgesteld van BTW op grond van art. 11, lid 1, onderdeel g, Wet op de omzetbelasting 1968 (medische vrijstelling)</p>
 
 <div class="spacer"></div>
 

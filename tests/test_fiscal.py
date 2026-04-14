@@ -1237,10 +1237,38 @@ class TestBox3:
     def test_box3_zero_vermogen(self):
         """No assets = no tax."""
         from fiscal.berekeningen import bereken_box3
-        params = {'box3_bank_saldo': 0, 'box3_overige_bezittingen': 0, 'box3_schulden': 0}
+        params = FISCALE_PARAMS[2024].copy()
+        params['box3_bank_saldo'] = 0
+        params['box3_overige_bezittingen'] = 0
+        params['box3_schulden'] = 0
         result = bereken_box3(params)
         assert result.belasting == 0
         assert result.grondslag == 0
+
+    def test_box3_raises_on_missing_required_params(self):
+        """Regression (review K2): missing box3_* fiscal params must fail loud.
+
+        Previously the code silently substituted hardcoded defaults (1.03,
+        6.17, 2.46, 36, 57000, 3700) when keys were absent, violating the
+        CLAUDE.md rule 'no hardcoded fiscal fallbacks'.
+        """
+        import pytest
+        from fiscal.berekeningen import bereken_box3
+        # Missing all required fiscal rate/threshold keys.
+        params = {'box3_bank_saldo': 10000, 'box3_overige_bezittingen': 0,
+                  'box3_schulden': 0, 'jaar': 2024}
+        with pytest.raises(ValueError, match="Box 3 fiscale parameters"):
+            bereken_box3(params)
+
+    def test_box3_raises_on_partial_required_params(self):
+        """Regression (review K2): even one missing param must fail loud."""
+        import pytest
+        from fiscal.berekeningen import bereken_box3
+        params = FISCALE_PARAMS[2024].copy()
+        params['box3_bank_saldo'] = 10000
+        del params['box3_rendement_bank_pct']
+        with pytest.raises(ValueError, match="box3_rendement_bank_pct"):
+            bereken_box3(params)
 
     def test_box3_negative_netto_vermogen(self):
         """Box 3 with schulden > bezittingen should not divide by zero."""
@@ -1255,12 +1283,11 @@ class TestBox3:
     def test_box3_below_heffingsvrij(self):
         """Assets below heffingsvrij vermogen = no tax."""
         from fiscal.berekeningen import bereken_box3
-        params = {
-            'box3_bank_saldo': 50000, 'box3_overige_bezittingen': 0, 'box3_schulden': 0,
-            'box3_heffingsvrij_vermogen': 57000, 'box3_rendement_bank_pct': 1.03,
-            'box3_rendement_overig_pct': 6.17, 'box3_rendement_schuld_pct': 2.46,
-            'box3_tarief_pct': 36,
-        }
+        params = FISCALE_PARAMS[2024].copy()
+        params['box3_bank_saldo'] = 50000
+        params['box3_overige_bezittingen'] = 0
+        params['box3_schulden'] = 0
+        # 2024: heffingsvrij 57000
         result = bereken_box3(params, fiscaal_partner=True)
         # 50000 < 57000*2 = 114000, so grondslag = 0
         assert result.grondslag == 0
@@ -1269,14 +1296,13 @@ class TestBox3:
     def test_box3_with_partner(self):
         """Partner doubles heffingsvrij vermogen."""
         from fiscal.berekeningen import bereken_box3
-        params = {
-            'box3_bank_saldo': 100000, 'box3_overige_bezittingen': 0, 'box3_schulden': 0,
-            'box3_heffingsvrij_vermogen': 57000, 'box3_rendement_bank_pct': 1.03,
-            'box3_rendement_overig_pct': 6.17, 'box3_rendement_schuld_pct': 2.46,
-            'box3_tarief_pct': 36,
-        }
+        params = FISCALE_PARAMS[2024].copy()
+        params['box3_bank_saldo'] = 100000
+        params['box3_overige_bezittingen'] = 0
+        params['box3_schulden'] = 0
         with_partner = bereken_box3(params, fiscaal_partner=True)
         without_partner = bereken_box3(params, fiscaal_partner=False)
+        # 2024: heffingsvrij 57000 per person
         # With partner: 100000 - 114000 = 0 (below threshold)
         assert with_partner.grondslag == 0
         # Without partner: 100000 - 57000 = 43000
@@ -1286,19 +1312,21 @@ class TestBox3:
     def test_box3_2024_realistic(self):
         """Realistic 2024 scenario with bank + beleggingen."""
         from fiscal.berekeningen import bereken_box3
-        params = {
-            'box3_bank_saldo': 80000, 'box3_overige_bezittingen': 50000, 'box3_schulden': 10000,
-            'box3_heffingsvrij_vermogen': 57000, 'box3_rendement_bank_pct': 1.03,
-            'box3_rendement_overig_pct': 6.17, 'box3_rendement_schuld_pct': 2.46,
-            'box3_tarief_pct': 36, 'box3_drempel_schulden': 3700,
-        }
+        params = FISCALE_PARAMS[2024].copy()
+        params['box3_bank_saldo'] = 80000
+        params['box3_overige_bezittingen'] = 50000
+        params['box3_schulden'] = 10000
+        # 2024 DB-values: bank 1.44%, overig 6.04%, heffingsvrij 57000,
+        # drempel 3700, tarief 36%.
         result = bereken_box3(params, fiscaal_partner=False)
         # bezittingen=130000, schulden=10000, drempel=3700, effective_schulden=6300
         # netto=123700, heffingsvrij=57000, grondslag=66700
         assert result.totaal_bezittingen == 130000
         assert result.grondslag == 66700
-        assert result.rendement_bank == round(80000 * 0.0103, 2)
-        assert result.rendement_overig == round(50000 * 0.0617, 2)
+        bank_pct = params['box3_rendement_bank_pct'] / 100
+        overig_pct = params['box3_rendement_overig_pct'] / 100
+        assert result.rendement_bank == round(80000 * bank_pct, 2)
+        assert result.rendement_overig == round(50000 * overig_pct, 2)
         assert result.belasting > 0
 
 
@@ -1393,8 +1421,13 @@ class TestBox3DrempelSchulden:
         # grondslag = max(0, 80000 - 1600 - 57000) = 21400
         assert result.grondslag == 21400
 
-    def test_no_drempel_param_defaults_to_3700(self):
-        """If box3_drempel_schulden not in params, defaults to 3700."""
+    def test_no_drempel_param_raises_loud(self):
+        """Updated (review K2): missing box3_drempel_schulden now raises.
+
+        Previously this key fell back to a hardcoded 3700, masking DB gaps.
+        The fix aligns with bereken_volledig's strict required_keys contract.
+        """
+        import pytest
         from fiscal.berekeningen import bereken_box3
         params = {
             'box3_bank_saldo': 80000, 'box3_overige_bezittingen': 0,
@@ -1402,11 +1435,10 @@ class TestBox3DrempelSchulden:
             'box3_heffingsvrij_vermogen': 57000,
             'box3_rendement_bank_pct': 1.44, 'box3_rendement_overig_pct': 6.04,
             'box3_rendement_schuld_pct': 2.61, 'box3_tarief_pct': 36,
-            # no box3_drempel_schulden → default 3700
+            # no box3_drempel_schulden — must fail, not silently default
         }
-        result = bereken_box3(params, fiscaal_partner=False)
-        # drempel = 3700, effective schulden = 5000 - 3700 = 1300
-        assert result.grondslag == 80000 - 1300 - 57000  # 21700
+        with pytest.raises(ValueError, match="box3_drempel_schulden"):
+            bereken_box3(params, fiscaal_partner=False)
 
 
 

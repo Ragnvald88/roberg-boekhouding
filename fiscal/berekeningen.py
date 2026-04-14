@@ -120,20 +120,44 @@ class Box3Resultaat:
 def bereken_box3(params: dict, fiscaal_partner: bool = True) -> Box3Resultaat:
     """Calculate Box 3 forfaitair rendement (2023+ method).
 
+    Fiscal rate/threshold parameters (rendementen, tarief, heffingsvrij,
+    drempel) are loaded from fiscale_params via `params` and MUST be present;
+    missing keys raise ValueError, consistent with bereken_volledig. This
+    prevents silent-wrong calculations when the DB for a year is incomplete.
+
+    Balance-sheet inputs (bank_saldo, overige_bezittingen, schulden) are
+    user data and default to 0 when the user has not entered them.
+
     Args:
         params: Dict with box3_* keys from fiscale_params.
         fiscaal_partner: If True, double the heffingsvrij vermogen.
     """
-    bank = float(params.get('box3_bank_saldo', 0))
-    overig = float(params.get('box3_overige_bezittingen', 0))
-    schulden_bruto = float(params.get('box3_schulden', 0))
+    required_keys = [
+        'box3_rendement_bank_pct',
+        'box3_rendement_overig_pct',
+        'box3_rendement_schuld_pct',
+        'box3_tarief_pct',
+        'box3_heffingsvrij_vermogen',
+        'box3_drempel_schulden',
+    ]
+    missing = [k for k in required_keys if params.get(k) is None]
+    if missing:
+        raise ValueError(
+            f"Box 3 fiscale parameters incompleet voor "
+            f"{params.get('jaar', '?')}: ontbrekend: {', '.join(missing)}"
+        )
 
-    rend_bank_pct = float(params.get('box3_rendement_bank_pct', 1.03)) / 100
-    rend_overig_pct = float(params.get('box3_rendement_overig_pct', 6.17)) / 100
-    rend_schuld_pct = float(params.get('box3_rendement_schuld_pct', 2.46)) / 100
-    tarief_pct = float(params.get('box3_tarief_pct', 36)) / 100
-    heffingsvrij_pp = float(params.get('box3_heffingsvrij_vermogen', 57000))
-    drempel_schulden_pp = float(params.get('box3_drempel_schulden', 3700))
+    # User balance-sheet inputs — default to 0 if not entered.
+    bank = float(params.get('box3_bank_saldo') or 0)
+    overig = float(params.get('box3_overige_bezittingen') or 0)
+    schulden_bruto = float(params.get('box3_schulden') or 0)
+
+    rend_bank_pct = float(params['box3_rendement_bank_pct']) / 100
+    rend_overig_pct = float(params['box3_rendement_overig_pct']) / 100
+    rend_schuld_pct = float(params['box3_rendement_schuld_pct']) / 100
+    tarief_pct = float(params['box3_tarief_pct']) / 100
+    heffingsvrij_pp = float(params['box3_heffingsvrij_vermogen'])
+    drempel_schulden_pp = float(params['box3_drempel_schulden'])
 
     # Drempel schulden: schulden below threshold are ignored
     drempel = drempel_schulden_pp * (2 if fiscaal_partner else 1)
