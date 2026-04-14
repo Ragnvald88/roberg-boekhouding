@@ -63,6 +63,50 @@ def _can_revert_to_concept(row: dict) -> bool:
     )
 
 
+def _find_pdf_by_filename(stored: str, base: Path) -> Path | None:
+    """Pure PDF lookup with filename fallback.
+
+    Tries the stored path first. If missing, looks for the same basename
+    in ``base`` and ``base/imports``. Returns the first existing Path, or
+    None. Testable without mocks.
+    """
+    if not stored:
+        return None
+    p = Path(stored)
+    if p.exists():
+        return p
+    for candidate in (base / p.name, base / 'imports' / p.name):
+        if candidate.exists():
+            return candidate
+    return None
+
+
+async def _resolve_pdf_pad(row: dict) -> Path | None:
+    """Resolve a factuur's pdf_pad, self-healing stale absolute paths.
+
+    If the stored path is wrong but a file with the same basename exists
+    in PDF_DIR (or its imports/ subdir), update the DB silently and
+    return the corrected path. This makes the app survive data-dir
+    moves without manual intervention. Returns None if truly missing.
+    """
+    stored = row.get('pdf_pad', '')
+    found = _find_pdf_by_filename(stored, PDF_DIR)
+    if found is None:
+        return None
+    if str(found) != stored:
+        factuur_id = row.get('id')
+        if factuur_id:
+            try:
+                await update_factuur(DB_PATH, factuur_id, pdf_pad=str(found))
+                row['pdf_pad'] = str(found)
+            except Exception:
+                # Silent: the user's action still succeeds even if the
+                # persistence side-effect fails. They'll just re-resolve
+                # on the next click.
+                pass
+    return found
+
+
 def _line_item_to_werkdag_kwargs(
     li: dict,
     inv_type: str,
@@ -820,28 +864,29 @@ async def facturen_page():
 
         async def on_download(e):
             row = e.args
-            pdf_path = row.get('pdf_pad', '')
-            if pdf_path and Path(pdf_path).exists():
-                ui.download(pdf_path)
+            resolved = await _resolve_pdf_pad(row)
+            if resolved:
+                ui.download(str(resolved))
             else:
                 ui.notify('PDF niet gevonden', type='warning')
 
         async def on_open_finder(e):
             row = e.args
-            pdf_path = row.get('pdf_pad', '')
-            if pdf_path and Path(pdf_path).exists():
-                await asyncio.to_thread(subprocess.run, ['open', '-R', pdf_path])
+            resolved = await _resolve_pdf_pad(row)
+            if resolved:
+                await asyncio.to_thread(
+                    subprocess.run, ['open', '-R', str(resolved)])
             else:
                 ui.notify('PDF niet gevonden', type='warning')
 
         async def on_preview(e):
             row = e.args
-            pdf_path = row.get('pdf_pad', '')
-            if not pdf_path or not Path(pdf_path).exists():
+            resolved = await _resolve_pdf_pad(row)
+            if resolved is None:
                 ui.notify('PDF niet gevonden', type='warning')
                 return
             # Determine the correct static URL path
-            p = Path(pdf_path)
+            p = resolved
             # PDFs can be in data/facturen/ or data/facturen/imports/
             try:
                 rel = p.relative_to(PDF_DIR)
@@ -984,15 +1029,18 @@ async def facturen_page():
             """Send invoice via email using macOS Mail.app, then mark as verstuurd."""
             import json as _json
             row = e.args
-            pdf_path = row.get('pdf_pad', '')
             nummer = row['nummer']
 
             # Fetch shared data once (used for both PDF generation and email)
             all_klanten = await get_klanten(DB_PATH, alleen_actief=False)
             bg = await get_bedrijfsgegevens(DB_PATH)
 
+            # Try to resolve an existing PDF (self-heals stale paths).
+            resolved = await _resolve_pdf_pad(row)
+            pdf_path = str(resolved) if resolved else ''
+
             # Auto-generate PDF for concepts that don't have one yet
-            if not pdf_path or not Path(pdf_path).exists():
+            if not pdf_path:
                 async with get_db_ctx(DB_PATH) as conn:
                     cur = await conn.execute(
                         "SELECT regels_json, betaallink FROM facturen WHERE id = ?",
@@ -1107,12 +1155,12 @@ async def facturen_page():
         async def on_send_herinnering(e):
             """Send reminder email for overdue invoice via macOS Mail.app."""
             row = e.args
-            pdf_path = row.get('pdf_pad', '')
             nummer = row['nummer']
-
-            if not pdf_path or not Path(pdf_path).exists():
+            resolved = await _resolve_pdf_pad(row)
+            if resolved is None:
                 ui.notify('Geen PDF gevonden voor deze factuur', type='warning')
                 return
+            pdf_path = str(resolved)
 
             all_klanten = await get_klanten(DB_PATH, alleen_actief=False)
             bg = await get_bedrijfsgegevens(DB_PATH)

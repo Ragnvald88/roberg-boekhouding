@@ -757,6 +757,48 @@ def test_revert_betaald_imported_hidden():
         {'status': 'betaald', 'type': 'factuur', 'bron': 'import'}) is False
 
 
+# === PDF path resolution with fallback ===
+
+def test_find_pdf_empty_stored_returns_none(tmp_path):
+    from pages.facturen import _find_pdf_by_filename
+    assert _find_pdf_by_filename('', tmp_path) is None
+
+
+def test_find_pdf_stored_path_exists_returns_it(tmp_path):
+    from pages.facturen import _find_pdf_by_filename
+    real = tmp_path / 'real.pdf'
+    real.write_bytes(b'%PDF-1.4')
+    assert _find_pdf_by_filename(str(real), tmp_path) == real
+
+
+def test_find_pdf_fallback_to_base_dir(tmp_path):
+    """Stale absolute path → resolve via filename lookup in base dir."""
+    from pages.facturen import _find_pdf_by_filename
+    stale = '/nonexistent/old/location/2025-099.pdf'
+    # File exists under tmp_path with same basename
+    actual = tmp_path / '2025-099.pdf'
+    actual.write_bytes(b'%PDF-1.4')
+    assert _find_pdf_by_filename(stale, tmp_path) == actual
+
+
+def test_find_pdf_fallback_to_imports_subdir(tmp_path):
+    """Fallback also checks base/imports/ for imported factuur PDFs."""
+    from pages.facturen import _find_pdf_by_filename
+    imports_dir = tmp_path / 'imports'
+    imports_dir.mkdir()
+    stale = '/old/Drenthe_05-24.pdf'
+    actual = imports_dir / 'Drenthe_05-24.pdf'
+    actual.write_bytes(b'%PDF-1.4')
+    assert _find_pdf_by_filename(stale, tmp_path) == actual
+
+
+def test_find_pdf_truly_missing_returns_none(tmp_path):
+    """No file at stored path or fallback locations → None."""
+    from pages.facturen import _find_pdf_by_filename
+    stale = '/old/ghost.pdf'
+    assert _find_pdf_by_filename(stale, tmp_path) is None
+
+
 # === ANW line item km_tarief (C.5) ===
 
 def test_line_item_to_werkdag_anw_forces_km_tarief_zero():
