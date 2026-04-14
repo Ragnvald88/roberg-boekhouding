@@ -134,8 +134,6 @@ async def compute_checklist_issues(db_path, jaar: int) -> list[tuple[str, str, s
     Returns list of (severity, message, link) tuples — same format as
     render_controles uses internally. Empty list = year is clean.
     """
-    from components.document_specs import AANGIFTE_DOCS  # noqa: F401
-
     issues: list[tuple[str, str, str | None]] = []
     async with get_db_ctx(db_path) as conn:
         # 1. Ongefactureerde werkdagen
