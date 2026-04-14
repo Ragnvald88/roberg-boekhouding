@@ -1376,6 +1376,32 @@ async def update_banktransactie(db_path: Path = DB_PATH, transactie_id: int = 0,
             await conn.commit()
 
 
+async def get_categorie_suggestions(db_path: Path = DB_PATH) -> dict[str, str]:
+    """Build a lookup of tegenpartij → most-used category.
+
+    Groups by lowercased tegenpartij, picks the category with the highest
+    count. Only considers transactions that have a non-empty category.
+    Returns dict mapping lowercase tegenpartij → category string.
+    """
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            """SELECT LOWER(tegenpartij) as tp, categorie, COUNT(*) as cnt
+               FROM banktransacties
+               WHERE categorie IS NOT NULL AND categorie != ''
+                 AND tegenpartij IS NOT NULL AND tegenpartij != ''
+               GROUP BY LOWER(tegenpartij), categorie
+               ORDER BY LOWER(tegenpartij), cnt DESC""")
+        rows = await cur.fetchall()
+
+    # For each tegenpartij, take the first row (highest count due to ORDER BY)
+    suggestions = {}
+    for r in rows:
+        tp = r['tp']
+        if tp not in suggestions:
+            suggestions[tp] = r['categorie']
+    return suggestions
+
+
 async def delete_banktransacties(db_path: Path = DB_PATH,
                                   transactie_ids: list[int] = None) -> tuple[int, list[int]]:
     """Delete bank transactions by IDs.
