@@ -16,7 +16,7 @@ from database import (
     get_uitgaven_per_categorie, get_openstaande_facturen,
     get_werkdagen_ongefactureerd_summary, get_km_totaal,
     get_fiscale_params, get_aangifte_documenten,
-    get_va_betalingen, DB_PATH,
+    get_va_betalingen, get_health_alerts, DB_PATH,
 )
 from components.document_specs import AANGIFTE_DOCS
 from components.fiscal_utils import fetch_fiscal_data, extrapoleer_jaaromzet
@@ -182,7 +182,8 @@ async def dashboard_page():
         # Run all independent DB calls concurrently
         (kpis, kpis_vorig, omzet_huidig, omzet_vorig, kosten_per_cat,
          openstaande, ongefact, km_data,
-         ib_resultaat, fp, va_data, aangifte_docs) = await asyncio.gather(
+         ib_resultaat, fp, va_data, aangifte_docs,
+         health_alerts) = await asyncio.gather(
             get_kpis(DB_PATH, jaar=jaar),
             get_kpis(DB_PATH, jaar=jaar - 1),
             get_omzet_per_maand(DB_PATH, jaar=jaar),
@@ -195,6 +196,7 @@ async def dashboard_page():
             get_fiscale_params(DB_PATH, jaar),
             get_va_betalingen(DB_PATH, jaar),
             get_aangifte_documenten(DB_PATH, jaar),
+            get_health_alerts(DB_PATH, jaar=jaar),
         )
 
         uren_criterium = int(fp.urencriterium) if fp else URENCRITERIUM_DEFAULT
@@ -611,6 +613,48 @@ async def dashboard_page():
                             .style('border: 1px solid #EA580C; '
                                    'border-radius: 6px; '
                                    'color: #EA580C; font-size: 12px')
+
+            # Health alerts — additional signals beyond ongefact/openstaand
+            if health_alerts:
+                if not (has_ongefact or has_openstaand):
+                    # Only show header if AANDACHTSPUNTEN wasn't already rendered
+                    ui.label('AANDACHTSPUNTEN').classes('section-label')
+
+                _severity_style = {
+                    'warning': (
+                        'background: #FEF2F2; border: 1px solid #FECACA;',
+                        '#DC2626', '#991B1B',
+                    ),
+                    'info': (
+                        'background: #EFF6FF; border: 1px solid #BFDBFE;',
+                        '#2563EB', '#1E40AF',
+                    ),
+                }
+                for alert in health_alerts:
+                    bg_style, icon_color, text_color = _severity_style.get(
+                        alert['severity'], _severity_style['info'])
+                    with ui.element('div').style(
+                            f'{bg_style} border-radius: 10px; '
+                            f'padding: 14px 18px; display: flex; '
+                            f'align-items: center; '
+                            f'justify-content: space-between'):
+                        with ui.row().classes('items-center gap-2'):
+                            icon = ('warning' if alert['severity'] == 'warning'
+                                    else 'info_outline')
+                            ui.icon(icon, size='20px').style(
+                                f'color: {icon_color}')
+                            ui.html(
+                                f'<span style="font-size:13px;font-weight:600;'
+                                f'color:{text_color}">'
+                                f'{alert["message"]}</span>')
+                        if alert.get('link'):
+                            ui.button(
+                                'Bekijk',
+                                on_click=lambda l=alert['link']: ui.navigate.to(l),
+                            ).props('flat dense size=sm') \
+                                .style(f'border: 1px solid {icon_color}; '
+                                       f'border-radius: 6px; '
+                                       f'color: {icon_color}; font-size: 12px')
 
     jaar_select.on_value_change(lambda _: refresh_dashboard())
     await refresh_dashboard()
