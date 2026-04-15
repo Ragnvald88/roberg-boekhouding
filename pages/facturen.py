@@ -1,6 +1,7 @@
 """Facturen pagina — factuur aanmaken, overzicht en betaalstatus."""
 
 import asyncio
+import html
 import subprocess
 import tempfile
 from datetime import date, datetime, timedelta
@@ -176,68 +177,70 @@ def _classify_import_item(
     return 'nieuw', ''
 
 
-def _build_mail_body(nummer, bedrag, iban, bedrijfsnaam, naam, telefoon, bg_email, betaallink=''):
-    """Build plain text factuur email body. Returns a single string.
+def _build_mail_body(nummer, bedrag, iban, bedrijfsnaam, naam, telefoon,
+                     bg_email, betaallink=''):
+    """Build factuur email body as minimal HTML.
 
-    Per CLAUDE.md: Mail.app silently breaks HTML content + attachments, so the
-    body must stay plain text. Mail.app auto-links plain URLs in plain-text
-    bodies, so betaallink can be included as a literal URL — no HTML needed.
+    Mail.app's AppleScript `html content` property is deprecated on macOS
+    14+ ("Does nothing at all"), so we route the email through the Cocoa
+    Share-Sheet compose service (`components.mail_helper`), which DOES
+    accept an HTML body together with a PDF attachment. The betaallink is
+    rendered as a clickable `<a>` on the phrase "deze link".
+
+    User-controlled values are html-escaped to prevent any chance of
+    injection via business metadata coming out of the DB.
     """
-    betaallink_line = (
-        f'U kunt ook eenvoudig betalen via deze link:\n{betaallink}\n'
+    esc = html.escape
+    betaallink_block = (
+        f'<p>U kunt ook eenvoudig betalen via '
+        f'<a href="{esc(betaallink, quote=True)}">deze link</a>.</p>'
         if betaallink else ''
     )
+    tel_line = f'Tel: {esc(telefoon)}<br>' if telefoon else ''
     return (
-        f'Bijgaand stuur ik u factuur {nummer}.\n'
-        f'\n'
-        f'Het totaalbedrag van {bedrag} verzoek ik u binnen 14 dagen '
-        f'over te maken op rekeningnummer {iban} t.n.v. {bedrijfsnaam}, '
-        f'onder vermelding van factuurnummer {nummer}.\n'
-        f'\n'
-        f'{betaallink_line}'
-        f'Mocht u vragen hebben, dan hoor ik het graag.\n'
-        f'\n'
-        f'\n'
-        f'Met vriendelijke groet,\n'
-        f'\n'
-        f'{naam}\n'
-        f'\n'
-        f'{bedrijfsnaam}\n'
-        f'{f"Tel: {telefoon}" if telefoon else ""}\n'
-        f'{bg_email}'
+        f'<p>Bijgaand stuur ik u factuur {esc(nummer)}.</p>'
+        f'<p>Het totaalbedrag van {esc(bedrag)} verzoek ik u binnen 14 dagen '
+        f'over te maken op rekeningnummer {esc(iban)} t.n.v. '
+        f'{esc(bedrijfsnaam)}, onder vermelding van factuurnummer '
+        f'{esc(nummer)}.</p>'
+        f'{betaallink_block}'
+        f'<p>Mocht u vragen hebben, dan hoor ik het graag.</p>'
+        f'<p>Met vriendelijke groet,</p>'
+        f'<p>{esc(naam)}<br>'
+        f'{esc(bedrijfsnaam)}<br>'
+        f'{tel_line}'
+        f'{esc(bg_email)}</p>'
     )
 
 
 def _build_herinnering_body(nummer, bedrag, datum, iban, bedrijfsnaam, naam,
                             telefoon, bg_email, betaallink=''):
-    """Build plain text herinnering email body for overdue invoices."""
-    betaallink_line = (
-        f'U kunt ook eenvoudig betalen via deze link:\n{betaallink}\n'
+    """Build herinnering (reminder) email body as minimal HTML. See
+    `_build_mail_body` for rationale on HTML vs plain text."""
+    esc = html.escape
+    betaallink_block = (
+        f'<p>U kunt ook eenvoudig betalen via '
+        f'<a href="{esc(betaallink, quote=True)}">deze link</a>.</p>'
         if betaallink else ''
     )
+    tel_line = f'Tel: {esc(telefoon)}<br>' if telefoon else ''
     return (
-        f'Beste klant,\n'
-        f'\n'
-        f'Wellicht is het aan uw aandacht ontsnapt, maar ik heb nog geen '
-        f'betaling ontvangen voor factuur {nummer} van {datum} ter hoogte '
-        f'van {bedrag}.\n'
-        f'\n'
-        f'Ik verzoek u vriendelijk het bedrag binnen 7 dagen over te maken op '
-        f'rekeningnummer {iban} t.n.v. {bedrijfsnaam}, onder vermelding van '
-        f'factuurnummer {nummer}.\n'
-        f'\n'
-        f'{betaallink_line}'
-        f'Mocht de betaling reeds onderweg zijn, dan kunt u dit bericht als '
-        f'niet verzonden beschouwen. Heeft u vragen, neem dan gerust contact op.\n'
-        f'\n'
-        f'\n'
-        f'Met vriendelijke groet,\n'
-        f'\n'
-        f'{naam}\n'
-        f'\n'
-        f'{bedrijfsnaam}\n'
-        f'{f"Tel: {telefoon}" if telefoon else ""}\n'
-        f'{bg_email}'
+        f'<p>Beste klant,</p>'
+        f'<p>Wellicht is het aan uw aandacht ontsnapt, maar ik heb nog geen '
+        f'betaling ontvangen voor factuur {esc(nummer)} van {esc(datum)} '
+        f'ter hoogte van {esc(bedrag)}.</p>'
+        f'<p>Ik verzoek u vriendelijk het bedrag binnen 7 dagen over te '
+        f'maken op rekeningnummer {esc(iban)} t.n.v. {esc(bedrijfsnaam)}, '
+        f'onder vermelding van factuurnummer {esc(nummer)}.</p>'
+        f'{betaallink_block}'
+        f'<p>Mocht de betaling reeds onderweg zijn, dan kunt u dit bericht '
+        f'als niet verzonden beschouwen. Heeft u vragen, neem dan gerust '
+        f'contact op.</p>'
+        f'<p>Met vriendelijke groet,</p>'
+        f'<p>{esc(naam)}<br>'
+        f'{esc(bedrijfsnaam)}<br>'
+        f'{tel_line}'
+        f'{esc(bg_email)}</p>'
     )
 
 
@@ -1132,7 +1135,7 @@ async def facturen_page():
             try:
                 result = await asyncio.to_thread(
                     open_mail_with_attachment,
-                    to=klant_email, subject=subject, body=body,
+                    to=klant_email, subject=subject, body_html=body,
                     attachment_path=pdf_path_abs,
                 )
                 if result.returncode != 0:
@@ -1194,7 +1197,7 @@ async def facturen_page():
             try:
                 result = await asyncio.to_thread(
                     open_mail_with_attachment,
-                    to=klant_email, subject=subject, body=body,
+                    to=klant_email, subject=subject, body_html=body,
                     attachment_path=pdf_path_abs,
                 )
                 if result.returncode != 0:

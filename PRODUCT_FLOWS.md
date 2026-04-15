@@ -36,8 +36,8 @@ Gebruik dit als bron voor `/ux-review`.
 
 ### Factuur versturen
 - Trigger: "Verstuur via e-mail" in row-menu (alle statussen met PDF)
-- Opent Mail.app via AppleScript met pre-filled **plain-text** body + PDF bijlage
-- Body is altijd plain text (HTML content + attachments is kapot in Mail.app). Betaallink wordt als URL in de tekst opgenomen, Mail.app maakt er automatisch een clickbare link van.
+- Opent Mail.app via **NSSharingService** (Cocoa Share-Sheet compose-API) met pre-filled HTML body + PDF bijlage
+- Body is HTML met een clickable `<a href="…">deze link</a>` op de betaallink. AppleScript `html content` werkt sinds macOS 14 niet meer (Apple markeerde 'm "Does nothing at all") — NSSharingService is de moderne vervanger die HTML + attachment wél samen accepteert.
 - Als er nog geen PDF bestaat, wordt deze automatisch gegenereerd vóór versturen
 - Status wordt automatisch 'verstuurd' als factuur concept was
 

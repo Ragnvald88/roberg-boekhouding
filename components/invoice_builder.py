@@ -5,9 +5,8 @@ import base64
 import inspect
 import json
 import logging
-import shutil
 import sqlite3
-import tempfile
+import subprocess
 from datetime import date
 from pathlib import Path
 
@@ -350,11 +349,13 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None,
                         'plaats': plaats_input.value or '',
                     }
 
-                # Wire klant fields to preview
+                # Wire klant fields to preview (live while typing — the
+                # 300ms debounce in schedule_preview_update keeps the
+                # re-render rate sane).
                 for inp in [contact_input, adres_input,
                             postcode_input, plaats_input]:
-                    inp.on('blur', lambda _=None:
-                           schedule_preview_update())
+                    inp.on_value_change(
+                        lambda _=None: schedule_preview_update())
 
                 # ── Ongefactureerde werkdagen suggesties ──
                 ongefact_container = ui.column().classes('w-full gap-1')
@@ -572,7 +573,16 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None,
                         d_inp.on(
                             'update:model-value',
                             lambda _=None, u=updater: u())
-                        o_inp.on('blur', updater)
+                        # Live-preview: on_value_change fires on every
+                        # keystroke (Quasar's update:model-value); the
+                        # preview itself is debounced 300ms in
+                        # schedule_preview_update so keystroke-rate is
+                        # not a performance concern. Blur alone is not
+                        # enough — users expect the preview to mirror
+                        # the text as they type, and a mid-edit
+                        # add/remove of a line would otherwise shift
+                        # the stale blur-handler's captured index.
+                        o_inp.on_value_change(updater)
                         a_inp.on_value_change(updater)
                         t_inp.on_value_change(updater)
                         if km_inp is not None:
@@ -763,7 +773,14 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None,
                 # ── Action button handlers ──
 
                 async def download_preview():
-                    """Generate a preview PDF and trigger download."""
+                    """Generate a preview PDF and open it in the system's
+                    default PDF viewer (Preview.app on macOS).
+
+                    Saves to ~/Downloads so the file persists after closing
+                    Preview, mirroring the old browser-mode behavior that
+                    dropped a file in the user's Downloads folder — but now
+                    the PDF is immediately visible instead of hidden.
+                    """
                     if not line_items:
                         ui.notify(
                             'Voeg eerst factuurregels toe',
@@ -771,37 +788,46 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None,
                         return
                     klant_dict = _read_klant_fields()
                     regels = _build_regels(line_items)
-                    tmp_dir = None
+                    out_dir = Path.home() / 'Downloads'
+                    out_dir.mkdir(parents=True, exist_ok=True)
+                    # QR is only persisted to disk when saving a real factuur
+                    # (PDF_DIR/<nummer>_qr.png). For a preview we write it to
+                    # Downloads as well so generate_invoice can reference it;
+                    # it's a small PNG and gets overwritten on next preview.
+                    preview_qr = ''
+                    if _qr_bytes['data']:
+                        qr_tmp = out_dir / '_boekhouding_preview_qr.png'
+                        await asyncio.to_thread(
+                            qr_tmp.write_bytes, _qr_bytes['data'])
+                        preview_qr = str(qr_tmp)
                     try:
-                        tmp_dir = Path(tempfile.mkdtemp())
-                        # Write QR to temp file if uploaded
-                        tmp_qr = ''
-                        if _qr_bytes['data']:
-                            tmp_qr_path = tmp_dir / 'qr.png'
-                            tmp_qr_path.write_bytes(_qr_bytes['data'])
-                            tmp_qr = str(tmp_qr_path)
                         pdf_path = await asyncio.to_thread(
                             generate_invoice,
                             nummer_input.value or 'preview',
-                            klant_dict, [], tmp_dir,
+                            klant_dict, [], out_dir,
                             factuur_datum=(
                                 datum_input.value
                                 or date.today().isoformat()),
                             bedrijfsgegevens=bg_dict,
                             pre_regels=regels,
-                            qr_path=tmp_qr,
+                            qr_path=preview_qr,
                         )
-                        pdf_bytes = await asyncio.to_thread(
-                            pdf_path.read_bytes)
-                        ui.download.content(
-                            pdf_bytes, filename=pdf_path.name)
+                        # Open in system default PDF viewer. subprocess.run
+                        # returns once LaunchServices has handed the file to
+                        # Preview.app — so the file is safely on disk before
+                        # this call returns.
+                        await asyncio.to_thread(
+                            subprocess.run,
+                            ['open', str(pdf_path)],
+                            check=False)
+                        ui.notify(
+                            f'Preview geopend: {pdf_path.name}',
+                            type='positive')
                     except Exception as ex:
+                        log.exception('PDF preview failed')
                         ui.notify(
                             f'PDF preview mislukt: {ex}',
                             type='negative')
-                    finally:
-                        if tmp_dir and tmp_dir.exists():
-                            shutil.rmtree(tmp_dir, ignore_errors=True)
 
                 async def genereer_factuur():
                     # Validate
@@ -1178,7 +1204,8 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None,
             )
 
         # Wire nummer + datum to preview
-        nummer_input.on('blur', lambda _=None: schedule_preview_update())
+        nummer_input.on_value_change(
+            lambda _=None: schedule_preview_update())
         datum_input.on(
             'update:model-value',
             lambda _=None: schedule_preview_update())

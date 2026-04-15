@@ -948,7 +948,7 @@ Expected: all pass, including the two new snapshot-route tests.
 DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib .venv/bin/python main.py
 ```
 
-In the browser:
+In the app window (native pywebview):
 1. Navigate to Jaarafsluiting → pick a concept year → hit "Definitief maken"
 2. Navigate to Aangifte for that year → verify cijfers match the Jaarcijfers-PDF
 3. (Optionally) go to Jaarafsluiting → "Heropenen" → add a factuur → "Definitief" again → verify new snapshot updated

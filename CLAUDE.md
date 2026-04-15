@@ -1,19 +1,28 @@
 # Boekhouding App
 
-Standalone boekhoudapplicatie (NiceGUI + Python) voor een eenmanszaak huisartswaarnemer. Draait lokaal op macOS, opent in browser. Data in `~/Library/Application Support/Boekhouding/data/` (niet in git, niet op cloud-sync).
+Standalone boekhoudapplicatie (NiceGUI + Python) voor een eenmanszaak huisartswaarnemer. Draait lokaal op macOS als native venster (pywebview). Data in `~/Library/Application Support/Boekhouding/data/` (niet in git, niet op cloud-sync).
 
 ## Tech Stack
-- **UI**: NiceGUI >=3.0 (Quasar/Vue), browser mode (`ui.run(host='127.0.0.1', port=8085)`)
+- **UI**: NiceGUI >=3.0 (Quasar/Vue), **native mode** via pywebview: `ui.run(native=True, window_size=(1400, 900))`. Één proces, één venster, eigen dock-icon. `Boekhouding.app` is een thin AppleScript-launcher die enkel `main.py` spawnt of — als de app al draait — de pywebview-window naar voren brengt; zie `Boekhouding.applescript`.
 - **Database**: SQLite via aiosqlite, raw SQL met `?` placeholders, GEEN ORM
 - **PDF**: WeasyPrint + Jinja2 (`templates/factuur.html`), **Charts**: ECharts via `ui.echart`
 - **Python**: 3.12+
 
 ## Commands
 ```bash
-# Start
+# Start (end-user): double-click Boekhouding.app, or
+open -a Boekhouding
+# — spawnt main.py en opent een native pywebview-venster; bij hernieuwde klik
+#   focust de launcher het bestaande venster in plaats van een tweede instance.
+
+# Start (development, direct): slaat de launcher over zodat stdout/stderr direct
+# in je terminal verschijnen — handig voor debug.
 source .venv/bin/activate
 export DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib
-python main.py  # → http://127.0.0.1:8085
+python main.py   # opent native venster (NiceGUI `native=True`)
+
+# Rebuild van Boekhouding.app na wijziging in Boekhouding.applescript of build-app.sh
+bash build-app.sh
 
 # Tests
 DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib .venv/bin/python -m pytest tests/ -v
@@ -37,7 +46,8 @@ DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib .venv/bin/python -m pytest tests/ -
 ## Ontwikkelregels
 
 ### Architectuur
-- Browser mode ALTIJD — NOOIT native/pywebview
+- **Native mode via pywebview** (`ui.run(native=True, ...)`). Browser-mode (`show=True`) is verlaten: de dock-icon/tab-juggling met AppleScript was broos (TCC-resets bij rebuild, Arc/Firefox geen tab-scripting, tab-accumulatie). Native geeft één proces, één venster, macOS regelt focus-op-dockklik zelf.
+- **Geen top-level side-effects in `main.py`** — NiceGUI native spawnt een pywebview-child dat `main.py` opnieuw importeert. Een `sys.exit()`-guard op port-in-use doodt dan die child en de app valt om vóór het venster zichtbaar is. Als je een startup-check toevoegt: plaats 'm in een `if __name__ == '__main__':` blok of laat uvicorn de binding-error zelf opgooien.
 - Shared layout via `components/layout.py`
 - Elke pagina is `@ui.page('/route')` in eigen bestand
 - `format_euro(value, decimals=2)`/`format_datum` ALLEEN uit `components/utils.py`
@@ -58,7 +68,7 @@ Concept (grey) → Verstuurd (blue/info) → Betaald (green/positive)
                   Verlopen (red/negative, computed: verstuurd + past due)
 ```
 - New invoices start as `'concept'` — freely editable
-- "Verstuur via e-mail" opens Mail.app via AppleScript with PDF attached → marks verstuurd
+- "Verstuur via e-mail" opens Mail.app via NSSharingService with HTML body + PDF attached → marks verstuurd
 - Revenue queries (`get_omzet_*`, `get_kpis`) exclude concept invoices
 - `update_factuur_status()` cascades to linked werkdagen
 
@@ -73,7 +83,7 @@ Concept (grey) → Verstuurd (blue/info) → Betaald (green/positive)
 - Bij SQL queries op `facturen`: controleer altijd of `status != 'concept'` filtering nodig is
 - Bij `werkdagen` data: `factuurnummer = ''` = ongefactureerd. Oude werkdagen kunnen extern gefactureerd zijn.
 - **Gebruiker boven data**: als de gebruiker zegt dat data niet klopt, onderzoek root cause — vertrouw niet blindelings op DB-waarden.
-- **AppleScript email**: altijd plain text (HTML content + attachments is broken in Mail.app). Betaallink als URL in tekst. `_build_mail_body` geeft één string terug, geen tuple. Helper in `components/mail_helper.py`.
+- **Factuur/herinnering e-mail via NSSharingService**: `_build_mail_body` en `_build_herinnering_body` geven **HTML** terug met clickable `<a href="…">deze link</a>` op de betaallink. User-controlled waarden worden via `html.escape` gefilterd. Versturen loopt via `components/mail_helper.py → open_mail_with_attachment(..., body_html=...)`; die shellt uit naar `components/mail_compose_helper.py` dat Mail.app's Cocoa Share-Sheet compose-API (`com.apple.share.Mail.compose`) aanroept via pyobjc. **Niet** via AppleScript's `html content`-property — die is door Apple gedeprecateerd met omschrijving "Does nothing at all" op macOS 14+ (zie `sdef /System/Applications/Mail.app`) en werkt niet meer samen met attachments.
 - **Fiscale params**: alle jaar-afhankelijke waarden uit DB (`fiscale_params`), GEEN hardcoded fallbacks. Ontbrekende keys → loud ValueError, aangifte-pagina toont error-card met link naar Instellingen.
 - **Jaarafsluiting definitief**: maakt een echte JSON snapshot (`jaarafsluiting_snapshots` tabel). Render-pad leest snapshot voor definitief-jaren, live data voor concept. Snapshot is schema-tolerant (altijd `dict.get(key, default)` in render code). `/aangifte` leest ook via `load_jaarafsluiting_data` zodat cijfers op scherm + Jaarcijfers-PDF consistent blijven, óók na engine-fixes.
 - **Jaar-lock (K6)**: zodra `jaarafsluiting_status='definitief'` weigert elke mutatie op facturen, werkdagen, uitgaven, banktransacties en fiscale_params van dat jaar met `YearLockedError` (subclass van `ValueError`). Guard zit in `assert_year_writable(db_path, jaar_of_datum)` helper. Unfreeze-escape: `update_jaarafsluiting_status(jaar, 'concept')` — die functie is als enige ongeguarded zodat "Heropenen" altijd werkt. Na heropenen → correcties → opnieuw definitief maken overschrijft het snapshot. Alle guards zijn getest in `tests/test_year_locking.py`.

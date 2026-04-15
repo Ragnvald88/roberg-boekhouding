@@ -1857,9 +1857,16 @@ class TestExtrapoleerJaaromzet:
         assert result['confidence'] == 'high'
 
     def test_extrapolation_linear(self, db_path):
-        """Current year: linear extrapolation from YTD."""
+        """Current year: linear extrapolation from YTD.
+
+        Mocks date.today() to a fixed point in the year so the extrapolation
+        divisor (`complete_months`) is deterministic — without this the test
+        silently starts failing once the calendar tips past the 15th of the
+        month after the seeded data (e.g. April 15th: 30k/4 months = 90k,
+        outside the asserted 100k-140k band).
+        """
         import asyncio
-        from datetime import date
+        import datetime
         from database import add_factuur
         from components.fiscal_utils import extrapoleer_jaaromzet
         # Add 3 months of revenue (Jan-Mar)
@@ -1868,8 +1875,21 @@ class TestExtrapoleerJaaromzet:
                                      datum=f'2026-{m:02d}-15', totaal_uren=80,
                                      totaal_km=0, totaal_bedrag=10000,
                                      status='verstuurd'))
-        result = asyncio.run(extrapoleer_jaaromzet(db_path, date.today().year))
-        # 30000 YTD in ~3 months → ~120000 annual
+
+        original_date = datetime.date
+
+        class MockDate(datetime.date):
+            @classmethod
+            def today(cls):
+                return original_date(2026, 3, 31)  # 3 complete months elapsed
+
+        datetime.date = MockDate
+        try:
+            result = asyncio.run(extrapoleer_jaaromzet(db_path, 2026))
+        finally:
+            datetime.date = original_date
+
+        # 30000 YTD / 3 complete months * 12 = 120000
         assert result['ytd_omzet'] == 30000
         assert 100000 < result['extrapolated_omzet'] < 140000
         assert result['confidence'] in ('low', 'medium')

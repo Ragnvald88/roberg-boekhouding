@@ -567,7 +567,13 @@ from pages.facturen import _build_mail_body, _build_herinnering_body
 
 
 def test_build_mail_body_with_betaallink():
-    """Body is plain text with betaallink as a literal URL. No HTML tags."""
+    """Body is HTML with betaallink as a clickable hyperlink on 'deze link'.
+
+    Delivered via NSSharingService (components.mail_helper) — Mail.app's
+    AppleScript `html content` property is deprecated / does-nothing, but
+    NSSharingService accepts HTML + attachment together, so we compose
+    HTML directly.
+    """
     body = _build_mail_body(
         '2026-021', '€ 1.097,34', 'NL00 TEST 0000 0000 00',
         'TestBV huisartswaarnemer', 'Test Gebruiker',
@@ -575,33 +581,46 @@ def test_build_mail_body_with_betaallink():
         betaallink='https://betaalverzoek.rabobank.nl/betaalverzoek/?id=abc',
     )
     assert isinstance(body, str)
-    # No HTML tags — Mail.app breaks on HTML + attachments (CLAUDE.md).
-    assert '<' not in body
-    assert '>' not in body
-    # Betaallink is a literal URL (Mail.app auto-links in plain text).
-    assert 'https://betaalverzoek.rabobank.nl/betaalverzoek/?id=abc' in body
+    # Clickable hyperlink on the phrase "deze link" with the betaallink
+    # as the href — this is the whole point of the HTML switch.
+    assert ('<a href="https://betaalverzoek.rabobank.nl/betaalverzoek/?id=abc">'
+            'deze link</a>') in body
     assert 'eenvoudig betalen' in body
+    # User-visible factuur details still present.
     assert 'Bijgaand stuur ik u factuur 2026-021' in body
     assert 'NL00 TEST 0000 0000 00' in body
+    # € is rendered literally (not entity-escaped — html.escape leaves it).
     assert '€ 1.097,34' in body
     assert 'TestBV huisartswaarnemer' in body
     assert 'Test Gebruiker' in body
 
 
 def test_build_mail_body_without_betaallink():
-    """Without betaallink the paragraph is omitted and body stays plain text."""
+    """Without betaallink the `<a>`-paragraph is omitted; body is still HTML."""
     body = _build_mail_body(
         '2026-021', '€ 1.097,34', 'NL00 TEST 0000 0000 00',
         'TestBV huisartswaarnemer', 'Test Gebruiker',
         '06 0000 0000', 'info@testbedrijf.nl',
     )
     assert isinstance(body, str)
-    assert '<' not in body
-    assert '>' not in body
-    assert 'betaallink' not in body.lower()
-    assert 'betalen via deze link' not in body
+    assert '<a href=' not in body
+    assert 'betalen via' not in body
     assert 'Bijgaand stuur ik u factuur 2026-021' in body
     assert 'NL00 TEST 0000 0000 00' in body
+
+
+def test_build_mail_body_escapes_hostile_values():
+    """User-controlled bedrijfsnaam / telefoon / naam must be html-escaped to
+    prevent accidental markup injection through DB-stored business metadata."""
+    body = _build_mail_body(
+        '2026-022', '€ 100,00', 'NL00 TEST 0000 0000 00',
+        'Evil<script>alert(1)</script>Corp', 'Dr. "Test" & Co',
+        '06-1<script>', 'a@b<c>.nl',
+    )
+    assert '<script>' not in body
+    assert '&lt;script&gt;' in body
+    assert '&amp;' in body
+    assert '&quot;' in body
 
 
 # ============================================================
@@ -610,7 +629,7 @@ def test_build_mail_body_without_betaallink():
 
 
 def test_herinnering_body_with_betaallink():
-    """Herinnering body includes betaallink when provided."""
+    """Herinnering body includes betaallink as a clickable hyperlink."""
     body = _build_herinnering_body(
         nummer='2026-001', bedrag='€ 1.234,00', datum='1 februari 2026',
         iban='NL00RABO0123456789', bedrijfsnaam='Testpraktijk',
@@ -623,20 +642,21 @@ def test_herinnering_body_with_betaallink():
     assert 'aan uw aandacht ontsnapt' in body
     assert '7 dagen' in body
     assert 'NL00RABO0123456789' in body
-    assert 'https://pay.example.com/123' in body
+    # Clickable hyperlink (not just raw URL in text).
+    assert '<a href="https://pay.example.com/123">deze link</a>' in body
     assert 'Dr. Test' in body
     assert 'Testpraktijk' in body
     assert '06-12345678' in body
 
 
 def test_herinnering_body_without_betaallink():
-    """Herinnering body omits betaallink paragraph when empty."""
+    """Herinnering body omits the `<a>`-paragraph when no betaallink."""
     body = _build_herinnering_body(
         nummer='2026-002', bedrag='€ 500,00', datum='15 maart 2026',
         iban='NL00RABO0123456789', bedrijfsnaam='Testpraktijk',
         naam='Dr. Test', telefoon='', bg_email='test@test.nl',
     )
-    assert 'betalen via deze link' not in body
+    assert '<a href=' not in body
     assert 'factuur 2026-002' in body
     assert '€ 500,00' in body
 
