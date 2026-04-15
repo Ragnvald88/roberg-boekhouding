@@ -1,18 +1,16 @@
 """Boekhouding — Entrypoint."""
 
 import os
-# Prevent NiceGUI from transitively importing matplotlib. We render charts
-# with ECharts; matplotlib and its ~50-module subtree (pyplot, mpl_toolkits,
-# pillow, pyparsing, kiwisolver, dateutil) would add 100-400ms to cold start
-# for nothing. NiceGUI's `nicegui/elements/pyplot.py:15` reads this env var.
-os.environ.setdefault('MATPLOTLIB', 'false')
-
 import signal
 import socket
 import subprocess
 import sys
 import webbrowser
 from urllib.request import urlopen
+
+from nicegui import app, ui
+from database import init_db, DB_PATH
+from import_.seed_data import seed_all
 
 PORT = 8085
 
@@ -52,8 +50,6 @@ def _kill_stale_process(port: int) -> None:
         pass
 
 
-# Port-check BEFORE heavy imports: if the app is already running, we only
-# need to open a browser tab — no need to pay the ~300ms NiceGUI import cost.
 if _port_in_use(PORT):
     if _app_responding(PORT):
         print(f'Boekhouding draait al op http://127.0.0.1:{PORT} — browser wordt geopend.')
@@ -66,12 +62,6 @@ if _port_in_use(PORT):
             print(f'FOUT: Kan poort {PORT} niet vrijmaken. Stop het proces handmatig.')
             sys.exit(1)
         print(f'Poort {PORT} is weer vrij. App wordt gestart...')
-
-# Heavy imports deferred to here so the "app already running" path above
-# exits within ~50ms instead of paying the full ~300ms NiceGUI startup.
-from nicegui import app, ui
-from database import init_db, DB_PATH
-from import_.seed_data import seed_all
 
 # Page imports (register @ui.page routes)
 import pages.dashboard
