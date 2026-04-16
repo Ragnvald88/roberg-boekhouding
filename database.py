@@ -837,6 +837,7 @@ def _row_to_factuur(r) -> Factuur:
         bron=r['bron'] if 'bron' in r.keys() else 'app',
         betaallink=r['betaallink'] if 'betaallink' in r.keys() else '',
         herinnering_datum=r['herinnering_datum'] if 'herinnering_datum' in r.keys() else '',
+        regels_json=r['regels_json'] if 'regels_json' in r.keys() else '',
     )
 
 

@@ -65,6 +65,36 @@ def _can_revert_to_concept(row: dict) -> bool:
     )
 
 
+def _can_send_mail(row: dict) -> bool:
+    """Can this factuur show 'Verstuur via e-mail' in the menu?
+
+    - Concept: ja, mits er regels zijn (builder-gegenereerde PDF kan on-demand).
+    - Verstuurd/verlopen: ja, mits er een pdf_pad bestaat.
+    - Betaald: nee (geen reden meer om te versturen).
+    - Imports zonder PDF: nee — dead-end want Bewerken is verborgen.
+    """
+    status = row.get('status', '')
+    if status == 'betaald':
+        return False
+    has_pdf = bool(row.get('pdf_pad'))
+    is_import = (row.get('type') == 'anw' or row.get('bron') == 'import')
+    if status == 'concept':
+        return bool(row.get('regels_json')) or has_pdf
+    # verstuurd of verlopen
+    if is_import:
+        return has_pdf
+    return has_pdf or bool(row.get('regels_json'))
+
+
+def _can_send_herinnering(row: dict) -> bool:
+    """Can this factuur show 'Herinnering versturen' in the menu?
+
+    Alleen voor verlopen facturen MET een bestaande PDF — herinnering-body
+    koppelt aan de originele factuur-PDF als attachment.
+    """
+    return bool(row.get('verlopen')) and bool(row.get('pdf_pad'))
+
+
 def _find_pdf_by_filename(stored: str, base: Path) -> Path | None:
     """Pure PDF lookup with filename fallback.
 
@@ -529,7 +559,7 @@ async def facturen_page():
                                 <q-item-section>Toon in Finder</q-item-section>
                             </q-item>
                             <q-separator />
-                            <q-item v-if="props.row.status !== 'betaald'" clickable
+                            <q-item v-if="props.row.can_send_mail" clickable
                                 @click="() => $parent.$emit('sendmail', props.row)">
                                 <q-item-section side>
                                     <q-icon name="email" size="xs"
@@ -537,7 +567,7 @@ async def facturen_page():
                                 </q-item-section>
                                 <q-item-section>Verstuur via e-mail</q-item-section>
                             </q-item>
-                            <q-item v-if="props.row.verlopen" clickable
+                            <q-item v-if="props.row.can_send_herinnering" clickable
                                 @click="() => $parent.$emit('sendherinnering', props.row)">
                                 <q-item-section side>
                                     <q-icon name="notification_important" size="xs"
@@ -645,7 +675,7 @@ async def facturen_page():
                 except (ValueError, TypeError):
                     vervaldatum_fmt = ''
 
-                rows.append({
+                row = {
                     'id': f.id,
                     'nummer': f.nummer,
                     'datum': f.datum,
@@ -663,8 +693,12 @@ async def facturen_page():
                     'pdf_pad': f.pdf_pad,
                     'type': f.type,
                     'bron': f.bron,
+                    'regels_json': f.regels_json,
                     'herinnering_datum': format_datum(f.herinnering_datum) if f.herinnering_datum else '',
-                })
+                }
+                row['can_send_mail'] = _can_send_mail(row)
+                row['can_send_herinnering'] = _can_send_herinnering(row)
+                rows.append(row)
                 if f.status != 'concept':
                     totaal += f.totaal_bedrag
                 if f.status != 'betaald' and f.status != 'concept':

@@ -777,6 +777,51 @@ def test_revert_betaald_imported_hidden():
         {'status': 'betaald', 'type': 'factuur', 'bron': 'import'}) is False
 
 
+# === UI-guard helpers for send-mail / send-herinnering ===
+
+def test_can_send_mail_true_for_concept_with_regels():
+    from pages.facturen import _can_send_mail
+    assert _can_send_mail({'status': 'concept', 'type': 'factuur',
+                            'bron': '', 'pdf_pad': '', 'regels_json': '[]'})
+
+
+def test_can_send_mail_true_for_verstuurd_with_pdf():
+    from pages.facturen import _can_send_mail
+    assert _can_send_mail({'status': 'verstuurd', 'type': 'factuur',
+                            'bron': '', 'pdf_pad': '/path/a.pdf',
+                            'regels_json': ''})
+
+
+def test_can_send_mail_false_for_betaald():
+    from pages.facturen import _can_send_mail
+    assert not _can_send_mail({'status': 'betaald', 'type': 'factuur',
+                                'bron': '', 'pdf_pad': '/path/a.pdf',
+                                'regels_json': ''})
+
+
+def test_can_send_mail_false_for_import_without_pdf():
+    """Imported factuur zonder PDF: UI zou dead-end 'Bewerken eerst' melden."""
+    from pages.facturen import _can_send_mail
+    assert not _can_send_mail({'status': 'verstuurd', 'type': 'anw',
+                                'bron': 'import', 'pdf_pad': '',
+                                'regels_json': ''})
+
+
+def test_can_send_herinnering_true_for_verlopen_with_pdf():
+    from pages.facturen import _can_send_herinnering
+    assert _can_send_herinnering({'verlopen': True, 'pdf_pad': '/path/a.pdf'})
+
+
+def test_can_send_herinnering_false_without_pdf():
+    from pages.facturen import _can_send_herinnering
+    assert not _can_send_herinnering({'verlopen': True, 'pdf_pad': ''})
+
+
+def test_can_send_herinnering_false_when_not_verlopen():
+    from pages.facturen import _can_send_herinnering
+    assert not _can_send_herinnering({'verlopen': False, 'pdf_pad': '/path/a.pdf'})
+
+
 # === PDF path resolution with fallback ===
 
 def test_find_pdf_empty_stored_returns_none(tmp_path):

@@ -79,6 +79,7 @@ class Factuur:
     bron: str = 'app'
     betaallink: str = ''
     herinnering_datum: str = ''
+    regels_json: str = ''
 
 
 @dataclass
