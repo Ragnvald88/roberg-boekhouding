@@ -28,6 +28,7 @@ from import_.pdf_parser import (
     parse_dagpraktijk_text, parse_anw_text,
 )
 from import_.klant_mapping import resolve_klant, resolve_anw_klant
+from import_.werkdag_validator import validate_werkdag_record, ValidationError
 
 PDF_DIR = DB_PATH.parent / "facturen"
 
@@ -1570,6 +1571,7 @@ async def facturen_page():
                     errors = 0
                     werkdagen_created = 0
                     werkdagen_linked = 0
+                    skipped_werkdagen: list[dict] = []
 
                     # Ensure PDF storage dirs exist
                     import_dir = PDF_DIR / 'imports'
@@ -1670,6 +1672,23 @@ async def facturen_page():
                                         else:
                                             wd_kwargs = _line_item_to_werkdag_kwargs(
                                                 li, inv_type, inv_km_tarief)
+                                            validator_rec = {
+                                                'datum': li_datum,
+                                                'code': wd_kwargs['code'],
+                                                'uren': wd_kwargs['uren'],
+                                                'tarief': wd_kwargs['tarief'],
+                                                'km': wd_kwargs['km'],
+                                                'km_tarief': wd_kwargs['km_tarief'],
+                                            }
+                                            try:
+                                                validate_werkdag_record(
+                                                    validator_rec, inv_type=inv_type)
+                                            except ValidationError as vex:
+                                                skipped_werkdagen.append({
+                                                    'datum': li_datum,
+                                                    'reason': str(vex),
+                                                })
+                                                continue
                                             await add_werkdag(
                                                 DB_PATH,
                                                 datum=li_datum,
@@ -1698,6 +1717,17 @@ async def facturen_page():
                         parts.append(f'{errors} fouten')
                     ui.notify(', '.join(parts),
                               type='positive' if not errors else 'warning')
+                    if skipped_werkdagen:
+                        lines = '\n'.join(
+                            f'  • {s["datum"]}: {s["reason"]}'
+                            for s in skipped_werkdagen
+                        )
+                        ui.notify(
+                            f'{len(skipped_werkdagen)} werkdag(en) '
+                            f'overgeslagen — controleer PDF of voeg '
+                            f'handmatig toe:\n{lines}',
+                            type='warning', multi_line=True, timeout=10000,
+                        )
                     await refresh_table()
 
             dlg.open()

@@ -1028,3 +1028,15 @@ async def test_invoice_lifecycle_full_path(db):
     # betaald -> concept is BLOCKED (data integrity: don't silently lose a payment)
     with pytest.raises(ValueError, match="niet toegestaan"):
         await update_factuur_status(db, factuur_id=fid, status='concept')
+
+
+def test_werkdag_validator_blocks_tarief_zero_at_import():
+    """Regression: validator catches the 2025 tarief=0 pattern before DB insert."""
+    from import_.werkdag_validator import validate_werkdag_record, ValidationError
+    bad_item = {
+        'datum': '2025-06-15', 'code': 'CONSULT',
+        'uren': 8.0, 'tarief': 0.0,
+        'km': 0.0, 'km_tarief': 0.0,
+    }
+    with pytest.raises(ValidationError, match='tarief=0'):
+        validate_werkdag_record(bad_item, inv_type='factuur')
