@@ -839,3 +839,42 @@ class TestExtractFactuurnummerVariants:
         text = 'Factuurnummer : 2024-024b\n'
         # Current behavior: captures the digit prefix, strips the 'b' suffix.
         assert _extract_factuurnummer(text) == '2024-024'
+
+
+# === Import hardening regression tests ===
+
+def test_parse_dutch_date_returns_none_on_malformed_month():
+    from import_.pdf_parser import parse_dutch_date
+    # Month contains letter -> int() would raise ValueError before fix
+    assert parse_dutch_date('01-1a-2025') is None
+
+
+def test_parse_dutch_date_returns_none_on_malformed_day():
+    from import_.pdf_parser import parse_dutch_date
+    assert parse_dutch_date('aa-01-2025') is None
+
+
+def test_extract_work_dates_skips_malformed_amount_line():
+    """Regel met multi-dot bedrag (1.2.3) moet geskipt worden, niet crashen."""
+    from import_.pdf_parser import extract_dagpraktijk_line_items
+    text = (
+        "01-06-2025   Waarneming dagpraktijk   3   € 1.2.3\n"
+        "02-06-2025   Waarneming dagpraktijk   4   € 77,50\n"
+    )
+    items = extract_dagpraktijk_line_items(text)
+    # Eerste regel moet geskipt zijn, tweede wel geparst
+    assert len(items) == 1
+    assert items[0]['datum'] == '2025-06-02'
+    assert abs(items[0]['tarief'] - 77.50) < 0.01
+
+
+def test_extract_anw_diensten_skips_malformed_row():
+    """Eén rare ANW-regel mag niet heel extract_anw_diensten killen."""
+    from import_.pdf_parser import extract_anw_diensten
+    text = (
+        "  320442  W4-A  01-06-2023  12:30  17:00  4.50   Weekend  € 116,36  Vrijgesteld  € 523,62\n"
+        "  320443  W4-A  02-06-2023  12:30  17:00  4.5.0  Weekend  € 116,36  Vrijgesteld  € 523,62\n"
+        "  320444  W4-A  03-06-2023  12:30  17:00  4.50   Weekend  € 116,36  Vrijgesteld  € 523,62\n"
+    )
+    diensten = extract_anw_diensten(text)
+    assert len(diensten) == 2  # bad row skipped

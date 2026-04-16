@@ -63,23 +63,32 @@ def parse_dutch_amount(s: str) -> float:
         return 0.0
 
 
-def parse_dutch_date(s: str) -> str:
-    """Parse Dutch date formats to ISO YYYY-MM-DD.
+DATE_RE = re.compile(r'^(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})$')
 
-    Handles: DD-MM-YYYY, D-M-YYYY, DD/MM/YYYY, DD-MM-YY
+
+def parse_dutch_date(s: str) -> str | None:
+    """Parse Dutch-style 'DD-MM-YYYY' or 'DD/MM/YY' -> ISO 'YYYY-MM-DD'.
+
+    Returns None on malformed input (e.g. '01-1a-2025', 'aa-01-2025') so callers
+    can skip the row instead of letting int()/ValueError tear down the whole import.
     """
-    s = s.strip().replace('/', '-')
-    parts = s.split('-')
-    if len(parts) != 3:
-        return s
-
-    day, month, year = parts
-    if len(year) == 2:
-        year = '20' + year
-    if len(year) != 4:
-        return s
-
-    return f"{year}-{int(month):02d}-{int(day):02d}"
+    if not s:
+        return None
+    m = DATE_RE.match(s.strip())
+    if not m:
+        return None
+    day_str, month_str, year_str = m.groups()
+    try:
+        day = int(day_str)
+        month = int(month_str)
+        year = int(year_str)
+    except ValueError:
+        return None
+    if len(year_str) == 2:
+        year += 2000
+    if not (1 <= day <= 31 and 1 <= month <= 12 and 2000 <= year <= 2100):
+        return None
+    return f"{year:04d}-{month:02d}-{day:02d}"
 
 
 def _extract_factuurnummer(text: str) -> str | None:
@@ -271,10 +280,9 @@ def _extract_work_dates(text: str) -> list[str]:
             line,
         )
         if m:
-            try:
-                dates.append(parse_dutch_date(m.group(1)))
-            except (ValueError, IndexError):
-                pass
+            parsed = parse_dutch_date(m.group(1))
+            if parsed:
+                dates.append(parsed)
     return dates
 
 
@@ -306,6 +314,29 @@ def _derive_km_from_reiskosten(reiskosten: float) -> tuple[float, float]:
         if abs(km - round(km)) < 0.01:
             return round(km), rate
     return round(reiskosten / 0.23), 0.23
+
+
+def _safe_parse_amount(euro_amounts: list[str]) -> float | None:
+    """Parse first euro amount safely. Returns None if empty or malformed.
+
+    `parse_dutch_amount` silently returns 0.0 on garbage like '1.2.3'; this
+    helper surfaces that as None so callers can skip the row rather than emit
+    a junk item with tarief=0.0.
+    """
+    if not euro_amounts:
+        return None
+    s = euro_amounts[0].strip()
+    if not s:
+        return None
+    # Multi-dot without a decimal comma is malformed unless it's a clean
+    # thousands-separated integer (e.g. '1.234.567'). '1.2.3' fails this.
+    if ',' not in s and s.count('.') > 1:
+        if not re.match(r'^-?\d{1,3}(\.\d{3})+$', s):
+            return None
+    try:
+        return parse_dutch_amount(s)
+    except (ValueError, IndexError):
+        return None
 
 
 def extract_dagpraktijk_line_items(text: str) -> list[dict]:
@@ -382,14 +413,20 @@ def extract_dagpraktijk_line_items(text: str) -> list[dict]:
         if is_km:
             # km line — update the current item
             if current_item:
+                amount = _safe_parse_amount(euro_amounts)
+                if amount is None:
+                    continue  # skip malformed km-line, keep item intact
                 current_item['km'] = antal
-                current_item['km_tarief'] = parse_dutch_amount(euro_amounts[0])
+                current_item['km_tarief'] = amount
         elif current_date:
             # uren line — start a new item
+            amount = _safe_parse_amount(euro_amounts)
+            if amount is None:
+                continue  # skip malformed tarief-line, don't start item
             if current_item:
                 items.append(current_item)
 
-            tarief = parse_dutch_amount(euro_amounts[0])
+            tarief = amount
             current_item = {
                 'datum': current_date,
                 'uren': antal,
@@ -459,11 +496,14 @@ def extract_anw_diensten(text: str) -> list[dict]:
             stripped,
         )
         if m:
+            try:
+                uren = float(m.group(6))
+            except (ValueError, IndexError):
+                continue  # skip malformed row rather than crash whole import
             current_code = m.group(2)
             datum = parse_dutch_date(m.group(3))
             if datum:
                 current_date = datum
-            uren = float(m.group(6))
             bedrag = parse_dutch_amount(m.group(9))
 
             if current_date:
@@ -490,7 +530,10 @@ def extract_anw_diensten(text: str) -> list[dict]:
             stripped,
         )
         if m and current_date:
-            uren = float(m.group(3))
+            try:
+                uren = float(m.group(3))
+            except (ValueError, IndexError):
+                continue  # skip malformed continuation row
             bedrag = parse_dutch_amount(m.group(6))
 
             if current_date not in diensten_by_date:
@@ -575,10 +618,9 @@ def parse_anw_text(text: str, filename: str = '') -> dict:
         if m and ('Dienst' not in line or re.search(r'\d{6}', line)):
             # Only if line has a dienst ID (6-digit number) or comes after header
             if re.search(r'^\s*\d{5,7}\s', line):
-                try:
-                    dienst_dates.append(parse_dutch_date(m.group(1)))
-                except (ValueError, IndexError):
-                    pass
+                parsed = parse_dutch_date(m.group(1))
+                if parsed:
+                    dienst_dates.append(parsed)
 
     return {
         'factuurnummer': factuurnummer,
