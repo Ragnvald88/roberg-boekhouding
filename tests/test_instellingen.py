@@ -15,6 +15,13 @@ VALID_2024 = {
     'pvv_premiegrondslag': 38098,
     'zvw_pct': 4.85, 'zvw_max_grondslag': 66956,
     'ew_forfait_pct': 0.35, 'repr_aftrek_pct': 80,
+    # Fields that became required after silent-fallback fix:
+    'villataks_grens': 1_350_000, 'wet_hillen_pct': 66.0,
+    'urencriterium': 1225, 'arbeidskorting_brackets': '[]',
+    'box3_heffingsvrij_vermogen': 57000,
+    'box3_rendement_bank_pct': 1.44, 'box3_rendement_overig_pct': 5.88,
+    'box3_rendement_schuld_pct': 2.61, 'box3_tarief_pct': 36,
+    'box3_drempel_schulden': 3700,
 }
 
 
@@ -132,3 +139,78 @@ def test_validate_accepts_zero_for_optional_aftrekposten():
     errors = _validate_fiscal_params(p)
     assert not any('startersaftrek' in e for e in errors)
     assert not any('zelfstandigenaftrek' in e for e in errors)
+
+
+def test_validate_rejects_missing_villataks_grens():
+    """villataks_grens is required — hardcoded silent default removed."""
+    bad = dict(VALID_2024)
+    del bad['villataks_grens']
+    errors = _validate_fiscal_params(bad)
+    assert any('villataks_grens' in e for e in errors)
+
+
+def test_validate_rejects_missing_urencriterium():
+    bad = dict(VALID_2024)
+    del bad['urencriterium']
+    errors = _validate_fiscal_params(bad)
+    assert any('urencriterium' in e for e in errors)
+
+
+def test_validate_rejects_missing_box3_heffingsvrij_vermogen():
+    bad = dict(VALID_2024)
+    del bad['box3_heffingsvrij_vermogen']
+    errors = _validate_fiscal_params(bad)
+    assert any('box3_heffingsvrij_vermogen' in e for e in errors)
+
+
+def test_validate_rejects_missing_box3_rendement_bank_pct():
+    bad = dict(VALID_2024)
+    del bad['box3_rendement_bank_pct']
+    errors = _validate_fiscal_params(bad)
+    assert any('box3_rendement_bank_pct' in e for e in errors)
+
+
+def test_validate_accepts_zero_wet_hillen_pct():
+    """wet_hillen_pct = 0 is legitimate (post-uitfasering)."""
+    p = dict(VALID_2024)
+    p['wet_hillen_pct'] = 0
+    errors = _validate_fiscal_params(p)
+    assert not any('wet_hillen_pct' in e for e in errors)
+
+
+def test_validate_rejects_missing_wet_hillen_pct():
+    """Absent wet_hillen_pct must flag — presence required, even if value 0."""
+    bad = dict(VALID_2024)
+    del bad['wet_hillen_pct']
+    errors = _validate_fiscal_params(bad)
+    assert any('wet_hillen_pct' in e for e in errors)
+
+
+def test_validate_accepts_zero_box3_rendement_schuld_pct():
+    """Rendement op schulden = 0 is legitiem voor wie geen Box-3-schulden heeft."""
+    p = dict(VALID_2024)
+    p['box3_rendement_schuld_pct'] = 0
+    errors = _validate_fiscal_params(p)
+    assert not any('box3_rendement_schuld_pct' in e for e in errors)
+
+
+def test_validate_accepts_zero_box3_drempel_schulden():
+    """Drempel schulden = 0 is legitiem (geen schulden)."""
+    p = dict(VALID_2024)
+    p['box3_drempel_schulden'] = 0
+    errors = _validate_fiscal_params(p)
+    assert not any('box3_drempel_schulden' in e for e in errors)
+
+
+def test_validate_rejects_empty_arbeidskorting_brackets():
+    bad = dict(VALID_2024)
+    bad['arbeidskorting_brackets'] = ''
+    errors = _validate_fiscal_params(bad)
+    assert any('arbeidskorting_brackets' in e for e in errors)
+
+
+def test_validate_rejects_missing_arbeidskorting_brackets():
+    bad = dict(VALID_2024)
+    del bad['arbeidskorting_brackets']
+    errors = _validate_fiscal_params(bad)
+    assert any('arbeidskorting_brackets' in e for e in errors)

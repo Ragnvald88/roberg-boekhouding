@@ -33,6 +33,8 @@ def _validate_fiscal_params(p: dict) -> list[str]:
         'mkb_vrijstelling_pct',
         'pvv_aow_pct', 'pvv_anw_pct', 'pvv_wlz_pct',
         'zvw_pct', 'ew_forfait_pct', 'repr_aftrek_pct',
+        # Box 3 rendementen/tarief: in de praktijk > 0 per Belastingdienst
+        'box3_rendement_bank_pct', 'box3_rendement_overig_pct', 'box3_tarief_pct',
     ]
     for fld in required_positive_pct:
         if fld not in p or p[fld] is None:
@@ -41,6 +43,19 @@ def _validate_fiscal_params(p: dict) -> list[str]:
         v = p[fld]
         if not (0 < v <= 100):
             errors.append(f'{fld} moet > 0 en <= 100 zijn (nu: {v})')
+
+    # Percentages waar 0 een legitieme waarde is (presence wel vereist).
+    # wet_hillen_pct wordt uitgefaseerd en kan 0 worden; schuld-rendement is
+    # 0 voor belastingplichtigen zonder Box-3-schulden.
+    required_nonneg_pct = ['wet_hillen_pct', 'box3_rendement_schuld_pct']
+    for fld in required_nonneg_pct:
+        if fld not in p or p[fld] is None:
+            errors.append(
+                f'{fld} is verplicht — vul 0 in als niet van toepassing')
+            continue
+        v = p[fld]
+        if not (0 <= v <= 100):
+            errors.append(f'{fld} moet tussen 0 en 100 liggen (nu: {v})')
 
     # IB schijf grenzen: verplicht en strikt > 0 (monotonie-check verderop)
     for fld in ('schijf1_grens', 'schijf2_grens'):
@@ -67,12 +82,30 @@ def _validate_fiscal_params(p: dict) -> list[str]:
         'ahk_afbouw_pct',  # heffingskortingen.py uses params['ahk_afbouw_pct']
         'zvw_max_grondslag',  # berekeningen.py uses params['zvw_max_grondslag']
         'pvv_premiegrondslag',  # berekeningen.py PVV calculation
+        # Nieuw required sinds silent-fallback fix:
+        'villataks_grens',  # villataks-berekening heeft een echte grens nodig
+        'urencriterium',  # ZZP-check op 1225 uur
+        'box3_heffingsvrij_vermogen',  # box3-berekening
     ]
     for fld in required_positive_amt:
         if fld not in p or p[fld] is None:
             errors.append(f'{fld} is verplicht en mag niet leeg zijn')
         elif p[fld] <= 0:
             errors.append(f'{fld} moet groter dan 0 zijn (nu: {p[fld]})')
+
+    # Bedragen waar 0 een legitieme waarde is (presence wel vereist).
+    required_nonneg_amt = ['box3_drempel_schulden']
+    for fld in required_nonneg_amt:
+        if fld not in p or p[fld] is None:
+            errors.append(
+                f'{fld} is verplicht — vul 0 in als niet van toepassing')
+        elif p[fld] < 0:
+            errors.append(f'{fld} mag niet negatief zijn (nu: {p[fld]})')
+
+    # arbeidskorting_brackets: moet een niet-lege string zijn (JSON-array van schijven)
+    if 'arbeidskorting_brackets' not in p or not p['arbeidskorting_brackets']:
+        errors.append(
+            'arbeidskorting_brackets is verplicht (JSON-array van schijven)')
 
     # Bedragen die 0 mogen zijn (bv. geen startersaftrek meer van toepassing)
     optional_nonneg = [
