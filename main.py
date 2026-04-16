@@ -25,7 +25,6 @@ PORT = 8085
 
 # Page imports (register @ui.page routes)
 import pages.dashboard
-import pages.dashboard_omzet
 import pages.werkdagen
 import pages.facturen
 import pages.klanten
