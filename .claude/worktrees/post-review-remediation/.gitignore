@@ -1,0 +1,11 @@
+data/
+__pycache__/
+*.pyc
+.DS_Store
+*.egg-info/
+.env
+.venv/
+.nicegui/
+.superpowers/
+suggestions_AI/
+.mcp.json
