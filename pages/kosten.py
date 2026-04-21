@@ -1,6 +1,7 @@
 """Kosten pagina — transacties (bank + cash) + investeringen."""
 
 import asyncio
+import json
 import shutil
 from datetime import date
 from itertools import groupby
@@ -50,18 +51,221 @@ async def _laad_inbox(container, jaar, refresh):
     container.clear()  # nothing to show yet (Task 12)
 
 
-async def _laad_tabel(container, jaar, status, categorie, search, view_mode):
+def _view_pdf(row: dict):
+    """Open the attached document file from a kosten row."""
+    p = row.get('pdf_pad', '')
+    if p and Path(p).exists():
+        ui.download.file(p)
+    else:
+        ui.notify('Bon niet gevonden', type='warning')
+
+
+async def _laad_tabel(
+    container, jaar, status, categorie, search, view_mode, refresh,
+):
     if container is None:
         return
     container.clear()
+
     rows = await get_kosten_view(
         DB_PATH, jaar=jaar, status=status,
         categorie=categorie, search=search,
     )
+
+    columns = [
+        {'name': 'datum', 'label': 'Datum', 'field': 'datum',
+         'align': 'left', 'sortable': True},
+        {'name': 'tegenpartij', 'label': 'Tegenpartij / Omschrijving',
+         'field': 'tegenpartij', 'align': 'left'},
+        {'name': 'categorie', 'label': 'Categorie', 'field': 'categorie',
+         'align': 'left'},
+        {'name': 'factuur', 'label': 'Factuur', 'field': 'factuur_status',
+         'align': 'left'},
+        {'name': 'bedrag', 'label': 'Bedrag', 'field': 'bedrag_fmt',
+         'align': 'right', 'sortable': True},
+        {'name': 'acties', 'label': '', 'field': 'acties',
+         'align': 'center'},
+    ]
+
+    table_rows = []
+    for r in rows:
+        display_name = r.tegenpartij or r.omschrijving or '(onbekend)'
+        table_rows.append({
+            'id_bank': r.id_bank,
+            'id_uitgave': r.id_uitgave,
+            'datum': r.datum,
+            'datum_fmt': format_datum(r.datum),
+            'tegenpartij': display_name,
+            'omschrijving': r.omschrijving,
+            'categorie': r.categorie,
+            'bedrag': r.bedrag,
+            'bedrag_fmt': format_euro(r.bedrag),
+            'factuur_status': r.status,
+            'pdf_pad': r.pdf_pad,
+            'is_manual': r.is_manual,
+            'initials': initials(r.tegenpartij or r.omschrijving),
+            'color': tegenpartij_color(r.tegenpartij or r.omschrijving),
+            # Row key must be unique across bank-only and manual rows.
+            # Manual rows have id_bank=None; bank rows always have id_bank set.
+            'row_key': (f'b{r.id_bank}' if r.id_bank is not None
+                        else f'u{r.id_uitgave}'),
+        })
+
+    # Inject the category list into a window global referenced by the
+    # categorie-dropdown slot template below. NiceGUI doesn't expose a
+    # cleaner hook for passing Python lists into per-cell slot templates.
+    # json.dumps keeps us safe against apostrophes / special chars.
+    ui.add_body_html(
+        '<script>window.__KOSTEN_CAT_LIST__ = '
+        f'{json.dumps(CATEGORIEEN)};</script>'
+    )
+
+    async def _on_set_cat(args: dict):
+        row = args['row']
+        cat = args['cat']
+        try:
+            if row['id_bank'] is not None and row['id_uitgave'] is None:
+                # Bank-only row: lazy-create the linked uitgave.
+                await ensure_uitgave_for_banktx(
+                    DB_PATH, bank_tx_id=row['id_bank'], categorie=cat,
+                )
+            else:
+                # Manual row or bank+linked row: update existing uitgave.
+                await update_uitgave(
+                    DB_PATH, uitgave_id=row['id_uitgave'], categorie=cat,
+                )
+            ui.notify(f'Categorie bijgewerkt naar {cat}', type='positive')
+            await refresh()
+        except YearLockedError as e:
+            ui.notify(str(e), type='negative')
+
+    async def _attach_pdf_dialog(row):
+        """Placeholder — Task 11 routes to the Detail dialog's Factuur tab."""
+        await _open_detail_dialog(row, default_tab='factuur')
+
+    async def _open_detail_dialog(row, default_tab: str = 'detail'):
+        """Stub — Task 11 replaces this with the full Detail dialog."""
+        ui.notify('Detail-dialog komt in Task 11', type='info')
+
     with container:
-        ui.label(
-            f'{len(rows)} rij(en) — {view_mode} view (placeholder — Task 10)'
-        ).classes('text-caption text-grey')
+        with ui.card().classes('w-full'):
+            tbl = ui.table(
+                columns=columns, rows=table_rows, row_key='row_key',
+                selection='multiple',
+                pagination={
+                    'rowsPerPage': 20, 'sortBy': 'datum',
+                    'descending': True,
+                    'rowsPerPageOptions': [10, 20, 50, 0],
+                },
+            ).classes('w-full').props('flat')
+
+            tbl.add_slot('body-cell-datum', '''
+                <q-td :props="props">{{ props.row.datum_fmt }}</q-td>
+            ''')
+
+            tbl.add_slot('body-cell-tegenpartij', '''
+                <q-td :props="props">
+                  <div class="row items-center q-gutter-sm">
+                    <div
+                         :style="`background:${props.row.color};
+                                   color:white;
+                                   width:30px;height:30px;
+                                   border-radius:7px;
+                                   display:grid;place-items:center;
+                                   font-weight:700;font-size:11px;
+                                   flex-shrink:0;`">
+                      {{ props.row.initials }}
+                    </div>
+                    <div>
+                      <div style="font-weight:500">
+                        {{ props.row.tegenpartij }}
+                      </div>
+                      <div class="text-caption text-grey"
+                           v-if="props.row.omschrijving &&
+                                  props.row.omschrijving !== props.row.tegenpartij">
+                        {{ props.row.omschrijving }}
+                      </div>
+                    </div>
+                  </div>
+                </q-td>
+            ''')
+
+            tbl.add_slot('body-cell-categorie', '''
+                <q-td :props="props">
+                  <q-btn-dropdown flat dense
+                                  no-caps
+                                  :label="props.row.categorie || '— kies —'"
+                                  :color="props.row.categorie ? 'primary' : 'warning'"
+                                  size="sm">
+                    <q-list dense>
+                      <q-item v-for="c in window.__KOSTEN_CAT_LIST__"
+                              :key="c"
+                              clickable
+                              v-close-popup
+                              @click="$parent.$emit('set_cat',
+                                       {row: props.row, cat: c})">
+                        <q-item-section>{{ c }}</q-item-section>
+                      </q-item>
+                    </q-list>
+                  </q-btn-dropdown>
+                </q-td>
+            ''')
+
+            tbl.add_slot('body-cell-factuur', '''
+                <q-td :props="props">
+                  <q-chip v-if="props.row.factuur_status === 'compleet'"
+                          color="positive" text-color="white"
+                          size="sm" icon="check_circle" dense>
+                    Compleet
+                  </q-chip>
+                  <q-chip v-else-if="props.row.factuur_status === 'ontbreekt'"
+                          color="warning" text-color="white"
+                          size="sm" icon="warning" dense>
+                    Ontbreekt
+                  </q-chip>
+                  <q-chip v-else color="info" text-color="white"
+                          size="sm" dense>
+                    Nieuw
+                  </q-chip>
+                  <q-btn v-if="props.row.pdf_pad" flat dense round size="xs"
+                         icon="attach_file" color="primary"
+                         @click="$parent.$emit('view_pdf', props.row)" />
+                  <q-chip v-if="props.row.is_manual" color="grey"
+                          text-color="white" size="sm" dense>
+                    contant
+                  </q-chip>
+                </q-td>
+            ''')
+
+            tbl.add_slot('body-cell-acties', '''
+                <q-td :props="props">
+                  <q-btn flat dense round icon="attach_file"
+                         size="sm" color="primary"
+                         title="Bon toevoegen"
+                         @click="$parent.$emit('attach_pdf', props.row)" />
+                  <q-btn flat dense round icon="more_horiz"
+                         size="sm" color="grey-7"
+                         @click="$parent.$emit('open_detail', props.row)" />
+                </q-td>
+            ''')
+
+            tbl.add_slot('no-data', '''
+                <q-tr><q-td colspan="100%"
+                            class="text-center q-pa-lg text-grey">
+                  Geen transacties gevonden.
+                </q-td></q-tr>
+            ''')
+
+            tbl.on('set_cat',
+                   lambda e: asyncio.create_task(_on_set_cat(e.args)))
+            tbl.on('view_pdf',
+                   lambda e: _view_pdf(e.args))
+            tbl.on('attach_pdf',
+                   lambda e: asyncio.create_task(
+                       _attach_pdf_dialog(e.args)))
+            tbl.on('open_detail',
+                   lambda e: asyncio.create_task(
+                       _open_detail_dialog(e.args)))
 
 
 async def _laad_breakdown(container, jaar):
@@ -101,6 +305,7 @@ async def kosten_page():
             kosten_table['ref'], filter_jaar['value'],
             filter_status['value'], filter_categorie['value'],
             filter_search['value'], view_mode['value'],
+            refresh=ververs_transacties,
         )
         await _laad_breakdown(
             breakdown_container['ref'], filter_jaar['value'])
