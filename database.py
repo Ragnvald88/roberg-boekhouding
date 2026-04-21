@@ -1326,13 +1326,13 @@ async def add_uitgave(db_path: Path = DB_PATH, **kwargs) -> int:
             """INSERT INTO uitgaven
                (datum, categorie, omschrijving, bedrag, pdf_pad,
                 is_investering, restwaarde_pct, levensduur_jaren,
-                aanschaf_bedrag, zakelijk_pct)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                aanschaf_bedrag, zakelijk_pct, bank_tx_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (kwargs['datum'], kwargs['categorie'], kwargs['omschrijving'],
              kwargs['bedrag'], kwargs.get('pdf_pad', ''),
              kwargs.get('is_investering', 0), kwargs.get('restwaarde_pct', 10),
              kwargs.get('levensduur_jaren'), kwargs.get('aanschaf_bedrag'),
-             kwargs.get('zakelijk_pct', 100))
+             kwargs.get('zakelijk_pct', 100), kwargs.get('bank_tx_id'))
         )
         await conn.commit()
         return cursor.lastrowid
@@ -3067,6 +3067,40 @@ async def find_pdf_matches_for_banktx(
         ))
     matches.sort(key=lambda m: (m.has_bedrag_match, m.score), reverse=True)
     return matches
+
+
+async def find_banktx_matches_for_pdf(
+    db_path: Path, filename: str, jaar: int,
+) -> list[tuple[int, str, float, str]]:
+    """Return (bank_tx_id, datum, bedrag_abs, tegenpartij) tuples where
+    filename tokens overlap with banktransacties.tegenpartij (len>=3).
+
+    Skips bank transactions that already have a linked uitgave — those
+    cannot be newly paired. Only debit rows (bedrag < 0) are considered.
+    Genegeerd rows excluded.
+    """
+    from components.kosten_helpers import match_tokens
+    stem = Path(filename).stem
+    jaar_start = f"{jaar:04d}-01-01"
+    jaar_end = f"{jaar + 1:04d}-01-01"
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            "SELECT id, datum, bedrag, tegenpartij FROM banktransacties "
+            "WHERE bedrag < 0 AND genegeerd = 0 "
+            "AND datum >= ? AND datum < ? "
+            "AND NOT EXISTS ("
+            "  SELECT 1 FROM uitgaven WHERE bank_tx_id = banktransacties.id"
+            ")",
+            (jaar_start, jaar_end))
+        candidates = []
+        for r in await cur.fetchall():
+            score = match_tokens(r["tegenpartij"] or "", stem)
+            if score > 0:
+                candidates.append((r["id"], r["datum"],
+                                   abs(r["bedrag"]), r["tegenpartij"],
+                                   score))
+    candidates.sort(key=lambda x: x[4], reverse=True)
+    return [c[:4] for c in candidates]
 
 
 async def get_kosten_view(

@@ -23,6 +23,7 @@ from database import (
     get_fiscale_params,
     ensure_uitgave_for_banktx, mark_banktx_genegeerd,
     get_kosten_view, get_kpi_kosten, find_pdf_matches_for_banktx,
+    find_banktx_matches_for_pdf,
     KostenRow, KpiKosten, PdfMatch, YearLockedError,
     DB_PATH,
 )
@@ -1183,6 +1184,10 @@ async def kosten_page():
                     kwargs['zakelijk_pct'] = input_zakelijk.value or 100
                     kwargs['aanschaf_bedrag'] = bedrag
 
+                # Pass through the prefill's bank_tx_id so Importeer can auto-link
+                if prefill and prefill.get('bank_tx_id'):
+                    kwargs['bank_tx_id'] = prefill['bank_tx_id']
+
                 try:
                     uitgave_id = await add_uitgave(DB_PATH, **kwargs)
 
@@ -1417,6 +1422,21 @@ async def kosten_page():
 
                 imported_count = sum(1 for i in items if i['already_imported'])
 
+                # Pre-compute bank-tx match hints for unmatched items
+                # (one async pass; subsequent rendering is sync).
+                match_map: dict[str, list] = {}
+                match_tasks = [
+                    (it['filename'],
+                     find_banktx_matches_for_pdf(
+                         DB_PATH, it['filename'], jaar))
+                    for it in items if not it['already_imported']
+                ]
+                if match_tasks:
+                    results = await asyncio.gather(
+                        *(t[1] for t in match_tasks))
+                    for (fname, _), res in zip(match_tasks, results):
+                        match_map[fname] = res
+
                 with container:
                     ui.label(
                         f'{len(items)} bestanden gevonden, '
@@ -1455,19 +1475,32 @@ async def kosten_page():
                                             ).classes(
                                                 'text-caption text-grey')
                                     else:
-                                        async def do_import(it=item):
+                                        item_matches = match_map.get(
+                                            item['filename'], [])
+                                        top_match = (item_matches[0]
+                                                     if item_matches else None)
+
+                                        async def do_import(
+                                            it=item, bank_match=top_match,
+                                        ):
+                                            prefill = {
+                                                'datum': (
+                                                    it['datum']
+                                                    or (bank_match[1]
+                                                        if bank_match
+                                                        else date.today()
+                                                        .isoformat())
+                                                ),
+                                                'categorie':
+                                                    it['categorie'],
+                                                'pdf_path':
+                                                    str(it['path']),
+                                            }
+                                            if bank_match:
+                                                prefill['bank_tx_id'] = (
+                                                    bank_match[0])
                                             await open_add_uitgave_dialog(
-                                                prefill={
-                                                    'datum': (
-                                                        it['datum']
-                                                        or date.today()
-                                                        .isoformat()
-                                                    ),
-                                                    'categorie':
-                                                        it['categorie'],
-                                                    'pdf_path':
-                                                        str(it['path']),
-                                                },
+                                                prefill=prefill,
                                                 on_saved=load_archive,
                                             )
 
@@ -1489,6 +1522,15 @@ async def kosten_page():
                                                 'datum onbekend'
                                             ).classes(
                                                 'text-caption text-orange')
+                                        if top_match:
+                                            # (bank_tx_id, datum, bedrag,
+                                            #  tegenpartij)
+                                            ui.label(
+                                                f'↔ {top_match[3]} · '
+                                                f'{format_datum(top_match[1])} · '
+                                                f'{format_euro(top_match[2])}'
+                                            ).classes(
+                                                'text-caption text-primary')
 
             # Year selector
             import_jaar_select = ui.select(

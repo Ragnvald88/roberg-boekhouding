@@ -63,3 +63,27 @@ async def test_match_multiple_returns_sorted(db, tmp_path, monkeypatch):
     await _seed_banktx(db, 1, "2026-04-01", -120.87, "KPN B.V.")
     matches = await find_pdf_matches_for_banktx(db, 1, jaar=2026)
     assert len(matches) == 2
+
+
+@pytest.mark.asyncio
+async def test_find_banktx_match_returns_unmatched_only(db):
+    import aiosqlite
+    from database import (find_banktx_matches_for_pdf,
+                          ensure_uitgave_for_banktx)
+    async with aiosqlite.connect(db) as conn:
+        await conn.execute(
+            "INSERT INTO banktransacties "
+            "(id, datum, bedrag, tegenpartij) VALUES (1, ?, ?, ?)",
+            ("2026-04-01", -120.87, "KPN B.V."))
+        await conn.execute(
+            "INSERT INTO banktransacties "
+            "(id, datum, bedrag, tegenpartij) VALUES (2, ?, ?, ?)",
+            ("2026-04-01", -120.87, "KPN B.V."))
+        await conn.commit()
+    # Link the first one
+    await ensure_uitgave_for_banktx(db, 1)
+    hits = await find_banktx_matches_for_pdf(
+        db, "2026-04-01_KPN_abo.pdf", 2026)
+    ids = [h[0] for h in hits]
+    assert 1 not in ids
+    assert 2 in ids
