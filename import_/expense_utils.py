@@ -8,7 +8,7 @@ detects already-imported files.
 import re
 from pathlib import Path
 
-from components.archive_paths import ARCHIVE_BASE
+from components import archive_paths
 
 # Mapping: archive folder name → app KOSTEN_CATEGORIEEN value
 # Note: 'AoV' is deliberately excluded — AOV is not a business expense,
@@ -100,7 +100,7 @@ def scan_archive(year: int, existing_filenames: set[str] | None = None) -> list[
         existing_filenames: Set of filenames already imported (for dedup display).
                            These are the pdf_pad values from the uitgaven table.
     """
-    archive_dir = ARCHIVE_BASE / str(year) / 'Uitgaven'
+    archive_dir = archive_paths.ARCHIVE_BASE / str(year) / 'Uitgaven'
     if not archive_dir.exists():
         return []
 

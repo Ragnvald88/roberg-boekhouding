@@ -6,8 +6,8 @@ from import_.expense_utils import (
     extract_date_from_filename,
     scan_archive,
     FOLDER_TO_CATEGORIE,
-    ARCHIVE_BASE,
 )
+from components.archive_paths import ARCHIVE_BASE
 
 
 

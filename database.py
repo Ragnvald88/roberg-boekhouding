@@ -47,6 +47,16 @@ class MatchProposal:
     bank_tegenpartij: str = ''
     alternatives: list = field(default_factory=list)
 
+
+@dataclass
+class PdfMatch:
+    path: Path
+    filename: str
+    categorie: str
+    score: int  # higher = better; for v1: tegenpartij token count
+    has_bedrag_match: bool = False  # reserved for v1.1
+
+
 _DEFAULT_DB_DIR = Path.home() / "Library" / "Application Support" / "Boekhouding" / "data"
 _ENV_OVERRIDE = os.environ.get("BOEKHOUDING_DB_DIR")
 _DB_DIR = Path(_ENV_OVERRIDE).expanduser() if _ENV_OVERRIDE else _DEFAULT_DB_DIR
@@ -2994,3 +3004,42 @@ async def delete_klant_locatie(db_path, locatie_id):
         await conn.execute(
             "DELETE FROM klant_locaties WHERE id = ?", (locatie_id,))
         await conn.commit()
+
+
+async def find_pdf_matches_for_banktx(
+    db_path: Path, bank_tx_id: int, jaar: int,
+) -> list[PdfMatch]:
+    """Return archive PDFs that plausibly match this bank transaction.
+
+    v1: matches by tegenpartij token overlap (len >= 3 chars).
+    Empty list when nothing matches.
+    """
+    from components.kosten_helpers import match_tokens
+    from import_.expense_utils import scan_archive
+
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            "SELECT datum, tegenpartij FROM banktransacties WHERE id = ?",
+            (bank_tx_id,))
+        row = await cur.fetchone()
+        if row is None:
+            raise ValueError(f"banktransactie {bank_tx_id} not found")
+        tegenpartij = row["tegenpartij"] or ""
+
+    items = scan_archive(jaar, set())  # existing_filenames empty — we re-rank
+    matches: list[PdfMatch] = []
+    for it in items:
+        if it.get("already_imported"):
+            continue
+        stem = Path(it["filename"]).stem
+        score = match_tokens(tegenpartij, stem)
+        if score == 0:
+            continue
+        matches.append(PdfMatch(
+            path=Path(it["path"]),
+            filename=it["filename"],
+            categorie=it["categorie"],
+            score=score,
+        ))
+    matches.sort(key=lambda m: (m.has_bedrag_match, m.score), reverse=True)
+    return matches
