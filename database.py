@@ -57,6 +57,30 @@ class PdfMatch:
     has_bedrag_match: bool = False  # reserved for v1.1
 
 
+@dataclass
+class KostenRow:
+    """Unified reconciliation row: bank-tx debit OR manual uitgave.
+
+    Produced by ``get_kosten_view``. ``is_manual`` distinguishes the
+    two sources; ``status`` is derived via
+    ``components.kosten_helpers.derive_status``.
+    """
+    id_bank: int | None
+    id_uitgave: int | None
+    datum: str
+    bedrag: float
+    tegenpartij: str
+    omschrijving: str
+    iban: str
+    categorie: str
+    pdf_pad: str
+    is_investering: bool
+    zakelijk_pct: float | None
+    status: str
+    is_manual: bool
+    genegeerd: int = 0
+
+
 _DEFAULT_DB_DIR = Path.home() / "Library" / "Application Support" / "Boekhouding" / "data"
 _ENV_OVERRIDE = os.environ.get("BOEKHOUDING_DB_DIR")
 _DB_DIR = Path(_ENV_OVERRIDE).expanduser() if _ENV_OVERRIDE else _DEFAULT_DB_DIR
@@ -3043,3 +3067,113 @@ async def find_pdf_matches_for_banktx(
         ))
     matches.sort(key=lambda m: (m.has_bedrag_match, m.score), reverse=True)
     return matches
+
+
+async def get_kosten_view(
+    db_path: Path,
+    jaar: int,
+    status: str | None = None,
+    categorie: str | None = None,
+    search: str | None = None,
+) -> list[KostenRow]:
+    """Unified reconciliation list: bank-tx debits + manual uitgaven.
+
+    Bank-side: every non-ignored debit (bedrag < 0), optionally joined
+    to its linked uitgave (LEFT JOIN on uitgaven.bank_tx_id).
+    Manual-side: uitgaven without a bank_tx_id (ad-hoc expenses).
+
+    Date filter uses the range form ``datum >= ? AND datum < ?`` so the
+    idx_*_datum indexes are hit. ``status`` / ``categorie`` / ``search``
+    are Python-side post-filters (cheap for single-user workloads).
+    """
+    from components.kosten_helpers import derive_status
+
+    jaar_start = f"{jaar:04d}-01-01"
+    jaar_end = f"{jaar + 1:04d}-01-01"
+
+    sql = """
+    SELECT * FROM (
+        SELECT 'bank' AS source,
+               b.id AS id_bank,
+               u.id AS id_uitgave,
+               b.datum AS datum,
+               ABS(b.bedrag) AS bedrag,
+               COALESCE(b.tegenpartij, '') AS tegenpartij,
+               COALESCE(NULLIF(u.omschrijving, ''), b.omschrijving, '')
+                 AS omschrijving,
+               COALESCE(b.tegenrekening, '') AS iban,
+               COALESCE(u.categorie, '') AS categorie,
+               COALESCE(u.pdf_pad, '') AS pdf_pad,
+               COALESCE(u.is_investering, 0) AS is_investering,
+               u.zakelijk_pct AS zakelijk_pct,
+               b.genegeerd AS genegeerd
+        FROM banktransacties b
+        LEFT JOIN uitgaven u ON u.bank_tx_id = b.id
+        WHERE b.bedrag < 0
+          AND b.genegeerd = 0
+          AND b.datum >= ? AND b.datum < ?
+
+        UNION ALL
+
+        SELECT 'manual' AS source,
+               NULL AS id_bank,
+               u.id AS id_uitgave,
+               u.datum AS datum,
+               u.bedrag AS bedrag,
+               '' AS tegenpartij,
+               u.omschrijving AS omschrijving,
+               '' AS iban,
+               u.categorie AS categorie,
+               COALESCE(u.pdf_pad, '') AS pdf_pad,
+               u.is_investering AS is_investering,
+               u.zakelijk_pct AS zakelijk_pct,
+               0 AS genegeerd
+        FROM uitgaven u
+        WHERE u.bank_tx_id IS NULL
+          AND u.datum >= ? AND u.datum < ?
+    )
+    ORDER BY datum DESC
+    """
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            sql, (jaar_start, jaar_end, jaar_start, jaar_end))
+        raw = await cur.fetchall()
+
+    rows: list[KostenRow] = []
+    for r in raw:
+        row_dict = {
+            "id_bank": r["id_bank"],
+            "id_uitgave": r["id_uitgave"],
+            "genegeerd": r["genegeerd"],
+            "categorie": r["categorie"],
+            "pdf_pad": r["pdf_pad"],
+        }
+        rows.append(KostenRow(
+            id_bank=r["id_bank"],
+            id_uitgave=r["id_uitgave"],
+            datum=r["datum"],
+            bedrag=r["bedrag"],
+            tegenpartij=r["tegenpartij"],
+            omschrijving=r["omschrijving"],
+            iban=r["iban"],
+            categorie=r["categorie"],
+            pdf_pad=r["pdf_pad"],
+            is_investering=bool(r["is_investering"]),
+            zakelijk_pct=r["zakelijk_pct"],
+            status=derive_status(row_dict),
+            is_manual=(r["source"] == "manual"),
+            genegeerd=r["genegeerd"],
+        ))
+
+    # Post-filters
+    if status is not None:
+        rows = [r for r in rows if r.status == status]
+    if categorie is not None and categorie != "":
+        rows = [r for r in rows if r.categorie == categorie]
+    if search:
+        q = search.lower()
+        rows = [r for r in rows if
+                q in r.tegenpartij.lower()
+                or q in r.omschrijving.lower()
+                or q in f"{r.bedrag:.2f}"]
+    return rows
