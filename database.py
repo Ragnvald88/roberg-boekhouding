@@ -1314,8 +1314,7 @@ async def ensure_uitgave_for_banktx(
     Idempotent. Enforces uitgave.bedrag = ABS(bank_tx.bedrag) at creation.
     Year-locked against bank_tx.datum.
     """
-    async with aiosqlite.connect(db_path) as conn:
-        conn.row_factory = aiosqlite.Row
+    async with get_db_ctx(db_path) as conn:
         cur = await conn.execute(
             "SELECT datum, bedrag, tegenpartij, omschrijving "
             "FROM banktransacties WHERE id = ?", (bank_tx_id,))
@@ -1347,7 +1346,9 @@ async def ensure_uitgave_for_banktx(
     uitgave_id = await add_uitgave(db_path, **kwargs)
 
     # Link it.
-    async with aiosqlite.connect(db_path) as conn:
+    async with get_db_ctx(db_path) as conn:
+        # Crash between add_uitgave commit and this linking UPDATE would leave
+        # an orphan uitgave; acceptable given the single-user local SQLite model.
         await conn.execute(
             "UPDATE uitgaven SET bank_tx_id = ? WHERE id = ?",
             (bank_tx_id, uitgave_id))

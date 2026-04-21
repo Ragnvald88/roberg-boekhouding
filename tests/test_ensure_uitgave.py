@@ -79,3 +79,26 @@ async def test_ensure_year_locked_raises(db):
 async def test_ensure_raises_for_unknown_bank_tx(db):
     with pytest.raises(ValueError):
         await ensure_uitgave_for_banktx(db, bank_tx_id=999)
+
+
+@pytest.mark.asyncio
+async def test_ensure_idempotent_ignores_overrides_on_second_call(db):
+    """Second call with different overrides returns existing id unchanged."""
+    await _seed_banktx(db, 1, "2026-04-01", -120.87)
+    first = await ensure_uitgave_for_banktx(
+        db, bank_tx_id=1, categorie="Telefoon/KPN")
+    second = await ensure_uitgave_for_banktx(
+        db, bank_tx_id=1, categorie="SOMETHING_ELSE")
+    assert first == second
+    uitgaven = await get_uitgaven(db, jaar=2026)
+    u = next(u for u in uitgaven if u.id == first)
+    assert u.categorie == "Telefoon/KPN"
+
+
+@pytest.mark.asyncio
+async def test_ensure_bedrag_is_abs_for_positive_bank_tx(db):
+    """Rare but possible: bank tx with positive bedrag (refund/reversal)."""
+    await _seed_banktx(db, 1, "2026-04-01", 42.50)
+    uid = await ensure_uitgave_for_banktx(db, bank_tx_id=1)
+    u = next(u for u in (await get_uitgaven(db, jaar=2026)) if u.id == uid)
+    assert u.bedrag == 42.50
