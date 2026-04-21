@@ -1409,7 +1409,7 @@ async def update_uitgave(db_path: Path = DB_PATH, uitgave_id: int = 0, **kwargs)
         values = []
         allowed = ('datum', 'categorie', 'omschrijving', 'bedrag', 'pdf_pad',
                     'is_investering', 'restwaarde_pct', 'levensduur_jaren',
-                    'aanschaf_bedrag', 'zakelijk_pct')
+                    'aanschaf_bedrag', 'zakelijk_pct', 'bank_tx_id')
         for key in allowed:
             if key in kwargs:
                 fields.append(f"{key} = ?")
