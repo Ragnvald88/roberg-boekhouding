@@ -3177,3 +3177,101 @@ async def get_kosten_view(
                 or q in r.omschrijving.lower()
                 or q in f"{r.bedrag:.2f}"]
     return rows
+
+
+@dataclass
+class KpiKosten:
+    """KPI strip aggregates for the Kosten page.
+
+    Produced by ``get_kpi_kosten``. ``monthly_totals`` is a 12-slot list
+    indexed by month-1 (Jan=0 … Dec=11) for the sparkline.
+    """
+    totaal: float
+    ontbreekt_count: int
+    ontbreekt_bedrag: float
+    afschrijvingen_jaar: float
+    investeringen_count: int
+    investeringen_bedrag: float
+    monthly_totals: list[float]
+
+
+async def get_kpi_kosten(db_path: Path, jaar: int) -> KpiKosten:
+    """Single-pass KPI strip data. See spec §8.
+
+    Reuses ``get_kosten_view`` for tx-side numbers (totaal, monthly,
+    ontbreekt) and ``get_investeringen_voor_afschrijving`` +
+    ``bereken_afschrijving`` for the investment side.
+
+    ``ontbreekt_count`` aggregates BOTH ``ontbreekt`` and
+    ``ongecategoriseerd`` status rows — both mean "needs user action"
+    and are shown in the same reconciliation inbox.
+
+    ``investeringen_count`` / ``investeringen_bedrag`` count only
+    investments acquired in ``jaar`` itself; ``afschrijvingen_jaar``
+    sums depreciation over all still-active investments acquired on or
+    before ``jaar``.
+    """
+    from fiscal.afschrijvingen import bereken_afschrijving
+
+    rows = await get_kosten_view(db_path, jaar=jaar)
+
+    totaal = sum(r.bedrag for r in rows)
+    monthly = [0.0] * 12
+    for r in rows:
+        try:
+            m = int(r.datum[5:7])
+            if 1 <= m <= 12:
+                monthly[m - 1] += r.bedrag
+        except (ValueError, IndexError):
+            continue
+
+    # Ontbreekt_count counts BOTH "ontbreekt" and "ongecategoriseerd"
+    # per spec §8 (both states mean "needs user attention"; they're
+    # shown in the same inbox).
+    ontbreekt_rows = [r for r in rows
+                      if r.status in ("ontbreekt", "ongecategoriseerd")]
+    ontbreekt_count = len(ontbreekt_rows)
+    ontbreekt_bedrag = sum(r.bedrag for r in ontbreekt_rows)
+
+    # Investeringen + afschrijvingen: get_investeringen_voor_afschrijving
+    # returns ALL investments (cumulative up to and including `tot_jaar`),
+    # so we count only rows whose acquisition year matches the filter
+    # year for investeringen_count, while afschrijvingen_jaar is summed
+    # over all active investments.
+    investeringen = await get_investeringen_voor_afschrijving(
+        db_path, tot_jaar=jaar)
+    inv_ids = [u.id for u in investeringen]
+    overrides_map = await get_afschrijving_overrides_batch(
+        db_path, inv_ids) if inv_ids else {}
+
+    investeringen_count = 0
+    investeringen_bedrag = 0.0
+    afschrijvingen_jaar = 0.0
+
+    for u in investeringen:
+        zp = (u.zakelijk_pct if u.zakelijk_pct is not None else 100) / 100.0
+        aanschaf = (u.aanschaf_bedrag or u.bedrag) * zp
+        # Count investment if it belongs to THIS jaar
+        if u.datum[:4] == f"{jaar:04d}":
+            investeringen_count += 1
+            investeringen_bedrag += aanschaf
+        result = bereken_afschrijving(
+            aanschaf_bedrag=aanschaf,
+            restwaarde_pct=u.restwaarde_pct or 10,
+            levensduur=u.levensduur_jaren or 5,
+            aanschaf_maand=int(u.datum[5:7]),
+            aanschaf_jaar=int(u.datum[0:4]),
+            bereken_jaar=jaar,
+            overrides=overrides_map.get(u.id),
+        )
+        afschrijvingen_jaar += result["afschrijving"]
+
+    return KpiKosten(
+        totaal=totaal,
+        ontbreekt_count=ontbreekt_count,
+        ontbreekt_bedrag=ontbreekt_bedrag,
+        afschrijvingen_jaar=afschrijvingen_jaar,
+        investeringen_count=investeringen_count,
+        investeringen_bedrag=investeringen_bedrag,
+        monthly_totals=monthly,
+    )
