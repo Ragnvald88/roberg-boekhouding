@@ -1,4 +1,4 @@
-"""Kosten pagina — uitgaven registratie + categorisatie."""
+"""Kosten pagina — transacties (bank + cash) + investeringen."""
 
 import asyncio
 import shutil
@@ -9,20 +9,66 @@ from pathlib import Path
 from nicegui import ui
 
 from components.layout import create_layout, page_title
-from components.utils import format_euro, format_datum, generate_csv, KOSTEN_CATEGORIEEN as CATEGORIEEN
-from database import (
-    add_uitgave, delete_uitgave, get_uitgaven, get_uitgaven_per_categorie,
-    get_investeringen_voor_afschrijving, update_uitgave, get_fiscale_params,
-    get_afschrijving_overrides, get_afschrijving_overrides_batch,
-    set_afschrijving_override, delete_afschrijving_override,
-    DB_PATH,
+from components.utils import (
+    format_euro, format_datum, KOSTEN_CATEGORIEEN as CATEGORIEEN,
 )
 from components.shared_ui import year_options, date_input
-from fiscal.afschrijvingen import bereken_afschrijving
+from components.kosten_helpers import (
+    derive_status, tegenpartij_color, initials,
+)
+from database import (
+    add_uitgave, delete_uitgave, get_uitgaven, update_uitgave,
+    get_fiscale_params,
+    ensure_uitgave_for_banktx, mark_banktx_genegeerd,
+    get_kosten_view, get_kpi_kosten, find_pdf_matches_for_banktx,
+    KostenRow, KpiKosten, PdfMatch, YearLockedError,
+    DB_PATH,
+)
+from pages.kosten_investeringen import laad_activastaat
 
 UITGAVEN_DIR = DB_PATH.parent / 'uitgaven'
 
 LEVENSDUUR_OPTIES = {3: '3 jaar', 4: '4 jaar', 5: '5 jaar'}
+
+
+# ---------------------------------------------------------------------------
+# Stub loaders — real implementations land in Tasks 10–14.
+# Kept at module scope so later tasks can redefine them by editing in place.
+# ---------------------------------------------------------------------------
+async def _laad_kpi(container, jaar):
+    if container is None:
+        return
+    container.clear()
+    with container:
+        ui.label(f'KPIs voor {jaar} (placeholder — Task 12)') \
+            .classes('text-caption')
+
+
+async def _laad_inbox(container, jaar, refresh):
+    if container is None:
+        return
+    container.clear()  # nothing to show yet (Task 12)
+
+
+async def _laad_tabel(container, jaar, status, categorie, search, view_mode):
+    if container is None:
+        return
+    container.clear()
+    rows = await get_kosten_view(
+        DB_PATH, jaar=jaar, status=status,
+        categorie=categorie, search=search,
+    )
+    with container:
+        ui.label(
+            f'{len(rows)} rij(en) — {view_mode} view (placeholder — Task 10)'
+        ).classes('text-caption text-grey')
+
+
+async def _laad_breakdown(container, jaar):
+    if container is None:
+        return
+    container.clear()  # placeholder for Task 14
+
 
 @ui.page('/kosten')
 async def kosten_page():
@@ -30,380 +76,45 @@ async def kosten_page():
     huidig_jaar = date.today().year
     jaren = year_options()
     filter_jaar = {'value': huidig_jaar}
-    filter_categorie = {'value': None}  # None = alle
+    filter_status = {'value': None}     # None = 'Alle'
+    filter_categorie = {'value': None}  # None = 'Alle'
+    filter_search = {'value': ''}
+    view_mode = {'value': 'lijst'}      # 'lijst' or 'maand'
 
-    # Read fiscal params from DB
     fp = await get_fiscale_params(DB_PATH, jaar=huidig_jaar)
     repr_aftrek_pct = int(fp.repr_aftrek_pct) if fp else 80
 
-    # References to dynamic UI elements
+    # UI refs (populated below, used by loaders)
     kosten_table = {'ref': None}
-    summary_container = {'ref': None}
-    activastaat_container = {'ref': None}
-    update_bulk_bar_ref = {'fn': None}
+    kpi_container = {'ref': None}
+    inbox_container = {'ref': None}
+    breakdown_container = {'ref': None}
+    activa_container = {'ref': None}
 
-    kosten_columns = [
-        {'name': 'bon', 'label': '', 'field': 'has_bon', 'align': 'center'},
-        {'name': 'datum', 'label': 'Datum', 'field': 'datum', 'sortable': True,
-         'align': 'left'},
-        {'name': 'categorie', 'label': 'Categorie', 'field': 'categorie',
-         'sortable': True, 'align': 'left'},
-        {'name': 'omschrijving', 'label': 'Omschrijving', 'field': 'omschrijving',
-         'align': 'left'},
-        {'name': 'bedrag', 'label': 'Bedrag', 'field': 'bedrag',
-         'sortable': True, 'align': 'right'},
-        {'name': 'investering', 'label': 'Inv.', 'field': 'investering',
-         'align': 'center'},
-        {'name': 'levensduur', 'label': 'Levensduur', 'field': 'levensduur_fmt',
-         'align': 'center'},
-        {'name': 'boekwaarde', 'label': 'Boekwaarde', 'field': 'boekwaarde_fmt',
-         'align': 'right'},
-        {'name': 'acties', 'label': 'Acties', 'field': 'acties', 'align': 'center'},
-    ]
-    async def laad_tabel():
-        """Reload the expenses table rows (preserves pagination/sort state)."""
-        table = kosten_table['ref']
-        if table is None:
-            return
-        jaar = filter_jaar['value']
-        cat = filter_categorie['value']
-        uitgaven = await get_uitgaven(DB_PATH, jaar=jaar, categorie=cat)
+    async def ververs_transacties():
+        await _laad_kpi(kpi_container['ref'], filter_jaar['value'])
+        await _laad_inbox(
+            inbox_container['ref'], filter_jaar['value'],
+            ververs_transacties,
+        )
+        await _laad_tabel(
+            kosten_table['ref'], filter_jaar['value'],
+            filter_status['value'], filter_categorie['value'],
+            filter_search['value'], view_mode['value'],
+        )
+        await _laad_breakdown(
+            breakdown_container['ref'], filter_jaar['value'])
 
-        # Fetch overrides for investments in this view
-        inv_ids = [u.id for u in uitgaven if u.is_investering]
-        all_overrides = await get_afschrijving_overrides_batch(
-            DB_PATH, inv_ids) if inv_ids else {}
+    async def ververs_investeringen():
+        await laad_activastaat(
+            activa_container['ref'], filter_jaar['value'],
+            ververs_transacties,
+        )
 
-        rows = []
-        for u in uitgaven:
-            row = {
-                'id': u.id,
-                'datum': u.datum,
-                'datum_fmt': format_datum(u.datum),
-                'categorie': u.categorie,
-                'omschrijving': u.omschrijving,
-                'bedrag': u.bedrag,
-                'bedrag_fmt': format_euro(u.bedrag),
-                'investering': 'Ja' if u.is_investering else '',
-                'is_investering': u.is_investering,
-                'restwaarde_pct': u.restwaarde_pct,
-                'levensduur_jaren': u.levensduur_jaren,
-                'zakelijk_pct': u.zakelijk_pct,
-                'levensduur_fmt': '',
-                'boekwaarde_fmt': '',
-                'has_bon': bool(u.pdf_pad),
-                'pdf_pad': u.pdf_pad,
-            }
-            if u.is_investering and u.levensduur_jaren:
-                row['levensduur_fmt'] = f'{u.levensduur_jaren} jaar'
-                aanschaf = (u.aanschaf_bedrag or u.bedrag) * ((u.zakelijk_pct if u.zakelijk_pct is not None else 100) / 100)
-                overrides = all_overrides.get(u.id)
-                result = bereken_afschrijving(
-                    aanschaf_bedrag=aanschaf,
-                    restwaarde_pct=u.restwaarde_pct or 10,
-                    levensduur=u.levensduur_jaren,
-                    aanschaf_maand=int(u.datum[5:7]),
-                    aanschaf_jaar=int(u.datum[0:4]),
-                    bereken_jaar=jaar,
-                    overrides=overrides,
-                )
-                row['boekwaarde_fmt'] = format_euro(result['boekwaarde'])
-            rows.append(row)
-
-        table.rows = rows
-        table.selected.clear()
-        table.update()
-        if update_bulk_bar_ref['fn']:
-            update_bulk_bar_ref['fn']()
-
-    async def laad_summary():
-        """Reload the summary card."""
-        container = summary_container['ref']
-        if container is None:
-            return
-        container.clear()
-        jaar = filter_jaar['value']
-        per_cat = await get_uitgaven_per_categorie(DB_PATH, jaar=jaar)
-        totaal = sum(r['totaal'] for r in per_cat)
-
-        with container:
-            ui.label(f'Kostenoverzicht {jaar}').classes('text-subtitle1 text-bold')
-            if per_cat:
-                for r in per_cat:
-                    with ui.row().classes('w-full justify-between'):
-                        ui.label(r['categorie'])
-                        ui.label(format_euro(r['totaal'])).classes('text-right')
-                ui.separator()
-                with ui.row().classes('w-full justify-between'):
-                    ui.label('Totaal').classes('text-bold')
-                    ui.label(format_euro(totaal)).classes('text-bold text-right')
-            else:
-                ui.label('Geen uitgaven gevonden.').classes('text-grey')
-
-    async def laad_activastaat():
-        """Render activastaat card showing current book values."""
-        container = activastaat_container['ref']
-        if container is None:
-            return
-        container.clear()
-        jaar = filter_jaar['value']
-        investeringen = await get_investeringen_voor_afschrijving(DB_PATH, tot_jaar=jaar)
-        if not investeringen:
-            return
-
-        # Fetch all overrides in one batch
-        all_overrides = await get_afschrijving_overrides_batch(
-            DB_PATH, [u.id for u in investeringen])
-
-        with container:
-            ui.label(f'Activastaat per 31-12-{jaar}').classes('text-subtitle1 text-bold')
-            activa_rows = []
-            for u in investeringen:
-                aanschaf = (u.aanschaf_bedrag or u.bedrag) * ((u.zakelijk_pct if u.zakelijk_pct is not None else 100) / 100)
-                overrides = all_overrides.get(u.id)
-                result = bereken_afschrijving(
-                    aanschaf_bedrag=aanschaf,
-                    restwaarde_pct=u.restwaarde_pct or 10,
-                    levensduur=u.levensduur_jaren or 5,
-                    aanschaf_maand=int(u.datum[5:7]),
-                    aanschaf_jaar=int(u.datum[0:4]),
-                    bereken_jaar=jaar,
-                    overrides=overrides,
-                )
-                activa_rows.append({
-                    'id': u.id,
-                    'omschrijving': u.omschrijving,
-                    'aanschaf': format_euro(aanschaf),
-                    'afschr_dit_jaar': format_euro(result['afschrijving']),
-                    'boekwaarde': format_euro(result['boekwaarde']),
-                    'has_override': result.get('has_override', False),
-                    # Raw data for edit dialog
-                    '_aanschaf_bedrag': aanschaf,
-                    '_restwaarde_pct': u.restwaarde_pct or 10,
-                    '_levensduur': u.levensduur_jaren or 5,
-                    '_aanschaf_maand': int(u.datum[5:7]),
-                    '_aanschaf_jaar': int(u.datum[0:4]),
-                })
-
-            columns = [
-                {'name': 'omschrijving', 'label': 'Omschrijving',
-                 'field': 'omschrijving', 'align': 'left'},
-                {'name': 'aanschaf', 'label': 'Aanschaf (zakelijk)',
-                 'field': 'aanschaf', 'align': 'right'},
-                {'name': 'afschr_dit_jaar', 'label': f'Afschr {jaar}',
-                 'field': 'afschr_dit_jaar', 'align': 'right'},
-                {'name': 'boekwaarde', 'label': 'Boekwaarde',
-                 'field': 'boekwaarde', 'align': 'right'},
-                {'name': 'acties', 'label': '', 'field': 'acties',
-                 'align': 'center'},
-            ]
-            activa_tbl = ui.table(
-                columns=columns, rows=activa_rows, row_key='id',
-            ).classes('w-full').props('dense flat')
-            activa_tbl.add_slot('body-cell-afschr_dit_jaar', '''
-                <q-td :props="props">
-                    <span>{{ props.row.afschr_dit_jaar }}</span>
-                    <q-icon v-if="props.row.has_override" name="edit"
-                            size="xs" color="primary" class="q-ml-xs" />
-                </q-td>
-            ''')
-            activa_tbl.add_slot('body-cell-acties', '''
-                <q-td :props="props">
-                    <q-btn flat dense icon="tune" size="sm"
-                           color="primary" title="Afschrijving aanpassen"
-                           @click="$parent.$emit('edit_afschr', props.row)" />
-                </q-td>
-            ''')
-            activa_tbl.on('edit_afschr',
-                          lambda e: open_afschrijving_dialog(e.args))
-    async def open_afschrijving_dialog(row: dict):
-        """Open dialog to view/edit per-year depreciation for an investment.
-
-        Past years (before filter year) are locked — already filed with BD.
-        Current + future years are editable.
-        Levensduur is editable and recalculates the schedule.
-        """
-        uitgave_id = row['id']
-        aanschaf = row['_aanschaf_bedrag']
-        restwaarde_pct = row['_restwaarde_pct']
-        levensduur_state = {'value': row['_levensduur']}
-        aanschaf_maand = row['_aanschaf_maand']
-        aanschaf_jaar = row['_aanschaf_jaar']
-        huidige_jaar = filter_jaar['value']
-
-        # Fetch existing overrides
-        overrides = await get_afschrijving_overrides(DB_PATH, uitgave_id)
-
-        with ui.dialog() as dialog, ui.card().classes('w-full max-w-xl q-pa-md'):
-            ui.label(f'Afschrijving — {row["omschrijving"]}').classes(
-                'text-h6 q-mb-sm')
-
-            # Asset info + editable levensduur
-            with ui.row().classes('w-full items-end gap-4'):
-                ui.label(f'Aanschaf: {format_euro(aanschaf)}').classes(
-                    'text-caption text-grey')
-                ui.label(f'Restwaarde: {restwaarde_pct:.0f}%').classes(
-                    'text-caption text-grey')
-                levensduur_input = ui.select(
-                    LEVENSDUUR_OPTIES, label='Levensduur',
-                    value=levensduur_state['value'],
-                ).classes('w-28')
-
-            ui.separator().classes('q-my-sm')
-
-            # Build year-by-year schedule
-            schedule_container = ui.column().classes('w-full gap-0')
-            inputs_by_year: dict[int, ui.number | None] = {}
-
-            def build_schedule():
-                schedule_container.clear()
-                inputs_by_year.clear()
-                lv = levensduur_state['value']
-                laatste_jaar = aanschaf_jaar + lv
-                toon_tot = max(laatste_jaar, huidige_jaar)
-
-                with schedule_container:
-                    # Header row
-                    with ui.row().classes('w-full items-center gap-2 q-pb-xs') \
-                            .style('border-bottom: 1px solid #E2E8F0'):
-                        ui.label('Jaar').classes('text-caption text-bold') \
-                            .style('width: 60px')
-                        ui.label('Berekend').classes(
-                            'text-caption text-bold text-right') \
-                            .style('width: 90px')
-                        ui.label('Handmatig').classes(
-                            'text-caption text-bold') \
-                            .style('width: 120px')
-                        ui.label('Boekwaarde').classes(
-                            'text-caption text-bold text-right') \
-                            .style('width: 90px')
-
-                    # Year rows
-                    for y in range(aanschaf_jaar, toon_tot + 1):
-                        # Auto value (without override)
-                        auto = bereken_afschrijving(
-                            aanschaf_bedrag=aanschaf,
-                            restwaarde_pct=restwaarde_pct,
-                            levensduur=lv,
-                            aanschaf_maand=aanschaf_maand,
-                            aanschaf_jaar=aanschaf_jaar,
-                            bereken_jaar=y,
-                        )
-                        auto_val = auto['afschrijving']
-
-                        # Book value with overrides
-                        result_with = bereken_afschrijving(
-                            aanschaf_bedrag=aanschaf,
-                            restwaarde_pct=restwaarde_pct,
-                            levensduur=lv,
-                            aanschaf_maand=aanschaf_maand,
-                            aanschaf_jaar=aanschaf_jaar,
-                            bereken_jaar=y,
-                            overrides=overrides,
-                        )
-
-                        has_ov = y in overrides
-                        override_val = overrides.get(y)
-                        is_locked = y < huidige_jaar  # past = filed with BD
-
-                        with ui.row().classes('w-full items-center gap-2 q-py-xs') \
-                                .style('border-bottom: 1px solid #F1F5F9'):
-                            # Year label
-                            lbl = ui.label(str(y)).style('width: 60px')
-                            if y == huidige_jaar:
-                                lbl.classes('text-bold text-primary')
-                            else:
-                                lbl.classes('text-caption')
-
-                            # Auto-calculated value
-                            ui.label(format_euro(auto_val)).classes(
-                                'text-caption text-grey text-right') \
-                                .style('width: 90px')
-
-                            if is_locked:
-                                # Past year: show value read-only with lock icon
-                                if has_ov:
-                                    ui.label(format_euro(override_val)).classes(
-                                        'text-caption text-bold').style(
-                                        'width: 120px')
-                                else:
-                                    ui.label('—').classes(
-                                        'text-caption text-grey').style(
-                                        'width: 120px')
-                                inputs_by_year[y] = None  # not editable
-                            else:
-                                # Current/future: editable
-                                inp = ui.number(
-                                    value=override_val if has_ov else None,
-                                    format='%.2f', min=0, step=0.01,
-                                    placeholder=f'{auto_val:.2f}',
-                                ).classes('w-28').props(
-                                    'dense outlined hide-bottom-space')
-                                inputs_by_year[y] = inp
-
-                            # Book value
-                            bw_label = ui.label(
-                                format_euro(result_with['boekwaarde'])
-                            ).classes('text-caption text-right') \
-                                .style('width: 90px')
-                            if has_ov:
-                                bw_label.classes('text-bold')
-
-                    # Locked years hint
-                    if any(y < huidige_jaar
-                           for y in range(aanschaf_jaar, toon_tot + 1)):
-                        ui.label(
-                            'Voorgaande jaren zijn vergrendeld (reeds aangegeven).'
-                        ).classes('text-caption text-grey q-mt-sm')
-
-            def on_levensduur_change():
-                levensduur_state['value'] = levensduur_input.value
-                build_schedule()
-
-            levensduur_input.on('update:model-value',
-                                lambda: on_levensduur_change())
-
-            build_schedule()
-
-            # Action buttons
-            with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
-                ui.button('Annuleren', on_click=dialog.close).props('flat')
-
-                async def opslaan():
-                    """Save overrides + levensduur."""
-                    # Save levensduur if changed
-                    new_lv = levensduur_state['value']
-                    if new_lv != row['_levensduur']:
-                        await update_uitgave(DB_PATH, uitgave_id=uitgave_id,
-                                             levensduur_jaren=new_lv)
-
-                    # Save overrides (only editable years)
-                    for y, inp in inputs_by_year.items():
-                        if inp is None:
-                            continue  # locked year
-                        val = inp.value
-                        if val is not None and val >= 0:
-                            await set_afschrijving_override(
-                                DB_PATH, uitgave_id, y, val)
-                            overrides[y] = val
-                        elif y in overrides:
-                            await delete_afschrijving_override(
-                                DB_PATH, uitgave_id, y)
-                            del overrides[y]
-                    dialog.close()
-                    ui.notify('Afschrijvingen opgeslagen', type='positive')
-                    await ververs()
-
-                ui.button('Opslaan', icon='save',
-                          on_click=opslaan).props('color=primary')
-
-        dialog.open()
-
-    async def ververs():
-        """Refresh table, summary and activastaat."""
-        await laad_tabel()
-        await laad_summary()
-        await laad_activastaat()
+    # -----------------------------------------------------------------
+    # Dialogs — preserved verbatim from the pre-Kosten-rework version.
+    # Tasks 10–13 still depend on these; do not refactor their bodies.
+    # -----------------------------------------------------------------
     async def open_add_uitgave_dialog(prefill: dict | None = None,
                                      on_saved: callable | None = None):
         """Open dialog to add a new expense.
@@ -436,7 +147,7 @@ async def kosten_page():
             ).classes('w-full')
 
             input_bedrag = ui.number(
-                'Bedrag incl. BTW (\u20ac)', format='%.2f',
+                'Bedrag incl. BTW (€)', format='%.2f',
                 min=0.01, step=0.01,
             ).classes('w-full')
 
@@ -558,7 +269,7 @@ async def kosten_page():
                             uitgave_id, upload_file['event'])
 
                     ui.notify('Uitgave opgeslagen', type='positive')
-                    await ververs()
+                    await ververs_transacties()
 
                     if and_new:
                         # Reset form — keep categorie
@@ -596,6 +307,7 @@ async def kosten_page():
                 ).props('color=primary')
 
         dialog.open()
+
     async def open_edit_dialog(row: dict):
         """Open dialog to edit an existing expense."""
         with ui.dialog() as dialog, ui.card().classes('w-full max-w-lg q-pa-md'):
@@ -610,7 +322,7 @@ async def kosten_page():
                 'Omschrijving', value=row['omschrijving']
             ).classes('w-full')
             edit_bedrag = ui.number(
-                'Bedrag incl. BTW (\u20ac)', value=row['bedrag'],
+                'Bedrag incl. BTW (€)', value=row['bedrag'],
                 format='%.2f', min=0.01, step=0.01
             ).classes('w-full')
 
@@ -664,7 +376,7 @@ async def kosten_page():
                                     confirm_dlg.close()
                                     dialog.close()
                                     ui.notify('Bon verwijderd', type='positive')
-                                    await ververs()
+                                    await ververs_transacties()
 
                                 ui.button('Verwijderen',
                                           on_click=do_remove) \
@@ -711,10 +423,11 @@ async def kosten_page():
                             row['id'], edit_upload_file['event'])
                     ui.notify('Uitgave bijgewerkt', type='positive')
                     dialog.close()
-                    await ververs()
+                    await ververs_transacties()
 
                 ui.button('Opslaan', on_click=bewaar_wijziging).props('color=primary')
         dialog.open()
+
     async def confirm_delete(row: dict):
         """Confirm and delete an expense."""
         with ui.dialog() as dialog, ui.card():
@@ -728,7 +441,7 @@ async def kosten_page():
                     await delete_uitgave(DB_PATH, uitgave_id=row['id'])
                     ui.notify('Uitgave verwijderd', type='positive')
                     dialog.close()
-                    await ververs()
+                    await ververs_transacties()
 
                 ui.button('Verwijderen', on_click=verwijder).props('color=negative')
         dialog.open()
@@ -761,6 +474,7 @@ async def kosten_page():
         dest = UITGAVEN_DIR / filename
         await asyncio.to_thread(shutil.copy2, source_path, dest)
         await update_uitgave(DB_PATH, uitgave_id=uitgave_id, pdf_pad=str(dest))
+
     async def open_import_dialog():
         """Open dialog to browse and import expense PDFs from archive."""
         from import_.expense_utils import scan_archive
@@ -903,14 +617,16 @@ async def kosten_page():
             await load_archive()
 
         async def on_import_close():
-            await ververs()
+            await ververs_transacties()
 
         import_dialog.on('hide', on_import_close)
         import_dialog.open()
 
-    with ui.column().classes('w-full p-6 max-w-7xl mx-auto gap-6'):
-
-        # Header row: title + primary action
+    # -----------------------------------------------------------------
+    # Page layout
+    # -----------------------------------------------------------------
+    with ui.column().classes('w-full p-6 max-w-7xl mx-auto gap-4'):
+        # Header
         with ui.row().classes('w-full items-center'):
             page_title('Kosten')
             ui.space()
@@ -923,143 +639,84 @@ async def kosten_page():
                 on_click=lambda: open_add_uitgave_dialog(),
             ).props('color=primary')
 
-        # Filter bar
-        with ui.element('div').classes('page-toolbar w-full'):
-            jaar_select = ui.select(
-                {j: str(j) for j in jaren},
-                label='Jaar', value=huidig_jaar,
-            ).classes('w-28')
+        with ui.tabs().classes('w-full') as tabs:
+            tab_tx = ui.tab('Transacties', icon='list')
+            tab_inv = ui.tab('Investeringen', icon='inventory_2')
 
-            cat_opties = {'': 'Alle'}
-            cat_opties.update({c: c for c in CATEGORIEEN})
-            cat_select = ui.select(
-                cat_opties, label='Categorie', value='',
-            ).classes('w-44')
+        with ui.tab_panels(tabs, value=tab_tx).classes('w-full'):
+            with ui.tab_panel(tab_tx):
+                # Filter bar
+                with ui.row().classes('w-full items-center gap-2'):
+                    jaar_select = ui.select(
+                        {j: str(j) for j in jaren},
+                        label='Jaar', value=huidig_jaar,
+                    ).classes('w-28')
 
-            ui.space()
+                    status_options = {
+                        None: 'Alle',
+                        'ongecategoriseerd': 'Ongecat.',
+                        'ontbreekt': 'Ontbreekt',
+                        'compleet': 'Compleet',
+                    }
+                    status_select = ui.select(
+                        status_options, label='Status',
+                        value=None,
+                    ).classes('w-40')
 
-            async def export_csv_kosten():
-                uitgaven = await get_uitgaven(
-                    DB_PATH, jaar=filter_jaar['value'],
-                    categorie=filter_categorie['value'])
-                headers = ['Datum', 'Categorie', 'Omschrijving', 'Bedrag',
-                           'Investering', 'Zakelijk %']
-                rows = [[u.datum, u.categorie, u.omschrijving, u.bedrag,
-                         'Ja' if u.is_investering else 'Nee',
-                         u.zakelijk_pct] for u in uitgaven]
-                csv_str = generate_csv(headers, rows)
-                ui.download.content(
-                    csv_str.encode('utf-8-sig'),
-                    f'kosten_{filter_jaar["value"]}.csv')
+                    cat_opties = {'': 'Alle categorieën'}
+                    cat_opties.update({c: c for c in CATEGORIEEN})
+                    cat_select = ui.select(
+                        cat_opties, label='Categorie', value='',
+                    ).classes('w-48')
 
-            ui.button(icon='download',
-                      on_click=export_csv_kosten) \
-                .props('flat round color=secondary size=sm') \
-                .tooltip('Exporteer CSV')
+                    search_input = ui.input(
+                        placeholder='Zoek…',
+                    ).classes('w-56').props('clearable dense outlined')
 
-            async def on_filter_change():
-                filter_jaar['value'] = jaar_select.value
-                filter_categorie['value'] = cat_select.value or None
-                await ververs()
+                    ui.space()
 
-            jaar_select.on('update:model-value', lambda: on_filter_change())
-            cat_select.on('update:model-value', lambda: on_filter_change())
-        with ui.card().classes('w-full'):
-            ui.label('Uitgaven').classes('text-subtitle1 text-bold')
+                    view_toggle = ui.toggle(
+                        {'lijst': 'Lijst', 'maand': 'Per maand'},
+                        value='lijst',
+                    ).props('dense')
 
-            bulk_bar = ui.row().classes('w-full items-center gap-4')
-            bulk_bar.set_visibility(False)
-            with bulk_bar:
-                bulk_label = ui.label('')
+                async def on_filter_change():
+                    filter_jaar['value'] = jaar_select.value
+                    filter_status['value'] = status_select.value
+                    filter_categorie['value'] = cat_select.value or None
+                    filter_search['value'] = search_input.value or ''
+                    view_mode['value'] = view_toggle.value
+                    await ververs_transacties()
 
-                async def verwijder_selectie():
-                    tbl = kosten_table['ref']
-                    if not tbl or not tbl.selected:
-                        return
-                    ids = [r['id'] for r in tbl.selected]
+                for w in (jaar_select, status_select, cat_select, view_toggle):
+                    w.on('update:model-value',
+                         lambda _=None: on_filter_change())
+                search_input.on(
+                    'update:model-value',
+                    lambda _=None: on_filter_change())
 
-                    async def confirm_bulk_delete():
-                        for uid in ids:
-                            await delete_uitgave(DB_PATH, uitgave_id=uid)
-                        dlg.close()
-                        ui.notify(
-                            f'{len(ids)} uitgave(n) verwijderd',
-                            type='positive')
-                        await ververs()
+                # KPI strip (Task 12)
+                kpi_container['ref'] = ui.row().classes('w-full gap-4')
 
-                    with ui.dialog() as dlg, ui.card():
-                        ui.label(f'{len(ids)} uitgave(n) verwijderen?') \
-                            .classes('text-h6')
-                        with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
-                            ui.button('Annuleren', on_click=dlg.close) \
-                                .props('flat')
-                            ui.button('Ja, verwijderen',
-                                      on_click=confirm_bulk_delete) \
-                                .props('color=negative')
-                    dlg.open()
+                # Reconciliation inbox (Task 12)
+                inbox_container['ref'] = ui.column().classes('w-full')
 
-                ui.button(
-                    'Verwijder selectie', icon='delete',
-                    on_click=verwijder_selectie,
-                ).props('color=negative outline')
+                # Main table (Task 10)
+                kosten_table['ref'] = ui.column().classes('w-full')
 
-            def update_bulk_bar():
-                tbl = kosten_table['ref']
-                selected = tbl.selected if tbl else []
-                n = len(selected) if selected else 0
-                if n > 0:
-                    bulk_bar.set_visibility(True)
-                    bulk_label.text = f'{n} uitgave(n) geselecteerd'
-                else:
-                    bulk_bar.set_visibility(False)
+                # Categorie breakdown (Task 14)
+                breakdown_container['ref'] = ui.column().classes('w-full')
 
-            update_bulk_bar_ref['fn'] = update_bulk_bar
+            with ui.tab_panel(tab_inv):
+                activa_container['ref'] = ui.column().classes('w-full gap-2')
 
-            kosten_table['ref'] = ui.table(
-                columns=kosten_columns, rows=[], row_key='id',
-                selection='multiple',
-                pagination={'rowsPerPage': 20, 'sortBy': 'datum',
-                            'descending': True,
-                            'rowsPerPageOptions': [10, 20, 50, 0]},
-            ).classes('w-full')
-            _tbl = kosten_table['ref']
-            _tbl.on('selection', lambda _: update_bulk_bar())
-            _tbl.add_slot('body-cell-bon', '''
-                <q-td :props="props">
-                    <q-btn v-if="props.row.has_bon" icon="attach_file" flat dense
-                           round size="sm" color="primary"
-                           @click="$parent.$emit('viewdoc', props.row)"
-                           title="Bekijk bon" />
-                </q-td>
-            ''')
-            _tbl.add_slot('body-cell-datum', '''
-                <q-td :props="props">{{ props.row.datum_fmt }}</q-td>
-            ''')
-            _tbl.add_slot('body-cell-bedrag', '''
-                <q-td :props="props" style="text-align:right">{{ props.row.bedrag_fmt }}</q-td>
-            ''')
-            _tbl.add_slot('body-cell-acties', '''
-                <q-td :props="props">
-                    <q-btn flat dense icon="edit" color="primary" size="sm"
-                           @click="$parent.$emit('edit', props.row)"
-                           title="Bewerken" />
-                    <q-btn flat dense icon="delete" color="negative" size="sm"
-                           @click="$parent.$emit('delete', props.row)"
-                           title="Verwijderen" />
-                </q-td>
-            ''')
-            _tbl.add_slot('no-data', '''
-                <q-tr><q-td colspan="100%" class="text-center q-pa-lg text-grey">
-                    Geen uitgaven gevonden.
-                </q-td></q-tr>
-            ''')
-            _tbl.on('edit', lambda e: open_edit_dialog(e.args))
-            _tbl.on('delete', lambda e: confirm_delete(e.args))
-            _tbl.on('viewdoc', lambda e: view_document(e.args))
-        with ui.card().classes('w-full'):
-            summary_container['ref'] = ui.column().classes('w-full gap-1')
-        with ui.card().classes('w-full'):
-            activastaat_container['ref'] = ui.column().classes('w-full gap-1')
+        # Load activastaat when Investeringen tab is first selected.
+        async def on_tab_change():
+            if tabs.value == 'Investeringen':
+                await ververs_investeringen()
+
+        tabs.on('update:model-value',
+                lambda _: asyncio.create_task(on_tab_change()))
 
     # Initial load
-    await ververs()
+    await ververs_transacties()
