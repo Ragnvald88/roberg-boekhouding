@@ -1304,6 +1304,58 @@ async def add_uitgave(db_path: Path = DB_PATH, **kwargs) -> int:
         return cursor.lastrowid
 
 
+async def ensure_uitgave_for_banktx(
+    db_path: Path,
+    bank_tx_id: int,
+    **overrides,
+) -> int:
+    """Return the uitgave.id linked to this bank_tx; create if absent.
+
+    Idempotent. Enforces uitgave.bedrag = ABS(bank_tx.bedrag) at creation.
+    Year-locked against bank_tx.datum.
+    """
+    async with aiosqlite.connect(db_path) as conn:
+        conn.row_factory = aiosqlite.Row
+        cur = await conn.execute(
+            "SELECT datum, bedrag, tegenpartij, omschrijving "
+            "FROM banktransacties WHERE id = ?", (bank_tx_id,))
+        bt = await cur.fetchone()
+        if bt is None:
+            raise ValueError(f"banktransactie {bank_tx_id} not found")
+
+        # Already linked?
+        cur = await conn.execute(
+            "SELECT id FROM uitgaven WHERE bank_tx_id = ?", (bank_tx_id,))
+        existing = await cur.fetchone()
+        if existing is not None:
+            return existing[0]
+
+    # Not linked — create. Year-lock against the bank tx datum.
+    await assert_year_writable(db_path, bt["datum"])
+
+    kwargs = {
+        "datum": bt["datum"],
+        "bedrag": abs(bt["bedrag"]),
+        "omschrijving": (bt["tegenpartij"] or "").strip()
+                        or (bt["omschrijving"] or "").strip() or "(bank tx)",
+        "categorie": "",
+    }
+    kwargs.update(overrides)
+
+    # Use add_uitgave so existing validation/year-lock stays DRY.
+    # add_uitgave does its own year-lock check, which is redundant but safe.
+    uitgave_id = await add_uitgave(db_path, **kwargs)
+
+    # Link it.
+    async with aiosqlite.connect(db_path) as conn:
+        await conn.execute(
+            "UPDATE uitgaven SET bank_tx_id = ? WHERE id = ?",
+            (bank_tx_id, uitgave_id))
+        await conn.commit()
+
+    return uitgave_id
+
+
 async def update_uitgave(db_path: Path = DB_PATH, uitgave_id: int = 0, **kwargs) -> None:
     if 'datum' in kwargs:
         _validate_datum(kwargs['datum'])
