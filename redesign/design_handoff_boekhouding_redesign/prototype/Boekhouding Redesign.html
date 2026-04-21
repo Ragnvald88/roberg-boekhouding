@@ -1,0 +1,2137 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=1440"/>
+<title>Boekhouding — Redesign</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Instrument+Serif&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>/* ============================================================
+   Boekhouding — calm, minimal, mono-accented design system
+   ============================================================ */
+
+:root {
+  /* Palette — warm off-white with teal accent (tweakable) */
+  --bg: #fafaf7;
+  --bg-elev: #ffffff;
+  --bg-sunk: #f5f4ef;
+  --bg-hover: #f0efe9;
+  --line: #e8e6df;
+  --line-strong: #d8d5cc;
+  --ink: #15171a;
+  --ink-2: #3a3d43;
+  --ink-3: #6b6f76;
+  --ink-4: #9a9ea5;
+
+  --accent: #0f766e;
+  --accent-soft: #e6f2f0;
+  --accent-ink: #0a524c;
+
+  --pos: #0f766e;
+  --neg: #b45309;
+  --warn: #a16207;
+  --info: #1e40af;
+
+  /* Type */
+  --f-sans: "Inter", "Söhne", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --f-mono: "JetBrains Mono", "Berkeley Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --f-serif: "Instrument Serif", "Source Serif Pro", ui-serif, Georgia, serif;
+
+  /* Density (tweakable) */
+  --pad: 20px;
+  --pad-sm: 12px;
+  --row-h: 44px;
+  --radius: 10px;
+  --radius-sm: 6px;
+  --radius-lg: 14px;
+
+  --shadow-sm: 0 1px 0 rgba(20, 20, 20, 0.02), 0 1px 2px rgba(20, 20, 20, 0.04);
+  --shadow-md: 0 1px 0 rgba(20, 20, 20, 0.03), 0 8px 24px -12px rgba(20, 20, 20, 0.08);
+  --shadow-lg: 0 30px 60px -20px rgba(20, 20, 20, 0.18), 0 12px 24px -12px rgba(20, 20, 20, 0.10);
+}
+
+[data-theme="dark"] {
+  --bg: #0e0f11;
+  --bg-elev: #17181b;
+  --bg-sunk: #0a0b0c;
+  --bg-hover: #1e2024;
+  --line: #26282c;
+  --line-strong: #35383d;
+  --ink: #f2f1ec;
+  --ink-2: #c9c7bf;
+  --ink-3: #8d8f94;
+  --ink-4: #5f6166;
+  --accent: #2dd4bf;
+  --accent-soft: #0d2f2c;
+  --accent-ink: #5eead4;
+  --pos: #2dd4bf;
+  --neg: #f59e0b;
+  --shadow-sm: 0 1px 0 rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 1px 0 rgba(0, 0, 0, 0.3), 0 10px 30px -12px rgba(0, 0, 0, 0.6);
+  --shadow-lg: 0 30px 60px -20px rgba(0, 0, 0, 0.8), 0 12px 24px -12px rgba(0, 0, 0, 0.5);
+}
+
+/* Density modes */
+[data-density="compact"] {
+  --pad: 14px; --pad-sm: 8px; --row-h: 36px;
+}
+[data-density="spacious"] {
+  --pad: 28px; --pad-sm: 16px; --row-h: 52px;
+}
+
+* { box-sizing: border-box; }
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--f-sans);
+  font-size: 14px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: "cv11", "ss01";
+}
+button, input, select, textarea { font: inherit; color: inherit; }
+
+.mono { font-family: var(--f-mono); font-feature-settings: "tnum", "zero"; letter-spacing: -0.01em; }
+.serif { font-family: var(--f-serif); }
+.num { font-family: var(--f-mono); font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+
+/* ============ APP SHELL ============ */
+.app {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  height: 100vh;
+  overflow: hidden;
+}
+[data-nav="compact"] .app { grid-template-columns: 60px 1fr; }
+
+.sidebar {
+  background: var(--bg);
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  padding: 18px 12px;
+  gap: 2px;
+  overflow-y: auto;
+}
+.brand {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 10px 22px;
+  font-family: var(--f-mono);
+  font-size: 13px;
+  letter-spacing: -0.01em;
+  color: var(--ink);
+}
+.brand .dot {
+  width: 20px; height: 20px; border-radius: 5px;
+  background: var(--ink);
+  color: var(--bg);
+  display: grid; place-items: center;
+  font-size: 11px; font-weight: 700;
+}
+.brand .kbd {
+  margin-left: auto;
+  font-size: 10px;
+  padding: 2px 5px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--ink-3);
+}
+
+.nav-section {
+  font-family: var(--f-mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-4);
+  padding: 16px 10px 6px;
+}
+.nav-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  color: var(--ink-2);
+  cursor: pointer;
+  font-size: 13px;
+  user-select: none;
+  position: relative;
+}
+.nav-item:hover { background: var(--bg-hover); color: var(--ink); }
+.nav-item.active { background: var(--bg-elev); color: var(--ink); box-shadow: var(--shadow-sm); border: 1px solid var(--line); }
+.nav-item .count {
+  margin-left: auto;
+  font-family: var(--f-mono);
+  font-size: 11px;
+  color: var(--ink-4);
+  background: var(--bg-sunk);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+.nav-item.active .count { background: var(--accent-soft); color: var(--accent-ink); }
+.nav-ic { width: 16px; height: 16px; color: var(--ink-3); flex-shrink: 0; }
+.nav-item.active .nav-ic { color: var(--accent); }
+
+.sidebar-foot {
+  margin-top: auto;
+  padding: 12px 10px;
+  border-top: 1px solid var(--line);
+  display: flex; align-items: center; gap: 10px;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+.avatar {
+  width: 26px; height: 26px; border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent), #1c1917);
+  color: white; display: grid; place-items: center;
+  font-size: 11px; font-weight: 600;
+}
+
+/* ============ MAIN ============ */
+.main { overflow-y: auto; overflow-x: hidden; background: var(--bg); }
+.topbar {
+  display: flex; align-items: center; gap: 12px;
+  padding: 14px 32px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--bg) 80%, transparent);
+  backdrop-filter: blur(8px);
+  position: sticky; top: 0; z-index: 10;
+}
+.crumbs {
+  display: flex; align-items: center; gap: 8px;
+  font-family: var(--f-mono);
+  font-size: 12px;
+  color: var(--ink-3);
+}
+.crumbs .cur { color: var(--ink); }
+.crumbs .sep { color: var(--ink-4); }
+
+.topbar-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+
+.content { padding: 32px 32px 80px; max-width: 1320px; }
+[data-density="compact"] .content { padding: 22px 22px 60px; }
+
+/* ============ PRIMITIVES ============ */
+.btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 12px;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  background: var(--bg-elev);
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 0.1s;
+}
+.btn:hover { background: var(--bg-hover); }
+.btn-primary {
+  background: var(--ink);
+  color: var(--bg);
+  border-color: var(--ink);
+}
+.btn-primary:hover { background: var(--ink-2); }
+.btn-accent {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+.btn-accent:hover { filter: brightness(1.05); }
+.btn-ghost { border-color: transparent; background: transparent; }
+.btn-ghost:hover { background: var(--bg-hover); }
+.btn .kbd {
+  font-family: var(--f-mono);
+  font-size: 10px;
+  padding: 1px 4px;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  opacity: 0.5;
+  margin-left: 4px;
+}
+
+.chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 8px;
+  border-radius: 99px;
+  font-family: var(--f-mono);
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  background: var(--bg-sunk);
+  color: var(--ink-3);
+  border: 1px solid var(--line);
+}
+.chip.pos { background: var(--accent-soft); color: var(--accent-ink); border-color: transparent; }
+.chip.neg { background: #fef3c7; color: #854d0e; border-color: transparent; }
+.chip.warn { background: #fef3c7; color: #854d0e; border-color: transparent; }
+.chip.info { background: #e0e7ff; color: #3730a3; border-color: transparent; }
+[data-theme="dark"] .chip.neg { background: #422006; color: #fbbf24; }
+[data-theme="dark"] .chip.warn { background: #422006; color: #fbbf24; }
+[data-theme="dark"] .chip.info { background: #1e1b4b; color: #a5b4fc; }
+
+.card {
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: var(--pad);
+}
+.card-tight { padding: var(--pad-sm) var(--pad); }
+
+.row { display: flex; align-items: center; gap: 12px; }
+.col { display: flex; flex-direction: column; gap: 12px; }
+.muted { color: var(--ink-3); }
+.tiny { font-size: 11px; }
+.eyebrow {
+  font-family: var(--f-mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.hr { border: 0; border-top: 1px solid var(--line); margin: 0; }
+
+.input {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  background: var(--bg-elev);
+  border-radius: 7px;
+  font-size: 13px;
+  transition: border-color 0.1s;
+}
+.input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+
+/* ============ DASHBOARD ============ */
+.page-head {
+  display: flex; align-items: flex-end; justify-content: space-between;
+  margin-bottom: 28px;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+.page-title {
+  font-family: var(--f-serif);
+  font-size: 34px;
+  font-weight: 400;
+  letter-spacing: -0.02em;
+  margin: 0;
+  line-height: 1;
+}
+.page-sub {
+  font-family: var(--f-mono);
+  font-size: 12px;
+  color: var(--ink-3);
+  margin-top: 10px;
+}
+
+.hero-grid {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr;
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  margin-bottom: 20px;
+}
+.hero-cell {
+  background: var(--bg-elev);
+  padding: 24px 24px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  position: relative;
+}
+.hero-cell.primary { padding: 28px 28px 26px; }
+.hero-label {
+  display: flex; align-items: center; gap: 8px;
+  font-family: var(--f-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--ink-3);
+  text-transform: uppercase;
+}
+.hero-value {
+  font-family: var(--f-mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  letter-spacing: -0.03em;
+  line-height: 1;
+  color: var(--ink);
+}
+.hero-cell.primary .hero-value { font-size: 52px; margin: 6px 0 4px; }
+.hero-cell .hero-value { font-size: 30px; margin: 6px 0 4px; }
+.hero-sub { font-size: 12px; color: var(--ink-3); display: flex; align-items: center; gap: 8px; }
+.hero-spark { margin-top: auto; height: 44px; }
+.hero-cell.primary .hero-spark { height: 64px; }
+
+/* Progress bar for urencriterium */
+.uren-card {
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 22px 24px;
+  display: grid;
+  grid-template-columns: 2fr 3fr;
+  gap: 28px;
+  align-items: center;
+  margin-bottom: 20px;
+}
+.uren-bar {
+  position: relative;
+  height: 36px;
+  background: var(--bg-sunk);
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+}
+.uren-fill {
+  position: absolute; inset: 0 auto 0 0;
+  background: var(--accent);
+  transition: width 0.6s ease;
+}
+.uren-target {
+  position: absolute; top: -4px; bottom: -4px;
+  width: 2px;
+  background: var(--ink);
+}
+.uren-target::after {
+  content: "1225";
+  position: absolute;
+  left: 50%; transform: translateX(-50%);
+  top: -18px;
+  font-family: var(--f-mono);
+  font-size: 10px;
+  color: var(--ink);
+  white-space: nowrap;
+}
+.uren-ticks {
+  display: flex; justify-content: space-between;
+  margin-top: 6px;
+  font-family: var(--f-mono);
+  font-size: 10px;
+  color: var(--ink-4);
+}
+
+/* Two-col dashboard area */
+.dash-grid {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 20px;
+  margin-bottom: 20px;
+}
+.chart-card { padding: 22px 24px 20px; }
+.chart-head {
+  display: flex; justify-content: space-between; align-items: flex-end;
+  margin-bottom: 18px;
+}
+.chart-title { font-size: 14px; font-weight: 500; color: var(--ink); }
+.chart-legend {
+  display: flex; gap: 14px;
+  font-family: var(--f-mono); font-size: 11px; color: var(--ink-3);
+}
+.legend-dot { width: 8px; height: 8px; border-radius: 2px; display: inline-block; margin-right: 5px; }
+
+/* Overdue list */
+.invoice-list { display: flex; flex-direction: column; gap: 0; }
+.invoice-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 0;
+  border-bottom: 1px dashed var(--line);
+  font-size: 13px;
+}
+.invoice-row:last-child { border-bottom: 0; }
+.invoice-row .due {
+  font-family: var(--f-mono); font-size: 11px; color: var(--neg); min-width: 58px;
+}
+.invoice-row .client { color: var(--ink); }
+.invoice-row .num { color: var(--ink); font-size: 13px; }
+
+/* Activity feed */
+.activity { display: flex; flex-direction: column; }
+.activity-row {
+  display: grid; grid-template-columns: 72px 1fr auto; gap: 16px; align-items: center;
+  padding: 10px 0;
+  border-bottom: 1px dashed var(--line);
+}
+.activity-row:last-child { border-bottom: 0; }
+.activity-row .when { font-family: var(--f-mono); font-size: 11px; color: var(--ink-4); }
+.activity-row .what { font-size: 13px; color: var(--ink-2); }
+.activity-row .amount { font-family: var(--f-mono); font-size: 12px; color: var(--ink); }
+.activity-row .amount.neg { color: var(--neg); }
+
+/* ============ TABLE ============ */
+.tbl {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.tbl thead th {
+  text-align: left;
+  font-family: var(--f-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-4);
+  font-weight: 500;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-sunk);
+}
+.tbl tbody td {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+  color: var(--ink-2);
+}
+.tbl tbody tr:hover { background: var(--bg-hover); cursor: pointer; }
+.tbl tbody tr.selected { background: var(--accent-soft); }
+.tbl tbody tr:last-child td { border-bottom: 0; }
+.tbl td.num, .tbl th.num { text-align: right; font-family: var(--f-mono); font-variant-numeric: tabular-nums; color: var(--ink); }
+
+/* ============ COMMAND PALETTE ============ */
+.cmdk-overlay {
+  position: fixed; inset: 0;
+  background: rgba(10, 10, 10, 0.3);
+  backdrop-filter: blur(3px);
+  display: grid; place-items: flex-start center;
+  padding-top: 14vh;
+  z-index: 100;
+  animation: fade 0.12s ease;
+}
+@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+.cmdk {
+  width: 620px; max-width: 90vw;
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+.cmdk-input {
+  width: 100%;
+  border: 0; outline: 0;
+  padding: 16px 20px;
+  font-size: 15px;
+  background: transparent;
+  border-bottom: 1px solid var(--line);
+  font-family: var(--f-sans);
+}
+.cmdk-list { max-height: 420px; overflow-y: auto; padding: 6px; }
+.cmdk-group {
+  font-family: var(--f-mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-4);
+  padding: 10px 10px 4px;
+}
+.cmdk-item {
+  display: flex; align-items: center; gap: 12px;
+  padding: 9px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.cmdk-item.active { background: var(--bg-hover); }
+.cmdk-item .ic { width: 16px; color: var(--ink-3); }
+.cmdk-item .shortcut {
+  margin-left: auto;
+  font-family: var(--f-mono);
+  font-size: 11px;
+  color: var(--ink-4);
+  display: flex; gap: 3px;
+}
+.cmdk-item .shortcut span {
+  padding: 1px 5px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+}
+.cmdk-foot {
+  padding: 8px 14px;
+  border-top: 1px solid var(--line);
+  font-family: var(--f-mono);
+  font-size: 11px;
+  color: var(--ink-4);
+  display: flex; gap: 16px;
+  background: var(--bg-sunk);
+}
+
+/* ============ DROPZONE ============ */
+.dropzone {
+  border: 1.5px dashed var(--line-strong);
+  border-radius: var(--radius);
+  padding: 32px;
+  text-align: center;
+  background: var(--bg-sunk);
+  color: var(--ink-3);
+  transition: all 0.15s;
+}
+.dropzone.hot { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-ink); }
+
+/* ============ FACTUUR BUILDER ============ */
+.builder { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+.line-item {
+  display: grid;
+  grid-template-columns: 2fr 60px 80px 80px 24px;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px dashed var(--line);
+}
+.line-item input { border: 0; background: transparent; padding: 4px 6px; border-radius: 4px; }
+.line-item input:focus { outline: 0; background: var(--bg-sunk); }
+.line-item input.num { text-align: right; }
+
+.preview-doc {
+  background: white;
+  border-radius: var(--radius);
+  padding: 36px 40px;
+  box-shadow: var(--shadow-md);
+  color: #15171a;
+  aspect-ratio: 210 / 297;
+  font-size: 11px;
+}
+[data-theme="dark"] .preview-doc { color: #15171a; }
+
+/* ============ BANK RECONCILE ============ */
+.bank-split {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--bg-elev);
+}
+.bank-col { padding: 12px; }
+.bank-col + .bank-col { border-left: 1px solid var(--line); }
+.bank-col h4 {
+  margin: 0 0 10px;
+  font-family: var(--f-mono); font-size: 11px; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--ink-3); font-weight: 500;
+  display: flex; justify-content: space-between;
+}
+.bank-item {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  margin-bottom: 6px;
+  display: flex; align-items: center; gap: 10px;
+  cursor: pointer;
+  background: var(--bg-elev);
+  transition: all 0.1s;
+}
+.bank-item:hover { border-color: var(--line-strong); }
+.bank-item.matched { border-color: var(--accent); background: var(--accent-soft); }
+.bank-item.selected { border-color: var(--ink); box-shadow: 0 0 0 2px var(--bg-sunk), 0 0 0 3px var(--ink); }
+.bank-item .desc { flex: 1; font-size: 13px; }
+.bank-item .sub { font-size: 11px; color: var(--ink-3); font-family: var(--f-mono); }
+.bank-item .amt { font-family: var(--f-mono); font-size: 13px; }
+.bank-item .amt.neg { color: var(--neg); }
+.bank-item .amt.pos { color: var(--pos); }
+
+/* ============ TWEAKS ============ */
+.tweaks {
+  position: fixed; right: 20px; bottom: 20px;
+  width: 280px;
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: var(--shadow-lg);
+  z-index: 50;
+  overflow: hidden;
+  font-size: 12px;
+}
+.tweaks-head {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  display: flex; justify-content: space-between; align-items: center;
+  font-family: var(--f-mono); font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--ink-3);
+}
+.tweaks-body { padding: 12px 14px; display: flex; flex-direction: column; gap: 12px; }
+.tweak-row { display: flex; flex-direction: column; gap: 6px; }
+.tweak-row label { color: var(--ink-3); font-size: 11px; font-family: var(--f-mono); text-transform: uppercase; letter-spacing: 0.08em; }
+.seg { display: flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.seg button {
+  flex: 1; padding: 5px 8px;
+  border: 0; background: var(--bg-elev);
+  font-size: 11px; color: var(--ink-2); cursor: pointer;
+  border-right: 1px solid var(--line);
+}
+.seg button:last-child { border-right: 0; }
+.seg button.on { background: var(--ink); color: var(--bg); }
+.swatches { display: flex; gap: 6px; }
+.swatch { width: 22px; height: 22px; border-radius: 5px; border: 2px solid transparent; cursor: pointer; }
+.swatch.on { border-color: var(--ink); }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 5px; border: 2px solid var(--bg); }
+::-webkit-scrollbar-thumb:hover { background: var(--ink-4); }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* Utilities */
+.gap-4 { gap: 4px; } .gap-8 { gap: 8px; } .gap-12 { gap: 12px; } .gap-16 { gap: 16px; } .gap-20 { gap: 20px; } .gap-24 { gap: 24px; }
+.mt-4 { margin-top: 4px; } .mt-8 { margin-top: 8px; } .mt-12 { margin-top: 12px; } .mt-16 { margin-top: 16px; } .mt-20 { margin-top: 20px; } .mt-24 { margin-top: 24px; } .mt-32 { margin-top: 32px; }
+.mb-8 { margin-bottom: 8px; } .mb-12 { margin-bottom: 12px; } .mb-16 { margin-bottom: 16px; } .mb-20 { margin-bottom: 20px; } .mb-24 { margin-bottom: 24px; }
+.flex { display: flex; } .flex-1 { flex: 1; } .items-center { align-items: center; } .justify-between { justify-content: space-between; }
+.hidden { display: none !important; }
+.text-right { text-align: right; } .text-center { text-align: center; }
+.pos { color: var(--pos); } .neg { color: var(--neg); }
+</style>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useRef, useMemo, createContext, useContext } = React;
+
+// ============ data.jsx ============
+/* global React */
+// Shared data, icons, formatters for Boekhouding redesign
+
+// ============ FORMATTERS ============
+const fmtEuro = (n, decimals = 0) => {
+  const s = Math.abs(n).toLocaleString('nl-NL', {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  });
+  return (n < 0 ? '-' : '') + '€\u00A0' + s;
+};
+const fmtEuroPlain = (n) => n.toLocaleString('nl-NL', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmtDateNL = (iso) => {
+  const [y, m, d] = iso.split('-');
+  return `${d}-${m}-${y}`;
+};
+const fmtDateShort = (iso) => {
+  const [, m, d] = iso.split('-');
+  const months = ['jan', 'feb', 'mrt', 'apr', 'mei', 'jun', 'jul', 'aug', 'sep', 'okt', 'nov', 'dec'];
+  return `${parseInt(d)} ${months[parseInt(m) - 1]}`;
+};
+
+window.fmtEuro = fmtEuro;
+window.fmtEuroPlain = fmtEuroPlain;
+window.fmtDateNL = fmtDateNL;
+window.fmtDateShort = fmtDateShort;
+
+// ============ ICONS (single-line stroke, minimal) ============
+const Ic = {
+  dashboard: (p) => <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" {...p}><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg>,
+  calendar: (p) => <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" {...p}><rect x="2" y="3" width="12" height="11" rx="1.5"/><path d="M2 6h12M5 2v3M11 2v3"/></svg>,
+  invoice: (p) => <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" {...p}><path d="M3 2h10v12l-2-1-2 1-2-1-2 1-2-1V2z"/><path d="M6 6h4M6 9h4"/></svg>,
+  cost: (p) => <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" {...p}><path d="M3 5h10l-1 9H4L3 5z"/><path d="M6 5V3a2 2 0 014 0v2"/></svg>,
+  bank: (p) => <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" {...p}><path d="M2 6l6-3.5L14 6M3 6v6M13 6v6M6 6v6M10 6v6M2 13h12"/></svg>,
+  docs: (p) => <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" {...p}><path d="M3 2h6l3 3v9H3V2z"/><path d="M9 2v3h3"/></svg>,
+  archive: (p) => <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" {...p}><rect x="2" y="3" width="12" height="3"/><path d="M3 6v8h10V6M6 9h4"/></svg>,
+  tax: (p) => <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" {...p}><path d="M3 2h10v12H3V2z"/><path d="M6 5l4 6M6 11l4-6"/><circle cx="6" cy="5" r="0.8"/><circle cx="10" cy="11" r="0.8"/></svg>,
+  users: (p) => <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" {...p}><circle cx="6" cy="6" r="2.5"/><path d="M2 13c0-2.2 1.8-4 4-4s4 1.8 4 4"/><circle cx="11" cy="5" r="2"/><path d="M10 10c2-0.3 4 1 4 3"/></svg>,
+  settings: (p) => <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" {...p}><path d="M2 5h8M12 5h2M2 11h2M6 11h8"/><circle cx="11" cy="5" r="1.5"/><circle cx="5" cy="11" r="1.5"/></svg>,
+  plus: (p) => <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" {...p}><path d="M8 3v10M3 8h10"/></svg>,
+  search: (p) => <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" {...p}><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14"/></svg>,
+  arrowUp: (p) => <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" {...p}><path d="M4 9l4-4 4 4M8 5v8"/></svg>,
+  arrowDown: (p) => <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" {...p}><path d="M4 7l4 4 4-4M8 11V3"/></svg>,
+  arrowRight: (p) => <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" {...p}><path d="M3 8h10M9 4l4 4-4 4"/></svg>,
+  clock: (p) => <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" {...p}><circle cx="8" cy="8" r="6"/><path d="M8 5v3l2 2"/></svg>,
+  check: (p) => <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" {...p}><path d="M3 8l3.5 3.5L13 5"/></svg>,
+  x: (p) => <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" {...p}><path d="M4 4l8 8M4 12l8-8"/></svg>,
+  warn: (p) => <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" {...p}><path d="M8 2l6 11H2L8 2z"/><path d="M8 7v3M8 11.5v0.5"/></svg>,
+  car: (p) => <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" {...p}><path d="M2 10V8l1.5-4h9L14 8v2"/><rect x="2" y="10" width="12" height="3" rx="1"/><circle cx="5" cy="13" r="1"/><circle cx="11" cy="13" r="1"/></svg>,
+  upload: (p) => <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" {...p}><path d="M8 11V2M4 6l4-4 4 4M2 11v2a1 1 0 001 1h10a1 1 0 001-1v-2"/></svg>,
+  link: (p) => <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" {...p}><path d="M6 10l4-4M6 4H4a3 3 0 100 6h2M10 12h2a3 3 0 100-6h-2"/></svg>,
+  sparkles: (p) => <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" {...p}><path d="M5 2v3M3.5 3.5h3M11 9v4M9 11h4M8 4l1.5 3L12 8l-2.5 1L8 12l-1.5-3L4 8l2.5-1L8 4z"/></svg>,
+  inbox: (p) => <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" {...p}><path d="M2 9l2-6h8l2 6v4a1 1 0 01-1 1H3a1 1 0 01-1-1V9z"/><path d="M2 9h3l1 2h4l1-2h3"/></svg>,
+  menu: (p) => <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" {...p}><path d="M3 4h10M3 8h10M3 12h10"/></svg>,
+  more: (p) => <svg viewBox="0 0 16 16" fill="currentColor" {...p}><circle cx="4" cy="8" r="1"/><circle cx="8" cy="8" r="1"/><circle cx="12" cy="8" r="1"/></svg>,
+  filter: (p) => <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" {...p}><path d="M2 3h12l-4.5 6v4l-3 1V9L2 3z"/></svg>,
+};
+window.Ic = Ic;
+
+// ============ DATA ============
+
+const KLANTEN = [
+  { id: 1, naam: 'Huisartsenpraktijk De Linden', plaats: 'Amsterdam', tarief: 95, km: 12, email: 'info@delinden.nl' },
+  { id: 2, naam: 'Medisch Centrum Westerpark', plaats: 'Amsterdam', tarief: 92, km: 8, email: 'praktijk@mcwp.nl' },
+  { id: 3, naam: 'HAP Noord-Holland', plaats: 'Zaandam', tarief: 110, km: 24, email: 'planning@hapnh.nl' },
+  { id: 4, naam: 'Praktijk Van der Berg', plaats: 'Haarlem', tarief: 88, km: 18, email: 'info@pvdb.nl' },
+  { id: 5, naam: 'Gezondheidscentrum De Pijp', plaats: 'Amsterdam', tarief: 94, km: 6, email: 'info@gcdepijp.nl' },
+  { id: 6, naam: 'Spoedpost Amstelland', plaats: 'Amstelveen', tarief: 115, km: 14, email: 'admin@spoedpost-amstelland.nl' },
+];
+
+// Generate werkdagen: ~18/month for current year
+const genWerkdagen = () => {
+  const rows = [];
+  let id = 1;
+  const codes = [
+    { code: 'DAG', label: 'Waarneming dagpraktijk', norm: true },
+    { code: 'DAG', label: 'Waarneming dagpraktijk', norm: true },
+    { code: 'DAG', label: 'Waarneming dagpraktijk', norm: true },
+    { code: 'ANW', label: 'ANW dienst', norm: true },
+    { code: 'ACH', label: 'Achterwacht', norm: false },
+  ];
+  for (let m = 1; m <= 4; m++) {
+    for (let d = 1; d <= 28; d++) {
+      if (Math.random() > 0.55) continue;
+      const k = KLANTEN[Math.floor(Math.random() * KLANTEN.length)];
+      const c = codes[Math.floor(Math.random() * codes.length)];
+      const uren = c.norm ? (c.code === 'ANW' ? 10 + Math.random() * 4 : 6 + Math.random() * 3) : 0;
+      const factuurnummer = m < 4 || (m === 4 && d < 10) ? `2026-${String(Math.floor(id / 3) + 10).padStart(3, '0')}` : '';
+      rows.push({
+        id: id++,
+        datum: `2026-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`,
+        klant_id: k.id,
+        klant_naam: k.naam,
+        code: c.code,
+        activiteit: c.label,
+        locatie: k.plaats,
+        uren: Math.round(uren * 4) / 4,
+        km: c.code === 'ACH' ? 0 : k.km,
+        tarief: c.code === 'ANW' ? k.tarief + 20 : k.tarief,
+        km_tarief: c.code === 'ANW' ? 0 : 0.23,
+        factuurnummer,
+        urennorm: c.norm,
+      });
+    }
+  }
+  return rows.sort((a, b) => b.datum.localeCompare(a.datum));
+};
+const WERKDAGEN = genWerkdagen();
+
+const FACTUREN = [
+  { id: 1, nummer: '2026-042', klant_id: 1, klant_naam: 'Huisartsenpraktijk De Linden', datum: '2026-04-08', totaal: 3420, status: 'verstuurd', verval: '2026-04-22', type: 'factuur', uren: 34, dagen: 5 },
+  { id: 2, nummer: '2026-041', klant_id: 3, klant_naam: 'HAP Noord-Holland', datum: '2026-04-01', totaal: 2860, status: 'betaald', betaald: '2026-04-12', verval: '2026-04-15', type: 'factuur', uren: 24, dagen: 3 },
+  { id: 3, nummer: '2026-040', klant_id: 2, klant_naam: 'Medisch Centrum Westerpark', datum: '2026-03-28', totaal: 2208, status: 'betaald', betaald: '2026-04-02', verval: '2026-04-11', type: 'factuur', uren: 22, dagen: 3 },
+  { id: 4, nummer: '2026-039', klant_id: 4, klant_naam: 'Praktijk Van der Berg', datum: '2026-03-20', totaal: 1584, status: 'verstuurd', verval: '2026-04-03', type: 'factuur', uren: 16, dagen: 2, overdue: true },
+  { id: 5, nummer: '2026-038', klant_id: 5, klant_naam: 'Gezondheidscentrum De Pijp', datum: '2026-03-18', totaal: 1692, status: 'betaald', betaald: '2026-03-30', verval: '2026-04-01', type: 'factuur', uren: 18, dagen: 2 },
+  { id: 6, nummer: '2026-037', klant_id: 6, klant_naam: 'Spoedpost Amstelland', datum: '2026-03-15', totaal: 4600, status: 'betaald', betaald: '2026-03-28', verval: '2026-03-29', type: 'anw', uren: 40, dagen: 4 },
+  { id: 7, nummer: '2026-036', klant_id: 1, klant_naam: 'Huisartsenpraktijk De Linden', datum: '2026-03-10', totaal: 2565, status: 'verstuurd', verval: '2026-03-24', type: 'factuur', uren: 27, dagen: 4, overdue: true },
+  { id: 8, nummer: '2026-CON', klant_id: 2, klant_naam: 'Medisch Centrum Westerpark', datum: '2026-04-15', totaal: 1840, status: 'concept', verval: '2026-04-29', type: 'factuur', uren: 20, dagen: 3 },
+];
+
+const UITGAVEN = [
+  { id: 1, datum: '2026-04-10', categorie: 'Vakliteratuur', omschrijving: 'NHG abonnement 2026', bedrag: 285, investering: false, bon: true },
+  { id: 2, datum: '2026-04-08', categorie: 'Reiskosten', omschrijving: 'Parkeren Amsterdam (4x)', bedrag: 24, investering: false, bon: true },
+  { id: 3, datum: '2026-04-02', categorie: 'Kantoor', omschrijving: 'MacBook Pro M4', bedrag: 2499, investering: true, levensduur: 5, zakelijk: 80, bon: true },
+  { id: 4, datum: '2026-03-28', categorie: 'Telefoon', omschrijving: 'KPN zakelijk', bedrag: 52, investering: false, bon: true },
+  { id: 5, datum: '2026-03-22', categorie: 'Verzekering', omschrijving: 'SPH pensioenpremie Q1', bedrag: 1850, investering: false, bon: true },
+  { id: 6, datum: '2026-03-20', categorie: 'Nascholing', omschrijving: 'Congres Huisartsen Utrecht', bedrag: 480, investering: false, bon: true },
+  { id: 7, datum: '2026-03-12', categorie: 'Representatie', omschrijving: 'Lunch klant (80% aftrek)', bedrag: 68, investering: false, bon: true },
+  { id: 8, datum: '2026-03-05', categorie: 'Software', omschrijving: 'Microsoft 365 jaar', bedrag: 99, investering: false, bon: false },
+];
+
+const BANKTRX = [
+  { id: 1, datum: '2026-04-14', bedrag: 3420, tegenpartij: 'Huisartsenpraktijk De Linden', omschrijving: '2026-042 factuurnr', categorie: '', matched: { type: 'factuur', id: 1, confidence: 'high' } },
+  { id: 2, datum: '2026-04-12', bedrag: 2860, tegenpartij: 'HAP Noord-Holland', omschrijving: 'Betaling fact 2026-041', categorie: 'Omzet', koppeling: '2026-041' },
+  { id: 3, datum: '2026-04-10', bedrag: -285, tegenpartij: 'NHG', omschrijving: 'Abonnement 2026', categorie: 'Vakliteratuur' },
+  { id: 4, datum: '2026-04-08', bedrag: -24, tegenpartij: 'Q-Park Amsterdam', omschrijving: 'Parkeerkosten', categorie: '' },
+  { id: 5, datum: '2026-04-05', bedrag: -1200, tegenpartij: 'Belastingdienst', omschrijving: 'VA IB 2026 — 7208.33.234.V.26', categorie: 'Belasting' },
+  { id: 6, datum: '2026-04-02', bedrag: 2208, tegenpartij: 'MC Westerpark BV', omschrijving: '2026-040', categorie: 'Omzet', koppeling: '2026-040' },
+  { id: 7, datum: '2026-04-02', bedrag: -2499, tegenpartij: 'Apple Store Online', omschrijving: 'MacBook Pro 14', categorie: '' },
+  { id: 8, datum: '2026-03-30', bedrag: 1692, tegenpartij: 'GC De Pijp', omschrijving: '20260038', categorie: 'Omzet', koppeling: '2026-038' },
+  { id: 9, datum: '2026-03-28', bedrag: -52, tegenpartij: 'KPN BV', omschrijving: 'Mobiel abo', categorie: 'Telefoon' },
+  { id: 10, datum: '2026-03-28', bedrag: 4600, tegenpartij: 'Spoedpost Amstelland', omschrijving: 'ANW diensten maart', categorie: 'Omzet', koppeling: '2026-037' },
+  { id: 11, datum: '2026-03-22', bedrag: -1850, tegenpartij: 'SPH', omschrijving: 'Pensioenpremie Q1', categorie: 'Verzekering' },
+  { id: 12, datum: '2026-03-20', bedrag: -68, tegenpartij: 'Restaurant Toscanini', omschrijving: 'Lunch', categorie: '' },
+];
+
+// Monthly revenue 2026 & 2025
+const MONTHLY_2026 = [8200, 7400, 10100, 4500, 0, 0, 0, 0, 0, 0, 0, 0];
+const MONTHLY_2025 = [6800, 7200, 8500, 9200, 7800, 5400, 2100, 4200, 8800, 9600, 10200, 11400];
+
+// Urencriterium
+const UREN_GEBOEKT = WERKDAGEN.filter(w => w.urennorm).reduce((s, w) => s + w.uren, 0);
+const UREN_TARGET = 1225;
+
+window.APPDATA = {
+  KLANTEN, WERKDAGEN, FACTUREN, UITGAVEN, BANKTRX,
+  MONTHLY_2026, MONTHLY_2025, UREN_GEBOEKT, UREN_TARGET,
+};
+
+// ============ SPARKLINE ============
+const Sparkline = ({ data, color, height = 44, fill = false }) => {
+  const w = 220, h = height, pad = 2;
+  const max = Math.max(...data);
+  const min = Math.min(...data);
+  const range = max - min || 1;
+  const pts = data.map((v, i) => {
+    const x = pad + (i / (data.length - 1)) * (w - pad * 2);
+    const y = pad + (1 - (v - min) / range) * (h - pad * 2);
+    return [x, y];
+  });
+  const d = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(' ');
+  const fillD = fill ? `${d} L${pts[pts.length-1][0]} ${h} L${pts[0][0]} ${h} Z` : '';
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} width="100%" height={h} preserveAspectRatio="none">
+      {fill && <path d={fillD} fill={color} opacity="0.08"/>}
+      <path d={d} fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+    </svg>
+  );
+};
+window.Sparkline = Sparkline;
+
+// ============ BAR CHART ============
+const BarChart = ({ data2026, data2025, height = 240 }) => {
+  const months = ['jan','feb','mrt','apr','mei','jun','jul','aug','sep','okt','nov','dec'];
+  const max = Math.max(...data2026, ...data2025, 1);
+  const niceMax = Math.ceil(max / 2500) * 2500;
+  const gridLines = 4;
+  return (
+    <div style={{ position: 'relative', height }}>
+      {/* Y-axis grid */}
+      <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', pointerEvents: 'none' }}>
+        {Array.from({ length: gridLines + 1 }).map((_, i) => {
+          const val = niceMax * (1 - i / gridLines);
+          return (
+            <div key={i} style={{ borderTop: i === gridLines ? 'none' : '1px dashed var(--line)', position: 'relative', height: 0 }}>
+              <span style={{ position: 'absolute', left: 0, top: -8, fontFamily: 'var(--f-mono)', fontSize: 10, color: 'var(--ink-4)' }}>
+                €{(val / 1000).toFixed(0)}k
+              </span>
+            </div>
+          );
+        })}
+      </div>
+      {/* Bars */}
+      <div style={{ position: 'absolute', left: 36, right: 0, top: 0, bottom: 18, display: 'flex', alignItems: 'flex-end', gap: 4 }}>
+        {months.map((m, i) => (
+          <div key={m} style={{ flex: 1, display: 'flex', gap: 2, height: '100%', alignItems: 'flex-end' }}>
+            <div style={{
+              flex: 1,
+              height: `${(data2025[i] / niceMax) * 100}%`,
+              background: 'var(--bg-sunk)',
+              border: '1px solid var(--line)',
+              borderBottom: 'none',
+              borderRadius: '3px 3px 0 0',
+            }} title={`2025 ${m}: ${fmtEuro(data2025[i])}`}/>
+            <div style={{
+              flex: 1,
+              height: `${(data2026[i] / niceMax) * 100}%`,
+              background: data2026[i] ? 'var(--accent)' : 'transparent',
+              borderRadius: '3px 3px 0 0',
+              opacity: data2026[i] ? 1 : 0,
+            }} title={`2026 ${m}: ${fmtEuro(data2026[i])}`}/>
+          </div>
+        ))}
+      </div>
+      {/* X-axis labels */}
+      <div style={{ position: 'absolute', left: 36, right: 0, bottom: 0, display: 'flex', gap: 4 }}>
+        {months.map(m => (
+          <div key={m} style={{ flex: 1, textAlign: 'center', fontFamily: 'var(--f-mono)', fontSize: 10, color: 'var(--ink-4)', textTransform: 'uppercase' }}>{m}</div>
+        ))}
+      </div>
+    </div>
+  );
+};
+window.BarChart = BarChart;
+
+// ============ STATUS CHIP ============
+const StatusChip = ({ status, overdue }) => {
+  if (overdue) return <span className="chip neg">verlopen</span>;
+  if (status === 'concept') return <span className="chip">concept</span>;
+  if (status === 'verstuurd') return <span className="chip info">verstuurd</span>;
+  if (status === 'betaald') return <span className="chip pos">betaald</span>;
+  return <span className="chip">{status}</span>;
+};
+window.StatusChip = StatusChip;
+
+
+// ============ dashboard.jsx ============
+/* global React, Ic, Sparkline, BarChart, StatusChip, fmtEuro, fmtDateNL, fmtDateShort, APPDATA */
+
+const Dashboard = ({ setRoute }) => {
+  const { FACTUREN, WERKDAGEN, BANKTRX, UITGAVEN, MONTHLY_2026, MONTHLY_2025, UREN_GEBOEKT, UREN_TARGET } = APPDATA;
+
+  const omzet2026 = MONTHLY_2026.reduce((a, b) => a + b, 0);
+  const omzet2025_ytd = MONTHLY_2025.slice(0, 4).reduce((a, b) => a + b, 0);
+  const kosten2026 = UITGAVEN.reduce((a, u) => a + u.bedrag * (u.zakelijk || 100) / 100, 0);
+  const winst = omzet2026 - kosten2026;
+  const openstaand = FACTUREN.filter(f => f.status === 'verstuurd').reduce((a, f) => a + f.totaal, 0);
+  const verlopen = FACTUREN.filter(f => f.overdue);
+  const uncategorizedBank = BANKTRX.filter(t => !t.categorie && !t.matched).length;
+  const pendingMatches = BANKTRX.filter(t => t.matched && t.matched.confidence).length;
+  const urenPct = (UREN_GEBOEKT / UREN_TARGET) * 100;
+  const urenRemaining = UREN_TARGET - UREN_GEBOEKT;
+  // days left in year
+  const today = new Date('2026-04-17');
+  const yearEnd = new Date('2026-12-31');
+  const daysLeft = Math.floor((yearEnd - today) / 86400000);
+  const urenPerWeekNeeded = urenRemaining / (daysLeft / 7);
+
+  const activity = [
+    { when: '14 apr', what: 'Betaling ontvangen van De Linden', amount: 3420, ref: '2026-042' },
+    { when: '12 apr', what: 'Factuur 2026-042 verstuurd', amount: 3420 },
+    { when: '10 apr', what: 'NHG abonnement geboekt', amount: -285 },
+    { when: '08 apr', what: 'Werkdag De Linden (7u)', amount: null },
+    { when: '05 apr', what: 'VA IB betaald aan Belastingdienst', amount: -1200 },
+    { when: '02 apr', what: 'MacBook Pro geboekt als investering', amount: -2499 },
+  ];
+
+  return (
+    <div className="content">
+      {/* Page head */}
+      <div className="page-head">
+        <div>
+          <h1 className="page-title">Goedemiddag, Rogier.</h1>
+          <div className="page-sub">Woensdag 17 april 2026 · week 16 · {daysLeft} dagen tot 31 dec</div>
+        </div>
+        <div className="row gap-8">
+          <button className="btn"><Ic.calendar/> Werkdag<span className="kbd">W</span></button>
+          <button className="btn btn-primary"><Ic.plus/> Factuur<span className="kbd">F</span></button>
+        </div>
+      </div>
+
+      {/* HERO — Urencriterium as the main event */}
+      <div className="card" style={{ padding: '28px 32px', marginBottom: 20, position: 'relative', overflow: 'hidden' }}>
+        <div className="flex items-center justify-between mb-16" style={{ flexWrap: 'wrap', gap: 20 }}>
+          <div>
+            <div className="eyebrow mb-8">Urencriterium 2026</div>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
+              <span className="num" style={{ fontSize: 64, fontWeight: 500, letterSpacing: '-0.03em', lineHeight: 1 }}>{UREN_GEBOEKT.toFixed(0)}</span>
+              <span className="num" style={{ fontSize: 24, color: 'var(--ink-4)' }}>/ {UREN_TARGET}</span>
+              <span className="chip pos" style={{ marginLeft: 8 }}>{urenPct.toFixed(0)}%</span>
+            </div>
+            <div className="muted tiny mono mt-8">
+              Nog {urenRemaining.toFixed(0)} uur · {urenPerWeekNeeded.toFixed(1)} u/week richting doel · achterwacht niet meegeteld
+            </div>
+          </div>
+          <div style={{ textAlign: 'right', minWidth: 200 }}>
+            <div className="eyebrow">Status</div>
+            <div className="mono" style={{ fontSize: 13, color: urenPct >= (daysLeft / 365 * 100) ? 'var(--pos)' : 'var(--neg)', marginTop: 6 }}>
+              {urenPct >= 15 ? '↗ op schema' : '↘ achter schema'}
+            </div>
+            <div className="tiny muted mt-4">Verwacht eindjaar: {Math.round(UREN_GEBOEKT / ((today - new Date('2026-01-01'))/86400000) * 365)} u</div>
+          </div>
+        </div>
+        {/* Timeline bar */}
+        <div style={{ position: 'relative', height: 8, background: 'var(--bg-sunk)', borderRadius: 4, overflow: 'hidden' }}>
+          <div style={{ position: 'absolute', inset: 0, width: `${urenPct}%`, background: 'var(--accent)', borderRadius: 4 }}/>
+          {/* year-progress marker */}
+          <div style={{ position: 'absolute', top: -4, bottom: -4, left: `${((today - new Date('2026-01-01'))/(yearEnd - new Date('2026-01-01')))*100}%`, width: 1, background: 'var(--ink)' }}/>
+        </div>
+        <div className="flex justify-between mono tiny mt-8" style={{ color: 'var(--ink-4)' }}>
+          <span>1 jan</span>
+          <span style={{ position: 'relative' }}>vandaag · {((today - new Date('2026-01-01'))/(yearEnd - new Date('2026-01-01'))*100).toFixed(0)}% van jaar</span>
+          <span>31 dec · 1.225u</span>
+        </div>
+      </div>
+
+      {/* HERO metrics row */}
+      <div className="hero-grid">
+        <div className="hero-cell primary">
+          <div className="hero-label"><Ic.arrowUp style={{ width: 12, height: 12 }}/> Omzet 2026</div>
+          <div className="hero-value num">{fmtEuro(omzet2026)}</div>
+          <div className="hero-sub">
+            <span className="chip pos">+{(((omzet2026 - omzet2025_ytd) / omzet2025_ytd) * 100).toFixed(0)}%</span>
+            <span>vs {fmtEuro(omzet2025_ytd)} t/m apr vorig jaar</span>
+          </div>
+          <div className="hero-spark">
+            <Sparkline data={MONTHLY_2026.slice(0, 4)} color="var(--accent)" height={60} fill={true}/>
+          </div>
+        </div>
+        <div className="hero-cell">
+          <div className="hero-label">Bedrijfswinst</div>
+          <div className="hero-value num">{fmtEuro(winst)}</div>
+          <div className="hero-sub">na kosten {fmtEuro(kosten2026)}</div>
+          <div className="hero-spark">
+            <Sparkline data={MONTHLY_2026.slice(0, 4).map(v => v * 0.78)} color="var(--ink-2)" height={44}/>
+          </div>
+        </div>
+        <div className="hero-cell">
+          <div className="hero-label">Openstaand</div>
+          <div className="hero-value num">{fmtEuro(openstaand)}</div>
+          <div className="hero-sub">
+            {verlopen.length > 0 && <span className="chip neg">{verlopen.length} verlopen</span>}
+            <span className="muted">in {FACTUREN.filter(f => f.status === 'verstuurd').length} facturen</span>
+          </div>
+          <div className="hero-spark" style={{ display: 'flex', alignItems: 'flex-end', gap: 4 }}>
+            {FACTUREN.filter(f => f.status === 'verstuurd').slice(0, 6).map((f, i) => (
+              <div key={i} style={{ flex: 1, height: `${Math.min(100, f.totaal / 40)}%`, background: f.overdue ? 'var(--neg)' : 'var(--ink-3)', borderRadius: 2, minHeight: 8 }}/>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Chart + Activity */}
+      <div className="dash-grid">
+        <div className="card chart-card">
+          <div className="chart-head">
+            <div>
+              <div className="eyebrow">Omzet per maand</div>
+              <div className="chart-title mt-4">Realisatie {new Date().getFullYear()} vs vorig jaar</div>
+            </div>
+            <div className="chart-legend">
+              <span><span className="legend-dot" style={{ background: 'var(--accent)' }}/>2026</span>
+              <span><span className="legend-dot" style={{ background: 'var(--bg-sunk)', border: '1px solid var(--line)' }}/>2025</span>
+            </div>
+          </div>
+          <BarChart data2026={MONTHLY_2026} data2025={MONTHLY_2025} height={220}/>
+        </div>
+
+        <div className="card">
+          <div className="flex justify-between items-center mb-16">
+            <div>
+              <div className="eyebrow">Aandacht vereist</div>
+            </div>
+          </div>
+          <div className="col" style={{ gap: 8 }}>
+            {verlopen.length > 0 && (
+              <AlertRow
+                icon={<Ic.warn/>} severity="neg"
+                title={`${verlopen.length} verlopen factuur${verlopen.length > 1 ? 'en' : ''}`}
+                sub={`${fmtEuro(verlopen.reduce((a, f) => a + f.totaal, 0))} · oudste ${Math.ceil((today - new Date(verlopen[0].verval))/86400000)} dagen`}
+                onClick={() => setRoute('facturen')}
+              />
+            )}
+            {pendingMatches > 0 && (
+              <AlertRow
+                icon={<Ic.link/>} severity="info"
+                title={`${pendingMatches} match-voorstel${pendingMatches > 1 ? 'len' : ''}`}
+                sub="Bank ↔ factuur koppeling klaar voor bevestiging"
+                onClick={() => setRoute('bank')}
+              />
+            )}
+            {uncategorizedBank > 0 && (
+              <AlertRow
+                icon={<Ic.bank/>} severity="warn"
+                title={`${uncategorizedBank} ongecategoriseerde transactie${uncategorizedBank > 1 ? 's' : ''}`}
+                sub="Smart-categorie beschikbaar voor 2"
+                onClick={() => setRoute('bank')}
+              />
+            )}
+            <AlertRow
+              icon={<Ic.calendar/>} severity=""
+              title="3 ongefactureerde werkdagen"
+              sub={`${fmtEuro(1840)} klaar om te factureren`}
+              onClick={() => setRoute('werkdagen')}
+            />
+          </div>
+
+          <div className="eyebrow mt-24 mb-12">Recente activiteit</div>
+          <div className="activity">
+            {activity.map((a, i) => (
+              <div key={i} className="activity-row">
+                <span className="when">{a.when}</span>
+                <span className="what">{a.what}</span>
+                <span className={`amount ${a.amount < 0 ? 'neg' : ''}`}>
+                  {a.amount !== null ? fmtEuro(a.amount) : '—'}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Bottom strip — secondary metrics */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 20 }}>
+        <MiniStat label="KM gereden" value="1.284 km" sub="€ 295,32 aftrekbaar" icon={<Ic.car/>}/>
+        <MiniStat label="Dagen gewerkt" value={`${WERKDAGEN.filter(w => new Date(w.datum) >= new Date('2026-01-01')).length}`} sub="sinds 1 jan" icon={<Ic.calendar/>}/>
+        <MiniStat label="Gem. dagtarief" value={fmtEuro(omzet2026 / Math.max(1, WERKDAGEN.filter(w => w.uren > 0).length))} sub="alle klanten" icon={<Ic.arrowUp/>}/>
+        <MiniStat label="Belasting prognose" value="terug: € 1.999" sub="o.b.v. 4 maanden" icon={<Ic.tax/>} pos/>
+      </div>
+    </div>
+  );
+};
+
+const AlertRow = ({ icon, severity, title, sub, onClick }) => (
+  <div onClick={onClick} style={{
+    display: 'grid', gridTemplateColumns: '28px 1fr auto', gap: 10, alignItems: 'center',
+    padding: '10px 12px', border: '1px solid var(--line)', borderRadius: 8, cursor: 'pointer',
+    background: 'var(--bg-elev)',
+  }}>
+    <div style={{
+      width: 24, height: 24, borderRadius: 6, display: 'grid', placeItems: 'center',
+      background: severity === 'neg' ? '#fef2f2' : severity === 'warn' ? '#fef3c7' : severity === 'info' ? '#e0e7ff' : 'var(--bg-sunk)',
+      color: severity === 'neg' ? '#b91c1c' : severity === 'warn' ? '#92400e' : severity === 'info' ? '#3730a3' : 'var(--ink-3)',
+    }}>
+      {React.cloneElement(icon, { style: { width: 13, height: 13 } })}
+    </div>
+    <div>
+      <div style={{ fontSize: 13, color: 'var(--ink)' }}>{title}</div>
+      <div className="tiny muted mono">{sub}</div>
+    </div>
+    <Ic.arrowRight style={{ width: 14, height: 14, color: 'var(--ink-4)' }}/>
+  </div>
+);
+
+const MiniStat = ({ label, value, sub, icon, pos }) => (
+  <div className="card" style={{ padding: '16px 18px' }}>
+    <div className="flex items-center justify-between mb-8">
+      <div className="eyebrow">{label}</div>
+      <div style={{ color: 'var(--ink-4)' }}>{React.cloneElement(icon, { style: { width: 14, height: 14 } })}</div>
+    </div>
+    <div className="num" style={{ fontSize: 22, fontWeight: 500, color: pos ? 'var(--pos)' : 'var(--ink)' }}>{value}</div>
+    <div className="tiny muted mono mt-4">{sub}</div>
+  </div>
+);
+
+window.Dashboard = Dashboard;
+
+
+// ============ pages.jsx ============
+/* global React, Ic, StatusChip, fmtEuro, fmtDateNL, fmtDateShort, APPDATA */
+
+
+// ============ WERKDAGEN ============
+const Werkdagen = ({ setRoute }) => {
+  const [selected, setSelected] = useState(new Set());
+  const [filter, setFilter] = useState('all');
+  const rows = useMemo(() => {
+    const r = APPDATA.WERKDAGEN;
+    if (filter === 'uninvoiced') return r.filter(w => !w.factuurnummer);
+    if (filter === 'anw') return r.filter(w => w.code === 'ANW');
+    return r;
+  }, [filter]);
+
+  const toggle = (id) => {
+    const n = new Set(selected);
+    n.has(id) ? n.delete(id) : n.add(id);
+    setSelected(n);
+  };
+  const selTotal = rows.filter(r => selected.has(r.id)).reduce((a, r) => a + r.uren * r.tarief + r.km * r.km_tarief, 0);
+  const selUren = rows.filter(r => selected.has(r.id)).reduce((a, r) => a + r.uren, 0);
+
+  return (
+    <div className="content">
+      <div className="page-head">
+        <div>
+          <h1 className="page-title">Werkdagen</h1>
+          <div className="page-sub">{APPDATA.WERKDAGEN.length} dagen geregistreerd · {APPDATA.UREN_GEBOEKT.toFixed(0)} uur telt voor urencriterium</div>
+        </div>
+        <div className="row gap-8">
+          <button className="btn"><Ic.upload/> Import CSV</button>
+          <button className="btn btn-primary"><Ic.plus/> Nieuwe werkdag<span className="kbd">N</span></button>
+        </div>
+      </div>
+
+      {/* Filter strip */}
+      <div className="row gap-8 mb-20" style={{ flexWrap: 'wrap' }}>
+        <div className="seg" style={{ border: '1px solid var(--line)', borderRadius: 7, display: 'flex', overflow: 'hidden' }}>
+          {[
+            { k: 'all', l: 'Alle' },
+            { k: 'uninvoiced', l: 'Ongefactureerd' },
+            { k: 'anw', l: 'ANW' },
+          ].map(f => (
+            <button key={f.k} onClick={() => setFilter(f.k)} className={filter === f.k ? 'on' : ''} style={{
+              padding: '7px 14px', border: 0, borderRight: '1px solid var(--line)',
+              background: filter === f.k ? 'var(--ink)' : 'var(--bg-elev)',
+              color: filter === f.k ? 'var(--bg)' : 'var(--ink-2)',
+              fontSize: 12, cursor: 'pointer', fontFamily: 'var(--f-mono)',
+            }}>{f.l}</button>
+          ))}
+        </div>
+        <select className="input" style={{ width: 160 }}>
+          <option>Alle klanten</option>
+          {APPDATA.KLANTEN.map(k => <option key={k.id}>{k.naam}</option>)}
+        </select>
+        <select className="input" style={{ width: 120 }}><option>2026</option><option>2025</option></select>
+        <div style={{ marginLeft: 'auto', fontFamily: 'var(--f-mono)', fontSize: 12, color: 'var(--ink-3)' }}>
+          {rows.length} rijen · ∑ {rows.reduce((a, r) => a + r.uren, 0).toFixed(1)} u
+        </div>
+      </div>
+
+      {/* Selection action bar */}
+      {selected.size > 0 && (
+        <div style={{
+          position: 'sticky', top: 60, zIndex: 5,
+          background: 'var(--ink)', color: 'var(--bg)',
+          padding: '10px 20px', borderRadius: 10, marginBottom: 16,
+          display: 'flex', alignItems: 'center', gap: 16, boxShadow: 'var(--shadow-md)',
+        }}>
+          <span className="mono" style={{ fontSize: 13 }}>{selected.size} geselecteerd</span>
+          <span className="mono" style={{ fontSize: 12, opacity: 0.7 }}>{selUren.toFixed(1)} uur · {fmtEuro(selTotal)}</span>
+          <div style={{ flex: 1 }}/>
+          <button onClick={() => setRoute('factuur_new')} className="btn btn-accent"><Ic.invoice/> Maak factuur</button>
+          <button className="btn" style={{ background: 'transparent', color: 'var(--bg)', borderColor: 'var(--ink-3)' }} onClick={() => setSelected(new Set())}>
+            <Ic.x/>
+          </button>
+        </div>
+      )}
+
+      <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+        <table className="tbl">
+          <thead>
+            <tr>
+              <th style={{ width: 32 }}></th>
+              <th>Datum</th>
+              <th>Klant</th>
+              <th>Code</th>
+              <th className="num">Uren</th>
+              <th className="num">Km</th>
+              <th className="num">Tarief</th>
+              <th className="num">Bedrag</th>
+              <th>Factuur</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.slice(0, 24).map(r => {
+              const bedrag = r.uren * r.tarief + r.km * r.km_tarief;
+              return (
+                <tr key={r.id} onClick={() => toggle(r.id)} className={selected.has(r.id) ? 'selected' : ''}>
+                  <td><input type="checkbox" checked={selected.has(r.id)} onChange={() => toggle(r.id)}/></td>
+                  <td className="mono" style={{ fontSize: 12 }}>{fmtDateNL(r.datum)}</td>
+                  <td>
+                    <div>{r.klant_naam}</div>
+                    <div className="tiny muted">{r.locatie}</div>
+                  </td>
+                  <td>
+                    <span className={`chip ${r.code === 'ANW' ? 'info' : r.code === 'ACH' ? '' : 'pos'}`}>{r.code}</span>
+                  </td>
+                  <td className="num">{r.uren.toFixed(2)}</td>
+                  <td className="num">{r.km}</td>
+                  <td className="num">{fmtEuro(r.tarief)}</td>
+                  <td className="num">{fmtEuro(bedrag)}</td>
+                  <td className="mono" style={{ fontSize: 11, color: r.factuurnummer ? 'var(--ink-3)' : 'var(--neg)' }}>
+                    {r.factuurnummer || '—'}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+};
+
+// ============ FACTUREN ============
+const Facturen = ({ setRoute }) => {
+  const [filter, setFilter] = useState('all');
+  const [q, setQ] = useState('');
+  const { FACTUREN } = APPDATA;
+  const rows = useMemo(() => {
+    let r = FACTUREN;
+    if (filter === 'open') r = r.filter(f => f.status === 'verstuurd');
+    if (filter === 'verlopen') r = r.filter(f => f.overdue);
+    if (filter === 'concept') r = r.filter(f => f.status === 'concept');
+    if (q) r = r.filter(f => f.klant_naam.toLowerCase().includes(q.toLowerCase()) || f.nummer.includes(q));
+    return r;
+  }, [filter, q]);
+
+  const totals = {
+    all: FACTUREN.reduce((a, f) => a + f.totaal, 0),
+    open: FACTUREN.filter(f => f.status === 'verstuurd').reduce((a, f) => a + f.totaal, 0),
+    verlopen: FACTUREN.filter(f => f.overdue).reduce((a, f) => a + f.totaal, 0),
+    concept: FACTUREN.filter(f => f.status === 'concept').reduce((a, f) => a + f.totaal, 0),
+  };
+
+  return (
+    <div className="content">
+      <div className="page-head">
+        <div>
+          <h1 className="page-title">Facturen</h1>
+          <div className="page-sub">{FACTUREN.length} facturen in 2026 · {fmtEuro(totals.all)} totaal</div>
+        </div>
+        <div className="row gap-8">
+          <button className="btn"><Ic.upload/> Importeer PDF</button>
+          <button className="btn btn-primary" onClick={() => setRoute('factuur_new')}><Ic.plus/> Nieuwe factuur<span className="kbd">F</span></button>
+        </div>
+      </div>
+
+      {/* KPI strip */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 1, background: 'var(--line)', border: '1px solid var(--line)', borderRadius: 10, overflow: 'hidden', marginBottom: 20 }}>
+        {[
+          { k: 'all', l: 'Gefactureerd', v: totals.all, sub: `${FACTUREN.length} facturen` },
+          { k: 'open', l: 'Openstaand', v: totals.open, sub: `${FACTUREN.filter(f => f.status === 'verstuurd').length} verstuurd`, color: 'var(--info)' },
+          { k: 'verlopen', l: 'Verlopen', v: totals.verlopen, sub: `${FACTUREN.filter(f => f.overdue).length} > 14 dagen`, color: 'var(--neg)' },
+          { k: 'concept', l: 'Concept', v: totals.concept, sub: `${FACTUREN.filter(f => f.status === 'concept').length} concept`, color: 'var(--ink-3)' },
+        ].map(k => (
+          <button key={k.k} onClick={() => setFilter(k.k)} style={{
+            padding: '18px 20px', border: 0, textAlign: 'left', cursor: 'pointer',
+            background: filter === k.k ? 'var(--bg-sunk)' : 'var(--bg-elev)',
+            borderBottom: filter === k.k ? `2px solid ${k.color || 'var(--ink)'}` : '2px solid transparent',
+          }}>
+            <div className="eyebrow">{k.l}</div>
+            <div className="num" style={{ fontSize: 22, fontWeight: 500, marginTop: 6, color: k.color || 'var(--ink)' }}>{fmtEuro(k.v)}</div>
+            <div className="tiny muted mono mt-4">{k.sub}</div>
+          </button>
+        ))}
+      </div>
+
+      {/* Search */}
+      <div className="row gap-8 mb-20">
+        <div style={{ flex: 1, position: 'relative' }}>
+          <Ic.search style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', width: 14, height: 14, color: 'var(--ink-4)' }}/>
+          <input className="input" placeholder="Zoek op klant of factuurnummer…" style={{ paddingLeft: 34 }} value={q} onChange={e => setQ(e.target.value)}/>
+        </div>
+        <select className="input" style={{ width: 140 }}><option>Alle types</option><option>Dagpraktijk</option><option>ANW</option></select>
+      </div>
+
+      <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+        <table className="tbl">
+          <thead>
+            <tr>
+              <th>Factuur</th>
+              <th>Klant</th>
+              <th>Datum</th>
+              <th>Vervalt</th>
+              <th>Status</th>
+              <th className="num">Uren</th>
+              <th className="num">Bedrag</th>
+              <th style={{ width: 40 }}></th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(f => (
+              <tr key={f.id}>
+                <td className="mono" style={{ color: 'var(--ink)' }}>{f.nummer}</td>
+                <td>
+                  <div>{f.klant_naam}</div>
+                  {f.type === 'anw' && <div className="tiny muted mono">ANW · geïmporteerd</div>}
+                </td>
+                <td className="mono" style={{ fontSize: 12 }}>{fmtDateNL(f.datum)}</td>
+                <td className="mono" style={{ fontSize: 12, color: f.overdue ? 'var(--neg)' : 'var(--ink-3)' }}>{fmtDateNL(f.verval)}</td>
+                <td><StatusChip status={f.status} overdue={f.overdue}/></td>
+                <td className="num">{f.uren}</td>
+                <td className="num" style={{ fontWeight: 500 }}>{fmtEuro(f.totaal)}</td>
+                <td><button className="btn btn-ghost" style={{ padding: 4 }}><Ic.more style={{ width: 14, height: 14 }}/></button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+};
+
+// ============ KOSTEN (smart inbox) ============
+const Kosten = () => {
+  const [dragHot, setDragHot] = useState(false);
+  const { UITGAVEN } = APPDATA;
+  const total = UITGAVEN.reduce((a, u) => a + u.bedrag * (u.zakelijk || 100) / 100, 0);
+
+  return (
+    <div className="content">
+      <div className="page-head">
+        <div>
+          <h1 className="page-title">Kosten</h1>
+          <div className="page-sub">{UITGAVEN.length} uitgaven in 2026 · {fmtEuro(total)} zakelijk aftrekbaar</div>
+        </div>
+        <div className="row gap-8">
+          <button className="btn"><Ic.upload/> Import archief</button>
+          <button className="btn btn-primary"><Ic.plus/> Nieuwe uitgave</button>
+        </div>
+      </div>
+
+      {/* Smart inbox dropzone */}
+      <div
+        className={`dropzone ${dragHot ? 'hot' : ''}`}
+        style={{ marginBottom: 24 }}
+        onDragOver={e => { e.preventDefault(); setDragHot(true); }}
+        onDragLeave={() => setDragHot(false)}
+        onDrop={e => { e.preventDefault(); setDragHot(false); }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 16, flexWrap: 'wrap' }}>
+          <div style={{ width: 36, height: 36, borderRadius: 10, background: 'var(--accent-soft)', color: 'var(--accent-ink)', display: 'grid', placeItems: 'center' }}>
+            <Ic.sparkles style={{ width: 18, height: 18 }}/>
+          </div>
+          <div style={{ textAlign: 'left' }}>
+            <div style={{ fontSize: 14, color: 'var(--ink)', fontWeight: 500 }}>Smart inbox — sleep bonnetjes hierheen</div>
+            <div className="tiny muted mono mt-4">PDF, JPG of PNG · auto-categorisering op basis van leveranciersnaam</div>
+          </div>
+          <div style={{ flex: 1, minWidth: 80 }}/>
+          <button className="btn btn-accent"><Ic.upload/> Of kies bestand</button>
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: 20 }}>
+        <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+          <table className="tbl">
+            <thead>
+              <tr>
+                <th>Datum</th>
+                <th>Categorie</th>
+                <th>Omschrijving</th>
+                <th className="num">Bedrag</th>
+                <th>Bon</th>
+              </tr>
+            </thead>
+            <tbody>
+              {UITGAVEN.map(u => (
+                <tr key={u.id}>
+                  <td className="mono" style={{ fontSize: 12 }}>{fmtDateNL(u.datum)}</td>
+                  <td><span className="chip">{u.categorie}</span></td>
+                  <td>
+                    <div>{u.omschrijving}</div>
+                    {u.investering && <div className="tiny muted mono">Investering · {u.levensduur}j afschr. · {u.zakelijk}% zakelijk</div>}
+                  </td>
+                  <td className="num">{fmtEuro(u.bedrag)}</td>
+                  <td>
+                    {u.bon ? <span style={{ color: 'var(--pos)' }}><Ic.check style={{ width: 14, height: 14 }}/></span> :
+                      <span style={{ color: 'var(--neg)' }} className="tiny mono">ontbreekt</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Category breakdown */}
+        <div className="card">
+          <div className="eyebrow mb-12">Per categorie</div>
+          {Object.entries(UITGAVEN.reduce((acc, u) => {
+            acc[u.categorie] = (acc[u.categorie] || 0) + u.bedrag * (u.zakelijk || 100) / 100;
+            return acc;
+          }, {})).sort((a, b) => b[1] - a[1]).map(([cat, sum]) => {
+            const pct = (sum / total) * 100;
+            return (
+              <div key={cat} style={{ marginBottom: 10 }}>
+                <div className="flex justify-between mb-4">
+                  <span style={{ fontSize: 12 }}>{cat}</span>
+                  <span className="mono tiny">{fmtEuro(sum)}</span>
+                </div>
+                <div style={{ height: 4, background: 'var(--bg-sunk)', borderRadius: 2, overflow: 'hidden' }}>
+                  <div style={{ height: '100%', width: `${pct}%`, background: 'var(--accent)' }}/>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ============ BANK ============
+const Bank = () => {
+  const { BANKTRX, FACTUREN } = APPDATA;
+  const [selected, setSelected] = useState(null);
+  const unmatched = BANKTRX.filter(t => t.matched && !t.koppeling);
+  const uncategorized = BANKTRX.filter(t => !t.categorie && !t.matched);
+
+  const saldo = BANKTRX.reduce((a, t) => a + t.bedrag, 0);
+
+  return (
+    <div className="content">
+      <div className="page-head">
+        <div>
+          <h1 className="page-title">Bank</h1>
+          <div className="page-sub">{BANKTRX.length} transacties · saldo {fmtEuro(saldo)}</div>
+        </div>
+        <div className="row gap-8">
+          <button className="btn"><Ic.upload/> Rabobank CSV</button>
+        </div>
+      </div>
+
+      {/* Match proposals banner */}
+      {unmatched.length > 0 && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 16,
+          padding: '14px 20px', border: '1px solid var(--accent)', background: 'var(--accent-soft)',
+          borderRadius: 10, marginBottom: 20,
+        }}>
+          <div style={{ width: 32, height: 32, borderRadius: 8, background: 'var(--accent)', color: 'white', display: 'grid', placeItems: 'center' }}>
+            <Ic.link style={{ width: 16, height: 16 }}/>
+          </div>
+          <div>
+            <div style={{ fontSize: 13, color: 'var(--accent-ink)', fontWeight: 500 }}>{unmatched.length} match-voorstel{unmatched.length > 1 ? 'len' : ''} klaar</div>
+            <div className="tiny mono" style={{ color: 'var(--accent-ink)', opacity: 0.8 }}>Hoge zekerheid · op factuurnummer gematched</div>
+          </div>
+          <div style={{ flex: 1 }}/>
+          <button className="btn" style={{ background: 'white' }}>Bekijken</button>
+          <button className="btn btn-accent">Alles toepassen</button>
+        </div>
+      )}
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 380px', gap: 20 }}>
+        <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+          <table className="tbl">
+            <thead>
+              <tr>
+                <th>Datum</th>
+                <th>Tegenpartij</th>
+                <th>Categorie</th>
+                <th className="num">Bedrag</th>
+              </tr>
+            </thead>
+            <tbody>
+              {BANKTRX.map(t => (
+                <tr key={t.id} onClick={() => setSelected(t.id)} className={selected === t.id ? 'selected' : ''}>
+                  <td className="mono" style={{ fontSize: 12 }}>{fmtDateNL(t.datum)}</td>
+                  <td>
+                    <div>{t.tegenpartij}</div>
+                    <div className="tiny muted mono">{t.omschrijving}</div>
+                  </td>
+                  <td>
+                    {t.matched && !t.koppeling ? (
+                      <span className="chip info">→ match {t.matched.confidence}</span>
+                    ) : t.koppeling ? (
+                      <span className="chip pos mono">{t.koppeling}</span>
+                    ) : t.categorie ? (
+                      <span className="chip">{t.categorie}</span>
+                    ) : (
+                      <span className="chip neg">niet gecat.</span>
+                    )}
+                  </td>
+                  <td className="num" style={{ color: t.bedrag < 0 ? 'var(--neg)' : 'var(--pos)', fontWeight: 500 }}>
+                    {t.bedrag > 0 ? '+' : ''}{fmtEuro(t.bedrag, 2)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Reconcile panel */}
+        <div className="card" style={{ position: 'sticky', top: 80, alignSelf: 'flex-start' }}>
+          <div className="eyebrow mb-12">Koppel transactie</div>
+          {selected ? (() => {
+            const t = BANKTRX.find(x => x.id === selected);
+            const suggestions = FACTUREN.filter(f =>
+              Math.abs(f.totaal - Math.abs(t.bedrag)) < 50 ||
+              t.omschrijving.includes(f.nummer)
+            ).slice(0, 3);
+            return (
+              <div>
+                <div className="card-tight" style={{ background: 'var(--bg-sunk)', padding: 12, borderRadius: 8, marginBottom: 12 }}>
+                  <div className="tiny mono muted">{fmtDateNL(t.datum)}</div>
+                  <div style={{ fontSize: 13, marginTop: 4 }}>{t.tegenpartij}</div>
+                  <div className="num" style={{ fontSize: 18, fontWeight: 500, marginTop: 4, color: t.bedrag < 0 ? 'var(--neg)' : 'var(--pos)' }}>
+                    {t.bedrag > 0 ? '+' : ''}{fmtEuro(t.bedrag, 2)}
+                  </div>
+                </div>
+                {suggestions.length > 0 ? (
+                  <>
+                    <div className="eyebrow mb-8">Voorstellen</div>
+                    {suggestions.map(f => (
+                      <div key={f.id} className="bank-item" style={{ marginBottom: 6 }}>
+                        <Ic.invoice style={{ width: 14, height: 14, color: 'var(--ink-3)' }}/>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ fontSize: 13 }}>{f.nummer}</div>
+                          <div className="tiny muted">{f.klant_naam}</div>
+                        </div>
+                        <div className="num" style={{ fontSize: 12 }}>{fmtEuro(f.totaal)}</div>
+                      </div>
+                    ))}
+                  </>
+                ) : (
+                  <>
+                    <div className="eyebrow mb-8">Categoriseer</div>
+                    <select className="input mb-8"><option>Kies categorie…</option><option>Vakliteratuur</option><option>Reiskosten</option><option>Telefoon</option><option>Representatie</option></select>
+                    <button className="btn btn-accent" style={{ width: '100%', justifyContent: 'center' }}>
+                      <Ic.sparkles style={{ width: 13, height: 13 }}/> Slim voorstel gebruiken
+                    </button>
+                  </>
+                )}
+              </div>
+            );
+          })() : (
+            <div style={{ padding: '32px 0', textAlign: 'center', color: 'var(--ink-4)' }} className="mono tiny">
+              Selecteer een transactie
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+window.Werkdagen = Werkdagen;
+window.Facturen = Facturen;
+window.Kosten = Kosten;
+window.Bank = Bank;
+
+
+// ============ factuur_builder.jsx ============
+/* global React, Ic, StatusChip, fmtEuro, fmtEuroPlain, fmtDateNL, APPDATA */
+
+const FactuurBuilder = ({ setRoute }) => {
+  const [klantId, setKlantId] = useState(1);
+  const [lines, setLines] = useState([
+    { desc: 'Waarneming dagpraktijk 02-04-2026', qty: 8, price: 95 },
+    { desc: 'Waarneming dagpraktijk 05-04-2026', qty: 7.5, price: 95 },
+    { desc: 'Kilometervergoeding (4x24km)', qty: 96, price: 0.23 },
+  ]);
+  const klant = APPDATA.KLANTEN.find(k => k.id === parseInt(klantId));
+  const subtotaal = lines.reduce((a, l) => a + l.qty * l.price, 0);
+
+  const updateLine = (i, field, val) => {
+    const n = [...lines];
+    n[i][field] = field === 'desc' ? val : parseFloat(val) || 0;
+    setLines(n);
+  };
+
+  return (
+    <div className="content" style={{ maxWidth: 'none' }}>
+      <div className="page-head">
+        <div className="row gap-12">
+          <button className="btn btn-ghost" onClick={() => setRoute('facturen')}><Ic.arrowRight style={{ transform: 'rotate(180deg)' }}/> Terug</button>
+          <div>
+            <h1 className="page-title">Nieuwe factuur</h1>
+            <div className="page-sub">Concept · 2026-043</div>
+          </div>
+        </div>
+        <div className="row gap-8">
+          <button className="btn">Opslaan als concept</button>
+          <button className="btn btn-primary">Genereer & verstuur</button>
+        </div>
+      </div>
+
+      <div className="builder">
+        {/* LEFT — form */}
+        <div className="col" style={{ gap: 16 }}>
+          <div className="card">
+            <div className="eyebrow mb-12">Klant</div>
+            <select className="input mb-12" value={klantId} onChange={e => setKlantId(e.target.value)}>
+              {APPDATA.KLANTEN.map(k => <option key={k.id} value={k.id}>{k.naam}</option>)}
+            </select>
+            <div className="row gap-12">
+              <div style={{ flex: 1 }}>
+                <div className="eyebrow">Datum</div>
+                <input className="input mt-4" defaultValue="2026-04-17" type="date"/>
+              </div>
+              <div style={{ flex: 1 }}>
+                <div className="eyebrow">Vervaldatum</div>
+                <input className="input mt-4" defaultValue="2026-05-01" type="date"/>
+              </div>
+            </div>
+          </div>
+
+          {/* Unbilled werkdagen suggestions */}
+          <div className="card" style={{ background: 'var(--accent-soft)', border: '1px solid transparent' }}>
+            <div className="row items-center mb-8">
+              <Ic.sparkles style={{ width: 14, height: 14, color: 'var(--accent-ink)' }}/>
+              <div className="eyebrow" style={{ color: 'var(--accent-ink)' }}>3 ongefactureerde werkdagen voor deze klant</div>
+            </div>
+            <button className="btn btn-accent" style={{ marginTop: 8 }}>
+              <Ic.plus/> Importeer als regels
+            </button>
+          </div>
+
+          <div className="card">
+            <div className="flex justify-between mb-12">
+              <div className="eyebrow">Regels</div>
+              <button className="btn btn-ghost tiny" onClick={() => setLines([...lines, { desc: '', qty: 1, price: 0 }])}>
+                <Ic.plus style={{ width: 12, height: 12 }}/> Regel
+              </button>
+            </div>
+            <div className="line-item mono tiny muted" style={{ borderBottom: '1px solid var(--line)', paddingBottom: 6 }}>
+              <div>OMSCHRIJVING</div>
+              <div style={{ textAlign: 'right' }}>AANTAL</div>
+              <div style={{ textAlign: 'right' }}>PRIJS</div>
+              <div style={{ textAlign: 'right' }}>TOTAAL</div>
+              <div></div>
+            </div>
+            {lines.map((l, i) => (
+              <div key={i} className="line-item">
+                <input value={l.desc} onChange={e => updateLine(i, 'desc', e.target.value)} placeholder="Omschrijving…"/>
+                <input className="num" value={l.qty} onChange={e => updateLine(i, 'qty', e.target.value)} type="number" step="0.25"/>
+                <input className="num" value={l.price} onChange={e => updateLine(i, 'price', e.target.value)} type="number" step="0.01"/>
+                <div className="num" style={{ padding: '4px 6px', fontSize: 13 }}>{fmtEuro(l.qty * l.price, 2)}</div>
+                <button className="btn btn-ghost" style={{ padding: 2 }} onClick={() => setLines(lines.filter((_, j) => j !== i))}>
+                  <Ic.x style={{ width: 12, height: 12, color: 'var(--ink-4)' }}/>
+                </button>
+              </div>
+            ))}
+            <div className="flex justify-between mt-16" style={{ paddingTop: 12, borderTop: '1px solid var(--line)' }}>
+              <div className="mono" style={{ fontSize: 12, color: 'var(--ink-3)' }}>BTW vrijgesteld (art. 11 Wet OB)</div>
+              <div className="num" style={{ fontSize: 20, fontWeight: 500 }}>{fmtEuro(subtotaal, 2)}</div>
+            </div>
+          </div>
+        </div>
+
+        {/* RIGHT — preview */}
+        <div style={{ position: 'sticky', top: 80, alignSelf: 'flex-start' }}>
+          <div className="eyebrow mb-8" style={{ textAlign: 'center' }}>Live preview</div>
+          <div className="preview-doc">
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 32 }}>
+              <div>
+                <div style={{ fontSize: 18, fontWeight: 600, letterSpacing: '-0.02em' }}>R.P. Berg</div>
+                <div style={{ fontSize: 9, color: '#666', marginTop: 4, lineHeight: 1.5 }}>
+                  Huisarts Waarnemer<br/>
+                  Herengracht 123, 1015 BG Amsterdam<br/>
+                  KvK 12345678 · NL91 RABO 0123 4567 89
+                </div>
+              </div>
+              <div style={{ textAlign: 'right' }}>
+                <div style={{ fontFamily: 'var(--f-mono)', fontSize: 20, letterSpacing: '-0.02em' }}>FACTUUR</div>
+                <div style={{ fontFamily: 'var(--f-mono)', fontSize: 10, color: '#666', marginTop: 4 }}>2026-043</div>
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20, marginBottom: 24, fontSize: 10 }}>
+              <div>
+                <div style={{ color: '#888', fontFamily: 'var(--f-mono)', textTransform: 'uppercase', fontSize: 8, marginBottom: 4 }}>Factureren aan</div>
+                <div style={{ fontWeight: 500 }}>{klant?.naam}</div>
+                <div style={{ color: '#666' }}>{klant?.plaats}</div>
+              </div>
+              <div style={{ textAlign: 'right' }}>
+                <div style={{ color: '#888', fontFamily: 'var(--f-mono)', textTransform: 'uppercase', fontSize: 8, marginBottom: 4 }}>Datum · Vervalt</div>
+                <div style={{ fontFamily: 'var(--f-mono)' }}>17-04-2026 · 01-05-2026</div>
+              </div>
+            </div>
+
+            <table style={{ width: '100%', fontSize: 10, borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ borderBottom: '1px solid #000' }}>
+                  <th style={{ textAlign: 'left', padding: '6px 0', fontSize: 8, textTransform: 'uppercase', fontFamily: 'var(--f-mono)' }}>Omschrijving</th>
+                  <th style={{ textAlign: 'right', padding: '6px 0', fontSize: 8, textTransform: 'uppercase', fontFamily: 'var(--f-mono)' }}>Aantal</th>
+                  <th style={{ textAlign: 'right', padding: '6px 0', fontSize: 8, textTransform: 'uppercase', fontFamily: 'var(--f-mono)' }}>Prijs</th>
+                  <th style={{ textAlign: 'right', padding: '6px 0', fontSize: 8, textTransform: 'uppercase', fontFamily: 'var(--f-mono)' }}>Totaal</th>
+                </tr>
+              </thead>
+              <tbody>
+                {lines.map((l, i) => (
+                  <tr key={i} style={{ borderBottom: '1px solid #eee' }}>
+                    <td style={{ padding: '8px 0' }}>{l.desc || <em style={{ color: '#999' }}>—</em>}</td>
+                    <td style={{ textAlign: 'right', fontFamily: 'var(--f-mono)' }}>{l.qty}</td>
+                    <td style={{ textAlign: 'right', fontFamily: 'var(--f-mono)' }}>{fmtEuroPlain(l.price)}</td>
+                    <td style={{ textAlign: 'right', fontFamily: 'var(--f-mono)' }}>{fmtEuroPlain(l.qty * l.price)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16, paddingTop: 12, borderTop: '2px solid #000' }}>
+              <div style={{ textAlign: 'right' }}>
+                <div style={{ fontFamily: 'var(--f-mono)', fontSize: 8, color: '#888', textTransform: 'uppercase' }}>Totaal te betalen</div>
+                <div style={{ fontFamily: 'var(--f-mono)', fontSize: 20, fontWeight: 500, marginTop: 2 }}>€ {fmtEuroPlain(subtotaal)}</div>
+              </div>
+            </div>
+
+            <div style={{ marginTop: 40, fontSize: 8, color: '#888', fontFamily: 'var(--f-mono)', lineHeight: 1.6 }}>
+              Vrijgesteld van BTW op grond van artikel 11 lid 1 onderdeel g Wet OB 1968.<br/>
+              Gelieve te voldoen binnen 14 dagen op NL91 RABO 0123 4567 89 o.v.v. {klant ? '2026-043' : ''}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+window.FactuurBuilder = FactuurBuilder;
+
+
+// ============ app.jsx ============
+/* global React, ReactDOM, Ic, APPDATA, Dashboard, Werkdagen, Facturen, Kosten, Bank, FactuurBuilder */
+
+const DEFAULTS = /*EDITMODE-BEGIN*/{
+  "theme": "light",
+  "density": "normal",
+  "accent": "teal",
+  "nav": "expanded",
+  "font": "inter"
+}/*EDITMODE-END*/;
+
+const ACCENTS = {
+  teal:   { light: { accent: '#0f766e', soft: '#e6f2f0', ink: '#0a524c' }, dark: { accent: '#2dd4bf', soft: '#0d2f2c', ink: '#5eead4' } },
+  indigo: { light: { accent: '#4338ca', soft: '#e0e7ff', ink: '#312e81' }, dark: { accent: '#818cf8', soft: '#1e1b4b', ink: '#a5b4fc' } },
+  amber:  { light: { accent: '#b45309', soft: '#fef3c7', ink: '#78350f' }, dark: { accent: '#fbbf24', soft: '#422006', ink: '#fcd34d' } },
+  slate:  { light: { accent: '#334155', soft: '#e2e8f0', ink: '#0f172a' }, dark: { accent: '#94a3b8', soft: '#1e293b', ink: '#cbd5e1' } },
+  rose:   { light: { accent: '#be123c', soft: '#ffe4e6', ink: '#881337' }, dark: { accent: '#fb7185', soft: '#4c0519', ink: '#fda4af' } },
+};
+
+const FONTS = {
+  inter:  { body: 'Inter, ui-sans-serif, system-ui, sans-serif' },
+  geist:  { body: '"Geist", Inter, ui-sans-serif, sans-serif' },
+  ibm:    { body: '"IBM Plex Sans", Inter, ui-sans-serif, sans-serif' },
+  helv:   { body: '"Helvetica Neue", Helvetica, Arial, sans-serif' },
+};
+
+const App = () => {
+  const [route, setRoute] = useState('dashboard');
+  const [cmdk, setCmdk] = useState(false);
+  const [cmdQ, setCmdQ] = useState('');
+  const [cmdIdx, setCmdIdx] = useState(0);
+  const [cfg, setCfg] = useState(DEFAULTS);
+  const [tweaks, setTweaks] = useState(false);
+
+  // Apply theme/density
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', cfg.theme);
+    document.documentElement.setAttribute('data-density', cfg.density);
+    document.documentElement.setAttribute('data-nav', cfg.nav);
+    const acc = ACCENTS[cfg.accent][cfg.theme === 'dark' ? 'dark' : 'light'];
+    document.documentElement.style.setProperty('--accent', acc.accent);
+    document.documentElement.style.setProperty('--accent-soft', acc.soft);
+    document.documentElement.style.setProperty('--accent-ink', acc.ink);
+    document.documentElement.style.setProperty('--f-sans', FONTS[cfg.font].body);
+  }, [cfg]);
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    const onKey = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); setCmdk(v => !v); setCmdQ(''); setCmdIdx(0); }
+      if (e.key === 'Escape') setCmdk(false);
+      if (!cmdk && !e.metaKey && !e.ctrlKey && !e.target.matches('input,textarea,select')) {
+        if (e.key === 'f') { e.preventDefault(); setRoute('factuur_new'); }
+        if (e.key === 'w') { e.preventDefault(); setRoute('werkdagen'); }
+        if (e.key === 'd') { e.preventDefault(); setRoute('dashboard'); }
+        if (e.key === 'b') { e.preventDefault(); setRoute('bank'); }
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [cmdk]);
+
+  // Edit-mode bridge for Tweaks toolbar
+  useEffect(() => {
+    const onMsg = (e) => {
+      if (e.data?.type === '__activate_edit_mode') setTweaks(true);
+      if (e.data?.type === '__deactivate_edit_mode') setTweaks(false);
+    };
+    window.addEventListener('message', onMsg);
+    window.parent.postMessage({ type: '__edit_mode_available' }, '*');
+    return () => window.removeEventListener('message', onMsg);
+  }, []);
+
+  const setCfgKey = (k, v) => {
+    const next = { ...cfg, [k]: v };
+    setCfg(next);
+    window.parent.postMessage({ type: '__edit_mode_set_keys', edits: { [k]: v } }, '*');
+  };
+
+  const navGroups = [
+    { label: 'Boekhouden', items: [
+      { k: 'dashboard', l: 'Dashboard', ic: Ic.dashboard },
+      { k: 'werkdagen', l: 'Werkdagen', ic: Ic.calendar, count: APPDATA.WERKDAGEN.filter(w => !w.factuurnummer).length },
+      { k: 'facturen', l: 'Facturen', ic: Ic.invoice, count: APPDATA.FACTUREN.filter(f => f.status === 'concept').length || null },
+      { k: 'kosten', l: 'Kosten', ic: Ic.cost },
+      { k: 'bank', l: 'Bank', ic: Ic.bank, count: APPDATA.BANKTRX.filter(t => !t.categorie && !t.matched).length },
+    ]},
+    { label: 'Archief', items: [
+      { k: 'docs', l: 'Documenten', ic: Ic.docs },
+      { k: 'jaar', l: 'Jaarafsluiting', ic: Ic.archive },
+      { k: 'aangifte', l: 'Aangifte', ic: Ic.tax },
+    ]},
+    { label: 'Beheer', items: [
+      { k: 'klanten', l: 'Klanten', ic: Ic.users },
+      { k: 'settings', l: 'Instellingen', ic: Ic.settings },
+    ]},
+  ];
+
+  const pageTitles = {
+    dashboard: 'Dashboard', werkdagen: 'Werkdagen', facturen: 'Facturen',
+    kosten: 'Kosten', bank: 'Bank', docs: 'Documenten', jaar: 'Jaarafsluiting',
+    aangifte: 'Aangifte', klanten: 'Klanten', settings: 'Instellingen',
+    factuur_new: 'Facturen / Nieuw',
+  };
+
+  const cmdItems = [
+    { group: 'Acties', icon: Ic.plus, label: 'Nieuwe werkdag', shortcut: ['W'], go: () => setRoute('werkdagen') },
+    { group: 'Acties', icon: Ic.plus, label: 'Nieuwe factuur', shortcut: ['F'], go: () => setRoute('factuur_new') },
+    { group: 'Acties', icon: Ic.plus, label: 'Nieuwe uitgave', shortcut: [], go: () => setRoute('kosten') },
+    { group: 'Acties', icon: Ic.upload, label: 'Importeer Rabobank CSV', shortcut: [], go: () => setRoute('bank') },
+    { group: 'Acties', icon: Ic.upload, label: 'Importeer factuur-PDF', shortcut: [], go: () => setRoute('facturen') },
+    { group: 'Navigatie', icon: Ic.dashboard, label: 'Ga naar Dashboard', shortcut: ['D'], go: () => setRoute('dashboard') },
+    { group: 'Navigatie', icon: Ic.calendar, label: 'Ga naar Werkdagen', shortcut: ['W'], go: () => setRoute('werkdagen') },
+    { group: 'Navigatie', icon: Ic.invoice, label: 'Ga naar Facturen', shortcut: ['F'], go: () => setRoute('facturen') },
+    { group: 'Navigatie', icon: Ic.bank, label: 'Ga naar Bank', shortcut: ['B'], go: () => setRoute('bank') },
+    { group: 'Aangifte', icon: Ic.tax, label: 'Aangifte-overzicht 2026', shortcut: [], go: () => setRoute('aangifte') },
+    { group: 'Aangifte', icon: Ic.archive, label: 'Jaarafsluiting 2025 bekijken', shortcut: [], go: () => setRoute('jaar') },
+    { group: 'Klanten', icon: Ic.users, label: 'Nieuwe klant toevoegen', shortcut: [], go: () => setRoute('klanten') },
+    ...APPDATA.KLANTEN.slice(0, 4).map(k => ({
+      group: 'Klanten', icon: Ic.users, label: k.naam, shortcut: [], go: () => setRoute('klanten')
+    })),
+  ];
+  const filteredCmd = cmdQ ? cmdItems.filter(i => i.label.toLowerCase().includes(cmdQ.toLowerCase())) : cmdItems;
+
+  const runCmd = (i) => { filteredCmd[i]?.go(); setCmdk(false); };
+
+  return (
+    <div className="app" data-screen-label={pageTitles[route] || route}>
+      {/* SIDEBAR */}
+      <aside className="sidebar">
+        <div className="brand">
+          <div className="dot">B</div>
+          {cfg.nav === 'expanded' && <>
+            <div>
+              <div style={{ fontWeight: 600 }}>Boekhouding</div>
+              <div style={{ color: 'var(--ink-4)', fontSize: 10 }}>R.P. Berg — Huisarts</div>
+            </div>
+          </>}
+        </div>
+
+        <button className="nav-item" onClick={() => { setCmdk(true); setCmdQ(''); setCmdIdx(0); }} style={{ marginBottom: 8 }}>
+          <Ic.search className="nav-ic"/>
+          {cfg.nav === 'expanded' && <>
+            <span style={{ color: 'var(--ink-3)' }}>Zoeken</span>
+            <span className="count" style={{ fontSize: 9 }}>⌘K</span>
+          </>}
+        </button>
+
+        {navGroups.map(g => (
+          <React.Fragment key={g.label}>
+            {cfg.nav === 'expanded' && <div className="nav-section">{g.label}</div>}
+            {g.items.map(item => (
+              <div key={item.k}
+                className={`nav-item ${route === item.k || (route === 'factuur_new' && item.k === 'facturen') ? 'active' : ''}`}
+                onClick={() => setRoute(item.k)}
+                title={item.l}>
+                <item.ic className="nav-ic"/>
+                {cfg.nav === 'expanded' && <>
+                  <span>{item.l}</span>
+                  {item.count ? <span className="count">{item.count}</span> : null}
+                </>}
+              </div>
+            ))}
+          </React.Fragment>
+        ))}
+
+        <div className="sidebar-foot">
+          <div className="avatar">RB</div>
+          {cfg.nav === 'expanded' && (
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ color: 'var(--ink)', fontSize: 12, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>R.P. Berg</div>
+              <div style={{ fontSize: 10 }} className="mono">fiscaal jaar 2026</div>
+            </div>
+          )}
+        </div>
+      </aside>
+
+      {/* MAIN */}
+      <main className="main">
+        <div className="topbar">
+          <div className="crumbs">
+            <span>Boekhouding</span>
+            <span className="sep">/</span>
+            <span className="cur">{pageTitles[route]}</span>
+          </div>
+          <div className="topbar-right">
+            <button className="btn btn-ghost" onClick={() => { setCmdk(true); setCmdQ(''); setCmdIdx(0); }}>
+              <Ic.search style={{ width: 14, height: 14 }}/>
+              <span style={{ color: 'var(--ink-3)', fontSize: 12 }}>Zoek of begin te typen</span>
+              <span className="kbd">⌘K</span>
+            </button>
+          </div>
+        </div>
+
+        {route === 'dashboard' && <Dashboard setRoute={setRoute}/>}
+        {route === 'werkdagen' && <Werkdagen setRoute={setRoute}/>}
+        {route === 'facturen' && <Facturen setRoute={setRoute}/>}
+        {route === 'factuur_new' && <FactuurBuilder setRoute={setRoute}/>}
+        {route === 'kosten' && <Kosten/>}
+        {route === 'bank' && <Bank/>}
+        {['docs', 'jaar', 'aangifte', 'klanten', 'settings'].includes(route) && <Placeholder title={pageTitles[route]}/>}
+      </main>
+
+      {/* COMMAND PALETTE */}
+      {cmdk && (
+        <div className="cmdk-overlay" onClick={() => setCmdk(false)}>
+          <div className="cmdk" onClick={e => e.stopPropagation()}>
+            <input
+              className="cmdk-input"
+              placeholder="Zoek acties, klanten, facturen…"
+              autoFocus
+              value={cmdQ}
+              onChange={e => { setCmdQ(e.target.value); setCmdIdx(0); }}
+              onKeyDown={e => {
+                if (e.key === 'ArrowDown') { e.preventDefault(); setCmdIdx(Math.min(filteredCmd.length - 1, cmdIdx + 1)); }
+                if (e.key === 'ArrowUp') { e.preventDefault(); setCmdIdx(Math.max(0, cmdIdx - 1)); }
+                if (e.key === 'Enter') { e.preventDefault(); runCmd(cmdIdx); }
+              }}
+            />
+            <div className="cmdk-list">
+              {(() => {
+                let lastGroup = '';
+                return filteredCmd.map((item, i) => {
+                  const g = item.group !== lastGroup ? item.group : null;
+                  lastGroup = item.group;
+                  return (
+                    <React.Fragment key={i}>
+                      {g && <div className="cmdk-group">{g}</div>}
+                      <div className={`cmdk-item ${i === cmdIdx ? 'active' : ''}`} onClick={() => runCmd(i)} onMouseEnter={() => setCmdIdx(i)}>
+                        <item.icon className="ic"/>
+                        <span>{item.label}</span>
+                        {item.shortcut.length > 0 && <div className="shortcut">{item.shortcut.map((s, j) => <span key={j}>{s}</span>)}</div>}
+                      </div>
+                    </React.Fragment>
+                  );
+                });
+              })()}
+              {filteredCmd.length === 0 && (
+                <div className="cmdk-item" style={{ color: 'var(--ink-4)' }}>Geen resultaten voor "{cmdQ}"</div>
+              )}
+            </div>
+            <div className="cmdk-foot">
+              <span>↑↓ navigeren</span>
+              <span>↵ kies</span>
+              <span>esc sluiten</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TWEAKS */}
+      {tweaks && (
+        <div className="tweaks">
+          <div className="tweaks-head">
+            <span>Tweaks</span>
+            <button className="btn btn-ghost" style={{ padding: 2 }} onClick={() => setTweaks(false)}>
+              <Ic.x style={{ width: 12, height: 12 }}/>
+            </button>
+          </div>
+          <div className="tweaks-body">
+            <div className="tweak-row">
+              <label>Thema</label>
+              <div className="seg">
+                <button className={cfg.theme === 'light' ? 'on' : ''} onClick={() => setCfgKey('theme', 'light')}>Licht</button>
+                <button className={cfg.theme === 'dark' ? 'on' : ''} onClick={() => setCfgKey('theme', 'dark')}>Donker</button>
+              </div>
+            </div>
+            <div className="tweak-row">
+              <label>Accent</label>
+              <div className="swatches">
+                {Object.keys(ACCENTS).map(a => (
+                  <div key={a}
+                    onClick={() => setCfgKey('accent', a)}
+                    className={`swatch ${cfg.accent === a ? 'on' : ''}`}
+                    style={{ background: ACCENTS[a][cfg.theme === 'dark' ? 'dark' : 'light'].accent }}
+                  />
+                ))}
+              </div>
+            </div>
+            <div className="tweak-row">
+              <label>Dichtheid</label>
+              <div className="seg">
+                <button className={cfg.density === 'compact' ? 'on' : ''} onClick={() => setCfgKey('density', 'compact')}>Compact</button>
+                <button className={cfg.density === 'normal' ? 'on' : ''} onClick={() => setCfgKey('density', 'normal')}>Normaal</button>
+                <button className={cfg.density === 'spacious' ? 'on' : ''} onClick={() => setCfgKey('density', 'spacious')}>Ruim</button>
+              </div>
+            </div>
+            <div className="tweak-row">
+              <label>Navigatie</label>
+              <div className="seg">
+                <button className={cfg.nav === 'expanded' ? 'on' : ''} onClick={() => setCfgKey('nav', 'expanded')}>Volledig</button>
+                <button className={cfg.nav === 'compact' ? 'on' : ''} onClick={() => setCfgKey('nav', 'compact')}>Smal</button>
+              </div>
+            </div>
+            <div className="tweak-row">
+              <label>Font</label>
+              <div className="seg">
+                <button className={cfg.font === 'inter' ? 'on' : ''} onClick={() => setCfgKey('font', 'inter')}>Inter</button>
+                <button className={cfg.font === 'geist' ? 'on' : ''} onClick={() => setCfgKey('font', 'geist')}>Geist</button>
+                <button className={cfg.font === 'ibm' ? 'on' : ''} onClick={() => setCfgKey('font', 'ibm')}>IBM Plex</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const Placeholder = ({ title }) => (
+  <div className="content">
+    <div className="page-head">
+      <div>
+        <h1 className="page-title">{title}</h1>
+        <div className="page-sub">Deze sectie is in de redesign-prototype nog niet uitgewerkt.</div>
+      </div>
+    </div>
+    <div className="card" style={{ padding: 60, textAlign: 'center' }}>
+      <div style={{ display: 'grid', placeItems: 'center', height: 60, color: 'var(--ink-4)' }}>
+        <Ic.inbox style={{ width: 32, height: 32 }}/>
+      </div>
+      <div className="mono tiny muted mt-12">Vraag een vervolg om {title.toLowerCase()} te ontwerpen</div>
+    </div>
+  </div>
+);
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+
+
+</script>
+</body>
+</html>

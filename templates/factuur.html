@@ -53,19 +53,30 @@
   .header { display: flex; justify-content: space-between;
             margin-bottom: 6mm; }
 
-  .sender h1 { font-size: 14.5pt; font-weight: bold; color: #2c3e50;
-               margin-bottom: 0.5mm; }
-  .sender .address { font-size: 10pt; color: #2c3e50; line-height: 1.4; }
-  .sender .details { font-size: 9pt; color: #555; margin-top: 3mm;
-                     line-height: 1.5; }
+  /* Sender (linksboven) — klassieke letterhead-stijl:
+       1. Brand h1 = anker (semibold navy)
+       2. Drie compacte info-paragrafen (identiteit / bereikbaarheid /
+          formeel) met uniforme typografie, gescheiden door 2mm gaps.
+     Geen tabel-chrome: alle data heeft hetzelfde gewicht en de gaps
+     tussen .info-blokken doen het structuurwerk. Labels alleen waar
+     nodig (KvK/IBAN); telefoon en email zijn aan hun format
+     herkenbaar. tabular-nums lijnt cijferreeksen verticaal uit. */
+  .sender h1 { font-size: 14pt; font-weight: 600; color: #2c3e50;
+               letter-spacing: -0.01em; margin-bottom: 3mm; }
+  .sender .info { font-size: 9.5pt; color: #555; line-height: 1.5;
+                  font-variant-numeric: tabular-nums; }
+  .sender .info + .info { margin-top: 2mm; }
 
   .meta { text-align: right; }
   .meta h2 { font-size: 28pt; font-weight: 800; color: #2c3e50;
              margin: 0; border-bottom: 1pt solid #2c3e50;
              padding-bottom: 1.5mm; letter-spacing: 1px; }
   .meta .nummer { font-size: 12pt; color: #2c3e50; margin-top: 2mm; }
-  .meta .dates { font-size: 9.5pt; color: #555; margin-top: 5mm;
-                 line-height: 1.7; }
+  /* Dates uitgelijnd op het sender-blok (zelfde grijs + tabular-nums)
+     zodat links en rechts van de header dezelfde rustige typografie
+     tonen i.p.v. licht uit balans te zijn. */
+  .meta .dates { font-size: 9.5pt; color: #6b7280; margin-top: 5mm;
+                 line-height: 1.55; font-variant-numeric: tabular-nums; }
 
   /* ── Divider ───────────────────────────────── */
   .divider { width: 40px; height: 2px; background: #2c3e50;
@@ -151,17 +162,28 @@
 <div class="header">
   <div class="sender">
     <h1>{{ bedrijf.bedrijfsnaam }}</h1>
-    <div class="address">
+    {# Identiteit — naam, adres, plaats #}
+    <div class="info">
       {{ bedrijf.naam }}<br>
       {{ bedrijf.adres }}<br>
       {{ bedrijf.postcode_plaats }}
     </div>
-    <div class="details">
-      {% if bedrijf.telefoon|default('') %}Tel: {{ bedrijf.telefoon }}<br>{% endif %}
-      {% if bedrijf.email|default('') %}{{ bedrijf.email }}<br>{% endif %}
-      {% if bedrijf.kvk|default('') %}KvK: {{ bedrijf.kvk }}<br>{% endif %}
-      {% if bedrijf.iban|default('') %}IBAN: {{ bedrijf.iban }}{% endif %}
+    {# Bereikbaarheid — telefoon, email; geen labels (format spreekt) #}
+    {% if bedrijf.telefoon|default('') or bedrijf.email|default('') %}
+    <div class="info">
+      {% if bedrijf.telefoon|default('') %}{{ bedrijf.telefoon }}{% endif %}
+      {% if bedrijf.telefoon|default('') and bedrijf.email|default('') %}<br>{% endif %}
+      {% if bedrijf.email|default('') %}{{ bedrijf.email }}{% endif %}
     </div>
+    {% endif %}
+    {# Formele identifiers — KvK, IBAN; labels nodig #}
+    {% if bedrijf.kvk|default('') or bedrijf.iban|default('') %}
+    <div class="info">
+      {% if bedrijf.kvk|default('') %}KvK&nbsp;&nbsp;{{ bedrijf.kvk }}{% endif %}
+      {% if bedrijf.kvk|default('') and bedrijf.iban|default('') %}<br>{% endif %}
+      {% if bedrijf.iban|default('') %}IBAN&nbsp;{{ bedrijf.iban }}{% endif %}
+    </div>
+    {% endif %}
   </div>
   <div class="meta">
     <h2>FACTUUR</h2>

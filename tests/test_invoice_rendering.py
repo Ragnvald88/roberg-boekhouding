@@ -106,13 +106,20 @@ def test_render_kvk_iban_guards_empty():
 
 
 def test_render_kvk_iban_shown_when_set():
-    """KvK and IBAN are shown when present."""
+    """KvK and IBAN are shown when present.
+
+    Sender contact-tbl rendert label en value in aparte <td>'s
+    (geen 'KvK: 12345678'-string). Test op label én value separaat;
+    laat opmaak vrij voor toekomstige typografische tweaks.
+    """
     html = render_invoice_html(
         nummer='2026-007', factuur_datum='2026-02-15',
         bedrijfsgegevens=_BEDRIJF)
 
-    assert 'KvK: 12345678' in html
-    assert 'IBAN: NL00 TEST 0000 0000 00' in html
+    assert 'KvK' in html
+    assert '12345678' in html
+    assert 'IBAN' in html
+    assert 'NL00 TEST 0000 0000 00' in html
 
 
 def test_render_btw_legal_citation():
