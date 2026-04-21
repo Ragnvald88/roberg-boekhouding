@@ -416,6 +416,16 @@ MIGRATIONS = [
             fiscale_params_json TEXT NOT NULL
         )""",
     ]),
+    (26, "add_kosten_rework_columns", [
+        "ALTER TABLE uitgaven ADD COLUMN bank_tx_id INTEGER "
+        "REFERENCES banktransacties(id) ON DELETE SET NULL",
+        "CREATE INDEX IF NOT EXISTS idx_uitgaven_bank_tx "
+        "ON uitgaven(bank_tx_id)",
+        "ALTER TABLE banktransacties ADD COLUMN genegeerd INTEGER "
+        "NOT NULL DEFAULT 0 CHECK (genegeerd IN (0, 1))",
+        "CREATE INDEX IF NOT EXISTS idx_bank_genegeerd "
+        "ON banktransacties(genegeerd)",
+    ]),
 ]
 
 
