@@ -56,7 +56,7 @@ def test_match_tokens_miss():
 
 
 def test_match_tokens_ignores_short_tokens():
-    """Tokens < 4 chars don't count."""
+    """Tokens < 3 chars don't count."""
     # 'BV' is 2 chars, 'NL' is 2 chars — both ignored.
     assert match_tokens("BV NL", "BV NL other") == 0
 

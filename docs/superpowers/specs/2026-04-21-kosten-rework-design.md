@@ -149,7 +149,7 @@ Toggles the flag. Year-locked against `bank_tx.datum`.
 Uses existing `scan_archive(jaar, existing_filenames)`. For each archive file not already imported, computes a match score against this bank_tx:
 
 - bedrag match (if filename includes a parseable amount): equal within €0.01
-- tegenpartij token overlap: normalize both sides (lowercase, strip punctuation, split on whitespace/`_`/`-`), require at least one shared token of length ≥ 4
+- tegenpartij token overlap: normalize both sides (lowercase, strip punctuation, split on whitespace/`_`/`-`), require at least one shared token of length ≥ 3 (threshold set to 3 — not 4 — so real vendor names like `KPN` and `SPH` from `FOLDER_TO_CATEGORIE` actually match; 2-char noise like `BV`/`NL` is still filtered)
 
 Returns matches sorted by (has_bedrag_match, tegenpartij_token_count) desc. The inbox's "Slimme suggestie" button only surfaces when the top result has `has_bedrag_match=True` AND `tegenpartij_token_count >= 1`; otherwise the row shows the generic "Bon koppelen / Categoriseren" action.
 
