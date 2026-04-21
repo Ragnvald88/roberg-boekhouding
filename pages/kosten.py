@@ -472,15 +472,115 @@ async def _laad_kpi(container, jaar):
     if container is None:
         return
     container.clear()
+    kpi = await get_kpi_kosten(DB_PATH, jaar)
+
+    def _card(label: str, value: str, sub: str | None = None,
+              color: str = 'primary', icon: str | None = None,
+              on_click=None):
+        with ui.card().classes('flex-1 q-pa-md cursor-pointer' if on_click
+                                else 'flex-1 q-pa-md') as c:
+            if on_click:
+                c.on('click', lambda _: on_click())
+            with ui.row().classes('items-center gap-2'):
+                if icon:
+                    ui.icon(icon, color=color).classes('text-lg')
+                ui.label(label) \
+                    .classes('text-caption text-uppercase text-grey')
+            ui.label(value) \
+                .classes('text-h5 text-bold q-mt-xs') \
+                .style('font-variant-numeric: tabular-nums')
+            if sub:
+                ui.label(sub).classes('text-caption text-grey')
+        return c
+
     with container:
-        ui.label(f'KPIs voor {jaar} (placeholder — Task 12)') \
-            .classes('text-caption')
+        _card(
+            f'Totaal kosten {jaar}',
+            format_euro(kpi.totaal),
+            f"{len([m for m in kpi.monthly_totals if m>0])} actieve maanden")
+
+        _card(
+            'Factuur ontbreekt',
+            str(kpi.ontbreekt_count),
+            format_euro(kpi.ontbreekt_bedrag),
+            color='warning', icon='warning',
+            on_click=lambda: None)  # filter via status dropdown manually
+
+        _card(
+            f'Afschrijvingen {jaar}',
+            format_euro(kpi.afschrijvingen_jaar),
+            'Zie tab Investeringen',
+            icon='trending_down')
+
+        _card(
+            f'Investeringen {jaar}',
+            str(kpi.investeringen_count),
+            format_euro(kpi.investeringen_bedrag),
+            icon='inventory_2')
 
 
 async def _laad_inbox(container, jaar, refresh):
     if container is None:
         return
-    container.clear()  # nothing to show yet (Task 12)
+    container.clear()
+    rows = await get_kosten_view(DB_PATH, jaar=jaar)
+    needs = [r for r in rows
+             if r.status in ('ongecategoriseerd', 'ontbreekt')]
+    if not needs:
+        return
+
+    needs.sort(key=lambda r: r.datum, reverse=True)
+    top4 = needs[:4]
+
+    with container:
+        with ui.card() \
+                .classes('w-full q-pa-md') \
+                .style('background:linear-gradient(135deg,#fff7ed,#ffffff);'
+                        'border:1px solid #fed7aa'):
+            with ui.row().classes('items-center gap-3'):
+                ui.icon('warning', color='warning').classes('text-2xl')
+                with ui.column().classes('flex-1 gap-0'):
+                    ui.label(
+                        f'{len(needs)} transactie(s) hebben nog aandacht nodig') \
+                        .classes('text-subtitle2 text-bold')
+                    ui.label(
+                        'Klik om te categoriseren of een bon toe te voegen.') \
+                        .classes('text-caption text-grey')
+
+            with ui.row().classes('w-full gap-2 q-mt-md'):
+                for r in top4:
+                    card = ui.card() \
+                        .classes('q-pa-sm flex-1 cursor-pointer') \
+                        .style('min-width:220px')
+                    with card:
+                        with ui.row().classes('w-full items-baseline'):
+                            ui.label(
+                                r.tegenpartij or r.omschrijving or '(—)') \
+                                .classes('text-body2 text-bold')
+                            ui.space()
+                            ui.label(format_euro(r.bedrag)) \
+                                .classes('text-body2 text-bold') \
+                                .style('font-variant-numeric:tabular-nums')
+                        ui.label(format_datum(r.datum)) \
+                            .classes('text-caption text-grey')
+
+                    async def _on_click(row=r):
+                        row_dict = {
+                            'id_bank': row.id_bank,
+                            'id_uitgave': row.id_uitgave,
+                            'datum': row.datum,
+                            'bedrag': row.bedrag,
+                            'tegenpartij': row.tegenpartij,
+                            'omschrijving': row.omschrijving,
+                            'categorie': row.categorie,
+                            'pdf_pad': row.pdf_pad,
+                            'is_manual': row.is_manual,
+                            'iban': row.iban,
+                        }
+                        await _open_detail_dialog(row_dict, refresh)
+
+                    card.on('click', lambda _=None, r=r:
+                            asyncio.create_task(_on_click(r)))
 
 
 def _view_pdf(row: dict):
@@ -543,15 +643,6 @@ async def _laad_tabel(
                         else f'u{r.id_uitgave}'),
         })
 
-    # Inject the category list into a window global referenced by the
-    # categorie-dropdown slot template below. NiceGUI doesn't expose a
-    # cleaner hook for passing Python lists into per-cell slot templates.
-    # json.dumps keeps us safe against apostrophes / special chars.
-    ui.add_body_html(
-        '<script>window.__KOSTEN_CAT_LIST__ = '
-        f'{json.dumps(CATEGORIEEN)};</script>'
-    )
-
     async def _on_set_cat(args: dict):
         row = args['row']
         cat = args['cat']
@@ -592,6 +683,120 @@ async def _laad_tabel(
                     'rowsPerPageOptions': [10, 20, 50, 0],
                 },
             ).classes('w-full').props('flat')
+
+            # ---------------- Bulk action bar ----------------
+            # Appears when 1+ rows are selected; hidden otherwise.
+            # Handlers close over ``tbl`` (for ``tbl.selected``) and
+            # ``refresh`` so the page reflows after bulk ops.
+            bulk_row = ui.row() \
+                .classes('w-full items-center gap-2 q-py-sm') \
+                .style('background:#0f172a;color:white;border-radius:8px;'
+                        'padding:8px 16px')
+            bulk_row.set_visibility(False)
+            with bulk_row:
+                bulk_label = ui.label('')
+
+                async def bulk_set_cat():
+                    with ui.dialog() as dlg, ui.card():
+                        ui.label('Nieuwe categorie voor selectie') \
+                            .classes('text-h6')
+                        sel = ui.select(CATEGORIEEN, label='Categorie') \
+                            .classes('w-full')
+                        with ui.row() \
+                                .classes('w-full justify-end gap-2 q-mt-md'):
+                            ui.button('Annuleren', on_click=dlg.close) \
+                                .props('flat')
+
+                            async def apply():
+                                n_ok, n_skip = 0, 0
+                                for r in tbl.selected:
+                                    try:
+                                        if r['id_uitgave'] is None \
+                                                and r['id_bank'] is not None:
+                                            await ensure_uitgave_for_banktx(
+                                                DB_PATH,
+                                                bank_tx_id=r['id_bank'],
+                                                categorie=sel.value or '')
+                                        else:
+                                            await update_uitgave(
+                                                DB_PATH,
+                                                uitgave_id=r['id_uitgave'],
+                                                categorie=sel.value or '')
+                                        n_ok += 1
+                                    except YearLockedError:
+                                        n_skip += 1
+                                dlg.close()
+                                msg = f'{n_ok} bijgewerkt'
+                                if n_skip:
+                                    msg += (f', {n_skip} overgeslagen '
+                                            '(jaar afgesloten)')
+                                ui.notify(
+                                    msg,
+                                    type='positive' if n_ok else 'warning')
+                                await refresh()
+
+                            ui.button('Toepassen', on_click=apply) \
+                                .props('color=primary')
+                    dlg.open()
+
+                ui.button('Categorie wijzigen', icon='label',
+                          on_click=bulk_set_cat) \
+                    .props('outline color=white size=sm')
+
+                async def bulk_negeren():
+                    n_ok, n_skip = 0, 0
+                    for r in tbl.selected:
+                        if r['id_bank'] is None:
+                            continue
+                        try:
+                            await mark_banktx_genegeerd(
+                                DB_PATH, bank_tx_id=r['id_bank'],
+                                genegeerd=1)
+                            n_ok += 1
+                        except YearLockedError:
+                            n_skip += 1
+                    msg = f'{n_ok} rij(en) als privé gemarkeerd'
+                    if n_skip:
+                        msg += f', {n_skip} overgeslagen'
+                    ui.notify(msg,
+                              type='positive' if n_ok else 'warning')
+                    await refresh()
+
+                ui.button('Markeer als privé', icon='visibility_off',
+                          on_click=bulk_negeren) \
+                    .props('outline color=white size=sm')
+
+                async def bulk_delete():
+                    n_ok, n_skip = 0, 0
+                    for r in tbl.selected:
+                        if r['id_uitgave'] is None:
+                            continue
+                        try:
+                            await delete_uitgave(
+                                DB_PATH, uitgave_id=r['id_uitgave'])
+                            n_ok += 1
+                        except YearLockedError:
+                            n_skip += 1
+                    msg = f'{n_ok} uitgave(n) verwijderd'
+                    if n_skip:
+                        msg += f', {n_skip} overgeslagen'
+                    ui.notify(msg,
+                              type='positive' if n_ok else 'warning')
+                    await refresh()
+
+                ui.button('Verwijderen', icon='delete',
+                          on_click=bulk_delete) \
+                    .props('outline color=white size=sm')
+
+            def update_bulk():
+                n = len(tbl.selected)
+                if n > 0:
+                    bulk_row.set_visibility(True)
+                    bulk_label.text = f'{n} geselecteerd'
+                else:
+                    bulk_row.set_visibility(False)
+
+            tbl.on('selection', lambda _: update_bulk())
 
             tbl.add_slot('body-cell-datum', '''
                 <q-td :props="props">{{ props.row.datum_fmt }}</q-td>
@@ -701,6 +906,60 @@ async def _laad_tabel(
                    lambda e: asyncio.create_task(
                        _open_row_dialog(e.args)))
 
+            # ---------------- Per-maand view ----------------
+            # Inserts synthetic divider rows between month groups, each
+            # rendered via the ``top-row`` slot by matching the
+            # ``__maand_header__`` flag. ``rows`` in the table are sorted
+            # already (descending datum) by Quasar pagination, but we
+            # honour the original ``table_rows`` order and let Quasar
+            # re-sort if the user changes sort column.
+            if view_mode == 'maand':
+                tbl.add_slot('top-row', '''
+                    <q-tr v-if="props.row.__maand_header__">
+                      <q-td colspan="100%"
+                            class="text-weight-medium text-grey"
+                            style="background:#f1f5f9;letter-spacing:0.05em;
+                                   text-transform:uppercase;font-size:11px;
+                                   padding:8px 14px">
+                        {{ props.row.__maand__ }}
+                        <span style="float:right;font-variant-numeric:tabular-nums">
+                          {{ props.row.__maand_total__ }}
+                        </span>
+                      </q-td>
+                    </q-tr>
+                ''')
+                grouped: list[dict] = []
+                current_month = None
+                month_buf: list[dict] = []
+                for tr in table_rows:
+                    m = tr['datum'][:7]
+                    if m != current_month:
+                        if month_buf:
+                            total = sum(x['bedrag'] for x in month_buf)
+                            grouped.append({
+                                '__maand_header__': True,
+                                '__maand__': current_month,
+                                '__maand_total__': format_euro(total),
+                                'row_key': f'__hdr_{current_month}',
+                                'datum': current_month + '-00',
+                            })
+                            grouped.extend(month_buf)
+                            month_buf = []
+                        current_month = m
+                    month_buf.append(tr)
+                if month_buf:
+                    total = sum(x['bedrag'] for x in month_buf)
+                    grouped.append({
+                        '__maand_header__': True,
+                        '__maand__': current_month,
+                        '__maand_total__': format_euro(total),
+                        'row_key': f'__hdr_{current_month}',
+                        'datum': current_month + '-00',
+                    })
+                    grouped.extend(month_buf)
+                tbl.rows = grouped
+                tbl.update()
+
 
 async def _laad_breakdown(container, jaar):
     if container is None:
@@ -711,6 +970,14 @@ async def _laad_breakdown(container, jaar):
 @ui.page('/kosten')
 async def kosten_page():
     create_layout('Kosten', '/kosten')
+    # Inject the category list into a window global referenced by the
+    # categorie-dropdown slot template inside the kosten table. Runs
+    # once on page mount — previously lived inside _laad_tabel which
+    # made it fire on every filter/refresh tick.
+    ui.add_body_html(
+        '<script>window.__KOSTEN_CAT_LIST__ = '
+        f'{json.dumps(CATEGORIEEN)};</script>'
+    )
     huidig_jaar = date.today().year
     jaren = year_options()
     filter_jaar = {'value': huidig_jaar}
