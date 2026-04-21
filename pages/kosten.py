@@ -710,18 +710,28 @@ async def _laad_tabel(
                             async def apply():
                                 n_ok, n_skip = 0, 0
                                 for r in tbl.selected:
+                                    # Skip synthetic month-divider rows
+                                    # in per-maand view (no id_* keys).
+                                    if r.get('__maand_header__'):
+                                        continue
+                                    id_bank = r.get('id_bank')
+                                    id_uitgave = r.get('id_uitgave')
                                     try:
-                                        if r['id_uitgave'] is None \
-                                                and r['id_bank'] is not None:
+                                        if id_uitgave is None \
+                                                and id_bank is not None:
                                             await ensure_uitgave_for_banktx(
                                                 DB_PATH,
-                                                bank_tx_id=r['id_bank'],
+                                                bank_tx_id=id_bank,
                                                 categorie=sel.value or '')
-                                        else:
+                                        elif id_uitgave is not None:
                                             await update_uitgave(
                                                 DB_PATH,
-                                                uitgave_id=r['id_uitgave'],
+                                                uitgave_id=id_uitgave,
                                                 categorie=sel.value or '')
+                                        else:
+                                            # Neither id_bank nor id_uitgave —
+                                            # nothing to update.
+                                            continue
                                         n_ok += 1
                                     except YearLockedError:
                                         n_skip += 1
@@ -746,11 +756,16 @@ async def _laad_tabel(
                 async def bulk_negeren():
                     n_ok, n_skip = 0, 0
                     for r in tbl.selected:
-                        if r['id_bank'] is None:
+                        # Skip synthetic month-divider rows
+                        # in per-maand view (no id_* keys).
+                        if r.get('__maand_header__'):
+                            continue
+                        id_bank = r.get('id_bank')
+                        if id_bank is None:
                             continue
                         try:
                             await mark_banktx_genegeerd(
-                                DB_PATH, bank_tx_id=r['id_bank'],
+                                DB_PATH, bank_tx_id=id_bank,
                                 genegeerd=1)
                             n_ok += 1
                         except YearLockedError:
@@ -769,11 +784,16 @@ async def _laad_tabel(
                 async def bulk_delete():
                     n_ok, n_skip = 0, 0
                     for r in tbl.selected:
-                        if r['id_uitgave'] is None:
+                        # Skip synthetic month-divider rows
+                        # in per-maand view (no id_* keys).
+                        if r.get('__maand_header__'):
+                            continue
+                        id_uitgave = r.get('id_uitgave')
+                        if id_uitgave is None:
                             continue
                         try:
                             await delete_uitgave(
-                                DB_PATH, uitgave_id=r['id_uitgave'])
+                                DB_PATH, uitgave_id=id_uitgave)
                             n_ok += 1
                         except YearLockedError:
                             n_skip += 1
