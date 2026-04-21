@@ -1,5 +1,9 @@
 # Kosten page rework — Implementation Plan
 
+> **Status: ✅ Complete (2026-04-21)** — all 14 tasks executed via superpowers:subagent-driven-development with opus implementer + 2 opus reviewers per task. Final whole-branch code review: **APPROVE FOR MERGE**. 807 tests passing, 0 failures. Commits `f0a59ec` → `7b44719` on `master`.
+>
+> **v1.1 polish items (non-blocking, staged for follow-up)**: add partial `UNIQUE` index on `uitgaven.bank_tx_id` OR route Importeer auto-link through `ensure_uitgave_for_banktx`; wire "Factuur ontbreekt" KPI click to filter; single-fetch `get_kosten_view` per refresh tick; strip stale "Stub loaders" comment; re-read uitgave by id instead of filtering list; visually separate "(nog te categoriseren)" in breakdown card; execute the deferred `database/` package refactor.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Rework `/kosten` around a bank-transaction-centric reconciliation list, linking `banktransacties` ↔ `uitgaven` via a new nullable FK, while preserving all existing fiscal logic (activastaat, afschrijvingen, KIA, year-lock).

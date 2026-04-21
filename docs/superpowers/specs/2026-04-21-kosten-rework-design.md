@@ -3,7 +3,7 @@
 **Date:** 2026-04-21
 **Route affected:** `/kosten`
 **Reference mockup:** `~/Downloads/Kosten.html`
-**Status:** Design approved, awaiting implementation plan
+**Status:** ✅ **Implemented 2026-04-21** — shipped in commits `f0a59ec` → `7b44719` (19 commits, 14 files, +2549/−692, 807 tests passing). See `docs/superpowers/plans/2026-04-21-kosten-rework.md` for task-by-task execution log.
 
 ## 1. Goal
 

@@ -105,26 +105,62 @@ De state machine is bewust los. Een `verstuurd` flag betekent niet dat de factuu
 
 ## Kosten
 
-### Nieuwe uitgave toevoegen
-- Trigger: "Nieuwe uitgave" button op `/kosten`
-- Opent: dialog met categorie, bedrag, omschrijving, datum
-- "Dit is een investering" checkbox toont extra velden (levensduur, restwaarde, zakelijk%)
-- Bon upload optioneel
-- "Opslaan & Nieuw" voor bulk-invoer
+Bank-transactie-centrische reconciliatie. Bank-debits en manuele (contant) uitgaven verschijnen in één geünificeerde lijst; PDFs worden aan een bank-tx gekoppeld via `uitgaven.bank_tx_id`.
 
-### Uitgave bewerken
-- Trigger: edit button per rij
-- Opent: zelfde dialog, pre-filled
-- Bon kan vervangen of verwijderd worden
+### Pagina-structuur
+- Twee tabs: **Transacties** (default, reconciliatie-lijst) en **Investeringen** (activastaat + afschrijvingen, ongewijzigd).
+- Boven de tabel: KPI-strip (4 kaarten: Totaal · Factuur ontbreekt · Afschrijvingen · Investeringen) + oranje reconciliatie-inbox (top-4 recente rijen die aandacht nodig hebben) + filterbalk (jaar · status · categorie · zoek · Lijst/Per maand toggle).
+- Onder de tabel: categorie-breakdown kaart met horizontale balken per categorie.
 
-### Activastaat
-- Onder de uitgaven-tabel: overzicht van alle investeringen met afschrijvingsberekening
-- "Afschrijving aanpassen" per investering: override levensduur of jaarlijkse bedragen
+### Row status
+Elke rij heeft één status (sequentieel afgeleid):
+- **Ongecategoriseerd** — bank-tx zonder linked uitgave, of uitgave zonder categorie
+- **Ontbreekt** — uitgave heeft categorie maar geen PDF
+- **Compleet** — categorie + PDF
+- Manuele cash-uitgaven krijgen een extra `contant`-badge
+
+### Inline categoriseren
+- Elke rij heeft een categorie-dropdown in de tabel (q-btn-dropdown).
+- Klik → categorie zetten roept onder water `ensure_uitgave_for_banktx` voor bank-only rijen (lazy-create uitgave) of `update_uitgave` voor bestaande. Year-locked, toast bij year-lock-error.
+
+### Nieuwe uitgave toevoegen (cash-bonnetje)
+- Trigger: "Nieuwe uitgave" button op `/kosten`. Alleen voor cash/contant-uitgaven die niet via de bank lopen; bank-uitgaven verschijnen automatisch via CSV-import en worden inline gekoppeld.
+- Opent: dialog met categorie, bedrag, omschrijving, datum.
+- "Dit is een investering" checkbox toont extra velden (levensduur, restwaarde, zakelijk%).
+- Bon upload optioneel.
+- "Opslaan & Nieuw" voor bulk-invoer.
+- Aangemaakte uitgave heeft `bank_tx_id = NULL`.
+
+### Detail bekijken / bewerken
+- Trigger: `more_horiz` button in de row acties-kolom, of klik op een inbox-kaart, of "attach file" button.
+- Opent Detail-dialog met drie tabs:
+  - **Detail**: bedrag (locked voor bank-linked, editable voor manual), IBAN read-only, categorie, omschrijving/notitie, Investering-toggle met levensduur/restwaarde/zakelijk%, Ontkoppel-knop (alleen bij bank-link).
+  - **Factuur**: iframe-preview van bestaande PDF (base64 data URI) + Download/Verwijder — of upload-zone + archief-suggesties uit `find_pdf_matches_for_banktx` met directe Koppel-knop.
+  - **Historie**: laatste 12 maanden rijen met dezelfde tegenpartij, met "terugkerende kost"-tip bij ≥3 hits binnen 120 dagen.
+- Footer: Annuleren · Verwijder (alleen bij bestaande uitgave) · Opslaan.
+- Alle mutaties year-locked.
+
+### Bulk-acties
+- Selecteer meerdere rijen → zwarte bulk-balk verschijnt met: **Categorie wijzigen** (lazy-create voor bank-only), **Markeer als privé** (alleen bank-rijen, via `mark_banktx_genegeerd`), **Verwijderen** (alleen uitgave-rijen).
+- Per-row year-lock; rijen in afgesloten jaar worden overgeslagen met summary-toast (`N bijgewerkt, M overgeslagen (jaar afgesloten)`).
+
+### Per-maand view
+- Toggle rechts in de filterbalk. Rijen worden gegroepeerd per maand met een header-rij die maand-totaal toont. Header-rijen zijn uitgesloten van bulk-selectie.
+
+### Privé / niet-zakelijke bank-transacties
+- Per-rij of via bulk "Markeer als privé" zet `banktransacties.genegeerd = 1`. Die rij verdwijnt uit de Kosten-weergave en telt niet mee in KPIs. Bedoeld voor eigen geld-overboekingen, ATM, incidentele privé-debits op de zakelijke rekening.
 
 ### Uitgaven importeren vanuit archief
-- Trigger: "Importeer" button
-- Scant het boekhouding-archief op het NAS voor ongeïmporteerde PDFs
-- Klik op bestandsnaam opent pre-filled toevoeg-dialog
+- Trigger: "Importeer" button.
+- Scant het boekhouding-archief op het NAS voor ongeïmporteerde PDFs per jaar, gegroepeerd per categorie-folder.
+- Bij elke ongeïmporteerde PDF pre-computed de dialog een bank-tx match via `find_banktx_matches_for_pdf`. Bij match toont hij `↔ {tegenpartij} · {datum} · {bedrag}` caption.
+- Klik op bestandsnaam opent pre-filled toevoeg-dialog; bij match wordt `bank_tx_id` automatisch meegegeven zodat save direct koppelt.
+- Unmatched PDFs worden standalone uitgaven (bank_tx_id NULL).
+
+### Investeringen-tab (activastaat)
+- Overzicht van alle investeringen met afschrijvingsberekening (lineair, restwaarde 10%, eerste jaar pro-rata per maand).
+- "Afschrijving aanpassen" per investering: override levensduur of jaarlijkse bedragen. Voorgaande jaren (< huidig jaar) zijn vergrendeld — reeds aangegeven bij Belastingdienst.
+- Tab wordt lazy-geladen: eerste klik triggert de activastaat-render.
 
 ---
 

@@ -203,6 +203,55 @@ Gebruik: `/audit-scan` leest dit bestand als checklist tegen de huidige code.
 
 ---
 
+## from-X-import-Y-monkeypatch-unfriendly — Module-level binding verhindert test-override
+
+**Samenvatting**: `from components.archive_paths import ARCHIVE_BASE` bindt `ARCHIVE_BASE` als een lokale naam in de importerende module. `monkeypatch.setattr(archive_paths, "ARCHIVE_BASE", tmp_path)` in een test wijzigt alleen `archive_paths.ARCHIVE_BASE`, niet de lokale copy in de consumer-module. Gevolg: de test werkt niet met tmp-dirs en leest stilletjes de echte archive-locatie op het NAS. Oplossing: gebruik `from components import archive_paths` + attribuut-lookup `archive_paths.ARCHIVE_BASE` bij elk gebruik, zodat de referentie dynamisch wordt opgehaald.
+
+**CLAUDE.md regel**: *"Kosten-pagina: Dynamic `ARCHIVE_BASE` — `import_/expense_utils.py` doet `from components import archive_paths` en refereert `archive_paths.ARCHIVE_BASE` dynamisch. Idem toepassen bij toekomstige consumers."*
+
+**Voorbeelden**:
+- `5e7096f feat(kosten): find_pdf_matches_for_banktx + dynamic ARCHIVE_BASE lookup` — refactor van `import_/expense_utils.py` nadat een Task-5 implementer correct escaleerde dat de tests niet konden monkeypatchen.
+
+**Hoe in HEAD te detecteren**:
+- Grep: `from\s+components\.archive_paths\s+import\s+ARCHIVE_BASE` — elke hit is een consumer die niet test-monkeypatchable is. `components/invoice_generator.py:8` is de nog-resterende consumer (geen test-coverage dus nu niet blokkerend, maar patroon zelfde).
+- Grep: `from\s+\w+\.\w+\s+import\s+[A-Z_]+\s*$` — module-level constant imports, kandidaat-symptomen voor hetzelfde patroon als de constant ooit test-mutabel moet worden.
+- Glob scope: `import_/**/*.py`, `components/**/*.py`, `pages/**/*.py`.
+
+---
+
+## bedrag-sign-mismatch-union — Tegengestelde conventies in UNION ALL
+
+**Samenvatting**: `banktransacties.bedrag` is negatief (debits < 0, credits > 0 zoals Rabobank-CSV levert). `uitgaven.bedrag` is positief (REAL CHECK >= 0). Een naïeve `UNION ALL` van beide zonder normalisatie levert een lijst met gemengde tekens → totalen kloppen niet, sorteringen lopen in de war. `ABS()` in de SELECT + bevestigende test is de oplossing.
+
+**CLAUDE.md regel**: impliciet — bewezen in `get_kosten_view` (spec §6.1 eist `ABS(b.bedrag)` in SELECT).
+
+**Voorbeelden**:
+- `043e318 feat(kosten): get_kosten_view — unified bank-tx + manual uitgaven` — UNION ALL met `ABS(b.bedrag)` in bank-side SELECT + `test_view_bank_only_row_has_ongecategoriseerd_status` pint bedrag == 120.87 voor een `-120.87` bank-tx.
+- `5831322 feat(kosten): ensure_uitgave_for_banktx` — enforcet `uitgave.bedrag = abs(bt["bedrag"])` bij creatie + `test_ensure_bedrag_is_abs_for_positive_bank_tx` voor de refund-case.
+
+**Hoe in HEAD te detecteren**:
+- Grep: `UNION\s+ALL` — voor elke hit: worden alle bedrag-kolommen aan beide kanten genormaliseerd? (`ABS(...)` of positief-vs-negatief-inconsistentie geflagd?)
+- Grep: `banktransacties.*bedrag` in aggregaties (SUM/AVG/etc.) — is `ABS()` gebruikt waar uitgaaf-som bedoeld wordt?
+- Glob scope: `database.py`, `pages/**/*.py`, `fiscal/**/*.py`.
+
+---
+
+## lazy-create-cancel-orphan — Dialog-open creëert record dat niet op te ruimen is bij annuleren
+
+**Samenvatting**: Detail-dialog op een bank-only rij roept `ensure_uitgave_for_banktx` vóór het renderen van de dialog zodat edit-kwargs een bestaande uitgave-id hebben. Als de gebruiker daarna op Annuleren klikt zonder iets te wijzigen, blijft er een lege uitgave (categorie='', omschrijving=tegenpartij) staan — zichtbaar als "linked" in de tabel terwijl de bedoeling was "geen verandering". Per-spec geaccepteerd (idempotent = volgende open vindt 'm terug), maar zou in v1.1 opgelost kunnen door lazy-create pas bij eerste echte edit te triggeren.
+
+**CLAUDE.md regel**: *"Lazy-create uitgave: elke edit op een bank-only rij routeert via `ensure_uitgave_for_banktx` ... Dit is idempotent."* — gedocumenteerd, niet verholpen.
+
+**Voorbeelden**:
+- `c827a03 feat(kosten): detail dialog with Detail / Factuur / Historie tabs` — bevat de lazy-create op dialog-open (lines 77-84 van `pages/kosten.py`).
+
+**Hoe in HEAD te detecteren**:
+- Grep: `await ensure_uitgave_for_banktx` gevolgd door een path die niet altijd een write of duidelijke intent heeft.
+- Handmatige check: opent de flow een dialog/view voordat de gebruiker heeft bevestigd iets te willen wijzigen? Zo ja: is de lazy-create écht nodig op dat moment?
+- Glob scope: `pages/kosten.py` (v1 scope), toekomstige callers van `ensure_uitgave_for_banktx`.
+
+---
+
 ## Feature-trends (uit `feat:` commits)
 
 Drie zichtbare thema's in nieuwe features van de afgelopen maanden:
@@ -220,8 +269,8 @@ Drie zichtbare thema's in nieuwe features van de afgelopen maanden:
 
 ## Meta
 
-- HEAD bij generatie: `08faace` (2026-04-15)
-- Gesampled: 9 commits (full diff) + ~25 commits (subject-signaal) uit de laatste 150 commits
-- Datum-range: 2026-03-27 → 2026-04-15 (recente fix-concentratie)
+- HEAD bij laatste update: `7b44719` (2026-04-21, Kosten-rework afgerond)
+- Initiële generatie: `08faace` (2026-04-15), 9 commits (full diff) + ~25 commits (subject-signaal)
+- 2026-04-21 uitbreiding: 3 nieuwe patronen uit de Kosten-rework (from-X-import-Y-monkeypatch, bedrag-sign-mismatch-union, lazy-create-cancel-orphan)
 - Gebruik: `/audit-scan [domein?]`
 - Ververs: `/audit-mine-commits --refresh`
