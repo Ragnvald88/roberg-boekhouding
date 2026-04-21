@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import inspect
 import json
 import shutil
 from datetime import date, datetime
@@ -985,7 +986,39 @@ async def _laad_tabel(
 async def _laad_breakdown(container, jaar):
     if container is None:
         return
-    container.clear()  # placeholder for Task 14
+    container.clear()
+    rows = await get_kosten_view(DB_PATH, jaar=jaar)
+    totals: dict[str, float] = {}
+    for r in rows:
+        key = r.categorie or '(nog te categoriseren)'
+        totals[key] = totals.get(key, 0.0) + r.bedrag
+    if not totals:
+        return
+    sorted_totals = sorted(totals.items(), key=lambda kv: kv[1],
+                           reverse=True)
+    grand = sum(totals.values())
+
+    with container:
+        with ui.card().classes('w-full q-pa-md'):
+            with ui.row().classes('w-full items-center'):
+                ui.label(f'Kosten per categorie — {jaar}') \
+                    .classes('text-subtitle1 text-bold')
+                ui.space()
+                ui.label(f'Totaal {format_euro(grand)}') \
+                    .classes('text-caption text-grey')
+
+            for name, amt in sorted_totals:
+                pct = (amt / grand * 100) if grand else 0
+                with ui.column().classes('w-full gap-0 q-my-xs'):
+                    with ui.row().classes('w-full'):
+                        ui.label(name).classes('text-body2')
+                        ui.space()
+                        ui.label(
+                            f'{format_euro(amt)} · {pct:.1f}%') \
+                            .classes('text-body2 text-bold') \
+                            .style('font-variant-numeric:tabular-nums')
+                    ui.linear_progress(value=pct / 100) \
+                        .props('color=primary size=6px')
 
 
 @ui.page('/kosten')
@@ -1217,7 +1250,7 @@ async def kosten_page():
                             add_upload.reset()
                     elif on_saved:
                         dialog.close()
-                        if asyncio.iscoroutinefunction(on_saved):
+                        if inspect.iscoroutinefunction(on_saved):
                             await on_saved()
                         else:
                             on_saved()
@@ -1238,152 +1271,6 @@ async def kosten_page():
                 ).props('color=primary')
 
         dialog.open()
-
-    async def open_edit_dialog(row: dict):
-        """Open dialog to edit an existing expense."""
-        with ui.dialog() as dialog, ui.card().classes('w-full max-w-lg q-pa-md'):
-            ui.label('Uitgave bewerken').classes('text-h6')
-
-            edit_datum = date_input('Datum', value=row['datum'])
-
-            edit_categorie = ui.select(
-                CATEGORIEEN, label='Categorie', value=row['categorie']
-            ).classes('w-full')
-            edit_omschrijving = ui.input(
-                'Omschrijving', value=row['omschrijving']
-            ).classes('w-full')
-            edit_bedrag = ui.number(
-                'Bedrag incl. BTW (€)', value=row['bedrag'],
-                format='%.2f', min=0.01, step=0.01
-            ).classes('w-full')
-
-            # Investering fields
-            is_inv = row.get('is_investering', False)
-            edit_investering = ui.checkbox('Dit is een investering', value=is_inv)
-            with ui.column().bind_visibility_from(edit_investering, 'value'):
-                edit_levensduur = ui.select(
-                    LEVENSDUUR_OPTIES, label='Levensduur',
-                    value=row.get('levensduur_jaren', 5)
-                ).classes('w-full')
-                edit_restwaarde = ui.number(
-                    'Restwaarde %', value=row.get('restwaarde_pct', 10),
-                    min=0, max=100
-                ).classes('w-full')
-                edit_zakelijk = ui.number(
-                    'Zakelijk %', value=row.get('zakelijk_pct', 100),
-                    min=0, max=100
-                ).classes('w-full')
-
-            # Investering fields visibility follows checkbox
-
-            # Document section
-            ui.separator().classes('q-my-sm')
-            edit_upload_file = {}
-            existing_pdf = row.get('pdf_pad', '')
-            if existing_pdf and Path(existing_pdf).exists():
-                with ui.row().classes('items-center gap-2'):
-                    ui.icon('attach_file', color='primary')
-                    ui.label(Path(existing_pdf).name).classes('text-body2')
-                    ui.button('Download', icon='download',
-                              on_click=lambda: ui.download.file(existing_pdf)
-                              ).props('flat dense size=sm')
-
-                    async def remove_bon():
-                        with ui.dialog() as confirm_dlg, ui.card():
-                            ui.label('Bon verwijderen?')
-                            ui.label('Het bonbestand wordt permanent verwijderd.') \
-                                .classes('text-grey')
-                            with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
-                                ui.button('Annuleren',
-                                          on_click=confirm_dlg.close).props('flat')
-
-                                async def do_remove():
-                                    await update_uitgave(
-                                        DB_PATH, uitgave_id=row['id'],
-                                        pdf_pad='')
-                                    p = Path(existing_pdf)
-                                    if p.exists():
-                                        await asyncio.to_thread(p.unlink)
-                                    confirm_dlg.close()
-                                    dialog.close()
-                                    ui.notify('Bon verwijderd', type='positive')
-                                    await ververs_transacties()
-
-                                ui.button('Verwijderen',
-                                          on_click=do_remove) \
-                                    .props('color=negative')
-                        confirm_dlg.open()
-
-                    ui.button('Verwijder bon', icon='delete',
-                              on_click=remove_bon).props(
-                                  'flat dense size=sm color=negative')
-            else:
-                ui.upload(
-                    label='Bon uploaden', auto_upload=True,
-                    on_upload=lambda e: edit_upload_file.update({'event': e}),
-                    max_file_size=10_000_000,
-                ).classes('w-full').props(
-                    'flat bordered accept=".pdf,.jpg,.jpeg,.png"')
-
-            with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
-                ui.button('Annuleren', on_click=dialog.close).props('flat')
-
-                async def bewaar_wijziging():
-                    if not edit_bedrag.value or edit_bedrag.value <= 0:
-                        ui.notify('Vul een positief bedrag in', type='warning')
-                        return
-                    kwargs = {
-                        'datum': edit_datum.value,
-                        'categorie': edit_categorie.value,
-                        'omschrijving': edit_omschrijving.value,
-                        'bedrag': edit_bedrag.value,
-                    }
-                    if edit_investering.value:
-                        kwargs['is_investering'] = 1
-                        kwargs['levensduur_jaren'] = edit_levensduur.value
-                        kwargs['restwaarde_pct'] = edit_restwaarde.value or 10
-                        kwargs['zakelijk_pct'] = edit_zakelijk.value or 100
-                        kwargs['aanschaf_bedrag'] = edit_bedrag.value
-                    else:
-                        kwargs['is_investering'] = 0
-                        kwargs['levensduur_jaren'] = None
-                        kwargs['aanschaf_bedrag'] = None
-                    await update_uitgave(DB_PATH, uitgave_id=row['id'], **kwargs)
-                    if edit_upload_file.get('event'):
-                        await save_upload_for_uitgave(
-                            row['id'], edit_upload_file['event'])
-                    ui.notify('Uitgave bijgewerkt', type='positive')
-                    dialog.close()
-                    await ververs_transacties()
-
-                ui.button('Opslaan', on_click=bewaar_wijziging).props('color=primary')
-        dialog.open()
-
-    async def confirm_delete(row: dict):
-        """Confirm and delete an expense."""
-        with ui.dialog() as dialog, ui.card():
-            ui.label('Weet je zeker dat je deze uitgave wilt verwijderen?')
-            ui.label(f"{row['datum']} — {row['omschrijving']} — "
-                     f"{format_euro(row['bedrag'])}").classes('text-grey')
-            with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
-                ui.button('Annuleren', on_click=dialog.close).props('flat')
-
-                async def verwijder():
-                    await delete_uitgave(DB_PATH, uitgave_id=row['id'])
-                    ui.notify('Uitgave verwijderd', type='positive')
-                    dialog.close()
-                    await ververs_transacties()
-
-                ui.button('Verwijderen', on_click=verwijder).props('color=negative')
-        dialog.open()
-
-    def view_document(row: dict):
-        """Open the attached document file."""
-        pdf_pad = row.get('pdf_pad', '')
-        if pdf_pad and Path(pdf_pad).exists():
-            ui.download.file(pdf_pad)
-        else:
-            ui.notify('Bestand niet gevonden', type='warning')
 
     async def open_import_dialog():
         """Open dialog to browse and import expense PDFs from archive."""
