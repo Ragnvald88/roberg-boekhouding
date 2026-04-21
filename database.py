@@ -1547,6 +1547,31 @@ async def update_banktransactie(db_path: Path = DB_PATH, transactie_id: int = 0,
             await conn.commit()
 
 
+async def mark_banktx_genegeerd(
+    db_path: Path,
+    bank_tx_id: int,
+    genegeerd: int = 1,
+) -> None:
+    """Set banktransacties.genegeerd flag. Year-locked against the tx datum."""
+    if genegeerd not in (0, 1):
+        raise ValueError("genegeerd must be 0 or 1")
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            "SELECT datum FROM banktransacties WHERE id = ?", (bank_tx_id,))
+        row = await cur.fetchone()
+        if row is None:
+            raise ValueError(f"banktransactie {bank_tx_id} not found")
+        datum = row['datum']
+
+    await assert_year_writable(db_path, datum)
+
+    async with get_db_ctx(db_path) as conn:
+        await conn.execute(
+            "UPDATE banktransacties SET genegeerd = ? WHERE id = ?",
+            (genegeerd, bank_tx_id))
+        await conn.commit()
+
+
 async def get_categorie_suggestions(db_path: Path = DB_PATH) -> dict[str, str]:
     """Build a lookup of tegenpartij → most-used category.
 
