@@ -51,3 +51,13 @@ async def test_mark_genegeerd_year_locked(db):
 async def test_mark_genegeerd_raises_for_unknown_id(db):
     with pytest.raises(ValueError):
         await mark_banktx_genegeerd(db, 999, genegeerd=1)
+
+
+@pytest.mark.asyncio
+async def test_mark_genegeerd_rejects_invalid_value(db):
+    """Pins the validation that genegeerd must be 0 or 1, not e.g. 2 or -1."""
+    await _seed_banktx(db, 1, "2026-04-01")
+    with pytest.raises(ValueError):
+        await mark_banktx_genegeerd(db, 1, genegeerd=2)
+    with pytest.raises(ValueError):
+        await mark_banktx_genegeerd(db, 1, genegeerd=-1)
