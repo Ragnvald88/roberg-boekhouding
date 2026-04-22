@@ -109,7 +109,7 @@ Bank-transactie-centrische reconciliatie. Bank-debits en manuele (contant) uitga
 
 ### Pagina-structuur
 - Twee tabs: **Transacties** (default, reconciliatie-lijst) en **Investeringen** (activastaat + afschrijvingen, ongewijzigd).
-- Boven de tabel: KPI-strip (4 kaarten: Totaal · Factuur ontbreekt · Afschrijvingen · Investeringen) + oranje reconciliatie-inbox (top-4 recente rijen die aandacht nodig hebben) + filterbalk (jaar · status · categorie · zoek · Lijst/Per maand toggle).
+- Boven de tabel: KPI-strip (4 kaarten: Totaal · Te verwerken · Afschrijvingen · Investeringen) + oranje reconciliatie-inbox (top-4 recente rijen die aandacht nodig hebben) + filterbalk (jaar · status · categorie · zoek · Lijst/Per maand toggle).
 - Onder de tabel: categorie-breakdown kaart met horizontale balken per categorie.
 
 ### Row status
