@@ -460,6 +460,7 @@ MIGRATIONS = [
         "CREATE INDEX IF NOT EXISTS idx_bank_genegeerd "
         "ON banktransacties(genegeerd)",
     ]),
+    (27, "migrate_bank_categorie_to_uitgaven", None),
 ]
 
 
@@ -605,7 +606,74 @@ async def _run_migration_21(conn):
     """)
 
 
-_MIGRATION_CALLABLES = {7: _run_migration_7, 8: _run_migration_8, 18: _run_migration_18, 20: _run_migration_20, 21: _run_migration_21}
+async def _run_migration_27(conn):
+    """Copy banktransacties.categorie (debits only) into uitgaven.categorie.
+
+    Pre-rework, users categorised debits via /bank, writing to
+    banktransacties.categorie. Post-rework, get_kosten_view only reads
+    uitgaven.categorie, so that data became orphaned. This migration
+    reconciles: for each bank debit with a non-empty categorie, either
+    update the linked uitgave (if empty-categorie) or lazy-create a new
+    uitgave carrying the categorie.
+
+    Skipped:
+    - Bank rows marked genegeerd=1 (privé — not business expenses).
+    - Rows whose year is jaarafsluiting_status='definitief' (frozen —
+      snapshot-rendered; retroactive uitgaven creation would drift the
+      underlying data from the snapshot).
+    - Linked uitgaven whose categorie is already non-empty (user's own
+      /kosten entry wins — never overwritten).
+
+    Idempotent: re-running is a no-op.
+    """
+    prev_factory = conn.row_factory
+    conn.row_factory = aiosqlite.Row
+    try:
+        cur = await conn.execute(
+            "SELECT jaar FROM fiscale_params "
+            "WHERE jaarafsluiting_status = 'definitief'")
+        frozen = {r[0] for r in await cur.fetchall()}
+
+        cur = await conn.execute("""
+            SELECT b.id AS b_id, b.datum AS datum, b.bedrag AS bedrag,
+                   b.tegenpartij AS tegenpartij, b.omschrijving AS omschrijving,
+                   b.categorie AS categorie, u.id AS uitgave_id,
+                   u.categorie AS uitgave_cat
+            FROM banktransacties b
+            LEFT JOIN uitgaven u ON u.bank_tx_id = b.id
+            WHERE b.bedrag < 0
+              AND b.genegeerd = 0
+              AND b.categorie IS NOT NULL
+              AND b.categorie != ''
+        """)
+        candidates = await cur.fetchall()
+
+        for row in candidates:
+            jaar = int(row['datum'][:4])
+            if jaar in frozen:
+                continue
+
+            if row['uitgave_id'] is not None:
+                if not (row['uitgave_cat'] or '').strip():
+                    await conn.execute(
+                        "UPDATE uitgaven SET categorie = ? WHERE id = ?",
+                        (row['categorie'], row['uitgave_id']))
+            else:
+                omschrijving = (
+                    (row['tegenpartij'] or '').strip()
+                    or (row['omschrijving'] or '').strip()
+                    or '(bank tx)')
+                await conn.execute(
+                    "INSERT INTO uitgaven "
+                    "(datum, categorie, omschrijving, bedrag, bank_tx_id) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (row['datum'], row['categorie'], omschrijving,
+                     abs(row['bedrag']), row['b_id']))
+    finally:
+        conn.row_factory = prev_factory
+
+
+_MIGRATION_CALLABLES = {7: _run_migration_7, 8: _run_migration_8, 18: _run_migration_18, 20: _run_migration_20, 21: _run_migration_21, 27: _run_migration_27}
 
 
 async def init_db(db_path: Path = DB_PATH) -> None:
