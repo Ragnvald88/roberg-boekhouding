@@ -12,7 +12,8 @@ from database import (
     get_banktransacties, get_imported_csv_bestanden,
     add_banktransacties, update_banktransactie,
     delete_banktransacties, find_factuur_matches, apply_factuur_matches,
-    get_categorie_suggestions, get_db_ctx, DB_PATH,
+    get_categorie_suggestions, get_uitgave_categorie_by_bank_tx,
+    set_banktx_categorie, get_db_ctx, DB_PATH,
 )
 from components.shared_ui import year_options
 from import_.rabobank_csv import parse_rabobank_csv
@@ -47,6 +48,10 @@ async def bank_page():
             transacties = [t for t in transacties
                            if q in t.tegenpartij.lower() or q in t.omschrijving.lower()]
 
+        # For debit rows, the authoritative categorie lives on the linked
+        # uitgave (post-Kosten-rework). Fetch the override map once.
+        debit_cat_map = await get_uitgave_categorie_by_bank_tx(DB_PATH)
+
         rows = []
         for t in transacties:
             # Determine status for color coding
@@ -57,10 +62,22 @@ async def bank_page():
             else:
                 status = 'niet-gekoppeld'
 
-            # Default: no suggestion
+            # Debits display the linked-uitgave categorie (unified source);
+            # positives keep their own banktransacties.categorie.
+            if t.bedrag < 0:
+                displayed_cat = debit_cat_map.get(t.id, '')
+            else:
+                displayed_cat = t.categorie
+
+            # Re-evaluate status for debits based on the unified categorie.
+            if t.bedrag < 0 and not (t.koppeling_type and t.koppeling_id):
+                status = 'gecategoriseerd' if displayed_cat else 'niet-gekoppeld'
+
+            # Apply suggestion for uncategorised rows with known counterparty.
+            # Uses displayed_cat so debits already-categorised on /kosten
+            # don't show a stale suggestion chip.
             suggested = ''
-            # Apply suggestion for uncategorized rows with known counterparty
-            if not t.categorie and t.tegenpartij:
+            if not displayed_cat and t.tegenpartij:
                 suggested = cat_suggestions['map'].get(t.tegenpartij.lower(), '')
 
             rows.append({
@@ -72,7 +89,7 @@ async def bank_page():
                 'tegenpartij': t.tegenpartij,
                 'omschrijving': t.omschrijving[:80] + ('...' if len(t.omschrijving) > 80 else ''),
                 'omschrijving_full': t.omschrijving,
-                'categorie': t.categorie,
+                'categorie': displayed_cat,
                 'suggested_categorie': suggested,
                 'koppeling': f"{t.koppeling_type} #{t.koppeling_id}" if t.koppeling_type else '',
                 'status': status,
