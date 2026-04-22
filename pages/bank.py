@@ -54,24 +54,19 @@ async def bank_page():
 
         rows = []
         for t in transacties:
-            # Determine status for color coding
+            # Debits display the linked-uitgave categorie (unified source);
+            # positives keep their own banktransacties.categorie.
+            displayed_cat = (debit_cat_map.get(t.id, '')
+                             if t.bedrag < 0 else t.categorie)
+
+            # Status uses displayed_cat as the sole driver for the
+            # uncategorised branches.
             if t.koppeling_type and t.koppeling_id:
                 status = 'gekoppeld'
-            elif t.categorie:
+            elif displayed_cat:
                 status = 'gecategoriseerd'
             else:
                 status = 'niet-gekoppeld'
-
-            # Debits display the linked-uitgave categorie (unified source);
-            # positives keep their own banktransacties.categorie.
-            if t.bedrag < 0:
-                displayed_cat = debit_cat_map.get(t.id, '')
-            else:
-                displayed_cat = t.categorie
-
-            # Re-evaluate status for debits based on the unified categorie.
-            if t.bedrag < 0 and not (t.koppeling_type and t.koppeling_id):
-                status = 'gecategoriseerd' if displayed_cat else 'niet-gekoppeld'
 
             # Apply suggestion for uncategorised rows with known counterparty.
             # Uses displayed_cat so debits already-categorised on /kosten
@@ -263,8 +258,17 @@ async def bank_page():
         return rows
 
     async def handle_categorie_change(row_id: int, new_cat: str):
-        """Update category for a bank transaction."""
-        await update_banktransactie(DB_PATH, transactie_id=row_id, categorie=new_cat)
+        """Update category for a bank transaction.
+
+        Debits route into uitgaven.categorie (unified with /kosten);
+        positives stay on banktransacties.categorie.
+        """
+        try:
+            await set_banktx_categorie(
+                DB_PATH, bank_tx_id=row_id, categorie=new_cat)
+        except ValueError as e:
+            ui.notify(str(e), type='negative')
+            return
         ui.notify('Categorie bijgewerkt', type='positive')
         await refresh_table()
 
