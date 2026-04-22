@@ -837,7 +837,8 @@ async def _laad_tabel(
 
             tbl.add_slot('body-cell-tegenpartij', '''
                 <q-td :props="props">
-                  <div class="row items-center q-gutter-sm">
+                  <div class="row items-center q-gutter-sm"
+                       style="width: 100%; flex-wrap: nowrap;">
                     <div
                          :style="`background:${props.row.color};
                                    color:white;
@@ -848,13 +849,21 @@ async def _laad_tabel(
                                    flex-shrink:0;`">
                       {{ props.row.initials }}
                     </div>
-                    <div>
-                      <div style="font-weight:500">
+                    <div style="min-width: 0; flex: 1;">
+                      <div style="font-weight:500;
+                                   white-space:nowrap;
+                                   overflow:hidden;
+                                   text-overflow:ellipsis;"
+                           :title="props.row.tegenpartij">
                         {{ props.row.tegenpartij }}
                       </div>
                       <div class="text-caption text-grey"
                            v-if="props.row.omschrijving &&
-                                  props.row.omschrijving !== props.row.tegenpartij">
+                                  props.row.omschrijving !== props.row.tegenpartij"
+                           :title="props.row.omschrijving"
+                           style="white-space:nowrap;
+                                   overflow:hidden;
+                                   text-overflow:ellipsis;">
                         {{ props.row.omschrijving }}
                       </div>
                     </div>
