@@ -871,26 +871,20 @@ async def _laad_tabel(
                 </q-td>
             ''')
 
-            tbl.add_slot('body-cell-categorie', '''
-                <q-td :props="props">
-                  <q-btn-dropdown flat dense
-                                  no-caps
-                                  :label="props.row.categorie || '— kies —'"
-                                  :color="props.row.categorie ? 'primary' : 'warning'"
-                                  size="sm">
-                    <q-list dense>
-                      <q-item v-for="c in window.__KOSTEN_CAT_LIST__"
-                              :key="c"
-                              clickable
-                              v-close-popup
-                              @click="$parent.$emit('set_cat',
-                                       {row: props.row, cat: c})">
-                        <q-item-section>{{ c }}</q-item-section>
-                      </q-item>
-                    </q-list>
-                  </q-btn-dropdown>
+            tbl.add_slot('body-cell-categorie', r"""
+                <q-td :props="props"
+                      :class="props.row.categorie ? '' : 'bg-orange-1'">
+                  <q-select
+                    :model-value="props.row.categorie"
+                    :options='""" + json.dumps(CATEGORIEEN) + r"""'
+                    dense borderless emit-value map-options
+                    placeholder="— kies —"
+                    @update:model-value="val => $parent.$emit('set_cat',
+                                                              {row: props.row,
+                                                               cat: val})"
+                    style="min-width: 160px" />
                 </q-td>
-            ''')
+            """)
 
             tbl.add_slot('body-cell-factuur', '''
                 <q-td :props="props">
@@ -1044,14 +1038,6 @@ async def _laad_breakdown(container, jaar):
 @ui.page('/kosten')
 async def kosten_page():
     create_layout('Kosten', '/kosten')
-    # Inject the category list into a window global referenced by the
-    # categorie-dropdown slot template inside the kosten table. Runs
-    # once on page mount — previously lived inside _laad_tabel which
-    # made it fire on every filter/refresh tick.
-    ui.add_body_html(
-        '<script>window.__KOSTEN_CAT_LIST__ = '
-        f'{json.dumps(CATEGORIEEN)};</script>'
-    )
     huidig_jaar = date.today().year
     jaren = year_options()
     filter_jaar = {'value': huidig_jaar}
