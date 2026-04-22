@@ -418,9 +418,10 @@ async def bank_page():
                 .props('color=negative outline')
 
         ui.label(
-            'Categorieën op debit-regels worden centraal in Kosten '
-            'opgeslagen.'
-        ).classes('text-caption text-grey-7 q-mb-xs')
+            'Categorieën voor uitgaven beheer je op Kosten. Hier '
+            'categoriseer je alleen inkomsten (Omzet, Privé, '
+            'Belasting, AOV).'
+        ).classes('text-caption text-grey-7 q-mt-sm q-mb-sm')
 
         # Color legend
         with ui.row().classes('gap-4 items-center q-mb-sm'):
@@ -490,7 +491,8 @@ async def bank_page():
                     <span :title="props.row.omschrijving_full">{{ props.row.omschrijving }}</span>
                 </q-td>
                 <q-td key="categorie" :props="props">
-                    <div style="display:flex; align-items:center; gap:4px">
+                    <div v-if="props.row.bedrag >= 0"
+                         style="display:flex; align-items:center; gap:4px">
                         <q-select
                             v-model="props.row.categorie"
                             :options='""" + json.dumps(BANK_CATEGORIEEN) + r"""'
@@ -505,6 +507,10 @@ async def bank_page():
                             @click="() => { props.row.categorie = props.row.suggested_categorie; $parent.$emit('cat_change', {id: props.row.id, cat: props.row.suggested_categorie}) }"
                         />
                     </div>
+                    <span v-else class="text-grey-8"
+                          :title="'Debit-categorieën worden op /kosten beheerd'">
+                        {{ props.row.categorie || '—' }}
+                    </span>
                 </q-td>
                 <q-td key="koppeling" :props="props">{{ props.row.koppeling }}</q-td>
                 <q-td key="actions" :props="props">
