@@ -1700,6 +1700,63 @@ async def get_categorie_suggestions(db_path: Path = DB_PATH) -> dict[str, str]:
     return suggestions
 
 
+async def get_uitgave_categorie_by_bank_tx(
+    db_path: Path = DB_PATH,
+) -> dict[int, str]:
+    """Return {bank_tx_id: categorie} for every uitgave linked to a bank tx.
+
+    Used by /bank to surface the authoritative categorie for debit rows
+    (since the debit's own banktransacties.categorie is no longer the
+    source of truth after the Kosten rework). Single round-trip.
+    """
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            "SELECT bank_tx_id, categorie FROM uitgaven "
+            "WHERE bank_tx_id IS NOT NULL")
+        rows = await cur.fetchall()
+    return {r[0]: (r[1] or '') for r in rows}
+
+
+async def set_banktx_categorie(
+    db_path: Path,
+    bank_tx_id: int,
+    categorie: str,
+) -> None:
+    """Write a categorie for a bank tx, routing by sign.
+
+    Debits (bedrag < 0) → route into uitgaven.categorie via
+    ensure_uitgave_for_banktx so /bank and /kosten agree.
+    Positives (bedrag >= 0) → stay on banktransacties.categorie.
+
+    Year-locked: the call chain (ensure_uitgave_for_banktx on create,
+    update_uitgave on update, update_banktransactie on positives) each
+    enforce assert_year_writable, so YearLockedError surfaces naturally.
+
+    Raises ValueError if the bank tx doesn't exist.
+    """
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            "SELECT bedrag FROM banktransacties WHERE id = ?",
+            (bank_tx_id,))
+        row = await cur.fetchone()
+    if row is None:
+        raise ValueError(f"banktransactie {bank_tx_id} not found")
+
+    if row['bedrag'] < 0:
+        # ensure_uitgave_for_banktx returns the uitgave id (creating if
+        # missing). On the create path it sets categorie via overrides;
+        # on the already-linked path it returns early without touching
+        # categorie — so we call update_uitgave explicitly afterwards.
+        # update_uitgave re-enforces the year-lock on the existing row.
+        uitgave_id = await ensure_uitgave_for_banktx(
+            db_path, bank_tx_id=bank_tx_id, categorie=categorie)
+        await update_uitgave(
+            db_path, uitgave_id=uitgave_id, categorie=categorie)
+    else:
+        await update_banktransactie(
+            db_path, transactie_id=bank_tx_id, categorie=categorie)
+
+
 async def delete_banktransacties(db_path: Path = DB_PATH,
                                   transactie_ids: list[int] = None) -> tuple[int, list[int]]:
     """Delete bank transactions by IDs.
