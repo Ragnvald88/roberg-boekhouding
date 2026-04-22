@@ -608,17 +608,28 @@ async def _laad_tabel(
 
     columns = [
         {'name': 'datum', 'label': 'Datum', 'field': 'datum',
-         'align': 'left', 'sortable': True},
+         'align': 'left', 'sortable': True,
+         'style': 'width: 110px; min-width: 110px',
+         'headerStyle': 'width: 110px; min-width: 110px'},
         {'name': 'tegenpartij', 'label': 'Tegenpartij / Omschrijving',
          'field': 'tegenpartij', 'align': 'left'},
         {'name': 'categorie', 'label': 'Categorie', 'field': 'categorie',
-         'align': 'left'},
+         'align': 'left',
+         'style': 'width: 180px; min-width: 180px; max-width: 180px',
+         'headerStyle': 'width: 180px; min-width: 180px; max-width: 180px'},
         {'name': 'factuur', 'label': 'Factuur', 'field': 'factuur_status',
-         'align': 'left'},
+         'align': 'left',
+         'style': 'width: 130px; min-width: 130px; max-width: 130px',
+         'headerStyle': 'width: 130px; min-width: 130px; max-width: 130px'},
         {'name': 'bedrag', 'label': 'Bedrag', 'field': 'bedrag_fmt',
-         'align': 'right', 'sortable': True},
+         'align': 'right', 'sortable': True,
+         'style': 'width: 120px; min-width: 120px; max-width: 120px; '
+                   'font-variant-numeric: tabular-nums',
+         'headerStyle': 'width: 120px; min-width: 120px; max-width: 120px'},
         {'name': 'acties', 'label': '', 'field': 'acties',
-         'align': 'center'},
+         'align': 'center',
+         'style': 'width: 90px; min-width: 90px; max-width: 90px',
+         'headerStyle': 'width: 90px; min-width: 90px; max-width: 90px'},
     ]
 
     table_rows = []
