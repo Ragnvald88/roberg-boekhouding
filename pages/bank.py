@@ -10,7 +10,7 @@ from components.layout import create_layout, page_title
 from components.utils import format_euro, format_datum, generate_csv, BANK_CATEGORIEEN
 from database import (
     get_banktransacties, get_imported_csv_bestanden,
-    add_banktransacties, update_banktransactie,
+    add_banktransacties,
     delete_banktransacties, find_factuur_matches, apply_factuur_matches,
     get_categorie_suggestions, get_uitgave_categorie_by_bank_tx,
     set_banktx_categorie, get_db_ctx, DB_PATH,
