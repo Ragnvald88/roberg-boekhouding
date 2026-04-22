@@ -417,6 +417,11 @@ async def bank_page():
                       on_click=lambda: on_bulk_delete()) \
                 .props('color=negative outline')
 
+        ui.label(
+            'Categorieën op debit-regels worden centraal in Kosten '
+            'opgeslagen.'
+        ).classes('text-caption text-grey-7 q-mb-xs')
+
         # Color legend
         with ui.row().classes('gap-4 items-center q-mb-sm'):
             for bg_class, label in [
