@@ -502,7 +502,7 @@ async def _laad_kpi(container, jaar):
             f"{len([m for m in kpi.monthly_totals if m>0])} actieve maanden")
 
         _card(
-            'Factuur ontbreekt',
+            'Te verwerken',
             str(kpi.ontbreekt_count),
             format_euro(kpi.ontbreekt_bedrag),
             color='warning', icon='warning',
