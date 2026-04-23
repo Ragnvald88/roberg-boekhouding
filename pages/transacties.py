@@ -24,6 +24,7 @@ from database import (
     YearLockedError, add_banktransacties, get_imported_csv_bestanden,
     apply_factuur_matches, get_db_ctx,
     delete_banktransacties, delete_uitgave,
+    mark_banktx_genegeerd,
 )
 from import_.rabobank_csv import parse_rabobank_csv
 
@@ -61,6 +62,8 @@ async def transacties_page(jaar: int | None = None,
 
     table_ref = {'table': None}
     match_btn_ref = {'button': None}
+    bulk_bar_ref = {'ref': None}
+    bulk_label_ref = {'ref': None}
     cat_suggestions = {'map': {}}
 
     async def _load_rows() -> list[dict]:
@@ -359,6 +362,125 @@ async def transacties_page(jaar: int | None = None,
             'update:model-value',
             lambda _=None: on_filter_change())
 
+        # Bulk bar — appears when 1+ rows selected
+        bulk_bar = ui.row().classes('w-full items-center gap-2 q-py-sm') \
+            .style('background:#0f172a;color:white;border-radius:8px;'
+                    'padding:8px 16px')
+        bulk_bar.set_visibility(False)
+        bulk_bar_ref['ref'] = bulk_bar
+        with bulk_bar:
+            bulk_label_ref['ref'] = ui.label('')
+
+            async def bulk_set_cat():
+                """Dialog → pick categorie → apply to all selected rows."""
+                with ui.dialog() as dlg, ui.card():
+                    ui.label('Nieuwe categorie voor selectie') \
+                        .classes('text-h6')
+                    sel = ui.select(BANK_CATEGORIEEN, label='Categorie') \
+                        .classes('w-full')
+                    with ui.row().classes(
+                            'w-full justify-end gap-2 q-mt-md'):
+                        ui.button('Annuleren', on_click=dlg.close) \
+                            .props('flat')
+
+                        async def apply_bulk_cat():
+                            n_ok, n_skip = 0, 0
+                            for r in table_ref['table'].selected:
+                                try:
+                                    if r.get('id_bank') is not None:
+                                        await set_banktx_categorie(
+                                            DB_PATH,
+                                            bank_tx_id=r['id_bank'],
+                                            categorie=sel.value or '')
+                                    elif r.get('id_uitgave') is not None:
+                                        await update_uitgave(
+                                            DB_PATH,
+                                            uitgave_id=r['id_uitgave'],
+                                            categorie=sel.value or '')
+                                    else:
+                                        continue
+                                    n_ok += 1
+                                except YearLockedError:
+                                    n_skip += 1
+                            dlg.close()
+                            msg = f'{n_ok} bijgewerkt'
+                            if n_skip:
+                                msg += (f', {n_skip} overgeslagen '
+                                          '(jaar afgesloten)')
+                            ui.notify(
+                                msg,
+                                type='positive' if n_ok else 'warning')
+                            await refresh()
+
+                        ui.button('Toepassen', on_click=apply_bulk_cat) \
+                            .props('color=primary')
+                dlg.open()
+
+            ui.button('Categorie wijzigen', icon='label',
+                       on_click=bulk_set_cat) \
+                .props('outline color=white size=sm')
+
+            async def bulk_negeren():
+                """Flag each selected bank row as genegeerd=1 (privé)."""
+                n_ok, n_skip = 0, 0
+                for r in table_ref['table'].selected:
+                    if r.get('id_bank') is None:
+                        continue  # manual rows skipped
+                    try:
+                        await mark_banktx_genegeerd(
+                            DB_PATH, bank_tx_id=r['id_bank'],
+                            genegeerd=1)
+                        n_ok += 1
+                    except YearLockedError:
+                        n_skip += 1
+                msg = f'{n_ok} rij(en) als privé gemarkeerd'
+                if n_skip:
+                    msg += f', {n_skip} overgeslagen'
+                ui.notify(msg,
+                           type='positive' if n_ok else 'warning')
+                await refresh()
+
+            ui.button('Markeer als privé', icon='visibility_off',
+                       on_click=bulk_negeren) \
+                .props('outline color=white size=sm')
+
+            async def bulk_delete():
+                """Delete each selected row (bank or manual)."""
+                n_ok, n_skip = 0, 0
+                for r in table_ref['table'].selected:
+                    try:
+                        if r.get('id_bank') is not None:
+                            await delete_banktransacties(
+                                DB_PATH, transactie_ids=[r['id_bank']])
+                        elif r.get('id_uitgave') is not None:
+                            await delete_uitgave(
+                                DB_PATH, uitgave_id=r['id_uitgave'])
+                        else:
+                            continue
+                        n_ok += 1
+                    except YearLockedError:
+                        n_skip += 1
+                msg = f'{n_ok} verwijderd'
+                if n_skip:
+                    msg += f', {n_skip} overgeslagen'
+                ui.notify(msg,
+                           type='positive' if n_ok else 'warning')
+                await refresh()
+
+            ui.button('Verwijderen', icon='delete',
+                       on_click=bulk_delete) \
+                .props('outline color=white size=sm')
+
+        def _update_bulk_bar():
+            """Show/hide bulk bar and update count label based on selection."""
+            n = (len(table_ref['table'].selected)
+                  if table_ref['table'] else 0)
+            if n > 0:
+                bulk_bar.set_visibility(True)
+                bulk_label_ref['ref'].text = f'{n} geselecteerd'
+            else:
+                bulk_bar.set_visibility(False)
+
         # Table skeleton — rows/slots wired in Task 13
         columns = [
             {'name': 'datum', 'label': 'Datum', 'field': 'datum_fmt',
@@ -609,6 +731,7 @@ async def transacties_page(jaar: int | None = None,
                   lambda e: asyncio.create_task(_open_factuur(e.args)))
         table.on('delete_row',
                   lambda e: asyncio.create_task(_on_delete_row(e.args)))
+        table.on('selection', lambda _: _update_bulk_bar())
 
         # Initial load
         await refresh()
