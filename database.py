@@ -3620,3 +3620,27 @@ async def get_kpi_kosten(db_path: Path, jaar: int) -> KpiKosten:
         investeringen_bedrag=investeringen_bedrag,
         monthly_totals=monthly,
     )
+
+
+async def get_kosten_breakdown(db_path: Path, jaar: int) -> dict[str, float]:
+    """Sum of ABS(bedrag) per categorie for /kosten overzicht.
+
+    Sources: bank debits with a linked uitgave (use uitgave.categorie), plus
+    manual cash uitgaven. Excludes genegeerd bank txs. Empty categorie is
+    bucketed as ``''`` so the caller can surface the "nog te categoriseren"
+    group separately (spec §3.2 — M7 polish).
+    """
+    jaar_start = f"{jaar:04d}-01-01"
+    jaar_end = f"{jaar + 1:04d}-01-01"
+    sql = """
+    SELECT COALESCE(u.categorie, '') AS cat, SUM(ABS(u.bedrag)) AS total
+    FROM uitgaven u
+    LEFT JOIN banktransacties b ON u.bank_tx_id = b.id
+    WHERE u.datum >= ? AND u.datum < ?
+      AND (b.id IS NULL OR b.genegeerd = 0)
+    GROUP BY COALESCE(u.categorie, '')
+    """
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(sql, (jaar_start, jaar_end))
+        raw = await cur.fetchall()
+    return {r["cat"]: float(r["total"]) for r in raw}
