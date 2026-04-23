@@ -5,7 +5,9 @@ factuur-match) and the /kosten transactie-tabel (debit categorisation +
 bon koppelen + cash entries + privé) into a single decision surface.
 """
 import asyncio
-from datetime import datetime
+import inspect
+from datetime import date, datetime
+from pathlib import Path
 
 from nicegui import ui
 
@@ -13,18 +15,22 @@ from components.layout import create_layout, page_title
 from components.utils import (
     format_euro, format_datum, KOSTEN_CATEGORIEEN, BANK_CATEGORIEEN,
 )
-from components.shared_ui import year_options
+from components.shared_ui import year_options, date_input
 from components.kosten_helpers import (
     tegenpartij_color, initials,
 )
-from components.transacties_dialog import _open_detail_dialog
+from components.transacties_dialog import (
+    _open_detail_dialog, save_upload_for_uitgave, _copy_and_link_pdf,
+)
 from database import (
     DB_PATH, get_transacties_view, get_categorie_suggestions,
     find_factuur_matches, set_banktx_categorie, update_uitgave,
+    add_uitgave, ensure_uitgave_for_banktx,
     YearLockedError, add_banktransacties, get_imported_csv_bestanden,
     apply_factuur_matches, get_db_ctx,
     delete_banktransacties, delete_uitgave,
     mark_banktx_genegeerd,
+    get_uitgaven, get_fiscale_params,
 )
 from import_.rabobank_csv import parse_rabobank_csv
 
@@ -33,6 +39,228 @@ from import_.rabobank_csv import parse_rabobank_csv
 # get expense-side cats. Injected server-side as props.row.cat_options.
 POSITIVE_CAT_OPTIONS = ['', 'Omzet', 'Prive', 'Belasting', 'AOV']
 DEBIT_CAT_OPTIONS = [''] + KOSTEN_CATEGORIEEN
+
+LEVENSDUUR_OPTIES = {3: '3 jaar', 4: '4 jaar', 5: '5 jaar'}
+
+
+async def open_add_uitgave_dialog(
+    prefill: dict | None = None,
+    on_saved=None,
+    refresh=None,
+    repr_aftrek_pct: int = 80,
+):
+    """Dialog to add a new manual (cash) uitgave, optionally pre-filled
+    from an archief-import or pre-linked to a bank_tx.
+
+    Extracted from pages/kosten.py during the consolidation. ``refresh``
+    is the caller's list-refresh function; called after each successful
+    save. ``on_saved`` is an optional separate callback (used by Task 18's
+    archief-import dialog to chain "next item" flow).
+
+    Routes auto-link through ``ensure_uitgave_for_banktx`` when
+    ``prefill['bank_tx_id']`` is present (M1 polish — idempotent).
+    """
+    upload_file = {}
+
+    with ui.dialog() as dialog, \
+            ui.card().classes('w-full max-w-lg q-pa-md'):
+        ui.label('Uitgave toevoegen').classes('text-h6 q-mb-md')
+
+        input_datum = date_input(
+            'Datum',
+            value=prefill.get('datum', date.today().isoformat())
+            if prefill else date.today().isoformat(),
+        )
+
+        input_categorie = ui.select(
+            KOSTEN_CATEGORIEEN, label='Categorie',
+            value=prefill.get('categorie') if prefill else None,
+        ).classes('w-full')
+
+        input_omschrijving = ui.input(
+            'Omschrijving',
+            value=prefill.get('omschrijving', '') if prefill else '',
+        ).classes('w-full')
+
+        input_bedrag = ui.number(
+            'Bedrag incl. BTW (€)', format='%.2f',
+            min=0.01, step=0.01,
+        ).classes('w-full')
+
+        # Investering section
+        input_investering = ui.checkbox(
+            'Dit is een investering', value=False)
+
+        investering_velden = ui.column().classes('pl-8 gap-2')
+        investering_velden.set_visibility(False)
+        with investering_velden:
+            with ui.row().classes('items-end gap-4'):
+                input_levensduur = ui.select(
+                    LEVENSDUUR_OPTIES, label='Levensduur', value=5,
+                ).classes('w-32')
+                input_restwaarde = ui.number(
+                    'Restwaarde %', value=10, min=0, max=100,
+                ).classes('w-32')
+                input_zakelijk = ui.number(
+                    'Zakelijk %', value=100, min=0, max=100,
+                ).classes('w-32')
+
+        # Representatie note (80%-aftrekbaar, 20% bijtelling)
+        bijtelling_pct = 100 - repr_aftrek_pct
+        representatie_note = ui.label(
+            f'{repr_aftrek_pct}% aftrekbaar, {bijtelling_pct}% bijtelling'
+        ).classes('text-caption text-orange')
+        representatie_note.set_visibility(False)
+
+        def on_investering_change():
+            investering_velden.set_visibility(input_investering.value)
+
+        input_investering.on(
+            'update:model-value', lambda: on_investering_change())
+
+        def on_categorie_change():
+            representatie_note.set_visibility(
+                input_categorie.value == 'Representatie')
+
+        input_categorie.on(
+            'update:model-value', lambda: on_categorie_change())
+
+        # PDF upload / prefilled PDF
+        ui.separator().classes('q-my-sm')
+        ui.label('Bon/factuur (optioneel)').classes(
+            'text-caption').style('color: #64748B')
+        add_upload = None
+        if prefill and prefill.get('pdf_path'):
+            pdf_source = Path(prefill['pdf_path'])
+            ui.label(f'Bon: {pdf_source.name}').classes(
+                'text-caption text-primary')
+        else:
+            add_upload = ui.upload(
+                label='Sleep bestand of klik', auto_upload=True,
+                on_upload=lambda e: upload_file.update({'event': e}),
+                max_file_size=10_000_000,
+            ).classes('w-full').props(
+                'flat bordered accept=".pdf,.jpg,.jpeg,.png"')
+
+        async def opslaan(and_new: bool = False):
+            if not input_datum.value:
+                ui.notify('Vul een datum in', type='warning')
+                return
+            if not input_categorie.value:
+                ui.notify('Kies een categorie', type='warning')
+                return
+            if not input_omschrijving.value:
+                ui.notify('Vul een omschrijving in', type='warning')
+                return
+            if not input_bedrag.value or input_bedrag.value <= 0:
+                ui.notify('Vul een positief bedrag in', type='warning')
+                return
+
+            # Duplicate detection: same datum + cat + bedrag already exists?
+            try:
+                existing = await get_uitgaven(
+                    DB_PATH, jaar=int(input_datum.value[:4]))
+                dupes = [
+                    u for u in existing
+                    if u.datum == input_datum.value
+                    and u.categorie == input_categorie.value
+                    and abs(u.bedrag - input_bedrag.value) < 0.01
+                ]
+                if dupes and not getattr(opslaan, '_confirmed_dupe', False):
+                    ui.notify(
+                        'Let op: vergelijkbare uitgave bestaat al voor '
+                        'deze datum/categorie/bedrag. Klik nogmaals op '
+                        'Opslaan om toch door te gaan.',
+                        type='warning', timeout=5000,
+                    )
+                    opslaan._confirmed_dupe = True
+                    return
+            except Exception:
+                pass
+            opslaan._confirmed_dupe = False
+
+            kwargs = {
+                'datum': input_datum.value,
+                'categorie': input_categorie.value,
+                'omschrijving': input_omschrijving.value,
+                'bedrag': input_bedrag.value,
+            }
+
+            bedrag = input_bedrag.value
+            if input_investering.value:
+                kwargs['is_investering'] = 1
+                kwargs['levensduur_jaren'] = input_levensduur.value
+                kwargs['restwaarde_pct'] = input_restwaarde.value or 10
+                kwargs['zakelijk_pct'] = input_zakelijk.value or 100
+                kwargs['aanschaf_bedrag'] = bedrag
+
+            # Route auto-link through ensure_uitgave_for_banktx (M1).
+            bank_tx_id = prefill.get('bank_tx_id') if prefill else None
+
+            try:
+                if bank_tx_id is not None:
+                    uitgave_id = await ensure_uitgave_for_banktx(
+                        DB_PATH, bank_tx_id=bank_tx_id,
+                        datum=kwargs.get('datum'),
+                        categorie=kwargs.get('categorie', ''),
+                        omschrijving=kwargs.get('omschrijving', ''))
+                    update_kwargs = {
+                        k: v for k, v in kwargs.items()
+                        if k not in ('datum', 'categorie',
+                                      'omschrijving', 'bedrag')}
+                    if update_kwargs:
+                        await update_uitgave(
+                            DB_PATH, uitgave_id=uitgave_id, **update_kwargs)
+                else:
+                    uitgave_id = await add_uitgave(DB_PATH, **kwargs)
+
+                # PDF: from prefill path OR from upload widget.
+                if prefill and prefill.get('pdf_path'):
+                    await _copy_and_link_pdf(
+                        uitgave_id, Path(prefill['pdf_path']))
+                elif upload_file.get('event'):
+                    await save_upload_for_uitgave(
+                        uitgave_id, upload_file['event'])
+
+                ui.notify('Uitgave opgeslagen', type='positive')
+                if refresh is not None:
+                    await refresh()
+
+                if and_new:
+                    saved_cat = input_categorie.value
+                    input_datum.value = date.today().isoformat()
+                    input_omschrijving.value = ''
+                    input_bedrag.value = None
+                    input_investering.value = False
+                    investering_velden.set_visibility(False)
+                    representatie_note.set_visibility(
+                        saved_cat == 'Representatie')
+                    upload_file.clear()
+                    if add_upload is not None:
+                        add_upload.reset()
+                elif on_saved:
+                    dialog.close()
+                    if inspect.iscoroutinefunction(on_saved):
+                        await on_saved()
+                    else:
+                        on_saved()
+                else:
+                    dialog.close()
+            except Exception as e:
+                ui.notify(f'Fout bij opslaan: {e}', type='negative')
+
+        with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
+            ui.button('Annuleren', on_click=dialog.close).props('flat')
+            ui.button(
+                'Opslaan & Nieuw', icon='add',
+                on_click=lambda: opslaan(and_new=True),
+            ).props('outline color=primary')
+            ui.button(
+                'Opslaan', icon='save',
+                on_click=lambda: opslaan(and_new=False),
+            ).props('color=primary')
+
+    dialog.open()
 
 
 @ui.page('/transacties')
@@ -50,6 +278,9 @@ async def transacties_page(jaar: int | None = None,
     """
     create_layout('Transacties', '/transacties')
     current_year = datetime.now().year
+
+    fp = await get_fiscale_params(DB_PATH, jaar=datetime.now().year)
+    repr_aftrek_pct = int(fp.repr_aftrek_pct) if fp else 80
 
     # Filter refs — populated from query-params on mount, mutated by
     # the filter-bar widgets, read by refresh().
@@ -285,6 +516,13 @@ async def transacties_page(jaar: int | None = None,
         with ui.row().classes('w-full items-center'):
             page_title('Transacties')
             ui.space()
+
+            # Contante uitgave — manual cash entry
+            ui.button('+ Contante uitgave', icon='add',
+                       on_click=lambda: open_add_uitgave_dialog(
+                           refresh=refresh,
+                           repr_aftrek_pct=repr_aftrek_pct)) \
+                .props('color=primary dense')
 
             # CSV upload — Rabobank CSV → banktransacties + factuur-match preview
             ui.upload(
