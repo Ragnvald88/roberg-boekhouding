@@ -128,7 +128,17 @@ Unchanged — re-uses `pages/kosten_investeringen.py:laad_activastaat` verbatim.
 
 ## 4. Data / database changes
 
-No schema migration. All additions are DB-helper functions.
+One tiny migration (M1 from v1.1 polish — subsumed into this work); otherwise all additions are DB-helper functions.
+
+### 4.0 Migratie 28 — unique partial index on `uitgaven.bank_tx_id`
+
+```sql
+CREATE UNIQUE INDEX IF NOT EXISTS idx_uitgaven_bank_tx_unique
+  ON uitgaven(bank_tx_id)
+  WHERE bank_tx_id IS NOT NULL;
+```
+
+Closes a race in the Importeer flow where two concurrent link attempts on the same bank_tx could create two uitgaven. Partial index — NULLs stay permitted (cash uitgaven). Idempotent via `IF NOT EXISTS`. Migration runs inside existing schema-version guarded upgrader in `database.py:init_db`.
 
 ### 4.1 New: `get_transacties_view`
 
@@ -265,6 +275,15 @@ async def get_terugkerende_kosten(
 
 SQL: groupby on `LOWER(tegenpartij)` across bank-debits (join `banktransacties.tegenpartij` to linked uitgaven or use `banktransacties.tegenpartij` directly since debits are bank-sourced). Filter by `datum >= :jaar_start - window_days AND genegeerd=0`. Sum over the jaar-window (not the lookup window — the count threshold uses 365d, the total is year-specific).
 
+### 4.4b New: `get_uitgave_by_id`
+
+```python
+async def get_uitgave_by_id(db_path: Path, uitgave_id: int) -> Uitgave | None:
+    """Targeted fetch — replaces list-and-filter in the detail-dialog bootstrap (M5)."""
+```
+
+Thin wrapper around `SELECT * FROM uitgaven WHERE id = ?`. Returns `None` when not found. Used in `components/transacties_dialog.py` after `ensure_uitgave_for_banktx` returns an id.
+
 ### 4.5 Updated: `get_categorie_suggestions`
 
 Current implementation only reads `banktransacties.categorie`. After migratie 27 debit-categorisations live in `uitgaven.categorie`, so debit suggestions are silently missing.
@@ -319,8 +338,8 @@ Once callers migrated, remove `get_kosten_view` and `KostenRow`.
 
 ### Phase 2 — new `/transacties` page (coexists with old pages)
 
-7. Create `pages/transacties.py` — combines CSV upload/delete/match (from old `bank.py`), category inline/bulk (from `kosten.py`), detail-dialog (extracted), cash-entry button, archief-import button.
-8. Extract Detail-dialog to `components/transacties_dialog.py` so both the old `kosten.py` (during transition) and new `transacties.py` can use it.
+7. Create `pages/transacties.py` — combines CSV upload/delete/match (from old `bank.py`), category inline/bulk (from `kosten.py`), detail-dialog (extracted), cash-entry button, archief-import button. **+ M1**: add migratie 28 creating `CREATE UNIQUE INDEX idx_uitgaven_bank_tx_unique ON uitgaven(bank_tx_id) WHERE bank_tx_id IS NOT NULL`. Route Importeer auto-link through `ensure_uitgave_for_banktx` (removes the duplicate-link race at DB level).
+8. Extract Detail-dialog to `components/transacties_dialog.py` so both the old `kosten.py` (during transition) and new `transacties.py` can use it. **+ M5**: add `get_uitgave_by_id(db, uitgave_id)` DB helper; dialog bootstrap re-reads by returned id instead of `get_uitgaven(jaar=…)` list-and-filter.
 9. Register `@ui.page('/transacties')`.
 10. Implement query-param handling: read `jaar/categorie/status/search` from request query on mount.
 11. Smoke: full flow end-to-end on `/transacties`. Old `/bank` and `/kosten` untouched.
@@ -330,7 +349,7 @@ Once callers migrated, remove `get_kosten_view` and `KostenRow`.
 
 13. Delete from `pages/kosten.py`: transacties-tabel, bulk-bar, add/edit/import/detail-dialogs, aandachtspunten-banner, status/categorie/search filters.
 14. Keep: KPI-strip (clickable per §3.2), activastaat-tab.
-15. Add: per-maand bar-chart, click-through on breakdown balken, terugkerende-kosten-kaart.
+15. Add: per-maand bar-chart, click-through on breakdown balken, terugkerende-kosten-kaart. **+ M7**: the `(nog te categoriseren)` bucket rendered as a separate card above the breakdown, muted styling, not clickable — so it doesn't visually dwarf real categories.
 16. The "Te verwerken" KPI-card navigates to `/transacties?status=ongecategoriseerd&jaar=X`.
 17. Existing kosten-page tests updated or removed where they tested the removed UI.
 18. CI green → merge.
@@ -422,13 +441,28 @@ Once callers migrated, remove `get_kosten_view` and `KostenRow`.
 | Large `pages/transacties.py` file | Detail-dialog extracted to `components/transacties_dialog.py`. Match-preview dialog kept in transacties.py (small). Archief-import dialog can be extracted later if page grows past 1500 lines. |
 | Soft-redirect `/bank → /transacties` surprises users who bookmarked old URL | Keep redirect for one release (no time-bomb), then remove in Phase 5 cleanup. |
 
-## 9. Relationship to open Kosten-rework v1.1 polish items
+## 9. Reconciliation with open Kosten-rework v1.1 polish items
 
-Per `open_plans.md`, 7 v1.1 polish items were staged after the Kosten rework. Those need to be reconciled against this spec before implementation begins. To be done as first step of Phase 1:
+Per `open_plans.md` (Kosten rework 2026-04-21 final review), 7 polish items were staged. Decisions below — items marked **[LANDS]** are rolled into the relevant phase of this plan; **[SUBSUMED]** dissolve because the surrounding code disappears; **[DEFER]** are tracked separately.
 
-- Read `project_kosten_rework.md` + any polish-item list
-- Mark each: **lands-here** (subsumed by this work), **drop** (superseded/no-longer-needed), **defer** (unrelated, move to separate plan)
-- Record decisions in the implementation plan (writing-plans output)
+| Item | Decision | Where |
+|---|---|---|
+| **M1** — close duplicate-link race (unique partial index on `uitgaven(bank_tx_id)` OR route Importeer through `ensure_uitgave_for_banktx`) | **[LANDS]** — Phase 2, as part of the archief-import code move. Prefer the unique partial index (migratie 28) because it's a DB-level guarantee rather than a code-convention one. | Phase 2, step 7 |
+| **M2** — single-fetch `get_kosten_view` per `ververs_transacties` tick (currently 4×) | **[SUBSUMED]** — `/kosten` shrinks to overzicht-only, no transacties-tabel; its new render path calls `get_kpi_kosten` + `get_kosten_breakdown` + `get_kosten_per_maand` + `get_terugkerende_kosten` (four *different* queries, each scoped). The original 4× duplication pattern ceases to exist. `/transacties` refresh remains a single `get_transacties_view` call per tick. | — |
+| **M3** — wire "Factuur ontbreekt" / "Te verwerken" KPI card click to filter | **[SUBSUMED]** — §3.2 specifies the "Te verwerken" card navigates to `/transacties?status=ongecategoriseerd&jaar=X`. The behaviour M3 wanted is now cross-page click-through, not in-page filter mutation. | §3.2 |
+| **M4** — remove stale "Stub loaders — Tasks 10–14" comment | **[SUBSUMED]** — `pages/kosten.py` is rewritten in Phase 3; the comment will not survive the rewrite. | — |
+| **M5** — after `ensure_uitgave_for_banktx` succeeds in `_open_detail_dialog`, re-read by returned id, not via `get_uitgaven(jaar=…)` list-and-filter | **[LANDS]** — Phase 2, when the detail dialog is extracted to `components/transacties_dialog.py`. Add a targeted `get_uitgave_by_id(db, uitgave_id)` helper to `database.py` and use it in the dialog's bootstrap path. | Phase 2, step 8 |
+| **M7** — visually separate `(nog te categoriseren)` bucket in breakdown card | **[LANDS]** — Phase 3, as the breakdown is being rewritten for click-through anyway. Uncategorised bucket gets a separator + muted styling + is non-clickable (no filter to apply). | Phase 3, step 15 |
+| **Lazy-create-cancel-orphan** — Detail dialog's pre-render `ensure_uitgave_for_banktx` leaves an empty uitgave if user clicks Annuleren without editing | **[DEFER]** — fix requires deferring lazy-create to first-mutation, a design-pattern change that touches the dialog's save-path. Preserved as-is in the extracted `components/transacties_dialog.py`. Staged for a follow-up after this consolidation merges. | — (new entry in `open_plans.md`) |
+
+### Other follow-ups from `open_plans.md`
+
+| Item | Decision |
+|---|---|
+| `jaar: int = 2026` hardcoded default audit across `database.py` | **[DEFER]** — orthogonal; time-bomb for 2027-01-01 but unrelated to consolidation. Stays in open_plans. |
+| AANDACHTSPUNTEN hex → Quasar semantic colors | **[SUBSUMED]** — the aandachtspunten-banner on `/kosten` is removed in Phase 3. |
+| `components/invoice_generator.py:8` still uses static `from components.archive_paths import ARCHIVE_BASE` | **[DEFER]** — orthogonal; only matters when `invoice_generator.py` gets test coverage. Stays in open_plans. |
+| `docs/superpowers/plans/2026-04-14-database-package-refactor.md` (database.py split) | **[DEFER]** — explicitly not-now per open_plans.md. This consolidation adds ~200 lines to database.py; revisit the split pressure after. |
 
 ## 10. Success criteria
 
@@ -443,7 +477,7 @@ Measurable "done" definition:
 
 ## 11. Explicit non-asks (for the record)
 
-- **No** new schema migration.
+- **No** schema migration *other than* the single-column-spanning unique partial index (migratie 28, §4.0) that M1 pulls in.
 - **No** Rabobank API auto-feed.
 - **No** rule-engine for auto-categorisation beyond the existing tegenpartij-suggestion.
 - **No** split-transactions (one bank-tx → N uitgaven). Schema stays 1:0-or-1. Revisit later if real need emerges.
