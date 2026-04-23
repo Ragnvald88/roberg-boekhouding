@@ -23,6 +23,7 @@ from database import (
     find_factuur_matches, set_banktx_categorie, update_uitgave,
     YearLockedError, add_banktransacties, get_imported_csv_bestanden,
     apply_factuur_matches, get_db_ctx,
+    delete_banktransacties, delete_uitgave,
 )
 from import_.rabobank_csv import parse_rabobank_csv
 
@@ -533,13 +534,81 @@ async def transacties_page(jaar: int | None = None,
         async def _open_factuur(row: dict):
             await _open_detail_dialog(row, refresh, default_tab='factuur')
 
+        async def _on_delete_row(row: dict):
+            """Delete a row — bank-tx (factuur-revert cascade) OR manual uitgave."""
+            if row.get('id_bank') is not None:
+                # Bank tx — may revert linked factuur
+                with ui.dialog() as dialog, ui.card():
+                    ui.label('Transactie verwijderen?').classes('text-h6')
+                    ui.label(f"{row['datum_fmt']} — {row['tegenpartij']} — "
+                              f"{row['bedrag_fmt']}").classes('text-grey')
+                    if row.get('koppeling_type') == 'factuur':
+                        ui.label(
+                            'Gekoppelde factuur wordt teruggezet naar '
+                            'verstuurd.'
+                        ).classes('text-caption text-warning q-mt-sm')
+                    with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
+                        ui.button('Annuleren',
+                                   on_click=dialog.close).props('flat')
+
+                        async def do_delete_bank():
+                            try:
+                                _n, reverted = await delete_banktransacties(
+                                    DB_PATH, transactie_ids=[row['id_bank']])
+                            except YearLockedError as e:
+                                ui.notify(str(e), type='negative')
+                                return
+                            dialog.close()
+                            ui.notify('Transactie verwijderd',
+                                       type='positive')
+                            if reverted:
+                                ui.notify(
+                                    f'{len(reverted)} factuur/facturen '
+                                    f'teruggezet naar verstuurd',
+                                    type='info')
+                            await refresh()
+
+                        ui.button('Verwijderen',
+                                   on_click=do_delete_bank) \
+                            .props('color=negative')
+                dialog.open()
+            elif row.get('id_uitgave') is not None:
+                # Manual cash uitgave — straight delete
+                with ui.dialog() as dialog, ui.card():
+                    ui.label('Uitgave verwijderen?').classes('text-h6')
+                    ui.label(f"{row['datum_fmt']} — "
+                              f"{row.get('omschrijving') or row['tegenpartij']}"
+                              f" — {row['bedrag_fmt']}") \
+                        .classes('text-grey')
+                    with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
+                        ui.button('Annuleren',
+                                   on_click=dialog.close).props('flat')
+
+                        async def do_delete_uitgave():
+                            try:
+                                await delete_uitgave(
+                                    DB_PATH, uitgave_id=row['id_uitgave'])
+                            except YearLockedError as e:
+                                ui.notify(str(e), type='negative')
+                                return
+                            dialog.close()
+                            ui.notify('Uitgave verwijderd',
+                                       type='positive')
+                            await refresh()
+
+                        ui.button('Verwijderen',
+                                   on_click=do_delete_uitgave) \
+                            .props('color=negative')
+                dialog.open()
+
         table.on('set_cat',
                   lambda e: asyncio.create_task(_on_set_cat(e.args)))
         table.on('open_detail',
                   lambda e: asyncio.create_task(_open_detail(e.args)))
         table.on('attach_pdf',
                   lambda e: asyncio.create_task(_open_factuur(e.args)))
-        # delete_row is emitted by the trash button but wired in Task 15
+        table.on('delete_row',
+                  lambda e: asyncio.create_task(_on_delete_row(e.args)))
 
         # Initial load
         await refresh()
