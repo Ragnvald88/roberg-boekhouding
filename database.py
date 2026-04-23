@@ -1722,26 +1722,56 @@ async def mark_banktx_genegeerd(
 async def get_categorie_suggestions(db_path: Path = DB_PATH) -> dict[str, str]:
     """Build a lookup of tegenpartij → most-used category.
 
-    Groups by lowercased tegenpartij, picks the category with the highest
-    count. Only considers transactions that have a non-empty category.
-    Returns dict mapping lowercase tegenpartij → category string.
+    Considers both:
+    - Debit transactions where user categorised via uitgaven.categorie (post
+      migratie 27 — this is the source of truth for debits).
+    - Positive transactions where user categorised via banktransacties.categorie
+      (Omzet / Prive / Belasting / AOV).
+
+    Returns lowercase-tegenpartij → most-frequent categorie. Tie-break: most
+    recent wins.
     """
     async with get_db_ctx(db_path) as conn:
         cur = await conn.execute(
-            """SELECT LOWER(tegenpartij) as tp, categorie, COUNT(*) as cnt, MAX(datum) as recent
-               FROM banktransacties
-               WHERE categorie IS NOT NULL AND categorie != ''
-                 AND tegenpartij IS NOT NULL AND tegenpartij != ''
-               GROUP BY LOWER(tegenpartij), categorie
-               ORDER BY LOWER(tegenpartij), cnt DESC, recent DESC""")
+            """
+            SELECT tp, categorie, SUM(cnt) AS cnt_total,
+                   MAX(recent) AS recent_max
+            FROM (
+                -- debit source (via linked uitgaven)
+                SELECT LOWER(b.tegenpartij) AS tp,
+                       u.categorie          AS categorie,
+                       COUNT(*)             AS cnt,
+                       MAX(b.datum)         AS recent
+                FROM uitgaven u
+                JOIN banktransacties b ON u.bank_tx_id = b.id
+                WHERE u.categorie IS NOT NULL AND u.categorie != ''
+                  AND b.tegenpartij IS NOT NULL AND b.tegenpartij != ''
+                GROUP BY LOWER(b.tegenpartij), u.categorie
+
+                UNION ALL
+
+                -- positive source (on banktransacties directly)
+                SELECT LOWER(tegenpartij) AS tp,
+                       categorie          AS categorie,
+                       COUNT(*)           AS cnt,
+                       MAX(datum)         AS recent
+                FROM banktransacties
+                WHERE bedrag >= 0
+                  AND categorie IS NOT NULL AND categorie != ''
+                  AND tegenpartij IS NOT NULL AND tegenpartij != ''
+                GROUP BY LOWER(tegenpartij), categorie
+            )
+            GROUP BY tp, categorie
+            ORDER BY tp, cnt_total DESC, recent_max DESC
+            """
+        )
         rows = await cur.fetchall()
 
-    # For each tegenpartij, take the first row (highest count due to ORDER BY)
-    suggestions = {}
+    suggestions: dict[str, str] = {}
     for r in rows:
-        tp = r['tp']
+        tp = r["tp"]
         if tp not in suggestions:
-            suggestions[tp] = r['categorie']
+            suggestions[tp] = r["categorie"]
     return suggestions
 
 
