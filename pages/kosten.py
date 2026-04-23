@@ -244,5 +244,41 @@ async def _laad_breakdown(container, jaar):
 
 
 async def _laad_terugkerend(container, jaar):
-    """Terugkerende kosten card — wired in Task 24."""
-    pass
+    """Terugkerende kosten: vendors with >=3 betalingen in the last 12mnd.
+
+    Lets the user see at a glance which abonnementen / vaste lasten run.
+    Each row navigates to /transacties?search=<tegenpartij> so the user
+    can review or reconcile in one click.
+    """
+    if container is None:
+        return
+    container.clear()
+    items = await get_terugkerende_kosten(DB_PATH, jaar=jaar)
+    if not items:
+        return
+    with container:
+        with ui.card().classes('w-full q-pa-md'):
+            ui.label(f'Terugkerende kosten — {jaar}') \
+                .classes('text-subtitle1 text-bold')
+            ui.label('Tegenpartijen met 3 of meer betalingen in de '
+                      'laatste 12 maanden.') \
+                .classes('text-caption text-grey q-mb-sm')
+            for item in items:
+                row = ui.row().classes(
+                    'w-full items-center q-py-xs cursor-pointer')
+                with row:
+                    ui.label(item['tegenpartij']) \
+                        .classes('text-body2').style('flex:1')
+                    ui.label(str(item['count'])) \
+                        .classes('text-caption text-grey') \
+                        .style('width:40px')
+                    ui.label(item['laatste_datum']) \
+                        .classes('text-caption text-grey') \
+                        .style('width:110px')
+                    ui.label(format_euro(item['jaar_totaal'])) \
+                        .classes('text-body2 text-bold') \
+                        .style('font-variant-numeric:tabular-nums;'
+                                'width:110px;text-align:right')
+                row.on('click', lambda _=None, tp=item['tegenpartij']:
+                        ui.navigate.to(
+                            f'/transacties?jaar={jaar}&search={tp}'))
