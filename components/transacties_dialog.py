@@ -3,8 +3,7 @@
 Extracted from pages/kosten.py during the bank/kosten consolidation
 (Phase 2 Task 11). Uses get_uitgave_by_id for bootstrap (M5 — avoids the
 list-and-filter silent-None race). Historie tab uses get_transacties_view
-filtered to bedrag < 0 (debit + manual scope) instead of the
-about-to-be-deprecated get_kosten_view.
+filtered to bedrag < 0 (debit + manual scope).
 """
 import asyncio
 import base64

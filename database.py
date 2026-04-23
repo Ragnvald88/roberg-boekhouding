@@ -58,30 +58,6 @@ class PdfMatch:
 
 
 @dataclass
-class KostenRow:
-    """Unified reconciliation row: bank-tx debit OR manual uitgave.
-
-    Produced by ``get_kosten_view``. ``is_manual`` distinguishes the
-    two sources; ``status`` is derived via
-    ``components.kosten_helpers.derive_status``.
-    """
-    id_bank: int | None
-    id_uitgave: int | None
-    datum: str
-    bedrag: float
-    tegenpartij: str
-    omschrijving: str
-    iban: str
-    categorie: str
-    pdf_pad: str
-    is_investering: bool
-    zakelijk_pct: float | None
-    status: str
-    is_manual: bool
-    genegeerd: int = 0
-
-
-@dataclass
 class TransactieRow:
     """Unified row for /transacties. Covers bank-debit, bank-credit, manual cash.
 
@@ -641,11 +617,11 @@ async def _run_migration_27(conn):
     """Copy banktransacties.categorie (debits only) into uitgaven.categorie.
 
     Pre-rework, users categorised debits via /bank, writing to
-    banktransacties.categorie. Post-rework, get_kosten_view only reads
-    uitgaven.categorie, so that data became orphaned. This migration
-    reconciles: for each bank debit with a non-empty categorie, either
-    update the linked uitgave (if empty-categorie) or lazy-create a new
-    uitgave carrying the categorie.
+    banktransacties.categorie. Post-rework, the kosten/transacties views
+    only read uitgaven.categorie, so that data became orphaned. This
+    migration reconciles: for each bank debit with a non-empty categorie,
+    either update the linked uitgave (if empty-categorie) or lazy-create
+    a new uitgave carrying the categorie.
 
     Skipped:
     - Bank rows marked genegeerd=1 (privé — not business expenses).
@@ -3303,120 +3279,6 @@ async def find_banktx_matches_for_pdf(
     return [c[:4] for c in candidates]
 
 
-async def get_kosten_view(
-    db_path: Path,
-    jaar: int,
-    status: str | None = None,
-    categorie: str | None = None,
-    search: str | None = None,
-) -> list[KostenRow]:
-    """Unified reconciliation list: bank-tx debits + manual uitgaven.
-
-    Bank-side: every non-ignored debit (bedrag < 0), optionally joined
-    to its linked uitgave (LEFT JOIN on uitgaven.bank_tx_id).
-    Manual-side: uitgaven without a bank_tx_id (ad-hoc expenses).
-
-    Date filter uses the range form ``datum >= ? AND datum < ?`` so the
-    idx_*_datum indexes are hit. ``status`` / ``categorie`` / ``search``
-    are Python-side post-filters (cheap for single-user workloads).
-    """
-    from components.kosten_helpers import derive_status
-
-    jaar_start = f"{jaar:04d}-01-01"
-    jaar_end = f"{jaar + 1:04d}-01-01"
-
-    sql = """
-    SELECT * FROM (
-        SELECT 'bank' AS source,
-               b.id AS id_bank,
-               u.id AS id_uitgave,
-               b.datum AS datum,
-               ABS(b.bedrag) AS bedrag,
-               COALESCE(b.tegenpartij, '') AS tegenpartij,
-               COALESCE(NULLIF(u.omschrijving, ''), b.omschrijving, '')
-                 AS omschrijving,
-               COALESCE(b.tegenrekening, '') AS iban,
-               COALESCE(u.categorie, '') AS categorie,
-               COALESCE(u.pdf_pad, '') AS pdf_pad,
-               COALESCE(u.is_investering, 0) AS is_investering,
-               u.zakelijk_pct AS zakelijk_pct,
-               b.genegeerd AS genegeerd
-        FROM banktransacties b
-        LEFT JOIN uitgaven u ON u.bank_tx_id = b.id
-        WHERE b.bedrag < 0
-          AND b.genegeerd = 0
-          AND b.datum >= ? AND b.datum < ?
-
-        UNION ALL
-
-        SELECT 'manual' AS source,
-               NULL AS id_bank,
-               u.id AS id_uitgave,
-               u.datum AS datum,
-               u.bedrag AS bedrag,
-               '' AS tegenpartij,
-               u.omschrijving AS omschrijving,
-               '' AS iban,
-               u.categorie AS categorie,
-               COALESCE(u.pdf_pad, '') AS pdf_pad,
-               u.is_investering AS is_investering,
-               u.zakelijk_pct AS zakelijk_pct,
-               0 AS genegeerd
-        FROM uitgaven u
-        WHERE u.bank_tx_id IS NULL
-          AND u.datum >= ? AND u.datum < ?
-    )
-    ORDER BY datum DESC
-    """
-    async with get_db_ctx(db_path) as conn:
-        cur = await conn.execute(
-            sql, (jaar_start, jaar_end, jaar_start, jaar_end))
-        raw = await cur.fetchall()
-
-    rows: list[KostenRow] = []
-    for r in raw:
-        # All rows in this view are costs (bank-side filtered to bedrag < 0,
-        # manual side are expenses). Pass a negative bedrag so derive_status
-        # routes through the debit branch. (Bedrag is ABS() in SQL.)
-        row_dict = {
-            "id_bank": r["id_bank"],
-            "id_uitgave": r["id_uitgave"],
-            "genegeerd": r["genegeerd"],
-            "categorie": r["categorie"],
-            "pdf_pad": r["pdf_pad"],
-            "bedrag": -abs(r["bedrag"] or 0.0),
-        }
-        rows.append(KostenRow(
-            id_bank=r["id_bank"],
-            id_uitgave=r["id_uitgave"],
-            datum=r["datum"],
-            bedrag=r["bedrag"],
-            tegenpartij=r["tegenpartij"],
-            omschrijving=r["omschrijving"],
-            iban=r["iban"],
-            categorie=r["categorie"],
-            pdf_pad=r["pdf_pad"],
-            is_investering=bool(r["is_investering"]),
-            zakelijk_pct=r["zakelijk_pct"],
-            status=derive_status(row_dict),
-            is_manual=(r["source"] == "manual"),
-            genegeerd=r["genegeerd"],
-        ))
-
-    # Post-filters
-    if status is not None:
-        rows = [r for r in rows if r.status == status]
-    if categorie is not None and categorie != "":
-        rows = [r for r in rows if r.categorie == categorie]
-    if search:
-        q = search.lower()
-        rows = [r for r in rows if
-                q in r.tegenpartij.lower()
-                or q in r.omschrijving.lower()
-                or q in f"{r.bedrag:.2f}"]
-    return rows
-
-
 async def get_transacties_view(
     db_path: Path,
     jaar: int,
@@ -3573,7 +3435,7 @@ class KpiKosten:
 async def get_kpi_kosten(db_path: Path, jaar: int) -> KpiKosten:
     """Single-pass KPI strip data. See spec §8.
 
-    Reuses ``get_kosten_view`` for tx-side numbers (totaal, monthly,
+    Reuses ``get_transacties_view`` for tx-side numbers (totaal, monthly,
     ontbreekt) and ``get_investeringen_voor_afschrijving`` +
     ``bereken_afschrijving`` for the investment side.
 
@@ -3588,15 +3450,19 @@ async def get_kpi_kosten(db_path: Path, jaar: int) -> KpiKosten:
     """
     from fiscal.afschrijvingen import bereken_afschrijving
 
-    rows = await get_kosten_view(db_path, jaar=jaar)
+    rows = await get_transacties_view(db_path, jaar=jaar)
+    # get_kosten_view returned only debit + manual rows with ABS(bedrag).
+    # get_transacties_view also returns credits and uses signed bedrag.
+    # Preserve the original semantics: filter to cost rows and abs() bedrag.
+    rows = [r for r in rows if r.bedrag < 0]
 
-    totaal = sum(r.bedrag for r in rows)
+    totaal = sum(abs(r.bedrag) for r in rows)
     monthly = [0.0] * 12
     for r in rows:
         try:
             m = int(r.datum[5:7])
             if 1 <= m <= 12:
-                monthly[m - 1] += r.bedrag
+                monthly[m - 1] += abs(r.bedrag)
         except (ValueError, IndexError):
             continue
 
@@ -3606,7 +3472,7 @@ async def get_kpi_kosten(db_path: Path, jaar: int) -> KpiKosten:
     ontbreekt_rows = [r for r in rows
                       if r.status in ("ontbreekt_bon", "ongecategoriseerd")]
     ontbreekt_count = len(ontbreekt_rows)
-    ontbreekt_bedrag = sum(r.bedrag for r in ontbreekt_rows)
+    ontbreekt_bedrag = sum(abs(r.bedrag) for r in ontbreekt_rows)
 
     # Investeringen + afschrijvingen: get_investeringen_voor_afschrijving
     # returns ALL investments (cumulative up to and including `tot_jaar`),
