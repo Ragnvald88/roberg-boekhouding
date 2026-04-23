@@ -461,6 +461,10 @@ MIGRATIONS = [
         "ON banktransacties(genegeerd)",
     ]),
     (27, "migrate_bank_categorie_to_uitgaven", None),
+    (28, "unique_partial_index_uitgaven_bank_tx", [
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_uitgaven_bank_tx_unique "
+        "ON uitgaven(bank_tx_id) WHERE bank_tx_id IS NOT NULL",
+    ]),
 ]
 
 
