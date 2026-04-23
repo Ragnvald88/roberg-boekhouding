@@ -177,8 +177,70 @@ async def _laad_per_maand(container, jaar):
 
 
 async def _laad_breakdown(container, jaar):
-    """Categorie breakdown clickable + uncat M7 card — wired in Task 23."""
-    pass
+    """Per-categorie breakdown: clickable bars → /transacties?categorie=...
+
+    M7 polish (from 2026-04-21 Kosten rework review): the empty-categorie
+    bucket renders as a separate muted card ABOVE the bar list so it
+    doesn't visually dwarf real categories.
+    """
+    if container is None:
+        return
+    container.clear()
+    totals = await get_kosten_breakdown(DB_PATH, jaar)
+    if not totals:
+        return
+
+    # Extract the uncategorised bucket
+    uncat_amount = totals.pop('', 0.0)
+    sorted_totals = sorted(totals.items(),
+                             key=lambda kv: kv[1], reverse=True)
+    grand = sum(totals.values()) + uncat_amount
+
+    with container:
+        # M7 — separate card for uncategorised, muted, not clickable
+        if uncat_amount > 0:
+            with ui.card().classes('w-full q-pa-md') \
+                    .style('background:#f8fafc;'
+                            'border-left:4px solid #f59e0b'):
+                with ui.row().classes('w-full items-center'):
+                    ui.icon('warning', color='warning').classes('text-lg')
+                    ui.label('Nog te categoriseren') \
+                        .classes('text-body2')
+                    ui.space()
+                    ui.label(format_euro(uncat_amount)) \
+                        .classes('text-body2 text-bold') \
+                        .style('font-variant-numeric:tabular-nums')
+                ui.label(
+                    'Verwerk deze op Transacties om ze hier te '
+                    'laten landen.') \
+                    .classes('text-caption text-grey')
+
+        # Real categories — clickable bars
+        with ui.card().classes('w-full q-pa-md'):
+            with ui.row().classes('w-full items-center'):
+                ui.label(f'Kosten per categorie — {jaar}') \
+                    .classes('text-subtitle1 text-bold')
+                ui.space()
+                ui.label(f'Totaal {format_euro(grand)}') \
+                    .classes('text-caption text-grey')
+
+            for name, amt in sorted_totals:
+                pct = (amt / grand * 100) if grand else 0
+                row = ui.column().classes(
+                    'w-full gap-0 q-my-xs cursor-pointer')
+                with row:
+                    with ui.row().classes('w-full'):
+                        ui.label(name).classes('text-body2')
+                        ui.space()
+                        ui.label(
+                            f'{format_euro(amt)} · {pct:.1f}%') \
+                            .classes('text-body2 text-bold') \
+                            .style('font-variant-numeric:tabular-nums')
+                    ui.linear_progress(value=pct / 100) \
+                        .props('color=primary size=6px')
+                row.on('click', lambda _=None, n=name:
+                        ui.navigate.to(
+                            f'/transacties?jaar={jaar}&categorie={n}'))
 
 
 async def _laad_terugkerend(container, jaar):
