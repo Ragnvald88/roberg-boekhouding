@@ -527,7 +527,7 @@ async def _laad_inbox(container, jaar, refresh):
     container.clear()
     rows = await get_kosten_view(DB_PATH, jaar=jaar)
     needs = [r for r in rows
-             if r.status in ('ongecategoriseerd', 'ontbreekt')]
+             if r.status in ('ongecategoriseerd', 'ontbreekt_bon')]
     if not needs:
         return
 
@@ -893,7 +893,7 @@ async def _laad_tabel(
                           size="sm" icon="check_circle" dense>
                     Compleet
                   </q-chip>
-                  <q-chip v-else-if="props.row.factuur_status === 'ontbreekt'"
+                  <q-chip v-else-if="props.row.factuur_status === 'ontbreekt_bon'"
                           color="warning" text-color="white"
                           size="sm" icon="warning" dense>
                     Ontbreekt
@@ -1495,7 +1495,7 @@ async def kosten_page():
                     status_options = {
                         None: 'Alle',
                         'ongecategoriseerd': 'Ongecat.',
-                        'ontbreekt': 'Ontbreekt',
+                        'ontbreekt_bon': 'Ontbreekt',
                         'compleet': 'Compleet',
                     }
                     status_select = ui.select(

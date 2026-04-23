@@ -7,21 +7,37 @@ from pathlib import Path
 
 
 def derive_status(row: dict) -> str:
-    """Return one of: 'hidden' | 'ongecategoriseerd' | 'ontbreekt' | 'compleet'.
+    """Sign-aware, priority-ordered status. See spec §4.1 steps 1-8.
 
-    Sequential and mutually exclusive. See spec §5.
+    Returns one of:
+      'prive_verborgen' | 'gekoppeld_factuur' | 'ongecategoriseerd' |
+      'ontbreekt_bon' | 'compleet' | 'gecategoriseerd'
+
+    Sequential and mutually exclusive.
     """
     if row.get("id_bank") is not None and row.get("genegeerd"):
-        return "hidden"
-    if row.get("id_uitgave") is None:
-        # bank-tx without a linked uitgave (can't happen for manual rows since
-        # id_uitgave is always set there; the None case is bank-only)
-        return "ongecategoriseerd"
-    if not (row.get("categorie") or "").strip():
-        return "ongecategoriseerd"
-    if not (row.get("pdf_pad") or "").strip():
-        return "ontbreekt"
-    return "compleet"
+        return "prive_verborgen"
+    if (row.get("koppeling_type") == "factuur"
+            and row.get("id_bank") is not None):
+        return "gekoppeld_factuur"
+
+    bedrag = row.get("bedrag") or 0.0
+    cat = (row.get("categorie") or "").strip()
+    pdf = (row.get("pdf_pad") or "").strip()
+
+    if bedrag < 0:
+        if row.get("id_uitgave") is None:
+            return "ongecategoriseerd"
+        if not cat:
+            return "ongecategoriseerd"
+        if not pdf:
+            return "ontbreekt_bon"
+        return "compleet"
+    else:
+        # Positive / income-side (no bon-concept for positives).
+        if not cat:
+            return "ongecategoriseerd"
+        return "gecategoriseerd"
 
 
 _WORD_RE = re.compile(r"[A-Za-z0-9]+")

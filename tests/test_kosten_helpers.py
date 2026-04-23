@@ -6,39 +6,105 @@ from components.kosten_helpers import (
 
 def test_derive_status_hidden_when_genegeerd():
     row = {"id_bank": 1, "genegeerd": 1, "id_uitgave": None,
-           "categorie": "", "pdf_pad": ""}
-    assert derive_status(row) == "hidden"
+           "categorie": "", "pdf_pad": "", "bedrag": -10.0}
+    assert derive_status(row) == "prive_verborgen"
 
 
 def test_derive_status_ongecat_when_no_uitgave():
     row = {"id_bank": 1, "genegeerd": 0, "id_uitgave": None,
-           "categorie": "", "pdf_pad": ""}
+           "categorie": "", "pdf_pad": "", "bedrag": -10.0}
     assert derive_status(row) == "ongecategoriseerd"
 
 
 def test_derive_status_ongecat_when_empty_categorie():
     row = {"id_bank": 1, "genegeerd": 0, "id_uitgave": 5,
-           "categorie": "", "pdf_pad": ""}
+           "categorie": "", "pdf_pad": "", "bedrag": -10.0}
     assert derive_status(row) == "ongecategoriseerd"
 
 
 def test_derive_status_ontbreekt_when_no_pdf():
     row = {"id_bank": 1, "genegeerd": 0, "id_uitgave": 5,
-           "categorie": "Kantoor", "pdf_pad": ""}
-    assert derive_status(row) == "ontbreekt"
+           "categorie": "Kantoor", "pdf_pad": "", "bedrag": -10.0}
+    assert derive_status(row) == "ontbreekt_bon"
 
 
 def test_derive_status_compleet():
     row = {"id_bank": 1, "genegeerd": 0, "id_uitgave": 5,
-           "categorie": "Kantoor", "pdf_pad": "/tmp/x.pdf"}
+           "categorie": "Kantoor", "pdf_pad": "/tmp/x.pdf",
+           "bedrag": -10.0}
     assert derive_status(row) == "compleet"
 
 
 def test_derive_status_manual_compleet():
     """Manual uitgave: id_bank None, id_uitgave set."""
     row = {"id_bank": None, "genegeerd": 0, "id_uitgave": 5,
-           "categorie": "Kantoor", "pdf_pad": "/tmp/x.pdf"}
+           "categorie": "Kantoor", "pdf_pad": "/tmp/x.pdf",
+           "bedrag": -10.0}
     assert derive_status(row) == "compleet"
+
+
+def test_derive_status_prive_verborgen_wins():
+    row = {"id_bank": 1, "id_uitgave": 5, "genegeerd": 1,
+           "categorie": "Telefoon/KPN", "pdf_pad": "/p.pdf",
+           "bedrag": -10.0, "koppeling_type": None}
+    from components.kosten_helpers import derive_status
+    assert derive_status(row) == "prive_verborgen"
+
+
+def test_derive_status_gekoppeld_factuur_for_positive_with_match():
+    row = {"id_bank": 1, "id_uitgave": None, "genegeerd": 0,
+           "categorie": "", "pdf_pad": "",
+           "bedrag": 100.0, "koppeling_type": "factuur", "koppeling_id": 42}
+    from components.kosten_helpers import derive_status
+    assert derive_status(row) == "gekoppeld_factuur"
+
+
+def test_derive_status_gecategoriseerd_positive():
+    row = {"id_bank": 1, "id_uitgave": None, "genegeerd": 0,
+           "categorie": "Omzet", "pdf_pad": "",
+           "bedrag": 200.0, "koppeling_type": None}
+    from components.kosten_helpers import derive_status
+    assert derive_status(row) == "gecategoriseerd"
+
+
+def test_derive_status_ongecategoriseerd_positive():
+    row = {"id_bank": 2, "id_uitgave": None, "genegeerd": 0,
+           "categorie": "", "pdf_pad": "",
+           "bedrag": 300.0, "koppeling_type": None}
+    from components.kosten_helpers import derive_status
+    assert derive_status(row) == "ongecategoriseerd"
+
+
+def test_derive_status_debit_ontbreekt_bon():
+    row = {"id_bank": 3, "id_uitgave": 9, "genegeerd": 0,
+           "categorie": "Kleine aankopen", "pdf_pad": "",
+           "bedrag": -50.0, "koppeling_type": None}
+    from components.kosten_helpers import derive_status
+    assert derive_status(row) == "ontbreekt_bon"
+
+
+def test_derive_status_debit_compleet():
+    row = {"id_bank": 4, "id_uitgave": 11, "genegeerd": 0,
+           "categorie": "Kleine aankopen", "pdf_pad": "/tmp/x.pdf",
+           "bedrag": -50.0, "koppeling_type": None}
+    from components.kosten_helpers import derive_status
+    assert derive_status(row) == "compleet"
+
+
+def test_derive_status_debit_ongecategoriseerd_no_uitgave():
+    row = {"id_bank": 5, "id_uitgave": None, "genegeerd": 0,
+           "categorie": "", "pdf_pad": "",
+           "bedrag": -10.0, "koppeling_type": None}
+    from components.kosten_helpers import derive_status
+    assert derive_status(row) == "ongecategoriseerd"
+
+
+def test_derive_status_debit_ongecategoriseerd_empty_cat():
+    row = {"id_bank": 6, "id_uitgave": 13, "genegeerd": 0,
+           "categorie": "", "pdf_pad": "",
+           "bedrag": -10.0, "koppeling_type": None}
+    from components.kosten_helpers import derive_status
+    assert derive_status(row) == "ongecategoriseerd"
 
 
 def test_match_tokens_hit_simple():

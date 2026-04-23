@@ -3304,12 +3304,16 @@ async def get_kosten_view(
 
     rows: list[KostenRow] = []
     for r in raw:
+        # All rows in this view are costs (bank-side filtered to bedrag < 0,
+        # manual side are expenses). Pass a negative bedrag so derive_status
+        # routes through the debit branch. (Bedrag is ABS() in SQL.)
         row_dict = {
             "id_bank": r["id_bank"],
             "id_uitgave": r["id_uitgave"],
             "genegeerd": r["genegeerd"],
             "categorie": r["categorie"],
             "pdf_pad": r["pdf_pad"],
+            "bedrag": -abs(r["bedrag"] or 0.0),
         }
         rows.append(KostenRow(
             id_bank=r["id_bank"],

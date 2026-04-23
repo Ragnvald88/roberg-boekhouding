@@ -53,7 +53,7 @@ async def test_view_linked_uitgave_shows_once(db):
     await ensure_uitgave_for_banktx(db, 1, categorie="Telefoon/KPN")
     rows = await get_kosten_view(db, jaar=2026)
     assert len(rows) == 1
-    assert rows[0].status == "ontbreekt"  # no pdf yet
+    assert rows[0].status == "ontbreekt_bon"  # no pdf yet
     assert rows[0].is_manual is False
 
 
