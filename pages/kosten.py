@@ -1223,12 +1223,29 @@ async def kosten_page():
                     kwargs['zakelijk_pct'] = input_zakelijk.value or 100
                     kwargs['aanschaf_bedrag'] = bedrag
 
-                # Pass through the prefill's bank_tx_id so Importeer can auto-link
-                if prefill and prefill.get('bank_tx_id'):
-                    kwargs['bank_tx_id'] = prefill['bank_tx_id']
+                # Pass through the prefill's bank_tx_id so Importeer can auto-link.
+                # Route through ensure_uitgave_for_banktx (idempotent) when a bank_tx_id
+                # is present — guards against duplicate-link races at migratie-28 level
+                # and makes repeated-import a no-op instead of an IntegrityError.
+                bank_tx_id = prefill.get('bank_tx_id') if prefill else None
 
                 try:
-                    uitgave_id = await add_uitgave(DB_PATH, **kwargs)
+                    if bank_tx_id is not None:
+                        uitgave_id = await ensure_uitgave_for_banktx(
+                            DB_PATH, bank_tx_id=bank_tx_id,
+                            datum=kwargs.get('datum'),
+                            categorie=kwargs.get('categorie', ''),
+                            omschrijving=kwargs.get('omschrijving', ''))
+                        # Apply remaining kwargs (investeringen fields, bedrag override) —
+                        # ensure() only sets the basics + enforces bedrag = ABS(bank_tx.bedrag).
+                        update_kwargs = {k: v for k, v in kwargs.items()
+                                         if k not in ('datum', 'categorie', 'omschrijving',
+                                                       'bedrag')}
+                        if update_kwargs:
+                            await update_uitgave(DB_PATH, uitgave_id=uitgave_id,
+                                                  **update_kwargs)
+                    else:
+                        uitgave_id = await add_uitgave(DB_PATH, **kwargs)
 
                     # Handle PDF: from prefill path or from upload widget
                     if prefill and prefill.get('pdf_path'):
