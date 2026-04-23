@@ -3214,7 +3214,7 @@ async def find_pdf_matches_for_banktx(
     v1: matches by tegenpartij token overlap (len >= 3 chars).
     Empty list when nothing matches.
     """
-    from components.kosten_helpers import match_tokens
+    from components.transacties_helpers import match_tokens
     from import_.expense_utils import scan_archive
 
     async with get_db_ctx(db_path) as conn:
@@ -3255,7 +3255,7 @@ async def find_banktx_matches_for_pdf(
     cannot be newly paired. Only debit rows (bedrag < 0) are considered.
     Genegeerd rows excluded.
     """
-    from components.kosten_helpers import match_tokens
+    from components.transacties_helpers import match_tokens
     stem = Path(filename).stem
     jaar_start = f"{jaar:04d}-01-01"
     jaar_end = f"{jaar + 1:04d}-01-01"
@@ -3299,7 +3299,7 @@ async def get_transacties_view(
     (status='prive_verborgen'); by default they are filtered in SQL so the
     default query path stays cheap.
     """
-    from components.kosten_helpers import derive_status
+    from components.transacties_helpers import derive_status
 
     jaar_start = f"{jaar:04d}-01-01"
     jaar_end = f"{jaar + 1:04d}-01-01"

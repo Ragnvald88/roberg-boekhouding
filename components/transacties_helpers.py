@@ -1,4 +1,4 @@
-"""Pure helpers for the Kosten page — no DB, no NiceGUI imports.
+"""Pure helpers for the Transacties page — no DB, no NiceGUI imports.
 
 Keep this file IO-free so it stays trivially unit-testable.
 """

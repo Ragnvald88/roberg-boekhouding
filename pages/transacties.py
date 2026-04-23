@@ -17,7 +17,7 @@ from components.utils import (
     format_euro, format_datum, KOSTEN_CATEGORIEEN, BANK_CATEGORIEEN,
 )
 from components.shared_ui import year_options, date_input
-from components.kosten_helpers import (
+from components.transacties_helpers import (
     tegenpartij_color, initials,
 )
 from components.transacties_dialog import (
