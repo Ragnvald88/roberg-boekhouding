@@ -21,8 +21,10 @@ from components.transacties_dialog import _open_detail_dialog
 from database import (
     DB_PATH, get_transacties_view, get_categorie_suggestions,
     find_factuur_matches, set_banktx_categorie, update_uitgave,
-    YearLockedError,
+    YearLockedError, add_banktransacties, get_imported_csv_bestanden,
+    apply_factuur_matches, get_db_ctx,
 )
+from import_.rabobank_csv import parse_rabobank_csv
 
 
 # Per-row category options — positives get income-side cats; debits/cash
@@ -129,6 +131,149 @@ async def transacties_page(jaar: int | None = None,
             table_ref['table'].update()
 
     # -------------------------------------------------------------- #
+    # CSV upload + factuur-match preview                             #
+    # -------------------------------------------------------------- #
+    async def handle_csv_upload(e):
+        """Parse uploaded Rabobank CSV, archive, insert, trigger match."""
+        content = await e.file.read()
+        filename = e.file.name
+        try:
+            transacties = parse_rabobank_csv(content)
+        except ValueError as exc:
+            ui.notify(f'Fout bij parsing: {exc}', type='negative')
+            return
+        if not transacties:
+            ui.notify('Geen transacties gevonden in CSV.', type='warning')
+            return
+
+        # Dedup — don't import the same filename twice
+        bestaande_csvs = await get_imported_csv_bestanden(DB_PATH)
+        if any(csv.endswith(f'_{filename}') for csv in bestaande_csvs):
+            ui.notify(f"CSV '{filename}' is al eerder geïmporteerd",
+                       type='warning')
+            return
+
+        # Archive CSV to data/bank_csv/ (best-effort, blocking IO wrapped)
+        csv_dir = DB_PATH.parent / 'bank_csv'
+        csv_dir.mkdir(parents=True, exist_ok=True)
+        archive_name = (f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_"
+                         f'{filename}')
+        archive_path = csv_dir / archive_name
+        await asyncio.to_thread(archive_path.write_bytes, content)
+
+        count = await add_banktransacties(DB_PATH, transacties,
+                                            csv_bestand=archive_name)
+        ui.notify(f'{count} transacties geïmporteerd uit {filename}',
+                   type='positive')
+
+        # Find unmatched factuur proposals and offer preview
+        proposals = await find_factuur_matches(DB_PATH)
+        await refresh()
+        if proposals:
+            await _show_match_preview_dialog(proposals, count)
+
+    async def _open_match_dialog_manually():
+        """Header button action — open match dialog if proposals exist."""
+        proposals = await find_factuur_matches(DB_PATH)
+        if not proposals:
+            ui.notify('Geen openstaande matches.', type='info')
+            return
+        await _show_match_preview_dialog(proposals, imported_count=0)
+
+    async def _build_match_preview_rows(proposals):
+        """Shape MatchProposal objects for the preview table."""
+        rows = []
+        async with get_db_ctx(DB_PATH) as conn:
+            for idx, p in enumerate(proposals):
+                f_cur = await conn.execute(
+                    "SELECT nummer, totaal_bedrag FROM facturen WHERE id = ?",
+                    (p.factuur_id,))
+                f_row = await f_cur.fetchone()
+                b_cur = await conn.execute(
+                    "SELECT tegenpartij, bedrag, datum FROM banktransacties "
+                    "WHERE id = ?", (p.bank_id,))
+                b_row = await b_cur.fetchone()
+                if not f_row or not b_row:
+                    continue
+                rows.append({
+                    'id': idx,
+                    'confidence': p.confidence,
+                    'confidence_icon': ('!' if p.confidence == 'low'
+                                         else 'OK'),
+                    'factuur': f_row['nummer'],
+                    'factuur_bedrag': format_euro(f_row['totaal_bedrag']),
+                    'bank': b_row['tegenpartij'] or '',
+                    'bank_datum': format_datum(b_row['datum']),
+                    'bank_bedrag': format_euro(b_row['bedrag']),
+                    'delta': format_euro(p.delta),
+                })
+        return rows
+
+    async def _show_match_preview_dialog(proposals, imported_count: int):
+        """Show match-review dialog; pre-tick high-confidence, apply on OK."""
+        rows = await _build_match_preview_rows(proposals)
+        n_low = sum(1 for r in rows if r['confidence'] == 'low')
+
+        with ui.dialog() as dialog, \
+                ui.card().classes('w-full').style('max-width:900px'):
+            title = (f'{imported_count} transacties geïmporteerd - '
+                      f'{len(proposals)} mogelijke koppelingen gevonden'
+                      if imported_count
+                      else f'{len(proposals)} openstaande koppelingen')
+            ui.label(title).classes('text-h6')
+            subtitle = ('Vink aan welke koppelingen je wilt toepassen. '
+                         'Dubbelzinnige matches moet je zelf controleren.')
+            if n_low:
+                subtitle += f' ({n_low} dubbelzinnig)'
+            ui.label(subtitle).classes('text-body2 q-mb-sm text-grey-8')
+
+            columns = [
+                {'name': 'confidence_icon', 'label': '',
+                 'field': 'confidence_icon', 'align': 'center'},
+                {'name': 'factuur', 'label': 'Factuur', 'field': 'factuur',
+                 'align': 'left'},
+                {'name': 'factuur_bedrag', 'label': 'Bedrag',
+                 'field': 'factuur_bedrag', 'align': 'right'},
+                {'name': 'bank', 'label': 'Bank tegenpartij',
+                 'field': 'bank', 'align': 'left'},
+                {'name': 'bank_datum', 'label': 'Bank datum',
+                 'field': 'bank_datum', 'align': 'left'},
+                {'name': 'bank_bedrag', 'label': 'Bank bedrag',
+                 'field': 'bank_bedrag', 'align': 'right'},
+                {'name': 'delta', 'label': 'Verschil',
+                 'field': 'delta', 'align': 'right'},
+            ]
+            preview_table = ui.table(
+                columns=columns, rows=rows, row_key='id',
+                selection='multiple',
+            ).props('flat bordered dense').classes('w-full')
+            # Pre-tick high-confidence; low-confidence needs explicit user click.
+            preview_table.selected = [
+                r for r in rows if r['confidence'] == 'high']
+
+            async def apply_selected():
+                chosen_ids = {r['id'] for r in preview_table.selected}
+                chosen = [p for idx, p in enumerate(proposals)
+                           if idx in chosen_ids]
+                if not chosen:
+                    ui.notify('Geen koppelingen geselecteerd',
+                               type='warning')
+                    return
+                applied = await apply_factuur_matches(DB_PATH, chosen)
+                nummers = ', '.join(p.factuur_nummer for p in chosen)
+                ui.notify(
+                    f'{applied} facturen als betaald gemarkeerd: {nummers}',
+                    type='positive')
+                dialog.close()
+                await refresh()
+
+            with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
+                ui.button('Annuleren', on_click=dialog.close).props('flat')
+                ui.button('Geselecteerde toepassen',
+                           on_click=apply_selected).props('color=primary')
+        dialog.open()
+
+    # -------------------------------------------------------------- #
     # Layout                                                         #
     # -------------------------------------------------------------- #
     with ui.column().classes('w-full p-6 max-w-7xl mx-auto gap-4'):
@@ -136,12 +281,18 @@ async def transacties_page(jaar: int | None = None,
         with ui.row().classes('w-full items-center'):
             page_title('Transacties')
             ui.space()
-            # Header action buttons — CSV upload / cash-entry / archief-
-            # import / matches-controleren are wired in later tasks.
+
+            # CSV upload — Rabobank CSV → banktransacties + factuur-match preview
+            ui.upload(
+                label='Importeer CSV',
+                on_upload=lambda e: asyncio.create_task(handle_csv_upload(e)),
+                auto_upload=True,
+            ).props('accept=".csv" flat color=primary').classes('w-44')
+
             match_btn_ref['button'] = ui.button(
                 'Matches controleren (0)',
                 icon='link',
-                on_click=lambda: None)  # wired in Task 19
+                on_click=lambda: asyncio.create_task(_open_match_dialog_manually()))
             match_btn_ref['button'].props('flat color=primary dense')
             match_btn_ref['button'].set_visibility(False)
 
