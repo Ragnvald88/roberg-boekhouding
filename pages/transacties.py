@@ -7,6 +7,7 @@ bon koppelen + cash entries + privé) into a single decision surface.
 import asyncio
 import inspect
 from datetime import date, datetime
+from itertools import groupby
 from pathlib import Path
 
 from nicegui import ui
@@ -31,6 +32,7 @@ from database import (
     delete_banktransacties, delete_uitgave,
     mark_banktx_genegeerd,
     get_uitgaven, get_fiscale_params,
+    find_banktx_matches_for_pdf,
 )
 from import_.rabobank_csv import parse_rabobank_csv
 
@@ -261,6 +263,199 @@ async def open_add_uitgave_dialog(
             ).props('color=primary')
 
     dialog.open()
+
+
+async def open_import_dialog(
+    default_jaar: int,
+    refresh,
+    jaren_opts,
+    repr_aftrek_pct: int = 80,
+):
+    """Archief-PDF importeer dialog. Scans the financieel-archief per jaar,
+    groups PDFs by categorie, and offers per-file Import links that open
+    open_add_uitgave_dialog with prefilled datum/categorie/pdf_path/bank_tx_id.
+
+    Extracted from pages/kosten.py during the consolidation.
+    """
+    from import_.expense_utils import scan_archive
+
+    with ui.dialog() as import_dialog, \
+            ui.card().classes('w-full q-pa-lg').style('max-width: 800px'):
+        ui.label('Uitgaven importeren').classes('text-h5 q-mb-md')
+
+        import_jaar = {'value': default_jaar}
+        list_container = {'ref': None}
+
+        async def load_archive():
+            """Scan archive and render file list."""
+            container = list_container['ref']
+            if not container:
+                return
+            container.clear()
+
+            jaar = import_jaar['value']
+
+            # Existing pdf_pad values for dedup detection
+            existing_uitgaven = await get_uitgaven(DB_PATH, jaar=jaar)
+            existing_filenames = set()
+            for u in existing_uitgaven:
+                if u.pdf_pad:
+                    existing_filenames.add(Path(u.pdf_pad).name)
+
+            items = scan_archive(jaar, existing_filenames)
+            if not items:
+                with container:
+                    ui.label(
+                        f'Geen uitgaven gevonden in archief voor {jaar}'
+                    ).classes('text-grey q-pa-md')
+                return
+
+            imported_count = sum(
+                1 for i in items if i['already_imported'])
+
+            # Pre-compute bank-tx match hints for unmatched items (one async
+            # pass; subsequent rendering is sync).
+            match_map: dict[str, list] = {}
+            match_tasks = [
+                (it['filename'],
+                 find_banktx_matches_for_pdf(
+                     DB_PATH, it['filename'], jaar))
+                for it in items if not it['already_imported']
+            ]
+            if match_tasks:
+                results = await asyncio.gather(
+                    *(t[1] for t in match_tasks))
+                for (fname, _), res in zip(match_tasks, results):
+                    match_map[fname] = res
+
+            with container:
+                ui.label(
+                    f'{len(items)} bestanden gevonden, '
+                    f'{imported_count} al geïmporteerd'
+                ).classes('text-caption text-grey q-mb-sm')
+
+                # Group by categorie
+                items_sorted = sorted(
+                    items, key=lambda x: x['categorie'])
+                for cat, group_iter in groupby(
+                    items_sorted, key=lambda x: x['categorie']
+                ):
+                    group_list = list(group_iter)
+                    cat_imported = sum(
+                        1 for g in group_list if g['already_imported']
+                    )
+
+                    with ui.expansion(
+                        f'{cat} ({len(group_list)})',
+                        caption=(f'{cat_imported} geïmporteerd'
+                                 if cat_imported else None),
+                    ).classes('w-full'):
+                        for item in group_list:
+                            with ui.row().classes(
+                                'w-full items-center gap-2 q-py-xs'
+                            ):
+                                if item['already_imported']:
+                                    ui.icon(
+                                        'check_circle', color='positive'
+                                    ).classes('text-lg')
+                                    ui.label(
+                                        item['filename']
+                                    ).classes('text-grey')
+                                    if item['datum']:
+                                        ui.label(
+                                            item['datum']
+                                        ).classes(
+                                            'text-caption text-grey')
+                                else:
+                                    item_matches = match_map.get(
+                                        item['filename'], [])
+                                    top_match = (item_matches[0]
+                                                 if item_matches else None)
+
+                                    async def do_import(
+                                        it=item, bank_match=top_match,
+                                    ):
+                                        prefill = {
+                                            'datum': (
+                                                it['datum']
+                                                or (bank_match[1]
+                                                    if bank_match
+                                                    else date.today()
+                                                    .isoformat())
+                                            ),
+                                            'categorie':
+                                                it['categorie'],
+                                            'pdf_path':
+                                                str(it['path']),
+                                        }
+                                        if bank_match:
+                                            prefill['bank_tx_id'] = (
+                                                bank_match[0])
+                                        await open_add_uitgave_dialog(
+                                            prefill=prefill,
+                                            on_saved=load_archive,
+                                            refresh=refresh,
+                                            repr_aftrek_pct=repr_aftrek_pct,
+                                        )
+
+                                    ui.icon(
+                                        'upload_file', color='primary'
+                                    ).classes('text-lg')
+                                    ui.link(
+                                        item['filename'],
+                                        on_click=do_import,
+                                    ).classes(
+                                        'text-primary cursor-pointer')
+                                    if item['datum']:
+                                        ui.label(
+                                            item['datum']
+                                        ).classes(
+                                            'text-caption text-grey')
+                                    else:
+                                        ui.label(
+                                            'datum onbekend'
+                                        ).classes(
+                                            'text-caption text-orange')
+                                    if top_match:
+                                        ui.label(
+                                            f'↔ {top_match[3]} · '
+                                            f'{format_datum(top_match[1])} · '
+                                            f'{format_euro(top_match[2])}'
+                                        ).classes(
+                                            'text-caption text-primary')
+
+        # Year selector
+        import_jaar_select = ui.select(
+            {j: str(j) for j in jaren_opts},
+            label='Jaar', value=import_jaar['value'],
+        ).classes('w-32')
+
+        async def on_import_jaar_change():
+            import_jaar['value'] = import_jaar_select.value
+            await load_archive()
+
+        import_jaar_select.on(
+            'update:model-value', lambda: on_import_jaar_change())
+
+        # File list
+        with ui.scroll_area().classes('w-full').style(
+                'max-height: 60vh'):
+            list_container['ref'] = ui.column().classes('w-full')
+
+        # Footer
+        with ui.row().classes('w-full justify-end q-mt-md'):
+            ui.button(
+                'Sluiten', on_click=import_dialog.close
+            ).props('flat')
+
+        await load_archive()
+
+    async def on_import_close():
+        if refresh:
+            await refresh()
+
+    import_dialog.on('hide', on_import_close)
+    import_dialog.open()
 
 
 @ui.page('/transacties')
@@ -530,6 +725,15 @@ async def transacties_page(jaar: int | None = None,
                 on_upload=lambda e: asyncio.create_task(handle_csv_upload(e)),
                 auto_upload=True,
             ).props('accept=".csv" flat color=primary').classes('w-44')
+
+            # Archief-PDFs importeren — scan financieel-archief, import PDFs
+            ui.button('Archief-PDFs importeren', icon='folder_open',
+                       on_click=lambda: open_import_dialog(
+                           default_jaar=filter_jaar['value'],
+                           refresh=refresh,
+                           jaren_opts=year_options(),
+                           repr_aftrek_pct=repr_aftrek_pct)) \
+                .props('flat color=secondary dense')
 
             match_btn_ref['button'] = ui.button(
                 'Matches controleren (0)',
