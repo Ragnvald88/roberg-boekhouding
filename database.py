@@ -3670,3 +3670,56 @@ async def get_kosten_per_maand(db_path: Path, jaar: int) -> list[float]:
             if 0 <= idx < 12:
                 out[idx] = float(r["total"])
     return out
+
+
+async def get_terugkerende_kosten(
+    db_path: Path,
+    jaar: int,
+    min_count: int = 3,
+    window_days: int = 365,
+) -> list[dict]:
+    """Tegenpartijen met >=min_count uitgaven in de laatste window_days.
+
+    The count threshold uses a rolling window ending at jaar-end; the total
+    reported is the SUM over the full jaar (Jan 1 -> Dec 31). Excludes
+    genegeerd bank txs.
+
+    Returns: list of {'tegenpartij', 'count', 'jaar_totaal', 'laatste_datum'}
+    sorted by jaar_totaal DESC.
+    """
+    from datetime import datetime as _dt, timedelta as _td
+    jaar_start = f"{jaar:04d}-01-01"
+    jaar_end = f"{jaar + 1:04d}-01-01"
+    window_start = (_dt.strptime(jaar_end, "%Y-%m-%d")
+                    - _td(days=window_days)).strftime("%Y-%m-%d")
+
+    sql = """
+    SELECT LOWER(b.tegenpartij) AS tp_lower,
+           MAX(b.tegenpartij)   AS tp_display,
+           COUNT(*)             AS cnt,
+           SUM(CASE WHEN u.datum >= ? AND u.datum < ?
+                    THEN ABS(u.bedrag) ELSE 0 END) AS jaar_totaal,
+           MAX(u.datum)         AS laatste
+    FROM uitgaven u
+    JOIN banktransacties b ON u.bank_tx_id = b.id
+    WHERE b.genegeerd = 0
+      AND u.datum >= ? AND u.datum < ?
+      AND TRIM(COALESCE(b.tegenpartij, '')) != ''
+    GROUP BY LOWER(b.tegenpartij)
+    HAVING COUNT(*) >= ?
+    ORDER BY jaar_totaal DESC
+    """
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            sql,
+            (jaar_start, jaar_end,
+             window_start, jaar_end,
+             min_count))
+        raw = await cur.fetchall()
+    return [
+        {'tegenpartij': r['tp_display'],
+         'count': r['cnt'],
+         'jaar_totaal': float(r['jaar_totaal']),
+         'laatste_datum': r['laatste']}
+        for r in raw
+    ]
