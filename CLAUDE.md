@@ -93,7 +93,8 @@ Concept (grey) → Verstuurd (blue/info) → Betaald (green/positive)
 - **Jaar-lock (K6)**: zodra `jaarafsluiting_status='definitief'` weigert elke mutatie op facturen, werkdagen, uitgaven, banktransacties en fiscale_params van dat jaar met `YearLockedError` (subclass van `ValueError`). Guard zit in `assert_year_writable(db_path, jaar_of_datum)` helper. Unfreeze-escape: `update_jaarafsluiting_status(jaar, 'concept')` — die functie is als enige ongeguarded zodat "Heropenen" altijd werkt. Na heropenen → correcties → opnieuw definitief maken overschrijft het snapshot. Alle guards zijn getest in `tests/test_year_locking.py`.
 - **Bank matching**: `find_factuur_matches` retourneert `MatchProposal` met `confidence='high'|'low'`. Preview-dialoog gating: user bevestigt matches vóór toepassing. `apply_factuur_matches` gaat via `update_factuur_status`.
 - **PDF-pad resolutie**: lees `pdf_pad` nooit direct — gebruik `_resolve_pdf_pad(row)` uit `pages/facturen.py`. Die probeert de stored path, valt terug op basename-lookup in `PDF_DIR` en `PDF_DIR/imports/`, en update de DB stilletjes bij fallback-hit (self-healing bij data-dir moves). Pure variant `_find_pdf_by_filename(stored, base)` is unit-getest met tmp_path.
-- **Category suggestions op bank**: `get_categorie_suggestions(db)` bouwt een lowercase `tegenpartij → most-used categorie` map. Tie-breaker: `cnt DESC, MAX(datum) DESC`. UI toont toverstaf-knop (`auto_fix_high`) naast q-select **alleen op positieve rijen** — debit-rijen zijn read-only (zie Kosten-pagina).
+- **Category suggestions**: `get_categorie_suggestions(db)` bouwt een lowercase `tegenpartij → most-used categorie` map via UNION ALL van twee bronnen: debit-uitgaven (`uitgaven.categorie JOIN banktransacties` — source of truth post-migratie 27) en positieve banktransacties (`banktransacties.categorie` — Omzet/Prive/Belasting/AOV). Tie-breaker: `cnt DESC, MAX(datum) DESC`. UI toont toverstaf-knop (`auto_fix_high`) naast q-select op **alle** ongecategoriseerde rijen (debit, positief én manueel) in `/transacties`.
+- **Bank-matching dialoog**: `find_factuur_matches` + `apply_factuur_matches` blijven ongewijzigd; preview-dialoog leeft nu op `/transacties` (triggert na CSV-import én via "Matches controleren (N)" header-knop zolang er proposals liggen).
 - **Dashboard health alerts**: `get_health_alerts(db, jaar)` geeft `list[dict]` met keys `key/severity/message/count/link`. Types: `uncategorized_bank`, `overdue_invoices`, `concept_invoices`, `missing_fiscal_params`. Rendered in `pages/dashboard.py` onder de AANDACHTSPUNTEN-sectie.
 - **Jaarafsluiting pre-flight**: `compute_checklist_issues(db_path, jaar)` in `pages/jaarafsluiting.py` geeft `list[tuple[severity, message, link]]`. Gebruikt door zowel de Controles-tab als de definitief-gate (soft gate, user kan doorgaan).
 
@@ -124,6 +125,18 @@ status, categorie, type, search, include_genegeerd)` in `database.py`.
 - **Bulk**: Categorie wijzigen · Markeer als privé (bank-only) · Verwijderen.
 - **Query-params**: `?jaar/maand/status/categorie/type/search` pre-populate
   filters. Used for click-through from `/kosten`.
+- **Sign convention in `TransactieRow.bedrag`**: signed. Bank debits keep
+  their stored negative; bank credits keep their stored positive; manual
+  cash uitgaven are normalised to negative via `-ABS(u.bedrag)` in the SQL.
+  UI colours by sign (teal ≥ 0, red < 0). KPI callers that need
+  positive-totals (`get_kpi_kosten`) use `abs(r.bedrag)` + filter
+  `r.bedrag < 0`.
+- **Dynamic `ARCHIVE_BASE` reference** (monkeypatch-friendly): consumer
+  modules (`import_/expense_utils.py` etc.) use `from components import
+  archive_paths` + `archive_paths.ARCHIVE_BASE` (attribute lookup at call
+  time), NOT `from components.archive_paths import ARCHIVE_BASE`. Tests
+  monkeypatch the module attribute; the attribute form propagates, the
+  direct-import form does not.
 
 ### Kosten-pagina (`/kosten`) — overzicht
 
