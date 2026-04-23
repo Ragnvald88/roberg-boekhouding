@@ -3376,19 +3376,32 @@ async def get_kosten_view(
 async def get_transacties_view(
     db_path: Path,
     jaar: int,
+    maand: int | None = None,
+    status: str | None = None,
+    categorie: str | None = None,
+    type: str | None = None,                   # 'bank' | 'contant' | None
+    search: str | None = None,
+    include_genegeerd: bool = False,
 ) -> list[TransactieRow]:
     """Unified view — bank debits + bank credits + manual cash uitgaven.
 
-    Post-filtering (status / categorie / type / search / maand /
-    include_genegeerd) is added in Task 4. This base version excludes
-    ``genegeerd=1`` rows by default; inclusion lands in Task 4.
+    Post-filters (status/categorie/type/search/maand/include_genegeerd)
+    are applied in Python at single-user scale. The date range uses the
+    idx_banktransacties_datum / idx_uitgaven_datum indexes.
+
+    ``include_genegeerd=True`` is required to surface privé-verborgen rows
+    (status='prive_verborgen'); by default they are filtered in SQL so the
+    default query path stays cheap.
     """
     from components.kosten_helpers import derive_status
 
     jaar_start = f"{jaar:04d}-01-01"
     jaar_end = f"{jaar + 1:04d}-01-01"
 
-    sql = """
+    # genegeerd filter moves into the WHERE clause conditionally.
+    gen_bank = "" if include_genegeerd else "AND b.genegeerd = 0 "
+
+    sql = f"""
     SELECT * FROM (
         SELECT 'bank_debit' AS source,
                b.id AS id_bank, u.id AS id_uitgave,
@@ -3406,7 +3419,7 @@ async def get_transacties_view(
                b.genegeerd AS genegeerd
         FROM banktransacties b
         LEFT JOIN uitgaven u ON u.bank_tx_id = b.id
-        WHERE b.bedrag < 0 AND b.genegeerd = 0
+        WHERE b.bedrag < 0 {gen_bank}
           AND b.datum >= ? AND b.datum < ?
 
         UNION ALL
@@ -3419,7 +3432,7 @@ async def get_transacties_view(
                '' AS pdf_pad, 0 AS is_investering, NULL AS zakelijk_pct,
                b.koppeling_type, b.koppeling_id, b.genegeerd
         FROM banktransacties b
-        WHERE b.bedrag >= 0 AND b.genegeerd = 0
+        WHERE b.bedrag >= 0 {gen_bank}
           AND b.datum >= ? AND b.datum < ?
 
         UNION ALL
@@ -3444,7 +3457,7 @@ async def get_transacties_view(
              jaar_start, jaar_end))
         raw = await cur.fetchall()
 
-    out: list[TransactieRow] = []
+    rows: list[TransactieRow] = []
     for r in raw:
         row_dict = {
             "id_bank": r["id_bank"],
@@ -3455,7 +3468,7 @@ async def get_transacties_view(
             "bedrag": r["bedrag"],
             "koppeling_type": r["koppeling_type"],
         }
-        out.append(TransactieRow(
+        rows.append(TransactieRow(
             source=r["source"],
             id_bank=r["id_bank"],
             id_uitgave=r["id_uitgave"],
@@ -3474,7 +3487,27 @@ async def get_transacties_view(
             status=derive_status(row_dict),
             is_manual=(r["source"] == "manual"),
         ))
-    return out
+
+    # Python-side post-filters
+    if type == 'bank':
+        rows = [r for r in rows if not r.is_manual]
+    elif type == 'contant':
+        rows = [r for r in rows if r.is_manual]
+    if maand is not None:
+        mm = f"{maand:02d}"
+        rows = [r for r in rows if r.datum[5:7] == mm]
+    if status is not None:
+        rows = [r for r in rows if r.status == status]
+    if categorie:
+        rows = [r for r in rows if r.categorie == categorie]
+    if search:
+        q = search.lower()
+        rows = [r for r in rows if (
+            q in r.tegenpartij.lower()
+            or q in r.omschrijving.lower()
+            or q in f"{abs(r.bedrag):.2f}"
+        )]
+    return rows
 
 
 @dataclass

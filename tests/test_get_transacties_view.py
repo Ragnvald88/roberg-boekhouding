@@ -107,3 +107,89 @@ async def test_bank_debit_join_picks_up_linked_uitgave(db):
     assert r.categorie == 'Telefoon/KPN'
     assert r.pdf_pad == '/tmp/x.pdf'
     assert r.status == 'compleet'
+
+
+@pytest.mark.asyncio
+async def test_type_filter_bank_excludes_manual(db):
+    await _seed_banktx(db, 1, '2026-03-01', -10)
+    await _seed_uitgave(db, '2026-03-02', 20, categorie='Bankkosten')
+    rows = await get_transacties_view(db, jaar=2026, type='bank')
+    assert [r.source for r in rows] == ['bank_debit']
+
+
+@pytest.mark.asyncio
+async def test_type_filter_contant_excludes_bank(db):
+    await _seed_banktx(db, 1, '2026-03-01', -10)
+    await _seed_uitgave(db, '2026-03-02', 20, categorie='Bankkosten')
+    rows = await get_transacties_view(db, jaar=2026, type='contant')
+    assert [r.source for r in rows] == ['manual']
+
+
+@pytest.mark.asyncio
+async def test_status_filter_ongecategoriseerd(db):
+    await _seed_banktx(db, 1, '2026-03-01', -10)     # no uitgave → ongecat
+    bid2 = 2
+    await _seed_banktx(db, bid2, '2026-03-02', -20)  # cat + bon → compleet
+    await _seed_uitgave(db, '2026-03-02', 20,
+                         categorie='Bankkosten', pdf_pad='/x.pdf',
+                         bank_tx_id=bid2)
+    rows = await get_transacties_view(
+        db, jaar=2026, status='ongecategoriseerd')
+    assert [r.id_bank for r in rows] == [1]
+
+
+@pytest.mark.asyncio
+async def test_status_filter_gekoppeld_factuur(db):
+    await _seed_banktx(db, 1, '2026-03-01', 100,
+                        koppeling_type='factuur', koppeling_id=42)
+    await _seed_banktx(db, 2, '2026-03-02', 200)  # unmatched
+    rows = await get_transacties_view(
+        db, jaar=2026, status='gekoppeld_factuur')
+    assert [r.id_bank for r in rows] == [1]
+
+
+@pytest.mark.asyncio
+async def test_categorie_filter(db):
+    await _seed_banktx(db, 1, '2026-03-01', -10)
+    await _seed_uitgave(db, '2026-03-01', 10,
+                         categorie='Telefoon/KPN', bank_tx_id=1)
+    await _seed_banktx(db, 2, '2026-03-02', -20)
+    await _seed_uitgave(db, '2026-03-02', 20,
+                         categorie='Bankkosten', bank_tx_id=2)
+    rows = await get_transacties_view(
+        db, jaar=2026, categorie='Telefoon/KPN')
+    assert [r.id_bank for r in rows] == [1]
+
+
+@pytest.mark.asyncio
+async def test_search_filter_on_tegenpartij(db):
+    await _seed_banktx(db, 1, '2026-03-01', -10, tegenpartij='KPN B.V.')
+    await _seed_banktx(db, 2, '2026-03-02', -20, tegenpartij='Shell')
+    rows = await get_transacties_view(db, jaar=2026, search='kpn')
+    assert [r.id_bank for r in rows] == [1]
+
+
+@pytest.mark.asyncio
+async def test_maand_filter(db):
+    await _seed_banktx(db, 1, '2026-02-28', -10)
+    await _seed_banktx(db, 2, '2026-03-01', -20)
+    await _seed_banktx(db, 3, '2026-03-31', -30)
+    await _seed_banktx(db, 4, '2026-04-01', -40)
+    rows = await get_transacties_view(db, jaar=2026, maand=3)
+    assert sorted(r.id_bank for r in rows) == [2, 3]
+
+
+@pytest.mark.asyncio
+async def test_include_genegeerd_default_excludes(db):
+    await _seed_banktx(db, 1, '2026-03-01', -10, genegeerd=1)
+    rows = await get_transacties_view(db, jaar=2026)
+    assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_include_genegeerd_true_returns_row(db):
+    await _seed_banktx(db, 1, '2026-03-01', -10, genegeerd=1)
+    rows = await get_transacties_view(
+        db, jaar=2026, include_genegeerd=True)
+    assert len(rows) == 1
+    assert rows[0].status == 'prive_verborgen'
