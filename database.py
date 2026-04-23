@@ -1417,6 +1417,20 @@ async def get_uitgaven(db_path: Path = DB_PATH, jaar: int = None,
         return [_row_to_uitgave(r) for r in rows]
 
 
+async def get_uitgave_by_id(db_path: Path, uitgave_id: int) -> Uitgave | None:
+    """Targeted fetch — single uitgave by id. Returns None if not found.
+
+    Replaces the list-and-filter pattern (``get_uitgaven(jaar=…)`` then
+    ``next(x for x in … if x.id == …)``) used in the detail-dialog bootstrap,
+    which silently returns None on degenerate races. See polish item M5.
+    """
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            "SELECT * FROM uitgaven WHERE id = ?", (uitgave_id,))
+        row = await cur.fetchone()
+    return _row_to_uitgave(row) if row else None
+
+
 async def add_uitgave(db_path: Path = DB_PATH, **kwargs) -> int:
     _validate_datum(kwargs['datum'])
     await assert_year_writable(db_path, kwargs['datum'])
