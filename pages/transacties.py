@@ -15,11 +15,13 @@ from components.utils import (
 )
 from components.shared_ui import year_options
 from components.kosten_helpers import (
-    derive_status, tegenpartij_color, initials,
+    tegenpartij_color, initials,
 )
+from components.transacties_dialog import _open_detail_dialog
 from database import (
     DB_PATH, get_transacties_view, get_categorie_suggestions,
-    find_factuur_matches,
+    find_factuur_matches, set_banktx_categorie, update_uitgave,
+    YearLockedError,
 )
 
 
@@ -238,6 +240,155 @@ async def transacties_page(jaar: int | None = None,
                   Geen transacties gevonden.
                 </q-td></q-tr>
             ''')
+
+            table.add_slot('body', r"""
+                <q-tr :props="props"
+                       :class="{
+                           'bg-teal-1': props.row.status === 'gekoppeld_factuur',
+                           'bg-amber-1': props.row.status === 'ontbreekt_bon',
+                           'bg-red-1': props.row.status === 'ongecategoriseerd',
+                           'bg-grey-3': props.row.status === 'prive_verborgen',
+                       }">
+                    <q-td auto-width>
+                        <q-checkbox v-model="props.selected" dense />
+                    </q-td>
+                    <q-td key="datum" :props="props">{{ props.row.datum_fmt }}</q-td>
+                    <q-td key="tegenpartij" :props="props">
+                        <div class="row items-center q-gutter-sm"
+                             style="width:100%;flex-wrap:nowrap;">
+                            <div :style="`background:${props.row.color};
+                                          color:white;
+                                          width:30px;height:30px;
+                                          border-radius:7px;
+                                          display:grid;place-items:center;
+                                          font-weight:700;font-size:11px;
+                                          flex-shrink:0;`">
+                                {{ props.row.initials }}
+                            </div>
+                            <div style="min-width:0;flex:1;">
+                                <div style="font-weight:500;
+                                             white-space:nowrap;
+                                             overflow:hidden;
+                                             text-overflow:ellipsis;"
+                                     :title="props.row.tegenpartij">
+                                    {{ props.row.tegenpartij }}
+                                </div>
+                                <div class="text-caption text-grey"
+                                     v-if="props.row.omschrijving &&
+                                            props.row.omschrijving !== props.row.tegenpartij"
+                                     :title="props.row.omschrijving"
+                                     style="white-space:nowrap;
+                                             overflow:hidden;
+                                             text-overflow:ellipsis;">
+                                    {{ props.row.omschrijving }}
+                                </div>
+                            </div>
+                        </div>
+                    </q-td>
+                    <q-td key="categorie" :props="props">
+                        <div style="display:flex;align-items:center;gap:4px">
+                            <q-select
+                                :model-value="props.row.categorie"
+                                :options="props.row.cat_options"
+                                dense borderless emit-value map-options
+                                placeholder="— kies —"
+                                @update:model-value="val => $parent.$emit('set_cat',
+                                                                          {row: props.row,
+                                                                           cat: val})"
+                                style="min-width:160px" />
+                            <q-btn v-if="props.row.suggested_categorie && !props.row.categorie"
+                                icon="auto_fix_high" flat dense round size="xs" color="primary"
+                                :title="'Toepassen: ' + props.row.suggested_categorie"
+                                @click="() => $parent.$emit('set_cat',
+                                                             {row: props.row,
+                                                              cat: props.row.suggested_categorie})" />
+                        </div>
+                    </q-td>
+                    <q-td key="bedrag" :props="props"
+                           :class="props.row.bedrag >= 0
+                                    ? 'text-teal-8 text-bold'
+                                    : 'text-red-8 text-bold'"
+                           style="text-align:right;
+                                  font-variant-numeric:tabular-nums">
+                        {{ props.row.bedrag_fmt }}
+                    </q-td>
+                    <q-td key="status_chip" :props="props">
+                        <q-chip v-if="props.row.status === 'compleet'"
+                                color="positive" text-color="white" size="sm"
+                                icon="check_circle" dense>Compleet</q-chip>
+                        <q-chip v-else-if="props.row.status === 'ontbreekt_bon'"
+                                color="warning" text-color="white" size="sm"
+                                icon="warning" dense>Bon ontbreekt</q-chip>
+                        <q-chip v-else-if="props.row.status === 'gekoppeld_factuur'"
+                                color="info" text-color="white" size="sm"
+                                icon="link" dense>Gekoppeld</q-chip>
+                        <q-chip v-else-if="props.row.status === 'gecategoriseerd'"
+                                color="grey-7" text-color="white" size="sm" dense>
+                            {{ props.row.categorie }}
+                        </q-chip>
+                        <q-chip v-else-if="props.row.status === 'prive_verborgen'"
+                                color="grey-5" text-color="white" size="sm"
+                                icon="visibility_off" dense>Privé</q-chip>
+                        <q-chip v-else color="negative" text-color="white" size="sm"
+                                dense>Nieuw</q-chip>
+                        <q-chip v-if="props.row.is_manual" color="grey-5"
+                                text-color="white" size="sm" dense
+                                style="margin-left:4px">contant</q-chip>
+                    </q-td>
+                    <q-td key="acties" :props="props">
+                        <q-btn v-if="props.row.bedrag < 0" flat dense round
+                               icon="attach_file" size="sm" color="primary"
+                               title="Bon toevoegen"
+                               @click="$parent.$emit('attach_pdf', props.row)" />
+                        <q-btn flat dense round icon="more_horiz" size="sm"
+                               color="grey-7"
+                               @click="$parent.$emit('open_detail', props.row)" />
+                        <q-btn flat dense round icon="delete" size="sm"
+                               color="negative"
+                               @click="$parent.$emit('delete_row', props.row)" />
+                    </q-td>
+                </q-tr>
+            """)
+
+        # -------------------------------------------------------------- #
+        # Row handlers                                                   #
+        # -------------------------------------------------------------- #
+        async def _on_set_cat(args: dict):
+            """Categorie change routed by sign.
+
+            Bank rows (debit OR credit) → set_banktx_categorie (sign-aware
+            inside — debits lazy-create uitgave; credits write to
+            banktransacties.categorie). Manual rows → update_uitgave.
+            Year-locked: YearLockedError surfaces via ui.notify.
+            """
+            row = args['row']
+            cat = args['cat'] or ''
+            try:
+                if row['id_bank'] is not None:
+                    await set_banktx_categorie(
+                        DB_PATH, bank_tx_id=row['id_bank'], categorie=cat)
+                else:
+                    await update_uitgave(
+                        DB_PATH, uitgave_id=row['id_uitgave'], categorie=cat)
+                ui.notify(f'Categorie: {cat or "(leeggemaakt)"}',
+                           type='positive')
+                await refresh()
+            except YearLockedError as e:
+                ui.notify(str(e), type='negative')
+
+        async def _open_detail(row: dict):
+            await _open_detail_dialog(row, refresh, default_tab='detail')
+
+        async def _open_factuur(row: dict):
+            await _open_detail_dialog(row, refresh, default_tab='factuur')
+
+        table.on('set_cat',
+                  lambda e: asyncio.create_task(_on_set_cat(e.args)))
+        table.on('open_detail',
+                  lambda e: asyncio.create_task(_open_detail(e.args)))
+        table.on('attach_pdf',
+                  lambda e: asyncio.create_task(_open_factuur(e.args)))
+        # delete_row is emitted by the trash button but wired in Task 15
 
         # Initial load
         await refresh()
