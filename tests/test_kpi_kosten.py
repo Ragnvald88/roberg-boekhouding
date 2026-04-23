@@ -80,6 +80,25 @@ async def test_kpi_afschrijvingen_nonzero_with_investment(db):
 
 
 @pytest.mark.asyncio
+async def test_kpi_ontbreekt_counts_linked_uitgave_missing_pdf(db):
+    """Regression: debit with linked uitgave + categorie but no pdf_pad
+    must count as ontbreekt_bon (status rename from "ontbreekt"
+    → "ontbreekt_bon" in Task 2)."""
+    await _seed_banktx(db, 1, "2026-04-01", -120.87)
+    async with aiosqlite.connect(db) as conn:
+        await conn.execute(
+            "INSERT INTO uitgaven "
+            "(datum, categorie, omschrijving, bedrag, pdf_pad, "
+            " bank_tx_id, is_investering, zakelijk_pct) "
+            "VALUES (?, 'Kantoor', 'x', ?, '', ?, 0, 100)",
+            ("2026-04-01", 120.87, 1))
+        await conn.commit()
+    kpi = await get_kpi_kosten(db, 2026)
+    assert kpi.ontbreekt_count >= 1
+    assert kpi.ontbreekt_bedrag == pytest.approx(120.87)
+
+
+@pytest.mark.asyncio
 async def test_kpi_excludes_genegeerd(db):
     await _seed_banktx(db, 1, "2026-04-01", -100.00)
     async with aiosqlite.connect(db) as conn:

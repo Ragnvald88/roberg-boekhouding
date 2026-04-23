@@ -3369,7 +3369,7 @@ async def get_kpi_kosten(db_path: Path, jaar: int) -> KpiKosten:
     ontbreekt) and ``get_investeringen_voor_afschrijving`` +
     ``bereken_afschrijving`` for the investment side.
 
-    ``ontbreekt_count`` aggregates BOTH ``ontbreekt`` and
+    ``ontbreekt_count`` aggregates BOTH ``ontbreekt_bon`` and
     ``ongecategoriseerd`` status rows — both mean "needs user action"
     and are shown in the same reconciliation inbox.
 
@@ -3392,11 +3392,11 @@ async def get_kpi_kosten(db_path: Path, jaar: int) -> KpiKosten:
         except (ValueError, IndexError):
             continue
 
-    # Ontbreekt_count counts BOTH "ontbreekt" and "ongecategoriseerd"
+    # Ontbreekt_count counts BOTH "ontbreekt_bon" and "ongecategoriseerd"
     # per spec §8 (both states mean "needs user attention"; they're
     # shown in the same inbox).
     ontbreekt_rows = [r for r in rows
-                      if r.status in ("ontbreekt", "ongecategoriseerd")]
+                      if r.status in ("ontbreekt_bon", "ongecategoriseerd")]
     ontbreekt_count = len(ontbreekt_rows)
     ontbreekt_bedrag = sum(r.bedrag for r in ontbreekt_rows)
 
