@@ -89,8 +89,56 @@ async def kosten_page():
 # Loader stubs — filled in Tasks 21-24                           #
 # -------------------------------------------------------------- #
 async def _laad_kpi(container, jaar):
-    """KPI strip — wired in Task 21."""
-    pass
+    """KPI strip: totaal kosten, te verwerken (→ /transacties),
+    afschrijvingen, investeringen count.
+
+    "Te verwerken" is clickable — navigates to /transacties filtered to
+    ongecategoriseerd so the user can continue the reconciliation flow.
+    """
+    if container is None:
+        return
+    container.clear()
+    kpi = await get_kpi_kosten(DB_PATH, jaar)
+
+    def _card(label: str, value: str, sub: str | None = None,
+              color: str = 'primary', icon: str | None = None,
+              on_click=None):
+        with ui.card().classes(
+                'flex-1 q-pa-md cursor-pointer' if on_click
+                else 'flex-1 q-pa-md') as c:
+            if on_click:
+                c.on('click', lambda _: on_click())
+            with ui.row().classes('items-center gap-2'):
+                if icon:
+                    ui.icon(icon, color=color).classes('text-lg')
+                ui.label(label).classes(
+                    'text-caption text-uppercase text-grey')
+            ui.label(value).classes('text-h5 text-bold q-mt-xs') \
+                .style('font-variant-numeric: tabular-nums')
+            if sub:
+                ui.label(sub).classes('text-caption text-grey')
+
+    with container:
+        _card(f'Totaal kosten {jaar}',
+              format_euro(kpi.totaal),
+              f'{len([m for m in kpi.monthly_totals if m>0])} actieve maanden')
+
+        _card('Te verwerken',
+              str(kpi.ontbreekt_count),
+              format_euro(kpi.ontbreekt_bedrag),
+              color='warning', icon='warning',
+              on_click=lambda: ui.navigate.to(
+                  f'/transacties?status=ongecategoriseerd&jaar={jaar}'))
+
+        _card(f'Afschrijvingen {jaar}',
+              format_euro(kpi.afschrijvingen_jaar),
+              'Zie tab Investeringen',
+              icon='trending_down')
+
+        _card(f'Investeringen {jaar}',
+              str(kpi.investeringen_count),
+              format_euro(kpi.investeringen_bedrag),
+              icon='inventory_2')
 
 
 async def _laad_per_maand(container, jaar):
