@@ -81,6 +81,33 @@ class KostenRow:
     genegeerd: int = 0
 
 
+@dataclass
+class TransactieRow:
+    """Unified row for /transacties. Covers bank-debit, bank-credit, manual cash.
+
+    ``bedrag`` is signed: + for income (bank credits), − for costs (debits +
+    manual). This uniformity lets the UI colour cells by sign without needing
+    ``source`` lookups.
+    """
+    source: str                    # 'bank_debit' | 'bank_credit' | 'manual'
+    id_bank: int | None
+    id_uitgave: int | None
+    datum: str
+    bedrag: float                  # signed
+    tegenpartij: str
+    omschrijving: str
+    iban: str
+    categorie: str
+    pdf_pad: str
+    is_investering: bool
+    zakelijk_pct: int | None
+    koppeling_type: str | None
+    koppeling_id: int | None
+    genegeerd: int
+    status: str                    # derived via derive_status
+    is_manual: bool                # True only for source == 'manual'
+
+
 _DEFAULT_DB_DIR = Path.home() / "Library" / "Application Support" / "Boekhouding" / "data"
 _ENV_OVERRIDE = os.environ.get("BOEKHOUDING_DB_DIR")
 _DB_DIR = Path(_ENV_OVERRIDE).expanduser() if _ENV_OVERRIDE else _DEFAULT_DB_DIR
@@ -3344,6 +3371,110 @@ async def get_kosten_view(
                 or q in r.omschrijving.lower()
                 or q in f"{r.bedrag:.2f}"]
     return rows
+
+
+async def get_transacties_view(
+    db_path: Path,
+    jaar: int,
+) -> list[TransactieRow]:
+    """Unified view — bank debits + bank credits + manual cash uitgaven.
+
+    Post-filtering (status / categorie / type / search / maand /
+    include_genegeerd) is added in Task 4. This base version excludes
+    ``genegeerd=1`` rows by default; inclusion lands in Task 4.
+    """
+    from components.kosten_helpers import derive_status
+
+    jaar_start = f"{jaar:04d}-01-01"
+    jaar_end = f"{jaar + 1:04d}-01-01"
+
+    sql = """
+    SELECT * FROM (
+        SELECT 'bank_debit' AS source,
+               b.id AS id_bank, u.id AS id_uitgave,
+               b.datum AS datum, b.bedrag AS bedrag,
+               COALESCE(b.tegenpartij, '') AS tegenpartij,
+               COALESCE(NULLIF(u.omschrijving, ''), b.omschrijving, '')
+                 AS omschrijving,
+               COALESCE(b.tegenrekening, '') AS iban,
+               COALESCE(u.categorie, '') AS categorie,
+               COALESCE(u.pdf_pad, '') AS pdf_pad,
+               COALESCE(u.is_investering, 0) AS is_investering,
+               u.zakelijk_pct AS zakelijk_pct,
+               b.koppeling_type AS koppeling_type,
+               b.koppeling_id AS koppeling_id,
+               b.genegeerd AS genegeerd
+        FROM banktransacties b
+        LEFT JOIN uitgaven u ON u.bank_tx_id = b.id
+        WHERE b.bedrag < 0 AND b.genegeerd = 0
+          AND b.datum >= ? AND b.datum < ?
+
+        UNION ALL
+
+        SELECT 'bank_credit' AS source,
+               b.id AS id_bank, NULL AS id_uitgave,
+               b.datum, b.bedrag,
+               COALESCE(b.tegenpartij, ''), COALESCE(b.omschrijving, ''),
+               COALESCE(b.tegenrekening, ''), COALESCE(b.categorie, ''),
+               '' AS pdf_pad, 0 AS is_investering, NULL AS zakelijk_pct,
+               b.koppeling_type, b.koppeling_id, b.genegeerd
+        FROM banktransacties b
+        WHERE b.bedrag >= 0 AND b.genegeerd = 0
+          AND b.datum >= ? AND b.datum < ?
+
+        UNION ALL
+
+        SELECT 'manual' AS source,
+               NULL AS id_bank, u.id AS id_uitgave,
+               u.datum, -ABS(u.bedrag) AS bedrag,
+               '' AS tegenpartij, u.omschrijving, '' AS iban,
+               u.categorie, COALESCE(u.pdf_pad, ''),
+               u.is_investering, u.zakelijk_pct,
+               NULL AS koppeling_type, NULL AS koppeling_id, 0 AS genegeerd
+        FROM uitgaven u
+        WHERE u.bank_tx_id IS NULL
+          AND u.datum >= ? AND u.datum < ?
+    )
+    ORDER BY datum DESC
+    """
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            sql,
+            (jaar_start, jaar_end, jaar_start, jaar_end,
+             jaar_start, jaar_end))
+        raw = await cur.fetchall()
+
+    out: list[TransactieRow] = []
+    for r in raw:
+        row_dict = {
+            "id_bank": r["id_bank"],
+            "id_uitgave": r["id_uitgave"],
+            "genegeerd": r["genegeerd"],
+            "categorie": r["categorie"],
+            "pdf_pad": r["pdf_pad"],
+            "bedrag": r["bedrag"],
+            "koppeling_type": r["koppeling_type"],
+        }
+        out.append(TransactieRow(
+            source=r["source"],
+            id_bank=r["id_bank"],
+            id_uitgave=r["id_uitgave"],
+            datum=r["datum"],
+            bedrag=r["bedrag"],
+            tegenpartij=r["tegenpartij"],
+            omschrijving=r["omschrijving"],
+            iban=r["iban"],
+            categorie=r["categorie"],
+            pdf_pad=r["pdf_pad"],
+            is_investering=bool(r["is_investering"]),
+            zakelijk_pct=r["zakelijk_pct"],
+            koppeling_type=r["koppeling_type"],
+            koppeling_id=r["koppeling_id"],
+            genegeerd=r["genegeerd"],
+            status=derive_status(row_dict),
+            is_manual=(r["source"] == "manual"),
+        ))
+    return out
 
 
 @dataclass
