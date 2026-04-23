@@ -40,6 +40,7 @@ DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib .venv/bin/python -m pytest tests/ -
 - `facturen.status` TEXT: `'concept'`, `'verstuurd'`, `'betaald'`
 - `facturen.type` TEXT: `'factuur'` (werkdag-backed), `'anw'` (imported ANW), `'vergoeding'` (ad-hoc)
 - `uitgaven.bank_tx_id` INTEGER nullable FK → `banktransacties(id) ON DELETE SET NULL` (migratie 26). Een uitgave kan 0-of-1-op-1 aan een bank-tx gekoppeld zijn. `NULL` = cash/contant-uitgave. Cascade-bij-delete is uitgesloten — fiscale records blijven altijd staan.
+- Migratie 28: `UNIQUE INDEX idx_uitgaven_bank_tx_unique ON uitgaven(bank_tx_id) WHERE bank_tx_id IS NOT NULL` — enforces at-most-one uitgave per bank_tx at DB level (closes Importeer duplicate-link race). Partial index; NULL cash uitgaven remain unconstrained.
 - `banktransacties.genegeerd` INTEGER NOT NULL DEFAULT 0 CHECK (0|1) — `1` = niet-zakelijk (privé-storting, ATM, overboeking), verborgen uit Kosten-overzicht. Alleen toggle via `mark_banktx_genegeerd()` (year-locked).
 - SQLite op lokaal filesystem (`~/Library/Application Support/Boekhouding/data/`), NIET op cloud-sync (WAL+SynologyDrive/iCloud = silent corruption). Override via `BOEKHOUDING_DB_DIR` env var voor tests.
 - **Backup**: `VACUUM INTO` (atomair), NOOIT live-file copy van `.sqlite3`
@@ -96,24 +97,50 @@ Concept (grey) → Verstuurd (blue/info) → Betaald (green/positive)
 - **Dashboard health alerts**: `get_health_alerts(db, jaar)` geeft `list[dict]` met keys `key/severity/message/count/link`. Types: `uncategorized_bank`, `overdue_invoices`, `concept_invoices`, `missing_fiscal_params`. Rendered in `pages/dashboard.py` onder de AANDACHTSPUNTEN-sectie.
 - **Jaarafsluiting pre-flight**: `compute_checklist_issues(db_path, jaar)` in `pages/jaarafsluiting.py` geeft `list[tuple[severity, message, link]]`. Gebruikt door zowel de Controles-tab als de definitief-gate (soft gate, user kan doorgaan).
 
-### Kosten-pagina (reconciliatie)
-- `/kosten` is **bank-transactie-centrisch**: toont een geünificeerde lijst van bank-debits (LEFT JOIN uitgaven via `bank_tx_id`) **+** manuele uitgaven (bank_tx_id NULL, voor cash-bonnetjes). Source: `get_kosten_view(db, jaar, status=..., categorie=..., search=...)` in `database.py`. Altijd `ABS(bedrag)` in de view; bank_tx bedragen zijn negatief in de DB.
-- Twee tabs: **Transacties** (nieuw reconciliatie-overzicht) en **Investeringen** (de activastaat — lifted verbatim naar `pages/kosten_investeringen.py`, ongewijzigd gedrag).
-- **Row status** (in `components/kosten_helpers.py → derive_status(row)`, sequentieel en mutueel exclusief):
-  1. `hidden` — bank_tx met `genegeerd=1`
-  2. `ongecategoriseerd` — bank_tx zonder linked uitgave, OF uitgave met lege categorie
-  3. `ontbreekt` — linked uitgave maar geen PDF
-  4. `compleet` — linked uitgave + categorie + PDF
-  - Manuele uitgaven (bank_tx_id NULL) krijgen bovendien een `contant`-badge in de UI.
-- **Lazy-create uitgave**: elke edit op een bank-only rij (inline categorie-dropdown, Detail-dialog open, bulk Categorie wijzigen) routeert via `ensure_uitgave_for_banktx(db, bank_tx_id, **overrides)`. Dit is idempotent (tweede call returnt bestaande id) en enforced `uitgave.bedrag = ABS(bank_tx.bedrag)` bij creatie. Year-locked.
-- **`update_uitgave`** en **`add_uitgave`** accepteren beide `bank_tx_id` in `**kwargs` — gebruikt door Ontkoppel (set NULL) en Importeer auto-link.
-- **Detail-dialog**: `ui.dialog`, NIET `ui.drawer` (drawer is nergens in het project gebruikt). Drie tabs: Detail / Factuur (iframe base64 preview, upload, archief-suggesties) / Historie (12-maands tegenpartij-lookback met terugkerend-tip bij ≥3 hits binnen 120d).
-- **Archief-matching**: `find_pdf_matches_for_banktx(db, bank_tx_id, jaar)` → `list[PdfMatch]` (heen); `find_banktx_matches_for_pdf(db, filename, jaar)` → `list[tuple]` (inverse, gebruikt `NOT EXISTS` om reeds-gelinkte bank-txs over te slaan). Beide via `match_tokens` in `components/kosten_helpers.py`, token-overlap `len >= 3` chars — 3 (niet 4) omdat echte vendors als `KPN`/`SPH` 3-char zijn. 2-char tokens (`BV`, `NL`) vallen er terecht uit.
-- **Importeer-dialog** pre-computes een `{filename: matches}` map via `asyncio.gather` zodat per-row rendering sync blijft. Bij match: toont `↔ {tegenpartij} · {datum} · {bedrag}` caption en injecteert `bank_tx_id` in de prefill zodat save auto-linkt.
-- **Category list in de slot**: de `body-cell-categorie` slot interpoleert `json.dumps(CATEGORIEEN)` direct in het `r"""…"""` template (patroon identiek aan `pages/bank.py:466-481`). Géén `window.__KOSTEN_CAT_LIST__` global, géén `ui.add_body_html` injectie — dat waren overblijfselen uit de eerste Kosten-rework en zijn verwijderd toen het dropdown-bug werd gefixt.
-- **Debit-categorie single source of truth**: `uitgaven.categorie`, NIET `banktransacties.categorie` (na migratie 27). `get_kosten_view` leest alleen `uitgaven.categorie`. `/bank` display voor debits haalt via `get_uitgave_categorie_by_bank_tx(db) → {bank_tx_id: categorie}` (single round-trip, indexed op `idx_uitgaven_bank_tx`). Writes vanuit de `/bank` UI gaan door `set_banktx_categorie(db, bank_tx_id, categorie)` — dat branched op sign: debit → `ensure_uitgave_for_banktx` + `update_uitgave`, positief → `update_banktransactie`. Gevolg voor UI: op `/bank` zijn debit-categoriecellen read-only (toont de afgeleide categorie of `—`); alleen positieve rijen (Omzet/Privé/Belasting/AOV) krijgen een q-select. Migratie 27 heeft bestaande debit-categorieën eenmalig naar `uitgaven.categorie` verhuisd (skipt definitief-jaren + `genegeerd=1`, idempotent).
-- **Bulk-acties** iteratie op `tbl.selected`: slaan `__maand_header__`-rijen en ontbrekende id-keys over via `r.get(...)`; elke row-mutatie in een `try/except YearLockedError` met skip-count in toast.
-- **Dynamic `ARCHIVE_BASE`**: `import_/expense_utils.py` doet `from components import archive_paths` en refereert `archive_paths.ARCHIVE_BASE` dynamisch — NIET `from components.archive_paths import ARCHIVE_BASE`. Reden: monkeypatching van `archive_paths.ARCHIVE_BASE` in tests propageert dan correct. Idem toepassen bij toekomstige consumers (invoice_generator nog on-deck).
+### Transacties-pagina (`/transacties`)
+
+Single inbox for all money-movement work — bank debits + bank positives +
+manual cash uitgaven. Source: `get_transacties_view(db, jaar, maand,
+status, categorie, type, search, include_genegeerd)` in `database.py`.
+
+- **Row status** (`derive_status` in `components/transacties_helpers.py`):
+  `prive_verborgen` (genegeerd=1) → `gekoppeld_factuur` (positive matched
+  to factuur) → `ongecategoriseerd` → `ontbreekt_bon` (debit cat'd w/o PDF)
+  → `compleet` (debit: cat+bon) → `gecategoriseerd` (positive: cat).
+- **Categorie write**: UI handler branches on `id_bank` — bank rows go
+  through `set_banktx_categorie` (sign-aware: debit → lazy-create uitgave
+  + update; positive → update banktransacties.categorie). Manual rows go
+  straight to `update_uitgave`.
+- **Per-row category options**: debits+cash get `KOSTEN_CATEGORIEEN`;
+  positives get `['Omzet', 'Prive', 'Belasting', 'AOV']`. Injected
+  server-side as `props.row.cat_options`.
+- **Detail dialog** lives in `components/transacties_dialog.py`. Bootstrap
+  uses `get_uitgave_by_id` (M5 fix — no list-and-filter silent-None race).
+- **Factuur-match preview**: after CSV import + header button
+  "Matches controleren (N)" for manual review.
+- **Cash entries** (`+ Contante uitgave`): `add_uitgave(bank_tx_id=None)`.
+- **Archief-PDFs importeren**: `scan_archive()` + `open_add_uitgave_dialog`
+  with prefill. Auto-link routes through `ensure_uitgave_for_banktx` (M1).
+- **Bulk**: Categorie wijzigen · Markeer als privé (bank-only) · Verwijderen.
+- **Query-params**: `?jaar/maand/status/categorie/type/search` pre-populate
+  filters. Used for click-through from `/kosten`.
+
+### Kosten-pagina (`/kosten`) — overzicht
+
+Read-only. Jaar-selector + 2 tabs (Overzicht / Investeringen). No form
+controls that mutate data.
+
+- **KPI strip**: `get_kpi_kosten`. "Te verwerken" card navigates to
+  `/transacties?status=ongecategoriseerd&jaar=X`.
+- **Per-maand bar chart**: `get_kosten_per_maand` (12 slots).
+- **Categorie breakdown**: `get_kosten_breakdown` — each bar is clickable →
+  `/transacties?jaar=X&categorie=Y`. The `(nog te categoriseren)` bucket
+  renders as a separate muted card above (M7 polish).
+- **Terugkerende kosten card**: `get_terugkerende_kosten` — vendors with
+  ≥3 hits in 365d, sorted by jaar-totaal DESC. Click → `/transacties?
+  search=tegenpartij`.
+- **Investeringen tab**: unchanged, `pages/kosten_investeringen.py:
+  laad_activastaat`.
 
 ### YAGNI
 Geen: user auth, BTW-administratie, loon/voorraad, real-time bank-API, auto-matching, CI/CD, multi-language
