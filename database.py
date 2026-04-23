@@ -3644,3 +3644,29 @@ async def get_kosten_breakdown(db_path: Path, jaar: int) -> dict[str, float]:
         cur = await conn.execute(sql, (jaar_start, jaar_end))
         raw = await cur.fetchall()
     return {r["cat"]: float(r["total"]) for r in raw}
+
+
+async def get_kosten_per_maand(db_path: Path, jaar: int) -> list[float]:
+    """12 slots indexed by month-1 (Jan=0 … Dec=11). ABS sum per maand.
+
+    Mirror of the debit+manual filter used by ``get_kosten_breakdown``.
+    """
+    jaar_start = f"{jaar:04d}-01-01"
+    jaar_end = f"{jaar + 1:04d}-01-01"
+    sql = """
+    SELECT CAST(substr(u.datum, 6, 2) AS INTEGER) AS m,
+           SUM(ABS(u.bedrag)) AS total
+    FROM uitgaven u
+    LEFT JOIN banktransacties b ON u.bank_tx_id = b.id
+    WHERE u.datum >= ? AND u.datum < ?
+      AND (b.id IS NULL OR b.genegeerd = 0)
+    GROUP BY m
+    """
+    out = [0.0] * 12
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(sql, (jaar_start, jaar_end))
+        for r in await cur.fetchall():
+            idx = (r["m"] or 1) - 1
+            if 0 <= idx < 12:
+                out[idx] = float(r["total"])
+    return out
