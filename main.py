@@ -30,6 +30,7 @@ import pages.facturen
 import pages.klanten
 import pages.kosten
 import pages.bank
+import pages.transacties
 import pages.jaarafsluiting
 import pages.aangifte
 import pages.documenten
