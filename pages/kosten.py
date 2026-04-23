@@ -142,8 +142,38 @@ async def _laad_kpi(container, jaar):
 
 
 async def _laad_per_maand(container, jaar):
-    """Per-maand bar chart — wired in Task 22."""
-    pass
+    """Per-maand bar chart: 12 bars Jan-Dec with € amount on hover.
+
+    Data from get_kosten_per_maand — covers debits + manual cash,
+    excludes genegeerd. Gives seasonality at a glance.
+    """
+    if container is None:
+        return
+    container.clear()
+    data = await get_kosten_per_maand(DB_PATH, jaar)
+    months = ['Jan', 'Feb', 'Mrt', 'Apr', 'Mei', 'Jun',
+              'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dec']
+    with container:
+        with ui.card().classes('w-full q-pa-md'):
+            ui.label(f'Kosten per maand — {jaar}') \
+                .classes('text-subtitle1 text-bold')
+            ui.echart({
+                'xAxis': {'type': 'category', 'data': months},
+                'yAxis': {'type': 'value'},
+                'tooltip': {
+                    'trigger': 'axis',
+                    'valueFormatter': (
+                        "function(v){ return '€ ' + "
+                        "Number(v).toLocaleString('nl-NL',"
+                        "{minimumFractionDigits:2}); }"),
+                },
+                'series': [{
+                    'type': 'bar',
+                    'data': [round(v, 2) for v in data],
+                    'itemStyle': {'color': '#0F766E'},
+                }],
+                'grid': {'left': 60, 'right': 20, 'top': 20, 'bottom': 40},
+            }).classes('w-full').style('height:240px')
 
 
 async def _laad_breakdown(container, jaar):
