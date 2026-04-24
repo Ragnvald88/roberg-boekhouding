@@ -66,7 +66,17 @@ async def _open_detail_dialog(row, refresh, default_tab: str = 'detail'):
     ``is_manual``, ``tegenpartij``, ``omschrijving`` etc. For bank-only
     rows (``id_uitgave is None``) we lazy-create the uitgave on open so
     downstream closures can capture the fresh id.
+
+    Credit rows (bedrag >= 0) are refused: lazy-create would insert a
+    positive-bedrag uitgave that pollutes /kosten breakdown numbers. The
+    /transacties template hides the trigger button for credits; this
+    guard catches any programmatic misuse.
     """
+    if (row.get('bedrag') or 0) >= 0:
+        ui.notify(
+            'Detail-weergave is alleen beschikbaar voor uitgaven.',
+            type='info')
+        return
     # Lazy-create uitgave for bank-only rows so all tabs have a target.
     try:
         if row.get('id_uitgave') is None and row.get('id_bank') is not None:
@@ -185,6 +195,13 @@ async def _open_detail_dialog(row, refresh, default_tab: str = 'detail'):
                     ui.button('Ontkoppel bank-transactie', icon='link_off',
                               on_click=ontkoppel) \
                         .props('flat dense color=grey-7 size=sm')
+                    # P2-4: ontkoppel behaviour is subtle — the uitgave
+                    # (categorie/bon/bedrag) survives as a manual cash
+                    # entry. Users expect "ontkoppel" to mean "delete".
+                    ui.label(
+                        'De uitgave blijft bestaan als contant-uitgave '
+                        'met dezelfde categorie en bon.'
+                    ).classes('text-caption text-grey q-ml-sm')
 
             # ---------------- FACTUUR ----------------
             with ui.tab_panel(t_factuur):
@@ -238,8 +255,16 @@ async def _open_detail_dialog(row, refresh, default_tab: str = 'detail'):
                 try:
                     kwargs = {
                         'categorie': edit_cat.value or '',
-                        'omschrijving': edit_omschr.value or '',
                     }
+                    # P2-8: only pass omschrijving if it changed from the
+                    # loaded value. Otherwise we'd blank-overwrite bank-
+                    # linked rows whose textarea is empty but DB has the
+                    # tegenpartij name from lazy-create.
+                    loaded_omschr = (u.omschrijving if u
+                                     else row.get('omschrijving', '')) or ''
+                    current_omschr = edit_omschr.value or ''
+                    if current_omschr != loaded_omschr:
+                        kwargs['omschrijving'] = current_omschr
                     if edit_bedrag is not None:
                         kwargs['bedrag'] = edit_bedrag.value
                     if edit_inv.value:

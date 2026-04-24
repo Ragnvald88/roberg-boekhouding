@@ -1362,11 +1362,17 @@ async def save_factuur_atomic(
 
             await conn.commit()
 
-            # Step 4: Clean up old PDF (outside transaction — non-critical)
+            # Step 4: Clean up old PDF (outside transaction — non-critical).
+            # Only unlink when the old path is truly orphaned: the new row
+            # points somewhere else (or nowhere). Regenerating with the
+            # same nummer overwrites the same filename, so unlinking
+            # unconditionally would delete the just-written PDF (F-3).
             if replacing_factuur_id and old and old['pdf_pad']:
-                pdf_file = Path(old['pdf_pad'])
-                if pdf_file.exists():
-                    await asyncio.to_thread(pdf_file.unlink)
+                new_pdf_pad = factuur_kwargs.get('pdf_pad', '')
+                if old['pdf_pad'] != new_pdf_pad:
+                    pdf_file = Path(old['pdf_pad'])
+                    if pdf_file.exists():
+                        await asyncio.to_thread(pdf_file.unlink)
 
             return cursor.lastrowid
         except Exception:
@@ -1821,13 +1827,27 @@ async def delete_banktransacties(db_path: Path = DB_PATH,
         return 0, []
     placeholders = ','.join('?' for _ in transactie_ids)
 
-    # Year-lock guard: check every affected row's datum.
+    # Year-lock guard: check every affected row's datum — BOTH the bank
+    # tx side and the linked factuur side. Late-payment scenarios (2024
+    # factuur paid via 2025 bank-tx) would otherwise let a writable-year
+    # bank-tx delete silently flip a frozen-year factuur's status.
     async with get_db_ctx(db_path) as conn:
         cur = await conn.execute(
             f"SELECT DISTINCT datum FROM banktransacties "
             f"WHERE id IN ({placeholders})", transactie_ids)
-        datum_rows = await cur.fetchall()
-    for r in datum_rows:
+        bank_datum_rows = await cur.fetchall()
+        cur = await conn.execute(
+            f"SELECT DISTINCT f.datum "
+            f"FROM facturen f "
+            f"JOIN banktransacties b ON b.koppeling_id = f.id "
+            f"WHERE b.id IN ({placeholders}) "
+            f"AND b.koppeling_type = 'factuur' "
+            f"AND f.status = 'betaald'",
+            transactie_ids)
+        factuur_datum_rows = await cur.fetchall()
+    for r in bank_datum_rows:
+        await assert_year_writable(db_path, r[0])
+    for r in factuur_datum_rows:
         await assert_year_writable(db_path, r[0])
 
     async with get_db_ctx(db_path) as conn:
@@ -1841,7 +1861,9 @@ async def delete_banktransacties(db_path: Path = DB_PATH,
         linked = await cur.fetchall()
         linked_factuur_ids = [r['koppeling_id'] for r in linked]
 
-        # Revert linked facturen betaald → verstuurd (same transaction)
+        # Revert linked facturen betaald → verstuurd (same transaction).
+        # Year-lock on factuur datums is asserted above, so a frozen-year
+        # factuur cannot reach this UPDATE.
         for fid in linked_factuur_ids:
             await conn.execute(
                 "UPDATE facturen SET status = 'verstuurd', betaald_datum = '' "
@@ -3226,7 +3248,9 @@ async def find_pdf_matches_for_banktx(
             raise ValueError(f"banktransactie {bank_tx_id} not found")
         tegenpartij = row["tegenpartij"] or ""
 
-    items = scan_archive(jaar, set())  # existing_filenames empty — we re-rank
+    # P2-2: scan_archive walks the SynologyDrive mount — off-thread so a
+    # cold/slow FS doesn't block the event loop.
+    items = await asyncio.to_thread(scan_archive, jaar, set())
     matches: list[PdfMatch] = []
     for it in items:
         if it.get("already_imported"):
@@ -3456,9 +3480,15 @@ async def get_kpi_kosten(db_path: Path, jaar: int) -> KpiKosten:
     # Preserve the original semantics: filter to cost rows and abs() bedrag.
     rows = [r for r in rows if r.bedrag < 0]
 
-    totaal = sum(abs(r.bedrag) for r in rows)
+    # Totaal + monthly exclude investeringen (P1-1): the laptop bought in
+    # January is depreciated via afschrijvingen (own KPI), not booked as
+    # a kost for that month/year. Ontbreekt_count still includes them —
+    # an uncategorised investering is equally "needs attention".
+    totaal = sum(abs(r.bedrag) for r in rows if not r.is_investering)
     monthly = [0.0] * 12
     for r in rows:
+        if r.is_investering:
+            continue
         try:
             m = int(r.datum[5:7])
             if 1 <= m <= 12:
@@ -3522,9 +3552,12 @@ async def get_kosten_breakdown(db_path: Path, jaar: int) -> dict[str, float]:
     """Sum of ABS(bedrag) per categorie for /kosten overzicht.
 
     Sources: bank debits with a linked uitgave (use uitgave.categorie), plus
-    manual cash uitgaven. Excludes genegeerd bank txs. Empty categorie is
-    bucketed as ``''`` so the caller can surface the "nog te categoriseren"
-    group separately (spec §3.2 — M7 polish).
+    manual cash uitgaven. Excludes genegeerd bank txs. Excludes uitgaven
+    linked to a POSITIVE bank-tx (defense against the phantom-uitgave
+    lazy-create bug, P0-1). Excludes investeringen (P1-1) — those are
+    depreciated via afschrijvingen, not booked as kosten in the purchase
+    year. Empty categorie is bucketed as ``''`` so the caller can surface
+    the "nog te categoriseren" group separately (spec §3.2 — M7 polish).
     """
     jaar_start = f"{jaar:04d}-01-01"
     jaar_end = f"{jaar + 1:04d}-01-01"
@@ -3533,7 +3566,8 @@ async def get_kosten_breakdown(db_path: Path, jaar: int) -> dict[str, float]:
     FROM uitgaven u
     LEFT JOIN banktransacties b ON u.bank_tx_id = b.id
     WHERE u.datum >= ? AND u.datum < ?
-      AND (b.id IS NULL OR b.genegeerd = 0)
+      AND u.is_investering = 0
+      AND (b.id IS NULL OR (b.genegeerd = 0 AND b.bedrag < 0))
     GROUP BY COALESCE(u.categorie, '')
     """
     async with get_db_ctx(db_path) as conn:
@@ -3545,7 +3579,8 @@ async def get_kosten_breakdown(db_path: Path, jaar: int) -> dict[str, float]:
 async def get_kosten_per_maand(db_path: Path, jaar: int) -> list[float]:
     """12 slots indexed by month-1 (Jan=0 … Dec=11). ABS sum per maand.
 
-    Mirror of the debit+manual filter used by ``get_kosten_breakdown``.
+    Mirror of the debit+manual filter used by ``get_kosten_breakdown`` —
+    excludes genegeerd, phantom-positive (P0-1), and investeringen (P1-1).
     """
     jaar_start = f"{jaar:04d}-01-01"
     jaar_end = f"{jaar + 1:04d}-01-01"
@@ -3555,7 +3590,8 @@ async def get_kosten_per_maand(db_path: Path, jaar: int) -> list[float]:
     FROM uitgaven u
     LEFT JOIN banktransacties b ON u.bank_tx_id = b.id
     WHERE u.datum >= ? AND u.datum < ?
-      AND (b.id IS NULL OR b.genegeerd = 0)
+      AND u.is_investering = 0
+      AND (b.id IS NULL OR (b.genegeerd = 0 AND b.bedrag < 0))
     GROUP BY m
     """
     out = [0.0] * 12

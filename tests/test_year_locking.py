@@ -364,6 +364,72 @@ async def test_delete_banktransacties_rejected_if_any_row_in_definitief_year(db)
 
 
 @pytest.mark.asyncio
+async def test_delete_banktx_rejected_when_linked_factuur_in_frozen_year(db):
+    """P0-2: a writable-year bank-tx paying a frozen-year factuur must not
+    revert that factuur's status. Snapshot-definitief jaren blijven
+    bevroren, ook via late-payment cascades."""
+    await _seed_fiscale_params_row(db, 2024)
+    await _seed_fiscale_params_row(db, 2025)
+    kid = await add_klant(db, naam='LatePayer BV', tarief_uur=0)
+    # Factuur issued in 2024, paid in early 2025 (real-world scenario).
+    fid = await add_factuur(db, nummer='2024-900', klant_id=kid,
+                             datum='2024-12-30', totaal_bedrag=500)
+    await update_factuur_status(db, factuur_id=fid, status='verstuurd')
+    await update_factuur_status(db, factuur_id=fid, status='betaald',
+                                 betaald_datum='2025-01-10')
+    await add_banktransacties(db, [
+        {'datum': '2025-01-10', 'bedrag': 500, 'tegenpartij': 'LatePayer BV',
+         'omschrijving': '2024-900', 'categorie': ''},
+    ], csv_bestand='jan2025.csv')
+    # Link the bank-tx to the factuur.
+    bank_rows = await get_banktransacties(db)
+    bank_id = bank_rows[0].id
+    await update_banktransactie(
+        db, transactie_id=bank_id,
+        koppeling_type='factuur', koppeling_id=fid)
+    # Freeze 2024.
+    await update_jaarafsluiting_status(db, 2024, 'definitief')
+    # 2025 bank-tx delete would revert the 2024 betaald factuur → must reject.
+    with pytest.raises(YearLockedError, match='2024'):
+        await delete_banktransacties(db, [bank_id])
+    # Bank-tx still present, factuur still betaald.
+    rows_after = await get_banktransacties(db)
+    assert any(x.id == bank_id for x in rows_after)
+    facturen = await get_facturen(db)
+    f = next(x for x in facturen if x.id == fid)
+    assert f.status == 'betaald'
+
+
+@pytest.mark.asyncio
+async def test_delete_banktx_allowed_when_linked_factuur_also_writable(db):
+    """Regression guard: if both the bank-tx and linked factuur jaar are
+    writable, the delete succeeds and the factuur reverts to verstuurd."""
+    await _seed_fiscale_params_row(db, 2025)
+    await _seed_fiscale_params_row(db, 2026)
+    kid = await add_klant(db, naam='OnTimePayer', tarief_uur=0)
+    fid = await add_factuur(db, nummer='2025-200', klant_id=kid,
+                             datum='2025-12-20', totaal_bedrag=250)
+    await update_factuur_status(db, factuur_id=fid, status='verstuurd')
+    await update_factuur_status(db, factuur_id=fid, status='betaald',
+                                 betaald_datum='2026-01-05')
+    await add_banktransacties(db, [
+        {'datum': '2026-01-05', 'bedrag': 250, 'tegenpartij': 'OnTimePayer',
+         'omschrijving': '2025-200', 'categorie': ''},
+    ], csv_bestand='jan2026.csv')
+    bank_id = (await get_banktransacties(db))[0].id
+    await update_banktransactie(
+        db, transactie_id=bank_id,
+        koppeling_type='factuur', koppeling_id=fid)
+    # Neither year frozen — delete must succeed and revert factuur.
+    count, reverted = await delete_banktransacties(db, [bank_id])
+    assert count == 1
+    assert reverted == [fid]
+    facturen = await get_facturen(db)
+    f = next(x for x in facturen if x.id == fid)
+    assert f.status == 'verstuurd'
+
+
+@pytest.mark.asyncio
 async def test_upsert_fiscale_params_rejected_in_definitief_year(db):
     """Full-upsert to a definitief jaar is blocked."""
     await _seed_fiscale_params_row(db, 2025)

@@ -4,6 +4,7 @@ Mutations live on /transacties. This page is summary-only.
 """
 import asyncio
 from datetime import date
+from urllib.parse import quote_plus
 
 from nicegui import ui
 
@@ -54,7 +55,13 @@ async def kosten_page():
 
             async def on_jaar_change():
                 filter_jaar['value'] = jaar_select.value
-                await ververs_overview()
+                # P2-1: refresh whichever tab is currently active — the
+                # Investeringen tab used to render stale data after a
+                # jaar change until the user manually re-selected it.
+                if tabs.value == 'Investeringen':
+                    await ververs_investeringen()
+                else:
+                    await ververs_overview()
 
             jaar_select.on('update:model-value',
                             lambda _=None: on_jaar_change())
@@ -197,11 +204,15 @@ async def _laad_breakdown(container, jaar):
     grand = sum(totals.values()) + uncat_amount
 
     with container:
-        # M7 — separate card for uncategorised, muted, not clickable
+        # P1-3: the uncategorised bucket now routes to /transacties
+        # (mirroring the "Te verwerken" KPI card) so the user can click
+        # straight through from overview to reconciliation.
         if uncat_amount > 0:
-            with ui.card().classes('w-full q-pa-md') \
-                    .style('background:#f8fafc;'
-                            'border-left:4px solid #f59e0b'):
+            uncat_card = ui.card().classes(
+                'w-full q-pa-md cursor-pointer') \
+                .style('background:#f8fafc;'
+                        'border-left:4px solid #f59e0b')
+            with uncat_card:
                 with ui.row().classes('w-full items-center'):
                     ui.icon('warning', color='warning').classes('text-lg')
                     ui.label('Nog te categoriseren') \
@@ -211,9 +222,12 @@ async def _laad_breakdown(container, jaar):
                         .classes('text-body2 text-bold') \
                         .style('font-variant-numeric:tabular-nums')
                 ui.label(
-                    'Verwerk deze op Transacties om ze hier te '
-                    'laten landen.') \
+                    'Klik om deze op /transacties te categoriseren.') \
                     .classes('text-caption text-grey')
+            uncat_card.on(
+                'click',
+                lambda _=None: ui.navigate.to(
+                    f'/transacties?status=ongecategoriseerd&jaar={jaar}'))
 
         # Real categories — clickable bars
         with ui.card().classes('w-full q-pa-md'):
@@ -240,7 +254,8 @@ async def _laad_breakdown(container, jaar):
                         .props('color=primary size=6px')
                 row.on('click', lambda _=None, n=name:
                         ui.navigate.to(
-                            f'/transacties?jaar={jaar}&categorie={n}'))
+                            f'/transacties?jaar={jaar}'
+                            f'&categorie={quote_plus(n)}'))
 
 
 async def _laad_terugkerend(container, jaar):
@@ -281,4 +296,5 @@ async def _laad_terugkerend(container, jaar):
                                 'width:110px;text-align:right')
                 row.on('click', lambda _=None, tp=item['tegenpartij']:
                         ui.navigate.to(
-                            f'/transacties?jaar={jaar}&search={tp}'))
+                            f'/transacties?jaar={jaar}'
+                            f'&search={quote_plus(tp)}'))

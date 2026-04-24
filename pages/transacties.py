@@ -302,7 +302,9 @@ async def open_import_dialog(
                 if u.pdf_pad:
                     existing_filenames.add(Path(u.pdf_pad).name)
 
-            items = scan_archive(jaar, existing_filenames)
+            # P2-2: scan_archive hits SynologyDrive — move it off-thread.
+            items = await asyncio.to_thread(
+                scan_archive, jaar, existing_filenames)
             if not items:
                 with container:
                     ui.label(
@@ -563,14 +565,36 @@ async def transacties_page(jaar: int | None = None,
     # -------------------------------------------------------------- #
     # CSV upload + factuur-match preview                             #
     # -------------------------------------------------------------- #
+    # P2-9: re-entrancy guard. NiceGUI upload fires per-file; if a user
+    # double-clicks or drops multiple CSVs, the second handler can start
+    # while the first is still archiving / inserting. This would double-
+    # import and race the dedup check.
+    csv_upload_busy = {'flag': False}
+
     async def handle_csv_upload(e):
         """Parse uploaded Rabobank CSV, archive, insert, trigger match."""
+        if csv_upload_busy['flag']:
+            ui.notify(
+                'Even wachten — vorige CSV-upload is nog bezig.',
+                type='warning')
+            return
+        csv_upload_busy['flag'] = True
+        try:
+            await _do_csv_upload(e)
+        finally:
+            csv_upload_busy['flag'] = False
+
+    async def _do_csv_upload(e):
         content = await e.file.read()
         filename = e.file.name
         try:
             transacties = parse_rabobank_csv(content)
         except ValueError as exc:
             ui.notify(f'Fout bij parsing: {exc}', type='negative')
+            return
+        except Exception as exc:  # P2-9: belt-and-suspenders
+            ui.notify(f'Onverwachte fout bij CSV-lezen: {exc}',
+                       type='negative')
             return
         if not transacties:
             ui.notify('Geen transacties gevonden in CSV.', type='warning')
@@ -593,8 +617,15 @@ async def transacties_page(jaar: int | None = None,
 
         count = await add_banktransacties(DB_PATH, transacties,
                                             csv_bestand=archive_name)
-        ui.notify(f'{count} transacties geïmporteerd uit {filename}',
-                   type='positive')
+        if count == 0:
+            ui.notify(
+                f"Geen nieuwe transacties — CSV '{filename}' bevatte "
+                f"alleen al geïmporteerde rijen.",
+                type='info', timeout=5000)
+        else:
+            ui.notify(
+                f'{count} transacties geïmporteerd uit {filename}',
+                type='positive')
 
         # Find unmatched factuur proposals and offer preview
         proposals = await find_factuur_matches(DB_PATH)
@@ -783,9 +814,28 @@ async def transacties_page(jaar: int | None = None,
             ).classes('w-32')
 
             search_input = ui.input(
-                placeholder='Zoek tegenpartij / omschrijving',
+                placeholder=(
+                    'Zoek tegenpartij, omschrijving of bedrag'),
                 value=filter_search['value']
             ).classes('w-64').props('clearable dense outlined')
+
+            async def reset_filters():
+                """P2-6: clear maand/status/categorie/type/search in one
+                click. Jaar stays — users rarely want to drop that too."""
+                maand_select.value = 0
+                status_select.value = None
+                categorie_select.value = ''
+                type_select.value = None
+                search_input.value = ''
+                filter_maand['value'] = 0
+                filter_status['value'] = None
+                filter_categorie['value'] = None
+                filter_type['value'] = None
+                filter_search['value'] = ''
+                await refresh()
+
+            ui.button('Reset', icon='clear', on_click=reset_filters) \
+                .props('flat dense color=grey-7')
 
         async def on_filter_change():
             filter_jaar['value'] = jaar_select.value
@@ -814,11 +864,32 @@ async def transacties_page(jaar: int | None = None,
             bulk_label_ref['ref'] = ui.label('')
 
             async def bulk_set_cat():
-                """Dialog → pick categorie → apply to all selected rows."""
+                """Dialog → pick categorie → apply to all selected rows.
+
+                P2-5: options respect the selection's sign. All debits →
+                kostencats; all credits → income-side; mixed → warn and
+                offer the intersection (empty category only).
+                """
+                selected = list(table_ref['table'].selected or [])
+                has_debit = any((r.get('bedrag') or 0) < 0 for r in selected)
+                has_credit = any((r.get('bedrag') or 0) >= 0
+                                  for r in selected)
+                if has_debit and not has_credit:
+                    opts = DEBIT_CAT_OPTIONS
+                elif has_credit and not has_debit:
+                    opts = POSITIVE_CAT_OPTIONS
+                else:
+                    opts = ['']  # mixed — only blanking is safe
                 with ui.dialog() as dlg, ui.card():
                     ui.label('Nieuwe categorie voor selectie') \
                         .classes('text-h6')
-                    sel = ui.select(BANK_CATEGORIEEN, label='Categorie') \
+                    if has_debit and has_credit:
+                        ui.label(
+                            'Selectie bevat zowel uitgaven als '
+                            'inkomsten — kies een aparte bulk-actie '
+                            'per sign.') \
+                            .classes('text-caption text-warning')
+                    sel = ui.select(opts, label='Categorie') \
                         .classes('w-full')
                     with ui.row().classes(
                             'w-full justify-end gap-2 q-mt-md'):
@@ -886,14 +957,21 @@ async def transacties_page(jaar: int | None = None,
                        on_click=bulk_negeren) \
                 .props('outline color=white size=sm')
 
-            async def bulk_delete():
-                """Delete each selected row (bank or manual)."""
+            async def _do_bulk_delete_now(rows_to_delete: list[dict]):
+                """Actual delete loop — called only after user confirms.
+
+                ``rows_to_delete`` is the snapshot captured when the
+                confirm dialog was opened, so a spurious selection
+                change after the confirm click cannot alter the scope.
+                """
                 n_ok, n_skip = 0, 0
-                for r in table_ref['table'].selected:
+                reverted_total = 0
+                for r in rows_to_delete:
                     try:
                         if r.get('id_bank') is not None:
-                            await delete_banktransacties(
+                            _n, reverted = await delete_banktransacties(
                                 DB_PATH, transactie_ids=[r['id_bank']])
+                            reverted_total += len(reverted)
                         elif r.get('id_uitgave') is not None:
                             await delete_uitgave(
                                 DB_PATH, uitgave_id=r['id_uitgave'])
@@ -903,11 +981,70 @@ async def transacties_page(jaar: int | None = None,
                     except YearLockedError:
                         n_skip += 1
                 msg = f'{n_ok} verwijderd'
+                if reverted_total:
+                    msg += (f', {reverted_total} factuur/facturen '
+                             'teruggezet naar verstuurd')
                 if n_skip:
-                    msg += f', {n_skip} overgeslagen'
+                    msg += f', {n_skip} overgeslagen (jaar afgesloten)'
                 ui.notify(msg,
                            type='positive' if n_ok else 'warning')
                 await refresh()
+
+            async def bulk_delete():
+                """P0-3: Pre-scan the selection and confirm any cascades
+                (factuur-revert, uitgave-orphaning) before deleting."""
+                selected = list(table_ref['table'].selected or [])
+                if not selected:
+                    return
+
+                factuur_linked = [
+                    r for r in selected
+                    if r.get('id_bank') is not None
+                    and r.get('koppeling_type') == 'factuur']
+                uitgave_orphans = [
+                    r for r in selected
+                    if r.get('id_bank') is not None
+                    and r.get('id_uitgave') is not None
+                    and ((r.get('categorie') or '').strip()
+                         or (r.get('pdf_pad') or '').strip())]
+
+                with ui.dialog() as dlg, ui.card():
+                    ui.label(
+                        f'{len(selected)} rij(en) verwijderen?') \
+                        .classes('text-h6')
+                    if factuur_linked:
+                        ui.label(
+                            f'{len(factuur_linked)} bank-transactie(s) '
+                            'zijn gekoppeld aan een factuur — die factuur '
+                            'wordt teruggezet naar "verstuurd".') \
+                            .classes('text-body2 text-warning q-mt-sm')
+                    if uitgave_orphans:
+                        ui.label(
+                            f'{len(uitgave_orphans)} bank-transactie(s) '
+                            'hebben een gekoppelde uitgave met categorie '
+                            'of bon. De uitgave blijft bestaan als '
+                            'contant-uitgave (ontkoppeld).') \
+                            .classes('text-body2 text-warning q-mt-xs')
+                    if not factuur_linked and not uitgave_orphans:
+                        ui.label(
+                            'Geen gekoppelde facturen of bonnen — '
+                            'de rijen worden eenvoudig verwijderd.') \
+                            .classes('text-caption text-grey q-mt-sm')
+                    with ui.row().classes(
+                            'w-full justify-end gap-2 q-mt-md'):
+                        ui.button('Annuleren',
+                                   on_click=dlg.close).props('flat')
+
+                        async def confirm_delete():
+                            dlg.close()
+                            # Pass the captured selection so a late
+                            # reselection can't silently broaden scope.
+                            await _do_bulk_delete_now(selected)
+
+                        ui.button('Ja, verwijderen',
+                                   on_click=confirm_delete) \
+                            .props('color=negative')
+                dlg.open()
 
             ui.button('Verwijderen', icon='delete',
                        on_click=bulk_delete) \
@@ -936,7 +1073,7 @@ async def transacties_page(jaar: int | None = None,
             {'name': 'status_chip', 'label': 'Factuur/bon',
              'field': 'status', 'align': 'center'},
             {'name': 'acties', 'label': '', 'field': 'acties',
-             'align': 'center'},
+             'align': 'center', 'sortable': False},
         ]
 
         with ui.card().classes('w-full'):
@@ -1045,8 +1182,8 @@ async def transacties_page(jaar: int | None = None,
                         <q-chip v-else-if="props.row.status === 'prive_verborgen'"
                                 color="grey-5" text-color="white" size="sm"
                                 icon="visibility_off" dense>Privé</q-chip>
-                        <q-chip v-else color="negative" text-color="white" size="sm"
-                                dense>Nieuw</q-chip>
+                        <q-chip v-else color="warning" text-color="white" size="sm"
+                                dense>Te categoriseren</q-chip>
                         <q-chip v-if="props.row.is_manual" color="grey-5"
                                 text-color="white" size="sm" dense
                                 style="margin-left:4px">contant</q-chip>
@@ -1056,8 +1193,9 @@ async def transacties_page(jaar: int | None = None,
                                icon="attach_file" size="sm" color="primary"
                                title="Bon toevoegen"
                                @click="$parent.$emit('attach_pdf', props.row)" />
-                        <q-btn flat dense round icon="more_horiz" size="sm"
-                               color="grey-7"
+                        <q-btn v-if="props.row.bedrag < 0" flat dense round
+                               icon="more_horiz" size="sm" color="grey-7"
+                               title="Details bewerken"
                                @click="$parent.$emit('open_detail', props.row)" />
                         <q-btn flat dense round icon="delete" size="sm"
                                color="negative"

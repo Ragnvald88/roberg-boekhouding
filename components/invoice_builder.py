@@ -148,7 +148,8 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None,
                                pre_nummer=None, on_close=None,
                                pre_klant_id=None,
                                replacing_factuur_id=None,
-                               pre_regels_json=''):
+                               pre_regels_json='',
+                               pre_datum=None):
     """Open the two-panel invoice builder dialog.
 
     Args:
@@ -161,6 +162,9 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None,
             (used when editing an existing concept — defers deletion until save
             to prevent data loss if the builder is closed without saving)
         pre_regels_json: JSON with saved line_items + klant address for concept reopen
+        pre_datum: pre-fill factuurdatum (for reopening existing concept).
+            Defaults to today when not provided; werkdag-imports no longer
+            override the field, so the user's chosen factuurdatum is preserved.
     """
     _builder_saved = {'done': False}
     # Load reference data
@@ -244,7 +248,8 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None,
                         'Factuurnummer', value=next_nummer,
                     ).props('outlined dense').classes('w-36')
                     datum_input = date_input(
-                        'Factuurdatum', value=date.today().isoformat(),
+                        'Factuurdatum',
+                        value=pre_datum or date.today().isoformat(),
                     ).classes('w-40')
                     ui.space()
                     ui.button(
@@ -418,13 +423,9 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None,
                                         _werkdagen_to_line_items(
                                             werkdagen, thuisplaats))
 
-                                    # Set datum to last werkdag
-                                    dates = [li['datum']
-                                             for li in line_items
-                                             if li['datum']]
-                                    if dates:
-                                        datum_input.value = max(dates)
-
+                                    # Factuurdatum stays at today (set on
+                                    # dialog open) — werkdag dates live on
+                                    # line items, not on the factuur header.
                                     render_line_items()
                                     schedule_preview_update()
 
@@ -663,12 +664,9 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None,
                                     wd_dlg.close()
                                     render_line_items()
                                     schedule_preview_update()
-                                    # Set datum to last werkdag date
-                                    dates = [
-                                        li['datum'] for li in line_items
-                                        if li['datum']]
-                                    if dates:
-                                        datum_input.value = max(dates)
+                                    # Factuurdatum is NOT overwritten here —
+                                    # it reflects the user's chosen issue
+                                    # date, not the werkdag date(s).
 
                                 ui.button(
                                     'Toevoegen', icon='add',
@@ -941,6 +939,15 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None,
                         li['werkdag_id'] for li in line_items
                         if li.get('werkdag_id')]
 
+                    # F-4: serialize line_items + klant_fields so a future
+                    # "Bewerken" reopens with the exact state, not a
+                    # reconstruction from werkdagen (which loses vrije
+                    # regels and can pull stale klant data).
+                    genereer_regels_data = {
+                        'line_items': line_items,
+                        'klant_fields': klant_dict,
+                    }
+
                     # PDF generation + DB save in a single guarded
                     # block. If save_factuur_atomic raises (e.g. another
                     # tab already inserted the same nummer), the PDF is
@@ -968,6 +975,7 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None,
                             totaal_bedrag=totaal_bedrag,
                             pdf_pad=str(pdf_path),
                             type=factuur_type,
+                            regels_json=json.dumps(genereer_regels_data),
                             betaallink=_qr_bytes.get('betaallink', ''),
                         )
                         pdf_to_cleanup = None
@@ -999,17 +1007,19 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None,
                         archive_factuur_pdf, pdf_path,
                         factuur_type=factuur_type, factuur_datum=factuur_datum)
 
+                    # F-3: refresh the parent table BEFORE closing the
+                    # dialog so the list never shows stale pdf_pad /
+                    # status while the user could click it.
                     _builder_saved['done'] = True
+                    if on_save:
+                        result = on_save()
+                        if inspect.iscoroutine(result):
+                            await result
                     dlg.close()
                     ui.notify(
                         f'Factuur {nummer} aangemaakt '
                         f'({format_euro(totaal_bedrag)})',
                         type='positive')
-
-                    if on_save:
-                        result = on_save()
-                        if inspect.iscoroutine(result):
-                            await result
 
                 async def opslaan_als_concept():
                     """Save factuur as concept without generating PDF."""
@@ -1093,17 +1103,19 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None,
                     elif qr_file.exists():
                         await asyncio.to_thread(qr_file.unlink)
 
+                    # F-3: refresh before closing so the list view
+                    # reflects the new concept's empty pdf_pad before
+                    # the user can interact with it.
                     _builder_saved['done'] = True
+                    if on_save:
+                        result = on_save()
+                        if inspect.iscoroutine(result):
+                            await result
                     dlg.close()
                     ui.notify(
                         f'Concept {nummer} opgeslagen '
                         f'({format_euro(totaal_bedrag)})',
                         type='info')
-
-                    if on_save:
-                        result = on_save()
-                        if inspect.iscoroutine(result):
-                            await result
 
                 # ── Totaal + acties (sticky aan onderkant) ──
                 with ui.column().classes('w-full gap-1').style(
@@ -1231,11 +1243,9 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None,
                     bedrijf_input.value = klant_obj.naam
                     matched_klant_id['value'] = klant_obj.id
 
-            # Restore datum from line items
-            dates = [li['datum'] for li in line_items if li.get('datum')]
-            if dates:
-                datum_input.value = max(dates)
-
+            # Factuurdatum comes from the stored facturen.datum via
+            # pre_datum — NOT from max(line_item_datums), which would
+            # silently revert any manually-set factuurdatum on reopen.
             render_line_items()
         elif pre_selected_werkdag_ids:
             # No saved state — reconstruct from werkdagen (legacy/first-save)
@@ -1256,10 +1266,9 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None,
                 line_items.extend(
                     _werkdagen_to_line_items(pre_wds, thuisplaats))
 
-                dates = [li['datum'] for li in line_items if li['datum']]
-                if dates:
-                    datum_input.value = max(dates)
-
+                # Factuurdatum stays at today / pre_datum. Werkdag dates
+                # belong on line items; the factuur header reflects the
+                # issue date.
                 render_line_items()
 
         if pre_klant_id and not pre_selected_werkdag_ids and not pre_regels_json:

@@ -108,3 +108,27 @@ async def test_kpi_excludes_genegeerd(db):
     kpi = await get_kpi_kosten(db, 2026)
     assert kpi.totaal == 0.0
     assert kpi.ontbreekt_count == 0
+
+
+@pytest.mark.asyncio
+async def test_kpi_totaal_excludes_investeringen(db):
+    """P1-1 regression: Totaal kosten must not include the aanschafprijs
+    of investeringen. Those are depreciated via afschrijvingen and shown
+    in their own KPI card."""
+    # Investering + regular uitgave in the same jaar.
+    await _seed_uitgave(db, "2026-01-10", 5000.00,
+                         categorie="Automatisering",
+                         is_investering=1, zakelijk_pct=100,
+                         aanschaf_bedrag=5000.00, levensduur=5)
+    await _seed_uitgave(db, "2026-02-10", 100.00, categorie="Bankkosten")
+    kpi = await get_kpi_kosten(db, 2026)
+    assert kpi.totaal == pytest.approx(100.00), (
+        "investering leaked into Totaal kosten — should only be reflected "
+        "via investeringen_bedrag + afschrijvingen_jaar")
+    # January month should be 0 (the €5000 lived there but is an investering).
+    assert kpi.monthly_totals[0] == 0.0
+    assert kpi.monthly_totals[1] == pytest.approx(100.00)
+    # The investering still counts in its own KPI + contributes to afschrijving.
+    assert kpi.investeringen_count == 1
+    assert kpi.investeringen_bedrag == pytest.approx(5000.00)
+    assert kpi.afschrijvingen_jaar > 0

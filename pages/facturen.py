@@ -1040,6 +1040,7 @@ async def facturen_page():
                 pre_klant_id=old_klant_id,
                 replacing_factuur_id=row['id'],
                 pre_regels_json=regels_json,
+                pre_datum=row.get('datum') or None,
             )
 
         async def on_mark_verstuurd(e):

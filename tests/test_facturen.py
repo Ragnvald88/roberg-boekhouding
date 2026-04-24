@@ -414,6 +414,52 @@ async def test_save_factuur_atomic_replaces_concept(db):
 
 
 @pytest.mark.asyncio
+async def test_save_factuur_atomic_keeps_pdf_when_path_unchanged(db, tmp_path):
+    """F-3 regression: regenerating an existing factuur writes the new PDF
+    to the same filename, then save_factuur_atomic runs. Unlinking the
+    'old' PDF would delete the just-written file. Guard: only unlink when
+    the new pdf_pad differs."""
+    kid = await add_klant(db, naam="SamePath", tarief_uur=80)
+    # Simulate an existing generated factuur whose PDF is on disk.
+    pdf_file = tmp_path / "2026-R02_SamePath.pdf"
+    pdf_file.write_bytes(b"%PDF-1.4 original")
+    old_id = await add_factuur(db, nummer="2026-R02", klant_id=kid,
+                                datum="2026-05-01", totaal_bedrag=640,
+                                pdf_pad=str(pdf_file), status='concept')
+    # Rewrite the file (simulating the regenerate-in-place behavior).
+    pdf_file.write_bytes(b"%PDF-1.4 regenerated")
+    # Replace with the SAME pdf_pad.
+    await save_factuur_atomic(
+        db, replacing_factuur_id=old_id,
+        nummer="2026-R02", klant_id=kid, datum="2026-05-01",
+        totaal_bedrag=700, pdf_pad=str(pdf_file))
+    # File must still exist.
+    assert pdf_file.exists(), (
+        "save_factuur_atomic deleted the PDF even though the new row "
+        "still points to it — the just-regenerated file is now gone.")
+
+
+@pytest.mark.asyncio
+async def test_save_factuur_atomic_deletes_pdf_when_new_path_differs(db, tmp_path):
+    """Complement of the above: when the new pdf_pad is empty (e.g. user
+    re-saved as concept over a generated factuur) the old PDF should be
+    cleaned up."""
+    kid = await add_klant(db, naam="DiffPath", tarief_uur=80)
+    pdf_file = tmp_path / "2026-R03_DiffPath.pdf"
+    pdf_file.write_bytes(b"%PDF")
+    old_id = await add_factuur(db, nummer="2026-R03", klant_id=kid,
+                                datum="2026-05-02", totaal_bedrag=500,
+                                pdf_pad=str(pdf_file), status='concept')
+    await save_factuur_atomic(
+        db, replacing_factuur_id=old_id,
+        nummer="2026-R03", klant_id=kid, datum="2026-05-02",
+        totaal_bedrag=500, pdf_pad='')  # concept — no PDF
+    assert not pdf_file.exists(), (
+        "Old orphaned PDF should have been unlinked when the new row "
+        "has empty pdf_pad.")
+
+
+@pytest.mark.asyncio
 async def test_save_factuur_atomic_rollback_on_duplicate(db):
     """If insert fails (duplicate nummer), old concept is NOT deleted."""
     kid = await add_klant(db, naam="Rollback", tarief_uur=80, retour_km=0)

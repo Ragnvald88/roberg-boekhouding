@@ -90,7 +90,7 @@ Concept (grey) → Verstuurd (blue/info) → Betaald (green/positive)
 - **Factuur/herinnering e-mail via NSSharingService**: `_build_mail_body` en `_build_herinnering_body` geven **HTML** terug met clickable `<a href="…">deze link</a>` op de betaallink. User-controlled waarden worden via `html.escape` gefilterd. Versturen loopt via `components/mail_helper.py → open_mail_with_attachment(..., body_html=...)`; die shellt uit naar `components/mail_compose_helper.py` dat Mail.app's Cocoa Share-Sheet compose-API (`com.apple.share.Mail.compose`) aanroept via pyobjc. **Niet** via AppleScript's `html content`-property — die is door Apple gedeprecateerd met omschrijving "Does nothing at all" op macOS 14+ (zie `sdef /System/Applications/Mail.app`) en werkt niet meer samen met attachments.
 - **Fiscale params**: alle jaar-afhankelijke waarden uit DB (`fiscale_params`), GEEN hardcoded fallbacks. Ontbrekende keys → loud ValueError, aangifte-pagina toont error-card met link naar Instellingen.
 - **Jaarafsluiting definitief**: maakt een echte JSON snapshot (`jaarafsluiting_snapshots` tabel). Render-pad leest snapshot voor definitief-jaren, live data voor concept. Snapshot is schema-tolerant (altijd `dict.get(key, default)` in render code). `/aangifte` leest ook via `load_jaarafsluiting_data` zodat cijfers op scherm + Jaarcijfers-PDF consistent blijven, óók na engine-fixes.
-- **Jaar-lock (K6)**: zodra `jaarafsluiting_status='definitief'` weigert elke mutatie op facturen, werkdagen, uitgaven, banktransacties en fiscale_params van dat jaar met `YearLockedError` (subclass van `ValueError`). Guard zit in `assert_year_writable(db_path, jaar_of_datum)` helper. Unfreeze-escape: `update_jaarafsluiting_status(jaar, 'concept')` — die functie is als enige ongeguarded zodat "Heropenen" altijd werkt. Na heropenen → correcties → opnieuw definitief maken overschrijft het snapshot. Alle guards zijn getest in `tests/test_year_locking.py`.
+- **Jaar-lock (K6)**: zodra `jaarafsluiting_status='definitief'` weigert elke mutatie op facturen, werkdagen, uitgaven, banktransacties en fiscale_params van dat jaar met `YearLockedError` (subclass van `ValueError`). Guard zit in `assert_year_writable(db_path, jaar_of_datum)` helper. Unfreeze-escape: `update_jaarafsluiting_status(jaar, 'concept')` — die functie is als enige ongeguarded zodat "Heropenen" altijd werkt. Na heropenen → correcties → opnieuw definitief maken overschrijft het snapshot. `delete_banktransacties` controleert óók de datums van gekoppelde facturen: een late-payment scenario (2024 factuur via 2025 bank-tx) mag geen frozen-year factuur naar `verstuurd` flippen. Alle guards zijn getest in `tests/test_year_locking.py`.
 - **Bank matching**: `find_factuur_matches` retourneert `MatchProposal` met `confidence='high'|'low'`. Preview-dialoog gating: user bevestigt matches vóór toepassing. `apply_factuur_matches` gaat via `update_factuur_status`.
 - **PDF-pad resolutie**: lees `pdf_pad` nooit direct — gebruik `_resolve_pdf_pad(row)` uit `pages/facturen.py`. Die probeert de stored path, valt terug op basename-lookup in `PDF_DIR` en `PDF_DIR/imports/`, en update de DB stilletjes bij fallback-hit (self-healing bij data-dir moves). Pure variant `_find_pdf_by_filename(stored, base)` is unit-getest met tmp_path.
 - **Category suggestions**: `get_categorie_suggestions(db)` bouwt een lowercase `tegenpartij → most-used categorie` map via UNION ALL van twee bronnen: debit-uitgaven (`uitgaven.categorie JOIN banktransacties` — source of truth post-migratie 27) en positieve banktransacties (`banktransacties.categorie` — Omzet/Prive/Belasting/AOV). Tie-breaker: `cnt DESC, MAX(datum) DESC`. UI toont toverstaf-knop (`auto_fix_high`) naast q-select op **alle** ongecategoriseerde rijen (debit, positief én manueel) in `/transacties`.
@@ -117,6 +117,10 @@ status, categorie, type, search, include_genegeerd)` in `database.py`.
   server-side as `props.row.cat_options`.
 - **Detail dialog** lives in `components/transacties_dialog.py`. Bootstrap
   uses `get_uitgave_by_id` (M5 fix — no list-and-filter silent-None race).
+  **Debit-only** — the dialog refuses to open on credit rows (bedrag ≥ 0);
+  lazy-create would otherwise write an ABS-bedrag uitgave linked to a
+  positive bank-tx and silently inflate /kosten breakdown totals. The
+  template also hides the `…` and `Bon toevoegen` buttons for credits.
 - **Factuur-match preview**: after CSV import + header button
   "Matches controleren (N)" for manual review.
 - **Cash entries** (`+ Contante uitgave`): `add_uitgave(bank_tx_id=None)`.
@@ -144,11 +148,19 @@ Read-only. Jaar-selector + 2 tabs (Overzicht / Investeringen). No form
 controls that mutate data.
 
 - **KPI strip**: `get_kpi_kosten`. "Te verwerken" card navigates to
-  `/transacties?status=ongecategoriseerd&jaar=X`.
-- **Per-maand bar chart**: `get_kosten_per_maand` (12 slots).
+  `/transacties?status=ongecategoriseerd&jaar=X`. `totaal` and
+  `monthly_totals` exclude `is_investering=1` rows: investeringen are
+  depreciated via `afschrijvingen_jaar`, not booked as kosten in the
+  purchase month/year.
+- **Per-maand bar chart**: `get_kosten_per_maand` (12 slots). Excludes
+  investeringen and uitgaven linked to positive bank-tx (defensive
+  against the P0-1 phantom-lazy-create path).
 - **Categorie breakdown**: `get_kosten_breakdown` — each bar is clickable →
-  `/transacties?jaar=X&categorie=Y`. The `(nog te categoriseren)` bucket
-  renders as a separate muted card above (M7 polish).
+  `/transacties?jaar=X&categorie=Y` (categorie is `urllib.parse.quote_plus`-ed
+  so `Telefoon/KPN` and tegenpartij names with `&` survive). The
+  `(nog te categoriseren)` bucket renders as a separate muted card above
+  (M7 polish); clicking it now routes to `?status=ongecategoriseerd`.
+  Same investering + bank-sign filters as the per-maand query.
 - **Terugkerende kosten card**: `get_terugkerende_kosten` — vendors with
   ≥3 hits in 365d, sorted by jaar-totaal DESC. Click → `/transacties?
   search=tegenpartij`.
@@ -168,7 +180,7 @@ Geen: user auth, BTW-administratie, loon/voorraad, real-time bank-API, auto-matc
 - **Afschrijvingen**: lineair, restwaarde 10%, eerste jaar pro-rata per maand
 - **Representatie**: 80%-regeling, 20% bijtelling op fiscale winst
 - **Factuur vereisten**: naam+adres+KvK, factuurnummer YYYY-NNN, vervaldatum 14d, BTW-vrijstellingstekst
-- **Factuur datum = last werkdag date** (work-date based, NOT invoice issue date)
+- **Factuur datum = issue date** (defaults to today; werkdag dates stay on the line items). The builder seeds `datum_input` from `pre_datum` (on concept-reopen) or today; werkdag-import flows never overwrite this field.
 - **ANW diensten**: km tracked but km_tarief=0 (travel included in ANW tarief)
 - **Belastingdienst IBAN**: NL86INGB0002445588
 
