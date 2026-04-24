@@ -2,6 +2,8 @@
 
 import asyncio
 import html
+import json
+import logging
 import subprocess
 import tempfile
 from datetime import date, datetime, timedelta
@@ -10,7 +12,9 @@ from pathlib import Path
 from nicegui import app, events, ui
 
 from components.layout import create_layout, page_title
-from components.invoice_builder import open_invoice_builder, _build_regels
+from components.invoice_builder import (
+    open_invoice_builder, _build_regels, _werkdagen_to_line_items,
+)
 from components.invoice_generator import generate_invoice, archive_factuur_pdf
 from components.mail_helper import open_mail_with_attachment
 from components.utils import format_euro, format_datum, generate_csv
@@ -18,10 +22,12 @@ from database import (
     get_facturen, add_factuur,
     delete_factuur, update_factuur,
     update_factuur_status, get_klanten,
-    get_bedrijfsgegevens,
+    get_bedrijfsgegevens, get_werkdagen,
     link_werkdagen_to_factuur, get_db_ctx, add_werkdag,
     get_fiscale_params, DB_PATH,
 )
+
+log = logging.getLogger(__name__)
 from components.shared_ui import year_options
 from import_.pdf_parser import (
     extract_pdf_text, detect_invoice_type,
@@ -137,6 +143,191 @@ async def _resolve_pdf_pad(row: dict) -> Path | None:
                 # on the next click.
                 pass
     return found
+
+
+async def _compute_regen_sources(row: dict) -> dict | None:
+    """Gather the ingredients needed to re-render a factuur PDF.
+
+    Reads ``regels_json`` from DB; falls back to linked werkdagen when
+    the JSON is empty or unparseable. Loads klant + bedrijfsgegevens.
+
+    Returns ``{'line_items', 'klant_fields', 'bg_dict', 'factuur_type',
+    'nummer', 'factuur_datum'}`` when regeneration is possible, or
+    ``None`` when there is not enough stored state (e.g. ANW import or
+    ad-hoc vergoeding without werkdagen AND without regels_json).
+
+    Pure-ish: only reads DB, never writes or renders. Safe to unit-test
+    without WeasyPrint.
+    """
+    nummer = row.get('nummer')
+    factuur_id = row.get('id')
+    if not nummer or not factuur_id:
+        return None
+
+    async with get_db_ctx(DB_PATH) as conn:
+        cur = await conn.execute(
+            "SELECT regels_json, type, klant_id, datum, bron "
+            "FROM facturen WHERE id = ?", (factuur_id,))
+        frow = await cur.fetchone()
+    if not frow:
+        return None
+    regels_json = (frow['regels_json'] or '')
+    factuur_type = (frow['type'] or 'factuur')
+    bron = (frow['bron'] or 'app')
+    klant_id = frow['klant_id']
+    factuur_datum = (frow['datum']
+                     or row.get('datum')
+                     or date.today().isoformat())
+
+    # Imports (ANW or bron='import') are frozen — the original PDF is
+    # the authority. We don't regenerate those.
+    if factuur_type == 'anw' or bron == 'import':
+        return None
+
+    # Load bedrijfsgegevens once.
+    bg = await get_bedrijfsgegevens(DB_PATH)
+    bg_dict: dict = {}
+    if bg:
+        for fld in ('bedrijfsnaam', 'naam', 'functie', 'adres',
+                    'postcode_plaats', 'kvk', 'iban', 'thuisplaats',
+                    'telefoon', 'email'):
+            bg_dict[fld] = getattr(bg, fld, '') or ''
+
+    line_items: list[dict] = []
+    klant_fields: dict = {}
+
+    # Preferred source: regels_json (saved by opslaan_als_concept /
+    # genereer_factuur from F-4 onwards).
+    if regels_json:
+        try:
+            regels_data = json.loads(regels_json)
+            line_items = regels_data.get('line_items', []) or []
+            klant_fields = regels_data.get('klant_fields', {}) or {}
+        except json.JSONDecodeError:
+            line_items, klant_fields = [], {}
+
+    # Fallback: reconstruct line_items from linked werkdagen.
+    if not line_items:
+        all_wd = await get_werkdagen(DB_PATH)
+        linked = [w for w in all_wd if w.factuurnummer == nummer]
+        if linked:
+            line_items = _werkdagen_to_line_items(
+                linked, bg_dict.get('thuisplaats', ''))
+
+    if not line_items:
+        return None
+
+    # Ensure klant_fields are populated (fall back to the klant record).
+    if not klant_fields and klant_id:
+        all_klanten = await get_klanten(DB_PATH, alleen_actief=False)
+        klant_obj = next(
+            (k for k in all_klanten if k.id == klant_id), None)
+        if klant_obj:
+            klant_fields = {
+                'naam': klant_obj.naam or '',
+                'contactpersoon':
+                    getattr(klant_obj, 'contactpersoon', '') or '',
+                'adres': klant_obj.adres or '',
+                'postcode': getattr(klant_obj, 'postcode', '') or '',
+                'plaats': getattr(klant_obj, 'plaats', '') or '',
+            }
+
+    return {
+        'line_items': line_items,
+        'klant_fields': klant_fields,
+        'bg_dict': bg_dict,
+        'factuur_type': factuur_type,
+        'nummer': nummer,
+        'factuur_datum': factuur_datum,
+    }
+
+
+async def _regenerate_factuur_pdf(row: dict) -> Path | None:
+    """Render a fresh PDF for an existing factuur from stored state.
+
+    Sources tried in order: ``regels_json`` → linked werkdagen. Writes
+    the PDF to ``PDF_DIR`` using the same filename convention as the
+    original generate; updates ``facturen.pdf_pad``; best-effort
+    archives to SynologyDrive. Returns the path, or ``None`` if the
+    factuur can't be reconstructed.
+
+    Year-lock: the pdf_pad update is swallowed if the factuur's year is
+    frozen, so frozen-year Preview still produces a viewable file on
+    disk even if we can't persist the path. Users won't see the row's
+    stored path update, but they will see the PDF.
+    """
+    src = await _compute_regen_sources(row)
+    if src is None:
+        return None
+
+    regels = _build_regels(src['line_items'])
+    qr_file = PDF_DIR / f"{src['nummer']}_qr.png"
+    qr_path = str(qr_file) if qr_file.exists() else ''
+
+    pdf_path: Path = await asyncio.to_thread(
+        generate_invoice,
+        src['nummer'], src['klant_fields'], [], PDF_DIR,
+        factuur_datum=src['factuur_datum'],
+        bedrijfsgegevens=src['bg_dict'],
+        pre_regels=regels,
+        qr_path=qr_path,
+    )
+
+    factuur_id = row.get('id')
+    if factuur_id:
+        try:
+            await update_factuur(
+                DB_PATH, factuur_id, pdf_pad=str(pdf_path))
+            row['pdf_pad'] = str(pdf_path)
+        except Exception:
+            # Year-locked or otherwise — keep the file on disk anyway.
+            log.debug(
+                "Kon pdf_pad niet bijwerken na regeneratie voor %s",
+                src['nummer'])
+
+    # Archive best-effort.
+    await asyncio.to_thread(
+        archive_factuur_pdf, pdf_path,
+        factuur_type=src['factuur_type'],
+        factuur_datum=src['factuur_datum'])
+
+    return pdf_path
+
+
+async def _ensure_factuur_pdf(row: dict) -> Path | None:
+    """One-stop PDF resolver for row-menu actions.
+
+    Tries the stored path + basename fallback; when nothing is on disk,
+    regenerates from stored state. Surfaces a clear warning when the
+    factuur genuinely cannot be reconstructed (ANW import, bron=import,
+    or vergoeding without regels_json nor werkdagen).
+
+    Callers (Preview/Download/Finder/SendMail/SendHerinnering) should
+    use this instead of ``_resolve_pdf_pad`` so "file deleted out from
+    under the DB" becomes self-healing instead of a dead end.
+    """
+    resolved = await _resolve_pdf_pad(row)
+    if resolved is not None:
+        return resolved
+
+    try:
+        regenerated = await _regenerate_factuur_pdf(row)
+    except Exception as ex:
+        log.exception(
+            "Regeneratie factuur %s mislukt", row.get('nummer'))
+        ui.notify(f'Regeneratie mislukt: {ex}', type='negative')
+        return None
+
+    if regenerated is None:
+        ui.notify(
+            'Kan deze factuur niet automatisch regenereren. '
+            'Open via Bewerken en sla opnieuw op om de regels te '
+            'herstellen.',
+            type='warning', timeout=6000)
+        return None
+
+    ui.notify('Factuur-PDF opnieuw gegenereerd', type='info')
+    return regenerated
 
 
 def _line_item_to_werkdag_kwargs(
@@ -902,26 +1093,21 @@ async def facturen_page():
 
         async def on_download(e):
             row = e.args
-            resolved = await _resolve_pdf_pad(row)
+            resolved = await _ensure_factuur_pdf(row)
             if resolved:
                 ui.download(str(resolved))
-            else:
-                ui.notify('PDF niet gevonden', type='warning')
 
         async def on_open_finder(e):
             row = e.args
-            resolved = await _resolve_pdf_pad(row)
+            resolved = await _ensure_factuur_pdf(row)
             if resolved:
                 await asyncio.to_thread(
                     subprocess.run, ['open', '-R', str(resolved)])
-            else:
-                ui.notify('PDF niet gevonden', type='warning')
 
         async def on_preview(e):
             row = e.args
-            resolved = await _resolve_pdf_pad(row)
+            resolved = await _ensure_factuur_pdf(row)
             if resolved is None:
-                ui.notify('PDF niet gevonden', type='warning')
                 return
             # Determine the correct static URL path
             p = resolved
@@ -1066,77 +1252,20 @@ async def facturen_page():
 
         async def on_send_mail(e):
             """Send invoice via email using macOS Mail.app, then mark as verstuurd."""
-            import json as _json
             row = e.args
             nummer = row['nummer']
 
-            # Fetch shared data once (used for both PDF generation and email)
+            # One-stop resolve: existing PDF → basename fallback → regenerate
+            # from regels_json / werkdagen → clear error. Replaces the old
+            # inline "regels_json only" fallback (F-5/F-6).
+            resolved = await _ensure_factuur_pdf(row)
+            if resolved is None:
+                return
+            pdf_path = str(resolved)
+
+            # Shared data used below.
             all_klanten = await get_klanten(DB_PATH, alleen_actief=False)
             bg = await get_bedrijfsgegevens(DB_PATH)
-
-            # Try to resolve an existing PDF (self-heals stale paths).
-            resolved = await _resolve_pdf_pad(row)
-            pdf_path = str(resolved) if resolved else ''
-
-            # Auto-generate PDF for concepts that don't have one yet
-            if not pdf_path:
-                async with get_db_ctx(DB_PATH) as conn:
-                    cur = await conn.execute(
-                        "SELECT regels_json, betaallink FROM facturen WHERE id = ?",
-                        (row['id'],))
-                    frow = await cur.fetchone()
-                regels_json = frow['regels_json'] if frow else ''
-                if not regels_json:
-                    ui.notify('Geen factuurregels — open de factuur eerst via Bewerken',
-                              type='warning')
-                    return
-                regels_data = _json.loads(regels_json)
-                line_items = regels_data.get('line_items', [])
-                regels = _build_regels(line_items)
-
-                # Get klant info for PDF
-                klant_obj = next(
-                    (k for k in all_klanten if k.id == row.get('klant_id')), None)
-                klant_fields = regels_data.get('klant_fields', {})
-                if not klant_fields and klant_obj:
-                    klant_fields = {
-                        'naam': klant_obj.naam, 'adres': klant_obj.adres or '',
-                        'postcode': getattr(klant_obj, 'postcode', ''),
-                        'plaats': getattr(klant_obj, 'plaats', ''),
-                    }
-
-                bg_dict = {}
-                if bg:
-                    for fld in ('bedrijfsnaam', 'naam', 'adres',
-                                'postcode_plaats', 'kvk', 'iban',
-                                'telefoon', 'email'):
-                        bg_dict[fld] = getattr(bg, fld, '') or ''
-
-                # QR code
-                qr_file = DB_PATH.parent / 'facturen' / f'{nummer}_qr.png'
-                gen_qr = str(qr_file) if qr_file.exists() else ''
-
-                factuur_datum = row.get('datum', '') or date.today().isoformat()
-                pdf_dir = DB_PATH.parent / 'facturen'
-                try:
-                    pdf_path_obj = await asyncio.to_thread(
-                        generate_invoice,
-                        nummer, klant_fields, [], pdf_dir,
-                        factuur_datum=factuur_datum,
-                        bedrijfsgegevens=bg_dict,
-                        pre_regels=regels,
-                        qr_path=gen_qr,
-                    )
-                    pdf_path = str(pdf_path_obj)
-                    await update_factuur(DB_PATH, row['id'], pdf_pad=pdf_path)
-                    # Archive to SynologyDrive (best-effort)
-                    await asyncio.to_thread(
-                        archive_factuur_pdf, pdf_path_obj,
-                        factuur_type=row.get('type', 'factuur'),
-                        factuur_datum=row.get('datum', ''))
-                except Exception as ex:
-                    ui.notify(f'PDF generatie mislukt: {ex}', type='negative')
-                    return
 
             # Get klant email if available
             klant_id = row.get('klant_id')
@@ -1195,9 +1324,8 @@ async def facturen_page():
             """Send reminder email for overdue invoice via macOS Mail.app."""
             row = e.args
             nummer = row['nummer']
-            resolved = await _resolve_pdf_pad(row)
+            resolved = await _ensure_factuur_pdf(row)
             if resolved is None:
-                ui.notify('Geen PDF gevonden voor deze factuur', type='warning')
                 return
             pdf_path = str(resolved)
 
