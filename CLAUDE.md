@@ -82,6 +82,12 @@ Concept (grey) → Verstuurd (blue/info) → Betaald (green/positive)
 - Geïmporteerde facturen (ANW of `bron='import'`) zijn **bevroren**: nooit Bewerken, nooit Markeer-als-concept.
 - Helpers in `pages/facturen.py`: `_is_editable(row)` en `_can_revert_to_concept(row)` spiegelen de Vue `v-if` regels en zijn unit-getest.
 
+### Invoice builder — save invariants (niet subtiel omzeilen)
+- **Beide save-paths serializen `regels_json`** = `{'line_items', 'klant_fields'}`. `opslaan_als_concept` én `genereer_factuur` moeten dit doen, anders verliest een latere Bewerken de vrije regels en reconstrueert vanuit werkdagen (lossy). De `_ensure_factuur_pdf` regeneratie-fallback leest deze JSON eerst.
+- **`save_factuur_atomic` stap 4 conditioneel**: unlink de oude PDF ALLEEN als `old.pdf_pad != factuur_kwargs.get('pdf_pad', '')`. Regenereren met zelfde nummer schrijft naar hetzelfde bestand — onvoorwaardelijk unlink zou de net-geschreven PDF verwijderen (F-3).
+- **Close-after-refresh**: in `genereer_factuur` + `opslaan_als_concept` loopt `on_save()` (refresh_table) VÓÓR `dlg.close()`. Anders ziet de gebruiker stale `pdf_pad` in het rij-menu tijdens de refresh-window, wat leidt tot "PDF niet gevonden" clicks op bestanden die save_factuur_atomic net heeft opgeruimd.
+- **`pre_datum` op concept-reopen**: `_reopen_concept_in_builder` geeft `pre_datum=row['datum']` door aan `open_invoice_builder`. De builder initialiseert `datum_input` met `pre_datum or date.today().isoformat()`. Werkdag-import flows mogen de factuurdatum NIET overschrijven (F-1/F-2 regressie-risico — er zijn geen `datum_input.value = max(dates)` assignments meer in het bestand; houd het zo).
+
 ### Kwaliteitseisen
 - Bij NiceGUI upload events: ALTIJD `await e.file.read()` en `e.file.name`. NOOIT `e.content.read()` of `e.name`.
 - Bij SQL queries op `facturen`: controleer altijd of `status != 'concept'` filtering nodig is
@@ -127,6 +133,7 @@ status, categorie, type, search, include_genegeerd)` in `database.py`.
 - **Archief-PDFs importeren**: `scan_archive()` + `open_add_uitgave_dialog`
   with prefill. Auto-link routes through `ensure_uitgave_for_banktx` (M1).
 - **Bulk**: Categorie wijzigen · Markeer als privé (bank-only) · Verwijderen.
+  *Bulk-Categorie* respecteert sign van de selectie: all-debit → kosten-cats, all-credit → `['', 'Omzet', 'Prive', 'Belasting', 'AOV']`, mixed → alleen blanken (met waarschuwing). *Bulk-Verwijderen* pre-scant de selectie en vraagt expliciet bevestiging bij factuur-revert cascades en uitgave-orphans; de captured `selected` snapshot wordt doorgegeven aan de inner delete-loop om scope-widening te voorkomen als de user de selectie na dialoog-open wijzigt.
 - **Query-params**: `?jaar/maand/status/categorie/type/search` pre-populate
   filters. Used for click-through from `/kosten`.
 - **Sign convention in `TransactieRow.bedrag`**: signed. Bank debits keep
