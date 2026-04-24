@@ -38,6 +38,29 @@ def _eprint(*args):
     print(*args, file=sys.stderr, flush=True)
 
 
+def _ensure_utf8_html(body_html: str) -> str:
+    """Return ``body_html`` wrapped with a UTF-8 <meta> declaration.
+
+    NSAttributedString.initWithHTML_documentAttributes_ silently falls
+    back to Windows-1252 when the document has no explicit charset,
+    which turns UTF-8 "€" bytes (E2 82 AC) into "â‚¬" in Mail's compose
+    window. Wrapping with a proper HTML5 shell makes the parser pick
+    UTF-8.
+
+    Idempotent: if the caller already declared a meta charset, the
+    input is returned unchanged.
+    """
+    lowered = body_html.lower()
+    if '<meta' in lowered and 'charset' in lowered:
+        return body_html
+    return (
+        '<!DOCTYPE html><html><head>'
+        '<meta http-equiv="Content-Type" '
+        'content="text/html; charset=UTF-8">'
+        '</head><body>' + body_html + '</body></html>'
+    )
+
+
 def main() -> int:
     try:
         payload = json.loads(sys.stdin.read())
@@ -59,7 +82,7 @@ def main() -> int:
 
     NSApplication.sharedApplication()
 
-    html_bytes = body_html.encode('utf-8')
+    html_bytes = _ensure_utf8_html(body_html).encode('utf-8')
     html_data = NSData.dataWithBytes_length_(html_bytes, len(html_bytes))
     attr_body, _ = NSAttributedString.alloc() \
         .initWithHTML_documentAttributes_(html_data, None)
