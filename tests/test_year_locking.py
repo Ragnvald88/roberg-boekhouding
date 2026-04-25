@@ -401,6 +401,44 @@ async def test_delete_banktx_rejected_when_linked_factuur_in_frozen_year(db):
 
 
 @pytest.mark.asyncio
+async def test_delete_banktx_rejected_when_linked_uitgave_in_frozen_year(db):
+    """Codex-found gap: delete_banktransacties must year-lock linked uitgaven
+    datums too, not only bank-tx and factuur. Otherwise the FK
+    `ON DELETE SET NULL` on uitgaven.bank_tx_id would silently null the
+    bank_tx_id of a frozen-year uitgave when its writable-year bank-tx is
+    deleted — a mutation on a frozen-year row without assert_year_writable.
+    """
+    await _seed_fiscale_params_row(db, 2024)
+    await _seed_fiscale_params_row(db, 2025)
+    # Bank-tx in writable 2025 (debit, e.g. paying a 2024 invoice late)
+    await add_banktransacties(db, [
+        {'datum': '2025-01-15', 'bedrag': -100, 'tegenpartij': 'Vendor',
+         'omschrijving': 'late factuur 2024', 'categorie': ''},
+    ], csv_bestand='jan2025.csv')
+    bank_id = (await get_banktransacties(db))[0].id
+    # Uitgave dated in 2024 (still writable at this point), linked to the
+    # 2025 bank-tx via bank_tx_id.
+    await add_uitgave(
+        db, datum='2024-12-30', categorie='Kantoor',
+        omschrijving='late factuur 2024', bedrag=100, bank_tx_id=bank_id)
+    # Now freeze 2024.
+    await update_jaarafsluiting_status(db, 2024, 'definitief')
+    # Deleting the 2025 bank-tx would null the 2024 uitgave's bank_tx_id
+    # → must reject with YearLockedError matching 2024.
+    with pytest.raises(YearLockedError, match='2024'):
+        await delete_banktransacties(db, [bank_id])
+    # Both rows still present (delete was rejected before any mutation).
+    assert len(await get_banktransacties(db)) == 1
+    assert len(await get_uitgaven(db)) == 1
+    # Verify the link is still in DB (bank_tx_id not nulled by SET NULL).
+    async with aiosqlite.connect(db) as conn:
+        cur = await conn.execute(
+            "SELECT bank_tx_id FROM uitgaven LIMIT 1")
+        row = await cur.fetchone()
+    assert row[0] == bank_id
+
+
+@pytest.mark.asyncio
 async def test_delete_banktx_allowed_when_linked_factuur_also_writable(db):
     """Regression guard: if both the bank-tx and linked factuur jaar are
     writable, the delete succeeds and the factuur reverts to verstuurd."""
@@ -424,6 +462,44 @@ async def test_delete_banktx_allowed_when_linked_factuur_also_writable(db):
     count, reverted = await delete_banktransacties(db, [bank_id])
     assert count == 1
     assert reverted == [fid]
+    facturen = await get_facturen(db)
+    f = next(x for x in facturen if x.id == fid)
+    assert f.status == 'verstuurd'
+
+
+@pytest.mark.asyncio
+async def test_delete_banktx_does_not_falsely_report_reverted_when_factuur_not_betaald(db):
+    """Codex-found: delete_banktransacties must only return factuur-ids
+    that were actually reverted (status changed from betaald → verstuurd).
+    A bank-tx can keep its koppeling to a factuur that the user manually
+    flipped back via "Markeer als concept" (betaald→verstuurd→concept).
+    Including such ids in the return value would falsely tell the user
+    "factuur teruggezet" when in fact nothing changed."""
+    await _seed_fiscale_params_row(db, 2025)
+    kid = await add_klant(db, naam='ManualFlipper', tarief_uur=0)
+    fid = await add_factuur(db, nummer='2025-300', klant_id=kid,
+                             datum='2025-06-01', totaal_bedrag=300)
+    await update_factuur_status(db, factuur_id=fid, status='verstuurd')
+    await update_factuur_status(db, factuur_id=fid, status='betaald',
+                                 betaald_datum='2025-06-15')
+    await add_banktransacties(db, [
+        {'datum': '2025-06-15', 'bedrag': 300, 'tegenpartij': 'ManualFlipper',
+         'omschrijving': '2025-300', 'categorie': ''},
+    ], csv_bestand='jun2025.csv')
+    bank_id = (await get_banktransacties(db))[0].id
+    await update_banktransactie(
+        db, transactie_id=bank_id,
+        koppeling_type='factuur', koppeling_id=fid)
+    # User manually flips factuur back: betaald → verstuurd. Koppeling
+    # on the bank-tx is intentionally NOT cleared by update_factuur_status.
+    await update_factuur_status(db, factuur_id=fid, status='verstuurd')
+    # Now delete the bank-tx. The factuur is already verstuurd, so the
+    # internal UPDATE WHERE status='betaald' is a no-op. Returned
+    # reverted list must be empty.
+    count, reverted = await delete_banktransacties(db, [bank_id])
+    assert count == 1
+    assert reverted == []
+    # Factuur status unchanged.
     facturen = await get_facturen(db)
     f = next(x for x in facturen if x.id == fid)
     assert f.status == 'verstuurd'

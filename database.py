@@ -1827,10 +1827,13 @@ async def delete_banktransacties(db_path: Path = DB_PATH,
         return 0, []
     placeholders = ','.join('?' for _ in transactie_ids)
 
-    # Year-lock guard: check every affected row's datum — BOTH the bank
-    # tx side and the linked factuur side. Late-payment scenarios (2024
-    # factuur paid via 2025 bank-tx) would otherwise let a writable-year
-    # bank-tx delete silently flip a frozen-year factuur's status.
+    # Year-lock guard: check every affected row's datum — bank tx side,
+    # linked factuur side, AND linked uitgave side. Late-payment scenarios
+    # (2024 factuur paid via 2025 bank-tx) would otherwise let a writable-
+    # year bank-tx delete silently flip a frozen-year factuur's status.
+    # Same for uitgaven: ON DELETE SET NULL on uitgaven.bank_tx_id would
+    # null a frozen-year uitgave's bank_tx_id without going through
+    # assert_year_writable.
     async with get_db_ctx(db_path) as conn:
         cur = await conn.execute(
             f"SELECT DISTINCT datum FROM banktransacties "
@@ -1845,17 +1848,31 @@ async def delete_banktransacties(db_path: Path = DB_PATH,
             f"AND f.status = 'betaald'",
             transactie_ids)
         factuur_datum_rows = await cur.fetchall()
+        cur = await conn.execute(
+            f"SELECT DISTINCT datum FROM uitgaven "
+            f"WHERE bank_tx_id IN ({placeholders})",
+            transactie_ids)
+        uitgave_datum_rows = await cur.fetchall()
     for r in bank_datum_rows:
         await assert_year_writable(db_path, r[0])
     for r in factuur_datum_rows:
         await assert_year_writable(db_path, r[0])
+    for r in uitgave_datum_rows:
+        await assert_year_writable(db_path, r[0])
 
     async with get_db_ctx(db_path) as conn:
-        # Find linked facturen before deletion
+        # Find linked facturen that will actually be reverted: only those
+        # currently in 'betaald' status. A bank-tx can keep its koppeling
+        # to a factuur that the user manually flipped back via "Markeer
+        # als concept" (betaald→verstuurd→concept) — including those in
+        # the result would falsely report "factuur teruggezet" to the user.
         cur = await conn.execute(
-            f"SELECT koppeling_id FROM banktransacties "
-            f"WHERE id IN ({placeholders}) AND koppeling_type = 'factuur' "
-            f"AND koppeling_id IS NOT NULL",
+            f"SELECT b.koppeling_id FROM banktransacties b "
+            f"JOIN facturen f ON f.id = b.koppeling_id "
+            f"WHERE b.id IN ({placeholders}) "
+            f"AND b.koppeling_type = 'factuur' "
+            f"AND b.koppeling_id IS NOT NULL "
+            f"AND f.status = 'betaald'",
             transactie_ids,
         )
         linked = await cur.fetchall()

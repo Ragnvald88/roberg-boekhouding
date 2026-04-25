@@ -83,8 +83,14 @@ async def kosten_page():
                     ui.column().classes('w-full gap-2')
 
         async def on_tab_change():
+            # Refresh whichever tab becomes active. Without the else-branch,
+            # switching back to Overzicht after a jaar-change on Investeringen
+            # would leave Overzicht showing stale data from the prior jaar
+            # (codex-found: kosten.py year-switch tab gap).
             if tabs.value == 'Investeringen':
                 await ververs_investeringen()
+            else:
+                await ververs_overview()
 
         tabs.on('update:model-value',
                  lambda _: asyncio.create_task(on_tab_change()))

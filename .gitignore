@@ -10,3 +10,7 @@ __pycache__/
 suggestions_AI/
 .mcp.json
 Boekhouding.app/
+
+# Codex review snapshots — generated on demand, not maintained
+codex.md
+.claude/.codex-review-state
