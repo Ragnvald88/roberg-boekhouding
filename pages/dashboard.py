@@ -621,6 +621,10 @@ async def dashboard_page():
                     ui.label('AANDACHTSPUNTEN').classes('section-label')
 
                 _severity_style = {
+                    'critical': (
+                        'background: #FEE2E2; border: 1px solid #FCA5A5;',
+                        '#B91C1C', '#7F1D1D',
+                    ),
                     'warning': (
                         'background: #FEF2F2; border: 1px solid #FECACA;',
                         '#DC2626', '#991B1B',
@@ -629,6 +633,11 @@ async def dashboard_page():
                         'background: #EFF6FF; border: 1px solid #BFDBFE;',
                         '#2563EB', '#1E40AF',
                     ),
+                }
+                _icon_for = {
+                    'critical': 'error',
+                    'warning': 'warning',
+                    'info': 'info_outline',
                 }
                 for alert in health_alerts:
                     bg_style, icon_color, text_color = _severity_style.get(
@@ -639,8 +648,8 @@ async def dashboard_page():
                             f'align-items: center; '
                             f'justify-content: space-between'):
                         with ui.row().classes('items-center gap-2'):
-                            icon = ('warning' if alert['severity'] == 'warning'
-                                    else 'info_outline')
+                            icon = _icon_for.get(
+                                alert['severity'], 'info_outline')
                             ui.icon(icon, size='20px').style(
                                 f'color: {icon_color}')
                             ui.html(

@@ -190,7 +190,7 @@ async def compute_checklist_issues(db_path, jaar: int) -> list[tuple[str, str, s
             issues.append((
                 'info',
                 f'{uncat} banktransacties niet gecategoriseerd',
-                '/bank'))
+                '/transacties?status=ongecategoriseerd'))
 
     # 5. VA bedragen zonder beschikking PDF
     params = await get_fiscale_params(db_path, jaar)

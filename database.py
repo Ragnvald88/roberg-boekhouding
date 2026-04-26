@@ -2639,25 +2639,38 @@ async def get_health_alerts(db_path: Path = DB_PATH, jaar: int = 2026) -> list[d
 
     Each alert is a dict with keys:
       key: str         — identifier (e.g. 'uncategorized_bank')
-      severity: str    — 'warning' or 'info'
+      severity: str    — 'info', 'warning', or 'critical'
       message: str     — human-readable Dutch description
       count: int       — number of items (for display)
       link: str        — page route to navigate to
     Returns empty list when everything is healthy.
+
+    Severity escalation (Plan 2026-04-26 Lane 2):
+    - concept invoices: info while all are <=14d old, warning if any older
+    - overdue invoices: warning at 14-30d, critical when any >30d
+    - stale werkdagen: warning when any >30d unfactured (always)
     """
     from datetime import date, timedelta
     alerts = []
     jaar_start = f'{jaar}-01-01'
     jaar_end = f'{jaar + 1}-01-01'
+    today_iso = date.today().isoformat()
     overdue_cutoff = (date.today() - timedelta(days=14)).isoformat()
+    overdue_critical_cutoff = (date.today() - timedelta(days=30)).isoformat()
+    concept_warn_cutoff = (date.today() - timedelta(days=14)).isoformat()
+    werkdag_stale_cutoff = (date.today() - timedelta(days=30)).isoformat()
 
     async with get_db_ctx(db_path) as conn:
-        # 1. Uncategorized bank transactions (no category, no koppeling)
+        # 1. Uncategorized bank transactions: same filter as the
+        # /transacties?status=ongecategoriseerd view (genegeerd=0,
+        # no category, no koppeling). Otherwise the alert can over-
+        # count rows that the view will then hide.
         cur = await conn.execute(
             "SELECT COUNT(*) FROM banktransacties "
             "WHERE datum >= ? AND datum < ? "
             "AND (categorie IS NULL OR categorie = '') "
-            "AND (koppeling_type IS NULL OR koppeling_type = '')",
+            "AND (koppeling_type IS NULL OR koppeling_type = '') "
+            "AND (genegeerd = 0 OR genegeerd IS NULL)",
             (jaar_start, jaar_end))
         uncat = (await cur.fetchone())[0]
         if uncat > 0:
@@ -2666,39 +2679,91 @@ async def get_health_alerts(db_path: Path = DB_PATH, jaar: int = 2026) -> list[d
                 'severity': 'info',
                 'message': f'{uncat} banktransacties niet gecategoriseerd',
                 'count': uncat,
-                'link': '/bank',
+                # `/bank` is a deprecated redirect — link directly to the
+                # filtered transacties view so the user lands on the same
+                # rows the alert just counted. Pass jaar so cross-year
+                # navigation from the dashboard's year selector lands on
+                # the same set the alert counted.
+                'link': (f'/transacties?status=ongecategoriseerd'
+                         f'&jaar={jaar}'),
             })
 
-        # 2. Overdue invoices (verstuurd + datum > 14 days ago)
+        # 2. Overdue invoices: warning at 14-30d, critical when >30d.
+        # Single aggregate query: total + the >30d subset.
         cur = await conn.execute(
-            "SELECT COUNT(*) FROM facturen "
+            "SELECT COUNT(*) AS total, "
+            "COALESCE(SUM(CASE WHEN datum < ? THEN 1 ELSE 0 END), 0) "
+            "  AS very_overdue "
+            "FROM facturen "
             "WHERE status = 'verstuurd' AND datum < ? "
             "AND datum >= ? AND datum < ?",
-            (overdue_cutoff, jaar_start, jaar_end))
-        overdue = (await cur.fetchone())[0]
+            (overdue_critical_cutoff, overdue_cutoff,
+             jaar_start, jaar_end))
+        row = await cur.fetchone()
+        overdue = row['total']
+        very_overdue = row['very_overdue']
         if overdue > 0:
+            if very_overdue > 0:
+                msg = (f'{overdue} facturen verlopen — '
+                       f'{very_overdue} > 30 dagen, stuur herinnering')
+                severity = 'critical'
+            else:
+                msg = f'{overdue} facturen verlopen (> 14 dagen)'
+                severity = 'warning'
             alerts.append({
                 'key': 'overdue_invoices',
-                'severity': 'warning',
-                'message': f'{overdue} facturen verlopen (> 14 dagen)',
+                'severity': severity,
+                'message': msg,
                 'count': overdue,
                 'link': '/facturen',
             })
 
-        # 3. Concept invoices still in draft
+        # 3. Concept invoices: escalate to warning when any >14d.
+        # Single aggregate query: total + the >14d subset.
         cur = await conn.execute(
-            "SELECT COUNT(*) FROM facturen "
+            "SELECT COUNT(*) AS total, "
+            "COALESCE(SUM(CASE WHEN datum < ? THEN 1 ELSE 0 END), 0) "
+            "  AS stale "
+            "FROM facturen "
             "WHERE status = 'concept' "
             "AND datum >= ? AND datum < ?",
-            (jaar_start, jaar_end))
-        concepts = (await cur.fetchone())[0]
+            (concept_warn_cutoff, jaar_start, jaar_end))
+        row = await cur.fetchone()
+        concepts = row['total']
+        stale_concepts = row['stale']
         if concepts > 0:
+            if stale_concepts > 0:
+                msg = (f'{concepts} facturen nog in concept — '
+                       f'{stale_concepts} al > 14 dagen oud')
+                severity = 'warning'
+            else:
+                msg = f'{concepts} facturen nog in concept'
+                severity = 'info'
             alerts.append({
                 'key': 'concept_invoices',
-                'severity': 'info',
-                'message': f'{concepts} facturen nog in concept',
+                'severity': severity,
+                'message': msg,
                 'count': concepts,
                 'link': '/facturen',
+            })
+
+        # 4. Stale werkdagen: unfactured AND older than 30 days.
+        # Future-dated werkdagen (planned but not worked yet) are ignored.
+        cur = await conn.execute(
+            "SELECT COUNT(*) FROM werkdagen "
+            "WHERE (factuurnummer = '' OR factuurnummer IS NULL) "
+            "AND datum < ? AND datum <= ? "
+            "AND datum >= ? AND datum < ?",
+            (werkdag_stale_cutoff, today_iso, jaar_start, jaar_end))
+        stale_werk = (await cur.fetchone())[0]
+        if stale_werk > 0:
+            alerts.append({
+                'key': 'stale_werkdagen',
+                'severity': 'warning',
+                'message': (f'{stale_werk} werkdagen > 30 dagen oud nog '
+                            f'niet gefactureerd'),
+                'count': stale_werk,
+                'link': '/werkdagen',
             })
 
     # 4. Missing fiscal params (outside connection — uses own)
