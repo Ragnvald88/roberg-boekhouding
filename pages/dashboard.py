@@ -25,6 +25,26 @@ from fiscal.berekeningen import bereken_volledig
 from fiscal.constants import URENCRITERIUM_DEFAULT
 
 
+def _has_va_data(fp, va_data) -> bool:
+    """Return True iff any voorlopige aanslag is registered for the year.
+
+    Three independent sources count:
+    - manual IB-VA: fp.voorlopige_aanslag_betaald
+    - manual ZVW-VA: fp.voorlopige_aanslag_zvw  (was missed before; bug A5)
+    - bank-imported VA payments: va_data['has_bank_data']
+
+    fp may be None (no fiscale_params row yet for the year). va_data is
+    expected to be a dict with optional 'has_bank_data' key.
+    """
+    if not fp:
+        return bool(va_data.get('has_bank_data', False))
+    return bool(
+        (getattr(fp, 'voorlopige_aanslag_betaald', 0) or 0) > 0
+        or (getattr(fp, 'voorlopige_aanslag_zvw', 0) or 0) > 0
+        or va_data.get('has_bank_data', False)
+    )
+
+
 @ui.page('/')
 async def dashboard_page():
     create_layout('Dashboard', '/')
@@ -280,10 +300,7 @@ async def dashboard_page():
                         .on('click', lambda: ui.navigate.to('/aangifte')):
 
                     if ib_resultaat is not None:
-                        has_va = (
-                            (fp and (fp.voorlopige_aanslag_betaald or 0) > 0)
-                            or va_data['has_bank_data']
-                        )
+                        has_va = _has_va_data(fp, va_data)
                         resultaat = ib_resultaat['resultaat']
                         confidence = ib_resultaat.get('confidence', 'low')
 
