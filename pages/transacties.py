@@ -934,17 +934,33 @@ async def transacties_page(jaar: int | None = None,
                 .props('outline color=white size=sm')
 
             async def bulk_negeren():
-                """Flag each selected bank row as genegeerd=1 (privé)."""
+                """Flag each selected bank row as genegeerd=1 (privé).
+
+                Skips rows that:
+                - are manual (no id_bank)
+                - are linked to a factuur (would silently desync the
+                  factuur's matched state — DB guard raises ValueError)
+                - belong to a definitief year (DB raises YearLockedError,
+                  which is a ValueError subclass)
+                """
+                # Snapshot selection so a stray click between iterations
+                # cannot widen the scope mid-loop.
+                selected = list(table_ref['table'].selected or [])
                 n_ok, n_skip = 0, 0
-                for r in table_ref['table'].selected:
+                for r in selected:
                     if r.get('id_bank') is None:
-                        continue  # manual rows skipped
+                        continue  # manual rows skipped silently
+                    if r.get('koppeling_type') == 'factuur':
+                        n_skip += 1
+                        continue
                     try:
                         await mark_banktx_genegeerd(
                             DB_PATH, bank_tx_id=r['id_bank'],
                             genegeerd=1)
                         n_ok += 1
-                    except YearLockedError:
+                    except ValueError:
+                        # Catches YearLockedError + factuur-koppeling guard
+                        # + missing-row + invalid-value. All map to "skip".
                         n_skip += 1
                 msg = f'{n_ok} rij(en) als privé gemarkeerd'
                 if n_skip:

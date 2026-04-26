@@ -814,6 +814,29 @@ async def assert_year_writable(db_path, jaar_or_datum) -> None:
         )
 
 
+async def _assert_werkdagen_writable(
+    db_path, werkdag_ids: list[int],
+) -> None:
+    """Year-lock guard for any werkdag IDs about to be mutated.
+
+    Used by link_werkdagen_to_factuur and save_factuur_atomic, both of
+    which UPDATE werkdagen.factuurnummer based on a list of IDs whose
+    datums may span definitief-locked years.
+    """
+    if not werkdag_ids:
+        return
+    placeholders = ','.join('?' for _ in werkdag_ids)
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            f"SELECT DISTINCT substr(datum, 1, 4) AS jaar "
+            f"FROM werkdagen WHERE id IN ({placeholders})",
+            list(werkdag_ids),
+        )
+        jaren = [int(r['jaar']) for r in await cur.fetchall() if r['jaar']]
+    for jaar in jaren:
+        await assert_year_writable(db_path, jaar)
+
+
 # === Bedrijfsgegevens ===
 
 async def get_bedrijfsgegevens(db_path: Path = DB_PATH) -> Bedrijfsgegevens | None:
@@ -1273,6 +1296,8 @@ async def delete_factuur(db_path: Path = DB_PATH, factuur_id: int = 0) -> None:
 async def link_werkdagen_to_factuur(db_path: Path = DB_PATH,
                                      werkdag_ids: list[int] = None,
                                      factuurnummer: str = '') -> None:
+    if werkdag_ids:
+        await _assert_werkdagen_writable(db_path, werkdag_ids)
     async with get_db_ctx(db_path) as conn:
         if werkdag_ids:
             placeholders = ','.join('?' for _ in werkdag_ids)
@@ -1311,6 +1336,8 @@ async def save_factuur_atomic(
             old_row = await cur.fetchone()
         if old_row:
             await assert_year_writable(db_path, old_row['datum'])
+    if werkdag_ids:
+        await _assert_werkdagen_writable(db_path, werkdag_ids)
     async with get_db_ctx(db_path) as conn:
         try:
             # Step 1: Delete old concept (if replacing)
@@ -1681,16 +1708,35 @@ async def mark_banktx_genegeerd(
     bank_tx_id: int,
     genegeerd: int = 1,
 ) -> None:
-    """Set banktransacties.genegeerd flag. Year-locked against the tx datum."""
+    """Set banktransacties.genegeerd flag. Year-locked against the tx datum.
+
+    A bank-tx that's matched to a factuur (koppeling_type='factuur') cannot
+    be flipped TO genegeerd=1 — that would silently desync the factuur's
+    "matched" state from the bank-tx becoming invisible. Unsetting
+    (genegeerd=0) on a factuur-linked row remains unconditional so the
+    inconsistency is repairable from the UI.
+    """
     if genegeerd not in (0, 1):
         raise ValueError("genegeerd must be 0 or 1")
     async with get_db_ctx(db_path) as conn:
         cur = await conn.execute(
-            "SELECT datum FROM banktransacties WHERE id = ?", (bank_tx_id,))
+            "SELECT datum, koppeling_type FROM banktransacties WHERE id = ?",
+            (bank_tx_id,))
         row = await cur.fetchone()
         if row is None:
             raise ValueError(f"banktransactie {bank_tx_id} not found")
         datum = row['datum']
+        koppeling_type = row['koppeling_type'] or ''
+
+    # Note: only `koppeling_type='factuur'` is currently written by the
+    # codebase (see e.g. apply_factuur_matches). If new koppeling types
+    # are introduced (uitgave, anw, etc.) and they should also block
+    # genegeerd=1, broaden this check to `koppeling_type != ''`.
+    if genegeerd == 1 and koppeling_type == 'factuur':
+        raise ValueError(
+            "Bank-tx is gekoppeld aan een factuur en kan niet als privé "
+            "worden gemarkeerd. Verwijder eerst de factuur-koppeling."
+        )
 
     await assert_year_writable(db_path, datum)
 

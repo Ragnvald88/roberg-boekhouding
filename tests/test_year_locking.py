@@ -10,6 +10,7 @@ from database import (
     add_uitgave, update_uitgave, delete_uitgave, get_uitgaven,
     add_factuur, update_factuur, update_factuur_status, delete_factuur,
     save_factuur_atomic, get_facturen,
+    link_werkdagen_to_factuur,
     add_banktransacties, update_banktransactie, delete_banktransacties,
     get_banktransacties,
     upsert_fiscale_params,
@@ -640,4 +641,93 @@ async def test_apply_factuur_matches_rejected_in_definitief_year(db):
     bank_rows = await get_banktransacties(db)
     assert all((b.koppeling_type or '') == '' for b in bank_rows), (
         "apply must not have created bank koppeling in a locked year"
+    )
+
+
+# === Werkdagen koppeling year-lock (Plan 2026-04-26 Lane 1, A1) ===
+
+@pytest.mark.asyncio
+async def test_link_werkdagen_to_factuur_rejected_for_locked_werkdag(db):
+    """link_werkdagen_to_factuur must guard each werkdag's datum.
+
+    Scenario: a werkdag from a definitief-locked year is selected during
+    invoice creation. Linking would silently mutate werkdagen.factuurnummer
+    on the locked row — a K6 violation.
+    """
+    kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=0)
+    await _seed_fiscale_params_row(db, 2024)
+    wid = await add_werkdag(db, datum='2024-06-10', klant_id=kid,
+                            uren=8, tarief=80, km=0, km_tarief=0)
+    await update_jaarafsluiting_status(db, 2024, 'definitief')
+    with pytest.raises(YearLockedError, match='2024'):
+        await link_werkdagen_to_factuur(
+            db, werkdag_ids=[wid], factuurnummer='2025-001')
+    # Guard-before-write: factuurnummer must remain ''.
+    rows = await get_werkdagen(db)
+    wd = next(w for w in rows if w.id == wid)
+    assert wd.factuurnummer == '', (
+        "link_werkdagen_to_factuur leaked through year-lock guard"
+    )
+
+
+@pytest.mark.asyncio
+async def test_link_werkdagen_to_factuur_rejects_mixed_year_list(db):
+    """A list mixing writable + locked werkdagen must reject the WHOLE batch.
+
+    Pins that the guard iterates all years, not just the first ID's year —
+    a buggy "check first only" implementation would let the locked row's
+    factuurnummer slip through.
+    """
+    kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=0)
+    await _seed_fiscale_params_row(db, 2024)
+    await _seed_fiscale_params_row(db, 2025)
+    wid_writable = await add_werkdag(
+        db, datum='2025-04-10', klant_id=kid, uren=8, tarief=80,
+        km=0, km_tarief=0)
+    wid_locked = await add_werkdag(
+        db, datum='2024-11-22', klant_id=kid, uren=8, tarief=80,
+        km=0, km_tarief=0)
+    await update_jaarafsluiting_status(db, 2024, 'definitief')
+    with pytest.raises(YearLockedError, match='2024'):
+        await link_werkdagen_to_factuur(
+            db, werkdag_ids=[wid_writable, wid_locked],
+            factuurnummer='2025-MIX')
+    # Whole batch rejected: the writable row also stays unlinked.
+    rows = await get_werkdagen(db)
+    by_id = {w.id: w for w in rows}
+    assert by_id[wid_writable].factuurnummer == '', (
+        "writable werkdag was linked despite locked sibling — guard ran "
+        "after partial mutation"
+    )
+    assert by_id[wid_locked].factuurnummer == ''
+
+
+@pytest.mark.asyncio
+async def test_save_factuur_atomic_rejected_when_linking_locked_werkdag(db):
+    """save_factuur_atomic's inline werkdag UPDATE must also be guarded.
+
+    Even if the new factuur datum is in a writable year, including a
+    werkdag from a locked year in werkdag_ids must raise YearLockedError
+    and roll back the entire save.
+    """
+    kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=0)
+    await _seed_fiscale_params_row(db, 2024)
+    await _seed_fiscale_params_row(db, 2025)
+    wid = await add_werkdag(db, datum='2024-09-15', klant_id=kid,
+                            uren=8, tarief=80, km=0, km_tarief=0)
+    await update_jaarafsluiting_status(db, 2024, 'definitief')
+    with pytest.raises(YearLockedError, match='2024'):
+        await save_factuur_atomic(
+            db, nummer='2025-NEW', klant_id=kid, datum='2025-03-01',
+            totaal_bedrag=640.00, regels_json='[]', werkdag_ids=[wid],
+        )
+    # Rollback: no factuur row, werkdag still ongefactureerd.
+    facturen = await get_facturen(db)
+    assert all(f.nummer != '2025-NEW' for f in facturen), (
+        "factuur was inserted despite locked werkdag in werkdag_ids"
+    )
+    rows = await get_werkdagen(db)
+    wd = next(w for w in rows if w.id == wid)
+    assert wd.factuurnummer == '', (
+        "locked werkdag's factuurnummer was mutated"
     )
