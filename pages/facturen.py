@@ -1008,7 +1008,9 @@ async def facturen_page():
             dialog.open()
 
         async def on_bulk_delete():
-            selected = table.selected
+            # Snapshot at click-time: a stray selection change while the
+            # confirm dialog is open must NOT widen the delete scope.
+            selected = list(table.selected or [])
             if not selected:
                 return
             nummers = [r['nummer'] for r in selected]
@@ -1049,7 +1051,8 @@ async def facturen_page():
             dialog.open()
 
         async def on_bulk_betaald():
-            selected = table.selected
+            # Snapshot at click-time: same reasoning as on_bulk_delete.
+            selected = list(table.selected or [])
             if not selected:
                 return
             n = len(selected)
