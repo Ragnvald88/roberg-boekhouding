@@ -666,6 +666,42 @@ class TestANWDDGDeclaratie:
 
 # ── Klant resolution ───────────────────────────────────────────────
 
+# Self-contained test mappings — keep tests independent of klant_mapping_local.py
+# (gitignored runtime overrides). Inserted into the production module via the
+# autouse fixture below.
+_TEST_SUFFIX_TO_KLANT = {
+    'Winsum': 'HAP K14',
+    'Klant2': 'Klant2',
+    'Vlagtwedde': 'Klant2',
+    'Marum': 'HAP K6',
+    'Klant7': 'K. Klant7',
+}
+_TEST_PDF_KLANT_TO_DB = {
+    'Centrum K14': 'HAP K14',
+    'K. Klant1': 'HAP K14',
+    'Praktijk K6': 'HAP K6',
+    'Praktijk K12': 'Praktijk K12',
+    'HAP NoordOost': 'HAP NoordOost',
+}
+_TEST_ANW_FILENAME_TO_KLANT = {
+    'DokterDrenthe': 'HAP MiddenLand',
+    'Drenthe': 'HAP MiddenLand',
+    'DokNoord': 'HAP NoordOost',
+    'DDG': 'HAP NoordOost',
+    'Groningen': 'HAP NoordOost',
+    'Gr_Factuur': 'HAP NoordOost',
+}
+
+
+@pytest.fixture
+def _stub_klant_mapping(monkeypatch):
+    from import_ import klant_mapping
+    monkeypatch.setattr(klant_mapping, 'SUFFIX_TO_KLANT', _TEST_SUFFIX_TO_KLANT)
+    monkeypatch.setattr(klant_mapping, 'PDF_KLANT_TO_DB', _TEST_PDF_KLANT_TO_DB)
+    monkeypatch.setattr(klant_mapping, 'ANW_FILENAME_TO_KLANT', _TEST_ANW_FILENAME_TO_KLANT)
+
+
+@pytest.mark.usefixtures('_stub_klant_mapping')
 class TestResolveKlant:
     def test_suffix_winsum(self):
         name, kid = resolve_klant(None, 'Winsum', MOCK_KLANTEN)
@@ -724,6 +760,7 @@ class TestResolveKlant:
         assert kid is None
 
 
+@pytest.mark.usefixtures('_stub_klant_mapping')
 class TestResolveANWKlant:
     def test_drenthe_2023(self):
         name, kid = resolve_anw_klant('2023-09_DokterDrenthe.pdf', MOCK_KLANTEN)

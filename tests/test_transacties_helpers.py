@@ -144,7 +144,7 @@ def test_tegenpartij_color_is_hsl():
 
 
 def test_initials_two_word():
-    assert initials("Test Berg") == "RB"
+    assert initials("Test Berg") == "TB"
 
 
 def test_initials_one_word():
@@ -160,7 +160,7 @@ def test_initials_empty():
 
 
 def test_initials_strips_punct():
-    assert initials("Boekhouder Verzekering") == "VS"
+    assert initials("Boekhouder Verzekering") == "BV"
 
 
 def test_bulk_set_cat_iterates_snapshot_not_live_selection():

@@ -22,10 +22,15 @@ from pathlib import Path
 # (gitignored) and override this default at import time.
 PERSONAL_SKIP_WORDS: tuple[str, ...] = (
     'Datum', 'FACTUUR', 'Tel', 'KvK', 'IBAN', 'Mail:', 'Bank:',
+    'TestBV', 'huisartswaarnemer', 'Test Gebruiker', 'T. Gebruiker',
+    'Teststraat 1', '1234 AB', '1234AB', 'testuser', '06 000', '0600',
+    '@example.com',
 )
 
 try:
-    from .pdf_parser_local import PERSONAL_SKIP_WORDS  # type: ignore[import-not-found,no-redef]  # noqa: F811
+    from .pdf_parser_local import PERSONAL_SKIP_WORDS as _local_skip_words  # type: ignore[import-not-found]
+    PERSONAL_SKIP_WORDS = PERSONAL_SKIP_WORDS + _local_skip_words
+    del _local_skip_words
 except ImportError:
     pass
 
@@ -268,7 +273,7 @@ def _extract_klant_name(text: str) -> str | None:
         stripped = line.strip()
         if stripped and not any(s in stripped for s in skip_words):
             # Must look like a practice/person name (not an address or code)
-            if re.match(r'^(Huisarts|Dokter|Dhr\.|Mw\.|S\.|M\.|HAP|Gezond)', stripped):
+            if re.match(r'^(Huisarts|Dokter|Dhr\.|Mw\.|S\.|M\.|K\.|HAP|Gezond|Praktijk|Centrum|Klant)', stripped):
                 return stripped
 
     return None
