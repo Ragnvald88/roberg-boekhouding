@@ -20,3 +20,4 @@ codex.md
 import_/klant_mapping_local.py
 import_/seed_data_local.py
 import_/pdf_parser_local.py
+.git-scrub-*
