@@ -164,10 +164,15 @@ Elke rij heeft één status (sequentieel afgeleid):
 
 ---
 
-## Bank
+## Transacties (CSV import + categoriseren)
+
+> NB: Wat hieronder "Bank" heette is sinds 2026-04-23 gefuseerd met
+> Kosten in één `/transacties` inbox. De oude `/bank` route bestaat
+> alleen nog als redirect. Zie ook `MEMORY.md` →
+> `project_transacties_consolidation.md`.
 
 ### CSV import
-- Trigger: upload widget bovenaan `/bank` pagina
+- Trigger: upload widget op `/transacties` (header)
 - Accepteert Rabobank CSV formaat
 - Auto-archiveert CSV naar `data/bank_csv/`
 - Duplicaat-detectie op (datum, bedrag, tegenpartij, omschrijving)
