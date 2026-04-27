@@ -204,7 +204,7 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
                      woz: float = 0, hypotheekrente: float = 0,
                      voorlopige_aanslag: float = 0,
                      voorlopige_aanslag_zvw: float = 0,
-                     ew_naar_partner: bool = False,
+                     ew_naar_partner: bool = True,
                      partner_inkomen: float = 0) -> FiscaalResultaat:
     """Complete fiscal waterfall using Decimal precision.
 
@@ -268,12 +268,35 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
     d_repr_bijtelling = d_repr * (D('1') - d_repr_aftrek_pct)
     r.repr_bijtelling = euro(d_repr_bijtelling)
 
-    # KIA: 28% als totaal investeringen binnen grenzen
+    # KIA: Belastingdienst-bracketfunctie (review A2 / lane 4).
+    # Vier banden boven de ondergrens:
+    #   - 0..ondergrens:                 0%
+    #   - ondergrens..bovengrens:        kia_pct% × investering
+    #   - bovengrens..plateau_eind:      vast plateau-bedrag
+    #   - plateau_eind..afbouw_eind:     plateau − afbouw_pct% × (invest − plateau_eind)
+    #   - > afbouw_eind:                 0
+    # Backwards-compat: als kia_plateau_bedrag = 0 (oudere geseede jaren), valt
+    # de logica terug op de oorspronkelijke cliff (alleen pct-band krijgt KIA).
     d_kia = D('0')
     d_kia_ondergrens = D(params['kia_ondergrens'])
     d_kia_bovengrens = D(params['kia_bovengrens'])
+    d_kia_plateau_bedrag = D(params.get('kia_plateau_bedrag', 0) or 0)
+    d_kia_plateau_eind = D(params.get('kia_plateau_eind', 0) or 0)
+    d_kia_afbouw_eind = D(params.get('kia_afbouw_eind', 0) or 0)
+    d_kia_afbouw_pct = D(params.get('kia_afbouw_pct', 0) or 0)
+
     if d_kia_ondergrens <= d_invest <= d_kia_bovengrens:
         d_kia = d_invest * D(params['kia_pct']) / D('100')
+    elif d_kia_plateau_bedrag > 0 and d_invest > d_kia_bovengrens \
+            and d_invest <= d_kia_plateau_eind:
+        # Plateau-band: vast bedrag
+        d_kia = d_kia_plateau_bedrag
+    elif d_kia_plateau_bedrag > 0 and d_invest > d_kia_plateau_eind \
+            and d_invest <= d_kia_afbouw_eind:
+        # Afbouw-band: plateau − afbouw_pct% × (invest − plateau_eind)
+        afbouw = (d_invest - d_kia_plateau_eind) * d_kia_afbouw_pct / D('100')
+        d_kia = max(D('0'), d_kia_plateau_bedrag - afbouw)
+    # else: > afbouw_eind, of out-of-band met no plateau geconfigureerd → 0.
     r.kia = euro(d_kia)
 
     # Fiscale winst = W&V winst + repr bijtelling - KIA

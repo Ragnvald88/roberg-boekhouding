@@ -89,6 +89,12 @@ FISCALE_PARAMS: dict[int, dict] = {
         'kia_ondergrens': 2801,
         'kia_bovengrens': 69765,
         'kia_pct': 28,
+        # KIA bracket (Belastingdienst tabel 2024):
+        # plateau € 19.535 (€ 69.766 t/m € 129.194); afbouw 7,56%/euro tot € 387.580
+        'kia_plateau_bedrag': 19535,
+        'kia_plateau_eind': 129194,
+        'kia_afbouw_eind': 387580,
+        'kia_afbouw_pct': 7.56,
         'km_tarief': 0.23,
         'schijf1_grens': 75518,
         'schijf1_pct': 36.97,
@@ -123,6 +129,12 @@ FISCALE_PARAMS: dict[int, dict] = {
         'kia_ondergrens': 2901,
         'kia_bovengrens': 70602,
         'kia_pct': 28,
+        # KIA bracket (Belastingdienst tabel 2025):
+        # plateau € 19.769 (€ 70.603 t/m € 130.744); afbouw 7,56%/euro tot € 392.230
+        'kia_plateau_bedrag': 19769,
+        'kia_plateau_eind': 130744,
+        'kia_afbouw_eind': 392230,
+        'kia_afbouw_pct': 7.56,
         'km_tarief': 0.23,
         'schijf1_grens': 38441,
         'schijf1_pct': 35.82,
@@ -157,6 +169,12 @@ FISCALE_PARAMS: dict[int, dict] = {
         'kia_ondergrens': 2901,
         'kia_bovengrens': 71683,
         'kia_pct': 28,
+        # KIA bracket (Belastingdienst tabel 2026):
+        # plateau € 20.072 (€ 71.684 t/m € 132.746); afbouw 7,56%/euro tot € 398.236
+        'kia_plateau_bedrag': 20072,
+        'kia_plateau_eind': 132746,
+        'kia_afbouw_eind': 398236,
+        'kia_afbouw_pct': 7.56,
         'km_tarief': 0.23,
         'schijf1_grens': 38883,
         'schijf1_pct': 35.75,

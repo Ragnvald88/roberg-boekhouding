@@ -242,6 +242,10 @@ class TestVolledig:
         Note: This test still has EW in verzamelinkomen (Task 3 adds ew_naar_partner)
         and is missing tariefsaanpassing (Task 2). VA=28544 is partial (Boekhouder total=30303).
         Results will be refined as fixes are applied.
+        Pin ew_naar_partner=False explicitly: the function default flipped to
+        True (A24) to match models.py:151. Tests that pre-date that flip
+        passed implicitly under the old default; pin it here so the
+        existing 69120 reference number stays meaningful.
         """
         params = FISCALE_PARAMS[2024]
         result = bereken_volledig(
@@ -251,6 +255,7 @@ class TestVolledig:
             aov=2998,
             woz=655000, hypotheekrente=6951,
             voorlopige_aanslag=28544,
+            ew_naar_partner=False,
         )
 
         # Belastbare winst ~76777
@@ -358,14 +363,18 @@ class TestVolledig:
         assert result.kia == 0
 
     def test_volledig_kia_boven_grens(self):
-        """Investeringen boven KIA-bovengrens: geen KIA."""
+        """Investeringen boven KIA-bovengrens: plateau-bedrag (Belastingdienst).
+
+        2024 plateau-bedrag € 19.535 voor investeringen € 69.766 – € 129.194.
+        80.000 > 69.765 → plateau-bedrag (was bug: gaf 0).
+        """
         params = FISCALE_PARAMS[2024]
         result = bereken_volledig(
             omzet=80000, kosten=10000, afschrijvingen=0,
-            representatie=0, investeringen_totaal=80000,  # > 69764
+            representatie=0, investeringen_totaal=80000,  # > 69765, <= 129194
             uren=1400, params=params,
         )
-        assert result.kia == 0
+        assert result.kia == 19535
 
     def test_volledig_kia_binnen_grenzen(self):
         """Investeringen binnen KIA-grenzen: 28%."""
@@ -515,6 +524,8 @@ class TestWetHillen:
 
         WOZ=655.000, hyp=6951: saldo is negative, no Hillen.
         Note: ew_naar_partner (Task 3) and tariefsaanpassing (Task 2) not yet applied.
+        Pin ew_naar_partner=False so the historic reference number stays
+        valid after the A24 default flip.
         """
         params = FISCALE_PARAMS[2024]
         result = bereken_volledig(
@@ -524,6 +535,7 @@ class TestWetHillen:
             aov=2998,
             woz=655000, hypotheekrente=6951,
             voorlopige_aanslag=28544,
+            ew_naar_partner=False,
         )
         assert abs(result.belastbare_winst - 76777) < 1
         assert abs(result.verzamelinkomen - 69120) < 1
@@ -601,16 +613,20 @@ class TestEWNaarPartner:
         # Boekhouder: ZVW = 3810
         assert abs(result.zvw - 3810) < 1
 
-    def test_default_ew_naar_partner_is_false(self):
-        """Default behavior (no ew_naar_partner parameter) keeps EW in verzamelinkomen."""
+    def test_explicit_ew_naar_partner_false_keeps_ew_in_verzamelinkomen(self):
+        """When ew_naar_partner=False is passed explicitly, EW stays in
+        verzamelinkomen. The default (True) reflects Boekhouder-praktijk and is
+        consistent with `models.py:151` (FiscaleParams.ew_naar_partner=True).
+        """
         params = FISCALE_PARAMS[2024]
         result = bereken_volledig(
             omzet=95145, kosten=0, afschrijvingen=0,
             representatie=550, investeringen_totaal=2919,
             uren=1400, params=params,
             aov=2998, woz=655000, hypotheekrente=6951,
+            ew_naar_partner=False,
         )
-        # Default: EW included, verzamelinkomen = 69120
+        # ew_naar_partner=False: EW included, verzamelinkomen = 69120.
         assert abs(result.verzamelinkomen - 69120) < 1
 
 
@@ -1059,10 +1075,28 @@ class TestBoekhouder2024Complete:
 
 
 class TestKIABoundary:
-    """Bug #1: KIA should apply at exactly the ondergrens (>=, not >)."""
+    """Lane 4 (review A2): KIA bracket function — Belastingdienst tabel.
 
-    def test_kia_at_exact_ondergrens(self):
-        """Invest exactly EUR2,901 (2025 ondergrens) should get KIA."""
+    Vier banden voor 2025:
+      - 0 .. € 2.900            → 0
+      - € 2.901 .. € 70.602     → 28% × investering
+      - € 70.603 .. € 130.744   → vast plateau-bedrag € 19.769
+      - € 130.745 .. € 392.230  → afbouw 7,56% × (invest − € 130.744)
+      - > € 392.230             → 0
+    """
+
+    def test_kia_at_ondergrens_minus_one_returns_zero(self):
+        """Invest € 2.900 (just below 2025 ondergrens) → 0."""
+        params = FISCALE_PARAMS[2025]
+        result = bereken_volledig(
+            omzet=80000, kosten=5000, afschrijvingen=0,
+            representatie=0, investeringen_totaal=2900,
+            uren=1400, params=params,
+        )
+        assert result.kia == 0
+
+    def test_kia_at_ondergrens_returns_pct(self):
+        """Invest exactly € 2.901 (2025 ondergrens) → 28% × invest."""
         params = FISCALE_PARAMS[2025]
         result = bereken_volledig(
             omzet=80000, kosten=5000, afschrijvingen=0,
@@ -1072,32 +1106,72 @@ class TestKIABoundary:
         expected_kia = round(2901 * 0.28, 2)
         assert result.kia == expected_kia
 
-    def test_kia_below_ondergrens(self):
-        """Invest EUR2,900 should NOT get KIA."""
-        params = FISCALE_PARAMS[2025]
-        result = bereken_volledig(
-            omzet=80000, kosten=5000, afschrijvingen=0,
-            representatie=0, investeringen_totaal=2900,
-            uren=1400, params=params,
-        )
-        assert result.kia == 0
-
-    def test_kia_at_exact_bovengrens(self):
-        """Invest exactly at bovengrens should still get KIA."""
+    def test_kia_at_bovengrens_returns_pct_max(self):
+        """Invest € 70.602 (top 28% band 2025) → 28% × bovengrens."""
         params = FISCALE_PARAMS[2025]
         result = bereken_volledig(
             omzet=80000, kosten=5000, afschrijvingen=0,
             representatie=0, investeringen_totaal=70602,
             uren=1400, params=params,
         )
-        assert result.kia > 0
+        expected = round(70602 * 0.28, 2)  # 19768.56
+        assert result.kia == expected
 
-    def test_kia_above_bovengrens(self):
-        """Invest above bovengrens gets no KIA."""
+    def test_kia_at_bovengrens_plus_one_returns_plateau(self):
+        """Invest € 70.603 → plateau-bedrag (was bug: gaf 0).
+
+        Belastingdienst KIA 2025: € 70.603 t/m € 130.744 → vast € 19.769.
+        """
         params = FISCALE_PARAMS[2025]
         result = bereken_volledig(
             omzet=80000, kosten=5000, afschrijvingen=0,
             representatie=0, investeringen_totaal=70603,
+            uren=1400, params=params,
+        )
+        assert result.kia == 19769
+
+    def test_kia_at_plateau_eind_returns_plateau(self):
+        """Invest € 130.744 (top plateau 2025) → € 19.769."""
+        params = FISCALE_PARAMS[2025]
+        result = bereken_volledig(
+            omzet=200000, kosten=5000, afschrijvingen=0,
+            representatie=0, investeringen_totaal=130744,
+            uren=1400, params=params,
+        )
+        assert result.kia == 19769
+
+    def test_kia_at_plateau_eind_plus_one_starts_afbouw(self):
+        """Invest € 130.745 → afbouw begint. plateau − 7,56% × (1) = 19769 − 0,0756 ≈ 19768,92."""
+        params = FISCALE_PARAMS[2025]
+        result = bereken_volledig(
+            omzet=200000, kosten=5000, afschrijvingen=0,
+            representatie=0, investeringen_totaal=130745,
+            uren=1400, params=params,
+        )
+        # afbouw: 1 × 7.56 / 100 = 0.0756 → kia = 19769 - 0.0756 = 19768.92
+        expected = round(19769 - (130745 - 130744) * 7.56 / 100, 2)
+        assert result.kia == expected
+
+    def test_kia_at_afbouw_eind_returns_zero(self):
+        """Invest € 392.230 (top afbouw 2025) → 0 (plateau volledig afgebouwd)."""
+        params = FISCALE_PARAMS[2025]
+        result = bereken_volledig(
+            omzet=500000, kosten=5000, afschrijvingen=0,
+            representatie=0, investeringen_totaal=392230,
+            uren=1400, params=params,
+        )
+        # Plateau € 19.769 − 7,56% × (392.230 − 130.744) = 19769 − 19768,34… ≈ 0,66
+        # Belastingdienst rondt op hele euro's, hier mogen we delta tonen — moet
+        # in de buurt van 0 liggen, niet exact 0.
+        assert result.kia <= 1.00
+        assert result.kia >= 0
+
+    def test_kia_above_afbouw_eind_returns_zero(self):
+        """Invest € 400.000 (boven afbouw_eind 2025) → 0."""
+        params = FISCALE_PARAMS[2025]
+        result = bereken_volledig(
+            omzet=500000, kosten=5000, afschrijvingen=0,
+            representatie=0, investeringen_totaal=400000,
             uren=1400, params=params,
         )
         assert result.kia == 0

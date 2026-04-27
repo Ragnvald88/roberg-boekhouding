@@ -122,6 +122,13 @@ class FiscaleParams:
     kia_bovengrens: float = 0.0
     kia_pct: float = 0.0
     kia_drempel_per_item: float = 450.0
+    # KIA bracket function (Belastingdienst tabel) — values 0 = niet
+    # geconfigureerd, engine valt dan terug op de cliff (kia_pct% binnen
+    # ondergrens..bovengrens, anders 0). Zie fiscal/berekeningen.py.
+    kia_plateau_bedrag: float = 0.0
+    kia_plateau_eind: float = 0.0
+    kia_afbouw_eind: float = 0.0
+    kia_afbouw_pct: float = 0.0
     km_tarief: float = 0.0
     schijf1_grens: float = 0.0
     schijf1_pct: float = 0.0
