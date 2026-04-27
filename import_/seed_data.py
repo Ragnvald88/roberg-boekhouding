@@ -215,25 +215,15 @@ async def seed_fiscale_params(db_path: Path) -> int:
     return count
 
 
-KLANT_LOCATIES = {
-    'HAP NoordOost': [
-        ('Groningen', 12), ('Zuidhorn', 52), ('Stadskanaal', 47),
-        ('Delfzijl', 64), ('Scheemda', 60),
-    ],
-    'HAP MiddenLand': [
-        ('Assen', 60), ('Hoogeveen', 128), ('Emmen', 102),
-    ],
-    'Klant2': [('Vlagtwedde', 108)],
-    "Praktijk K6": [('Marum', 54)],
-    'K. Klant7': [('Marum', 54)],
-    'HAP K14': [('Winsum', 44)],
-    'Praktijk K10': [('Smilde', 78)],
-    'Praktijk K11': [('Marum', 40)],
-    'Praktijk K12': [('Marum', 54)],
-    'Praktijk K13': [('De Wilp', 46)],
-    'Praktijk K9': [('Sellingen', 92)],
-    'K. Klant8': [('Marum', 54)],
-}
+# Real customer locaties live in `seed_data_local.py` (gitignored).
+# When that file is missing the seeder installs zero locaties and the user
+# adds them manually via /klanten.
+KLANT_LOCATIES: dict[str, list[tuple[str, int]]] = {}
+
+try:
+    from .seed_data_local import KLANT_LOCATIES  # type: ignore[import-not-found,no-redef]  # noqa: F811
+except ImportError:
+    pass
 
 
 async def seed_klant_locaties(db_path):

@@ -16,6 +16,19 @@ import re
 import subprocess
 from pathlib import Path
 
+# Generic skip-tokens used by `_extract_klant_name` to avoid mistaking
+# the freelancer's own header lines for the customer name. Personal
+# tokens (own name, address, phone, email) live in `pdf_parser_local.py`
+# (gitignored) and override this default at import time.
+PERSONAL_SKIP_WORDS: tuple[str, ...] = (
+    'Datum', 'FACTUUR', 'Tel', 'KvK', 'IBAN', 'Mail:', 'Bank:',
+)
+
+try:
+    from .pdf_parser_local import PERSONAL_SKIP_WORDS  # type: ignore[import-not-found,no-redef]  # noqa: F811
+except ImportError:
+    pass
+
 
 def extract_pdf_text(pdf_path: Path) -> str:
     """Extract text from PDF using pdftotext with layout preservation."""
@@ -197,11 +210,7 @@ def _extract_klant_name(text: str) -> str | None:
     Tries multiple strategies based on format variations.
     """
     lines = text.split('\n')
-    skip_words = (
-        'TestBV', 'huisartswaarnemer', 'Test Gebruiker', 'Teststraat 1',
-        '1234 AB', '1234AB', 'Datum', 'FACTUUR', 'Tel', 'KvK', 'IBAN',
-        'Mail:', 'Bank:', 'testuser', '06 000', '0643',
-    )
+    skip_words = PERSONAL_SKIP_WORDS
 
     # Strategy 1: "Factuur aan:" section (2025 app-generated, 2024-041)
     for i, line in enumerate(lines):
