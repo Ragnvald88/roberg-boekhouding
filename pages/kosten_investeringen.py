@@ -10,6 +10,8 @@ from nicegui import ui
 from components.utils import format_euro
 from database import (
     DB_PATH,
+    YearLockedError,
+    get_fiscale_params,
     get_investeringen_voor_afschrijving,
     get_afschrijving_overrides,
     get_afschrijving_overrides_batch,
@@ -20,12 +22,31 @@ from database import (
 from fiscal.afschrijvingen import bereken_afschrijving
 
 
+async def _is_jaar_definitief(db_path, jaar: int) -> bool:
+    """Lane 5 (review A7) — return True if `jaar` has
+    jaarafsluiting_status='definitief'. Pure helper so it can be unit-tested
+    without spinning up a NiceGUI runtime.
+    """
+    params = await get_fiscale_params(db_path, jaar)
+    if params is None:
+        return False
+    return getattr(params, 'jaarafsluiting_status', 'concept') == 'definitief'
+
+
 LEVENSDUUR_OPTIES = {3: "3 jaar", 4: "4 jaar", 5: "5 jaar"}
 
 
 async def laad_activastaat(container, jaar: int, on_change) -> None:
     """Render the activastaat card into `container`. `on_change` is an async
     callable invoked after edits so the caller can refresh dependent UI.
+
+    L8/U4 (codex follow-up): the lock-state for the displayed jaar is now
+    computed BEFORE the table renders, so the user sees a banner up-front
+    and the per-row "tune" button is suppressed (instead of letting the
+    user click through into a dialog that quietly disables every year's
+    input). The dialog still does its own per-year locked_years lookup
+    when it opens, which remains the source of truth for save-side
+    rejection.
     """
     container.clear()
     investeringen = await get_investeringen_voor_afschrijving(
@@ -36,12 +57,21 @@ async def laad_activastaat(container, jaar: int, on_change) -> None:
                 .classes("text-grey")
         return
 
+    # Compute the lock-state for the current jaar BEFORE rendering. This
+    # drives both the banner and the per-row action visibility below.
+    is_jaar_locked = await _is_jaar_definitief(DB_PATH, jaar)
+
     all_overrides = await get_afschrijving_overrides_batch(
         DB_PATH, [u.id for u in investeringen])
 
     with container:
         ui.label(f"Activastaat per 31-12-{jaar}") \
             .classes("text-subtitle1 text-bold")
+        if is_jaar_locked:
+            ui.label(
+                f"Jaar {jaar} is definitief afgesloten. "
+                "Heropen via Jaarafsluiting voor correcties."
+            ).classes("text-caption text-warning q-mt-xs")
         activa_rows = []
         for u in investeringen:
             aanschaf = (u.aanschaf_bedrag or u.bedrag) * (
@@ -91,10 +121,15 @@ async def laad_activastaat(container, jaar: int, on_change) -> None:
                         size="xs" color="primary" class="q-ml-xs" />
             </q-td>
         ''')
-        activa_tbl.add_slot("body-cell-acties", '''
+        # L8/U4: when the displayed jaar is definitief, render the tune
+        # button as disabled. The dialog itself still checks locked_years
+        # per-row, so this is purely a UX hint — clicking would only
+        # surface a fully-disabled schedule anyway.
+        disable_attr = ' disable' if is_jaar_locked else ''
+        activa_tbl.add_slot("body-cell-acties", f'''
             <q-td :props="props">
                 <q-btn flat dense icon="tune" size="sm"
-                       color="primary" title="Afschrijving aanpassen"
+                       color="primary" title="Afschrijving aanpassen"{disable_attr}
                        @click="$parent.$emit('edit_afschr', props.row)" />
             </q-td>
         ''')
@@ -114,6 +149,16 @@ async def open_afschrijving_dialog(row: dict, huidige_jaar: int,
     aanschaf_jaar = row["_aanschaf_jaar"]
 
     overrides = await get_afschrijving_overrides(DB_PATH, uitgave_id)
+
+    # Lane 5 (review A7): lock per-year inputs based on
+    # jaarafsluiting_status='definitief' instead of the prior
+    # `y < huidige_jaar` heuristic. Pre-fetch the status for every year
+    # the dialog might render so we don't await inside build_schedule.
+    laatste_jaar_max = aanschaf_jaar + max(LEVENSDUUR_OPTIES.keys())
+    toon_tot_max = max(laatste_jaar_max, huidige_jaar)
+    locked_years: dict[int, bool] = {}
+    for _y in range(aanschaf_jaar, toon_tot_max + 1):
+        locked_years[_y] = await _is_jaar_definitief(DB_PATH, _y)
 
     with ui.dialog() as dialog, ui.card().classes("w-full max-w-xl q-pa-md"):
         ui.label(f'Afschrijving — {row["omschrijving"]}') \
@@ -177,7 +222,9 @@ async def open_afschrijving_dialog(row: dict, huidige_jaar: int,
 
                     has_ov = y in overrides
                     override_val = overrides.get(y)
-                    is_locked = y < huidige_jaar
+                    # Lane 5 (review A7): UI lock is the
+                    # jaarafsluiting_status, not a year-cutoff.
+                    is_locked = locked_years.get(y, False)
 
                     with ui.row().classes(
                             "w-full items-center gap-2 q-py-xs") \
@@ -218,11 +265,11 @@ async def open_afschrijving_dialog(row: dict, huidige_jaar: int,
                         if has_ov:
                             bw_label.classes("text-bold")
 
-                if any(y < huidige_jaar
+                if any(locked_years.get(y, False)
                        for y in range(aanschaf_jaar, toon_tot + 1)):
                     ui.label(
-                        "Voorgaande jaren zijn vergrendeld "
-                        "(reeds aangegeven).") \
+                        "Definitief afgesloten jaren zijn vergrendeld. "
+                        "Heropen via Jaarafsluiting voor correcties.") \
                         .classes("text-caption text-grey q-mt-sm")
 
         def on_levensduur_change():
@@ -238,22 +285,30 @@ async def open_afschrijving_dialog(row: dict, huidige_jaar: int,
 
             async def opslaan():
                 new_lv = levensduur_state["value"]
-                if new_lv != row["_levensduur"]:
-                    await update_uitgave(
-                        DB_PATH, uitgave_id=uitgave_id,
-                        levensduur_jaren=new_lv)
-                for y, inp in inputs_by_year.items():
-                    if inp is None:
-                        continue
-                    val = inp.value
-                    if val is not None and val >= 0:
-                        await set_afschrijving_override(
-                            DB_PATH, uitgave_id, y, val)
-                        overrides[y] = val
-                    elif y in overrides:
-                        await delete_afschrijving_override(
-                            DB_PATH, uitgave_id, y)
-                        del overrides[y]
+                # Lane 5 (review A7/A13): the underlying DB helpers
+                # raise YearLockedError when one of the touched years is
+                # definitief. Catch + notify so the user sees a Dutch
+                # warning instead of an unhandled background traceback.
+                try:
+                    if new_lv != row["_levensduur"]:
+                        await update_uitgave(
+                            DB_PATH, uitgave_id=uitgave_id,
+                            levensduur_jaren=new_lv)
+                    for y, inp in inputs_by_year.items():
+                        if inp is None:
+                            continue
+                        val = inp.value
+                        if val is not None and val >= 0:
+                            await set_afschrijving_override(
+                                DB_PATH, uitgave_id, y, val)
+                            overrides[y] = val
+                        elif y in overrides:
+                            await delete_afschrijving_override(
+                                DB_PATH, uitgave_id, y)
+                            del overrides[y]
+                except YearLockedError as ex:
+                    ui.notify(str(ex), type='warning', position='top')
+                    return
                 dialog.close()
                 ui.notify("Afschrijvingen opgeslagen", type="positive")
                 await on_change()

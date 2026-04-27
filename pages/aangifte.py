@@ -29,6 +29,7 @@ from database import (
     update_ew_naar_partner,
     update_za_sa_toggles, get_belastingdienst_betalingen,
     update_partner_inputs, DB_PATH,
+    YearLockedError, assert_year_writable,
 )
 from components.shared_ui import year_options
 from fiscal.berekeningen import bereken_volledig, bereken_box3
@@ -232,6 +233,13 @@ async def aangifte_page():
                               f'Jaarafsluiting {jaar}: {ja_status.capitalize()}. '
                               'Sluit eerst de jaarafsluiting af.',
                               '/jaarafsluiting'))
+        else:
+            # Lane 5 (review A13): banner when the year is locked so the
+            # user understands why blur/save attempts get warning toasts.
+            warnings.append(('warning', 'lock',
+                              f'Jaar {jaar} is definitief afgesloten. '
+                              'Heropen via Jaarafsluiting voor correcties.',
+                              '/jaarafsluiting'))
 
         # Missing data checks
         if data['n_uitgaven'] == 0:
@@ -377,12 +385,28 @@ async def aangifte_page():
                 za_actief = data['params_dict'].get('za_actief', True)
                 sa_actief = data['params_dict'].get('sa_actief', False)
 
+                # L8/U1 (codex follow-up): disable inputs when the year is
+                # definitief so the user cannot blur/click into a guaranteed
+                # YearLockedError. Banner already informs them via render_warnings.
+                is_locked = (
+                    getattr(data['params'],
+                            'jaarafsluiting_status', 'concept') == 'definitief')
+
                 async def _on_za_sa_change():
-                    await update_za_sa_toggles(
-                        DB_PATH, jaar=jaar,
-                        za_actief=za_check.value,
-                        sa_actief=sa_check.value,
-                    )
+                    # Lane 5 (review A13): year-locked → YearLockedError.
+                    try:
+                        await update_za_sa_toggles(
+                            DB_PATH, jaar=jaar,
+                            za_actief=za_check.value,
+                            sa_actief=sa_check.value,
+                        )
+                    except YearLockedError as ex:
+                        ui.notify(str(ex), type='warning', position='top')
+                        # Revert checkbox state so the UI does not lie
+                        # about the persisted value.
+                        za_check.value = za_actief
+                        sa_check.value = sa_actief
+                        return
                     _invalidate_cache()
                     await render_winst()
                     await render_overzicht()
@@ -396,6 +420,9 @@ async def aangifte_page():
                         'Startersaftrek (SA)', value=sa_actief,
                         on_change=lambda: _on_za_sa_change(),
                     )
+                    if is_locked:
+                        za_check.props('disable')
+                        sa_check.props('disable')
 
                 # Urencriterium — only warn if not met
                 with ui.row().classes('items-center gap-2'):
@@ -441,6 +468,12 @@ async def aangifte_page():
         params = data['params']
         params_dict = data['params_dict']
 
+        # L8/U1 (codex follow-up): disable inputs when the year is definitief.
+        # Banner in render_warnings already tells the user why; disabling the
+        # field prevents a guaranteed YearLockedError on every blur.
+        is_locked = (
+            getattr(params, 'jaarafsluiting_status', 'concept') == 'definitief')
+
         # Containers for auto-updated read-only values
         ew_results_ref = {'container': None}
 
@@ -455,14 +488,20 @@ async def aangifte_page():
                         'WOZ-waarde', value=data['woz'],
                         format='%.0f', prefix='€',
                     ).classes('w-48')
+                    if is_locked:
+                        woz_input.props('disable')
                     hyp_input = ui.number(
                         'Hypotheekrente', value=data['hypotheekrente'],
                         format='%.2f', prefix='€',
                     ).classes('w-48')
+                    if is_locked:
+                        hyp_input.props('disable')
 
                 ew_partner_check = ui.checkbox(
                     'Toerekenen aan partner', value=data['ew_naar_partner'],
                 ).classes('q-mt-xs')
+                if is_locked:
+                    ew_partner_check.props('disable')
                 ui.label(BD['woz']).classes('text-caption text-grey-6')
 
                 # Read-only calculated values
@@ -480,10 +519,14 @@ async def aangifte_page():
                         'AOV premie', value=data['aov'],
                         format='%.2f', prefix='€',
                     ).classes('w-48')
+                    if is_locked:
+                        aov_input.props('disable')
                     lijfrente_input = ui.number(
                         'Lijfrentepremie', value=data.get('lijfrente', 0),
                         format='%.2f', prefix='€',
                     ).classes('w-48')
+                    if is_locked:
+                        lijfrente_input.props('disable')
                 with ui.row().classes('items-center gap-2 q-mt-xs'):
                     ui.icon('info_outline', color='warning').classes('text-lg')
                     ui.label('AOV en lijfrente zijn geen bedrijfskosten maar '
@@ -510,11 +553,15 @@ async def aangifte_page():
                         value=data['voorlopige_aanslag'],
                         format='%.2f', prefix='€',
                     ).classes('w-60')
+                    if is_locked:
+                        va_ib_input.props('disable')
                     va_zvw_input = ui.number(
                         'VA Zorgverzekeringswet (jaarbedrag)',
                         value=data['voorlopige_aanslag_zvw'],
                         format='%.2f', prefix='€',
                     ).classes('w-60')
+                    if is_locked:
+                        va_zvw_input.props('disable')
                 ui.label(f'{BD["va_ib"]}, {BD["va_zvw"]}') \
                     .classes('text-caption text-grey-6')
 
@@ -559,10 +606,14 @@ async def aangifte_page():
                         'Bruto jaarloon', value=params.partner_bruto_loon or 0,
                         format='%.2f', prefix='\u20ac',
                     ).classes('w-48')
+                    if is_locked:
+                        partner_loon_input.props('disable')
                     partner_lh_input = ui.number(
                         'Loonheffing', value=params.partner_loonheffing or 0,
                         format='%.2f', prefix='\u20ac',
                     ).classes('w-48')
+                    if is_locked:
+                        partner_lh_input.props('disable')
                 ui.label('Nodig voor berekening AHK partner').classes(
                     'text-caption text-grey-6')
 
@@ -583,20 +634,39 @@ async def aangifte_page():
                 ew_val = ew_partner_check.value
                 lijfrente_val = lijfrente_input.value or 0
 
-                await update_ib_inputs(
-                    DB_PATH, jaar=jaar,
-                    aov_premie=aov_val, woz_waarde=woz_val,
-                    hypotheekrente=hyp_val,
-                    voorlopige_aanslag_betaald=va_ib_val,
-                    voorlopige_aanslag_zvw=va_zvw_val,
-                    lijfrente_premie=lijfrente_val,
-                )
-                await update_ew_naar_partner(DB_PATH, jaar=jaar, value=ew_val)
-                await update_partner_inputs(
-                    DB_PATH, jaar=jaar,
-                    bruto_loon=partner_loon_input.value or 0,
-                    loonheffing=partner_lh_input.value or 0,
-                )
+                # Lane 5 (review A13): year-locked DB writes raise
+                # YearLockedError. Catch + notify so the user sees a
+                # Dutch warning instead of an unhandled background traceback.
+                try:
+                    await update_ib_inputs(
+                        DB_PATH, jaar=jaar,
+                        aov_premie=aov_val, woz_waarde=woz_val,
+                        hypotheekrente=hyp_val,
+                        voorlopige_aanslag_betaald=va_ib_val,
+                        voorlopige_aanslag_zvw=va_zvw_val,
+                        lijfrente_premie=lijfrente_val,
+                    )
+                    await update_ew_naar_partner(
+                        DB_PATH, jaar=jaar, value=ew_val)
+                    await update_partner_inputs(
+                        DB_PATH, jaar=jaar,
+                        bruto_loon=partner_loon_input.value or 0,
+                        loonheffing=partner_lh_input.value or 0,
+                    )
+                except YearLockedError as ex:
+                    ui.notify(str(ex), type='warning', position='top')
+                    # Codex follow-up: revert inputs to last-persisted
+                    # values so the UI does not lie about state on disk.
+                    aov_input.value = data['aov']
+                    woz_input.value = data['woz']
+                    hyp_input.value = data['hypotheekrente']
+                    va_ib_input.value = data['voorlopige_aanslag']
+                    va_zvw_input.value = data['voorlopige_aanslag_zvw']
+                    lijfrente_input.value = data.get('lijfrente', 0)
+                    ew_partner_check.value = data['ew_naar_partner']
+                    partner_loon_input.value = params.partner_bruto_loon or 0
+                    partner_lh_input.value = params.partner_loonheffing or 0
+                    return
 
                 # Invalidate cache and refresh dependent views
                 _invalidate_cache()
@@ -649,6 +719,11 @@ async def aangifte_page():
 
         params_dict = fiscale_params_to_dict(params)
 
+        # L8/U1 (codex follow-up): disable Box 3 inputs when the year is
+        # definitief — same pattern as render_winst / render_prive.
+        is_locked = (
+            getattr(params, 'jaarafsluiting_status', 'concept') == 'definitief')
+
         with box3_container:
             # Input card
             with ui.card().classes('w-full'):
@@ -663,19 +738,27 @@ async def aangifte_page():
                         'Banktegoeden', value=params.box3_bank_saldo,
                         format='%.2f', prefix='€',
                     ).classes('w-52')
+                    if is_locked:
+                        bank_input.props('disable')
                     overig_input = ui.number(
                         'Overige bezittingen', value=params.box3_overige_bezittingen,
                         format='%.2f', prefix='€',
                     ).classes('w-52')
+                    if is_locked:
+                        overig_input.props('disable')
                     schuld_input = ui.number(
                         'Schulden', value=params.box3_schulden,
                         format='%.2f', prefix='€',
                     ).classes('w-52')
+                    if is_locked:
+                        schuld_input.props('disable')
 
                 partner_check = ui.checkbox(
                     'Fiscaal partner (verdubbelt heffingsvrij vermogen)',
                     value=bool(params.box3_fiscaal_partner),
                 ).classes('q-mt-sm')
+                if is_locked:
+                    partner_check.props('disable')
 
                 ui.label(f'{BD["box3_bank"]}, {BD["box3_overig"]}, {BD["box3_schulden"]}').classes(
                     'text-caption text-grey-6')
@@ -685,20 +768,36 @@ async def aangifte_page():
                     overig_val = overig_input.value or 0
                     schuld_val = schuld_input.value or 0
 
-                    saved = await update_box3_inputs(
-                        DB_PATH, jaar=jaar,
-                        bank_saldo=bank_val,
-                        overige_bezittingen=overig_val,
-                        schulden=schuld_val,
-                    )
-                    if not saved:
-                        ui.notify(f'Geen fiscale parameters voor {jaar}', type='warning')
-                        return
+                    # Lane 5 (review A13): year-locked writes raise
+                    # YearLockedError. Notify the user instead of
+                    # leaking an unhandled traceback.
+                    try:
+                        saved = await update_box3_inputs(
+                            DB_PATH, jaar=jaar,
+                            bank_saldo=bank_val,
+                            overige_bezittingen=overig_val,
+                            schulden=schuld_val,
+                        )
+                        if not saved:
+                            ui.notify(
+                                f'Geen fiscale parameters voor {jaar}',
+                                type='warning')
+                            return
 
-                    # Persist fiscaal partner flag
-                    await update_box3_fiscaal_partner(
-                        DB_PATH, jaar=jaar,
-                        fiscaal_partner=partner_check.value)
+                        # Persist fiscaal partner flag
+                        await update_box3_fiscaal_partner(
+                            DB_PATH, jaar=jaar,
+                            fiscaal_partner=partner_check.value)
+                    except YearLockedError as ex:
+                        ui.notify(str(ex), type='warning', position='top')
+                        # Codex follow-up: revert inputs to last-persisted
+                        # values so the UI does not lie about state on disk.
+                        bank_input.value = params.box3_bank_saldo
+                        overig_input.value = params.box3_overige_bezittingen
+                        schuld_input.value = params.box3_schulden
+                        partner_check.value = bool(
+                            params.box3_fiscaal_partner)
+                        return
 
                     p = await get_fiscale_params(DB_PATH, jaar)
                     pd = fiscale_params_to_dict(p)
@@ -1006,14 +1105,50 @@ async def aangifte_page():
 
         safe_name = Path(e.file.name).name.replace(' ', '_')
         file_path = target_dir / safe_name
+
+        # L8/U2 (codex follow-up): year-lock check FIRST, before we touch
+        # the disk. Without this an upload to a definitief year still
+        # writes/overwrites the bytes (because `target_dir.mkdir` and
+        # `write_bytes` were unconditional) and only the DB insert raised.
+        # On an existing filename that meant the previous file's contents
+        # were silently destroyed before the DB rejected the operation.
+        # The DB-level guard in add_aangifte_document still runs as
+        # belt-and-braces below.
+        try:
+            await assert_year_writable(DB_PATH, jaar)
+        except YearLockedError as ex:
+            ui.notify(str(ex), type='warning', position='top')
+            dialog.close()
+            return
+
+        # Lane 5 (codex follow-up): check existence BEFORE writing so we
+        # only unlink a freshly-created file in the YearLockedError-cleanup
+        # branch — never an existing one that another DB-row still points at.
+        existed_before = file_path.exists()
         content = await e.file.read()
         await asyncio.to_thread(file_path.write_bytes, content)
 
-        await add_aangifte_document(
-            DB_PATH, jaar=jaar, categorie=categorie,
-            documenttype=documenttype, bestandsnaam=safe_name,
-            bestandspad=str(file_path),
-            upload_datum=date.today().isoformat())
+        # Lane 5 (review A13/A8): if the year is definitief the DB
+        # helper raises YearLockedError. Surface a warning + clean
+        # up the just-written file so we don't leave an orphan on disk.
+        # (Belt-and-braces: the pre-write guard above should already have
+        # caught the locked case; this catches a race where the year was
+        # closed between the guard and the DB insert.)
+        try:
+            await add_aangifte_document(
+                DB_PATH, jaar=jaar, categorie=categorie,
+                documenttype=documenttype, bestandsnaam=safe_name,
+                bestandspad=str(file_path),
+                upload_datum=date.today().isoformat())
+        except YearLockedError as ex:
+            if not existed_before:
+                try:
+                    await asyncio.to_thread(file_path.unlink)
+                except FileNotFoundError:
+                    pass
+            ui.notify(str(ex), type='warning', position='top')
+            dialog.close()
+            return
 
         dialog.close()
         ui.notify(f'{safe_name} geupload', type='positive')
@@ -1037,8 +1172,15 @@ async def aangifte_page():
         dialog.open()
 
     async def do_delete(doc, dialog):
-        # Delete DB record first, then file (if DB fails, file survives)
-        await delete_aangifte_document(DB_PATH, doc.id)
+        # Delete DB record first, then file (if DB fails, file survives).
+        # Lane 5 (review A13/A8): year-locked → YearLockedError; surface
+        # the warning and leave the file untouched.
+        try:
+            await delete_aangifte_document(DB_PATH, doc.id)
+        except YearLockedError as ex:
+            ui.notify(str(ex), type='warning', position='top')
+            dialog.close()
+            return
         file_path = Path(doc.bestandspad)
         if file_path.exists():
             await asyncio.to_thread(file_path.unlink)

@@ -25,6 +25,8 @@ from database import (
     get_bedrijfsgegevens, get_werkdagen,
     link_werkdagen_to_factuur, get_db_ctx, add_werkdag,
     get_fiscale_params, DB_PATH,
+    update_factuur_herinnering_datum, YearLockedError,
+    assert_year_writable,
 )
 
 log = logging.getLogger(__name__)
@@ -1327,6 +1329,14 @@ async def facturen_page():
             """Send reminder email for overdue invoice via macOS Mail.app."""
             row = e.args
             nummer = row['nummer']
+            # Pre-flight year-lock check: a herinnering on a definitief-year
+            # factuur must not even open Mail.app — otherwise the user composes
+            # an email that we then refuse to record (codex review L1 follow-up).
+            try:
+                await assert_year_writable(DB_PATH, row['datum'])
+            except YearLockedError as ex:
+                ui.notify(str(ex), type='warning')
+                return
             resolved = await _ensure_factuur_pdf(row)
             if resolved is None:
                 return
@@ -1372,12 +1382,17 @@ async def facturen_page():
                     ui.notify(f'Mail.app fout: {err}', type='negative')
                     return
 
-                # Store herinnering date
-                async with get_db_ctx(DB_PATH) as conn:
-                    await conn.execute(
-                        "UPDATE facturen SET herinnering_datum = ? WHERE id = ?",
-                        (date.today().isoformat(), row['id']))
-                    await conn.commit()
+                # Store herinnering date (year-locked helper).
+                # L1.4 (review A11): bypassing the helper would let a
+                # herinnering on a definitief-year factuur silently
+                # mutate metadata. The helper guards via factuur.datum.
+                try:
+                    await update_factuur_herinnering_datum(
+                        DB_PATH, factuur_id=row['id'],
+                        datum=date.today().isoformat())
+                except YearLockedError as ex:
+                    ui.notify(str(ex), type='warning')
+                    return
 
                 ui.notify(f'Herinnering voor {nummer} geopend in Mail.app',
                           type='positive')
