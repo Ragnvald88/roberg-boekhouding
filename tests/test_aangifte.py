@@ -734,3 +734,510 @@ async def test_aangifte_data_uses_snapshot_for_definitief_year(db):
     assert snapshot_data['omzet'] == FROZEN_OMZET, (
         "Definitief year must read snapshot omzet, not live-recomputed"
     )
+
+
+# ============================================================
+# A1 — Privé/genegeerd filter on aangifte uitgave-aggregations
+# ============================================================
+#
+# Bug: when a bank-tx is marked privé (banktransacties.genegeerd=1) the
+# linked uitgave's category survives. `get_uitgaven_per_categorie` and
+# `get_representatie_totaal` previously ignored the bank flag, so the
+# privé-debit was still counted as bedrijfskosten in /aangifte.
+# Fix: LEFT JOIN banktransacties + filter genegeerd=0 OR bank_tx_id IS NULL.
+
+async def _seed_banktx_row(db_path, *, id_, datum, bedrag,
+                           genegeerd=0, tegenpartij='Vendor X'):
+    """Insert a banktransacties row directly (cheaper than CSV-import flow)."""
+    import aiosqlite
+    async with aiosqlite.connect(db_path) as conn:
+        await conn.execute(
+            "INSERT INTO banktransacties (id, datum, bedrag, tegenpartij, "
+            "genegeerd) VALUES (?, ?, ?, ?, ?)",
+            (id_, datum, bedrag, tegenpartij, genegeerd))
+        await conn.commit()
+
+
+@pytest.mark.asyncio
+async def test_get_uitgaven_per_categorie_filters_genegeerd_bank(db):
+    """Bank-tx flagged genegeerd=1 → linked uitgave drops from per-cat sum."""
+    from database import get_uitgaven_per_categorie, mark_banktx_genegeerd
+    # Two debit bank-rows: one will be flipped privé later.
+    await _seed_banktx_row(db, id_=10, datum='2024-04-10', bedrag=-50.0,
+                           tegenpartij='Vendor A')
+    await _seed_banktx_row(db, id_=11, datum='2024-04-11', bedrag=-30.0,
+                           tegenpartij='Vendor B')
+    # Two uitgaven, same category 'Telefoon', linked to the bank rows.
+    uid_a = await add_uitgave(db, datum='2024-04-10', categorie='Telefoon',
+                              omschrijving='A', bedrag=50.0)
+    uid_b = await add_uitgave(db, datum='2024-04-11', categorie='Telefoon',
+                              omschrijving='B', bedrag=30.0)
+    import aiosqlite
+    async with aiosqlite.connect(db) as conn:
+        await conn.execute("UPDATE uitgaven SET bank_tx_id = ? WHERE id = ?",
+                           (10, uid_a))
+        await conn.execute("UPDATE uitgaven SET bank_tx_id = ? WHERE id = ?",
+                           (11, uid_b))
+        await conn.commit()
+
+    # Sanity: both contribute to the totaal before genegeerd flip.
+    rows = await get_uitgaven_per_categorie(db, jaar=2024)
+    cats = {r['categorie']: r['totaal'] for r in rows}
+    assert abs(cats.get('Telefoon', 0) - 80.0) < 1e-6
+
+    # Mark Vendor A's bank-tx as privé.
+    await mark_banktx_genegeerd(db, 10, genegeerd=1)
+    rows = await get_uitgaven_per_categorie(db, jaar=2024)
+    cats = {r['categorie']: r['totaal'] for r in rows}
+    # Only Vendor B (€30) remains.
+    assert abs(cats.get('Telefoon', 0) - 30.0) < 1e-6
+
+
+@pytest.mark.asyncio
+async def test_get_uitgaven_per_categorie_keeps_cash_uitgaven(db):
+    """Cash uitgaven (bank_tx_id IS NULL) must still count after the JOIN fix."""
+    from database import get_uitgaven_per_categorie
+    await add_uitgave(db, datum='2024-05-01', categorie='Bankkosten',
+                      omschrijving='Cash post', bedrag=12.50)
+    rows = await get_uitgaven_per_categorie(db, jaar=2024)
+    cats = {r['categorie']: r['totaal'] for r in rows}
+    assert abs(cats.get('Bankkosten', 0) - 12.50) < 1e-6
+
+
+@pytest.mark.asyncio
+async def test_get_representatie_totaal_filters_genegeerd_bank(db):
+    """Representatie sum must drop the privé-flagged bank-linked uitgave."""
+    from database import get_representatie_totaal, mark_banktx_genegeerd
+    await _seed_banktx_row(db, id_=20, datum='2024-06-15', bedrag=-45.0,
+                           tegenpartij='Restaurant X')
+    await _seed_banktx_row(db, id_=21, datum='2024-06-20', bedrag=-25.0,
+                           tegenpartij='Restaurant Y')
+    uid_x = await add_uitgave(db, datum='2024-06-15', categorie='Representatie',
+                              omschrijving='Lunch X', bedrag=45.0)
+    uid_y = await add_uitgave(db, datum='2024-06-20', categorie='Representatie',
+                              omschrijving='Lunch Y', bedrag=25.0)
+    import aiosqlite
+    async with aiosqlite.connect(db) as conn:
+        await conn.execute("UPDATE uitgaven SET bank_tx_id = ? WHERE id = ?",
+                           (20, uid_x))
+        await conn.execute("UPDATE uitgaven SET bank_tx_id = ? WHERE id = ?",
+                           (21, uid_y))
+        await conn.commit()
+
+    totaal = await get_representatie_totaal(db, jaar=2024)
+    assert abs(totaal - 70.0) < 1e-6
+
+    # Mark X privé; only Y remains.
+    await mark_banktx_genegeerd(db, 20, genegeerd=1)
+    totaal = await get_representatie_totaal(db, jaar=2024)
+    assert abs(totaal - 25.0) < 1e-6
+
+
+@pytest.mark.asyncio
+async def test_get_representatie_totaal_keeps_cash(db):
+    """Cash representatie (no bank link) must still be summed."""
+    from database import get_representatie_totaal
+    await add_uitgave(db, datum='2024-07-01', categorie='Representatie',
+                      omschrijving='Cash lunch', bedrag=22.5)
+    totaal = await get_representatie_totaal(db, jaar=2024)
+    assert abs(totaal - 22.5) < 1e-6
+
+
+@pytest.mark.asyncio
+async def test_aangifte_excludes_genegeerd_bank_uitgave(db):
+    """A privé-flagged debit must drop out of every aangifte uitgave
+    aggregation: per-categorie totaal + (when categorie='Representatie')
+    representatie totaal. Exercises the JOIN filter that fetch_fiscal_data
+    relies on, without depending on the full fiscale_params seed."""
+    from database import (
+        get_uitgaven_per_categorie, get_representatie_totaal,
+        mark_banktx_genegeerd,
+    )
+    # One bank-linked Telefoon debit (€100), one bank-linked Representatie
+    # debit (€60), one cash Telefoon (€20). After flipping the two bank rows
+    # privé, only the cash row should remain.
+    await _seed_banktx_row(db, id_=30, datum='2024-03-05', bedrag=-100.0,
+                           tegenpartij='Phone')
+    await _seed_banktx_row(db, id_=31, datum='2024-03-08', bedrag=-60.0,
+                           tegenpartij='Lunch')
+    uid_30 = await add_uitgave(db, datum='2024-03-05', categorie='Telefoon',
+                               omschrijving='Phone', bedrag=100.0)
+    uid_31 = await add_uitgave(db, datum='2024-03-08', categorie='Representatie',
+                               omschrijving='Lunch', bedrag=60.0)
+    await add_uitgave(db, datum='2024-03-06', categorie='Telefoon',
+                      omschrijving='Cash phone', bedrag=20.0)
+    import aiosqlite
+    async with aiosqlite.connect(db) as conn:
+        await conn.execute("UPDATE uitgaven SET bank_tx_id = ? WHERE id = ?",
+                           (30, uid_30))
+        await conn.execute("UPDATE uitgaven SET bank_tx_id = ? WHERE id = ?",
+                           (31, uid_31))
+        await conn.commit()
+
+    rows_before = await get_uitgaven_per_categorie(db, jaar=2024)
+    cat_before = {r['categorie']: r['totaal'] for r in rows_before}
+    repr_before = await get_representatie_totaal(db, jaar=2024)
+    assert abs(cat_before.get('Telefoon', 0) - 120.0) < 1e-6
+    assert abs(repr_before - 60.0) < 1e-6
+
+    await mark_banktx_genegeerd(db, 30, genegeerd=1)
+    await mark_banktx_genegeerd(db, 31, genegeerd=1)
+
+    rows_after = await get_uitgaven_per_categorie(db, jaar=2024)
+    cat_after = {r['categorie']: r['totaal'] for r in rows_after}
+    repr_after = await get_representatie_totaal(db, jaar=2024)
+    assert abs(cat_after.get('Telefoon', 0) - 20.0) < 1e-6
+    assert abs(repr_after - 0.0) < 1e-6
+
+
+# ============================================================
+# Lane 5 (review A13) — UI YearLockedError handling
+# ============================================================
+
+@pytest.mark.asyncio
+async def test_save_prive_handlers_in_aangifte_catch_yearlocked():
+    """Source-pin: each save handler in pages/aangifte.py wraps its
+    update_* DB call in try/except YearLockedError. Lane 5 (review A13).
+
+    Pure-runtime tests for these closures would need a NiceGUI page
+    context; instead we pin the source so a refactor that drops the
+    guard surfaces here.
+    """
+    from pathlib import Path
+    src = Path(__file__).resolve().parents[1] / 'pages' / 'aangifte.py'
+    text = src.read_text(encoding='utf-8')
+
+    # Import is wired through.
+    assert 'YearLockedError' in text, (
+        'pages/aangifte.py must import YearLockedError')
+
+    # Each save handler must contain `except YearLockedError` after its
+    # body. Use a coarse contains-check: the handler name plus a nearby
+    # except clause within the same function body.
+    for handler_marker in (
+        'async def save_prive():',
+        'async def save_and_calc_box3():',
+        'async def _on_za_sa_change():',
+        'async def handle_upload(',
+        'async def do_delete(',
+    ):
+        idx = text.find(handler_marker)
+        assert idx >= 0, f'handler missing: {handler_marker}'
+        # Look for `except YearLockedError` within the next ~3000 chars.
+        chunk = text[idx:idx + 3000]
+        assert 'except YearLockedError' in chunk, (
+            f'{handler_marker} must catch YearLockedError')
+
+
+@pytest.mark.asyncio
+async def test_aangifte_definitief_year_emits_lock_warning():
+    """Render-helper smoke: render_warnings appends a 'definitief'-banner
+    entry when jaarafsluiting_status='definitief'. Pin the message text."""
+    from pathlib import Path
+    src = Path(__file__).resolve().parents[1] / 'pages' / 'aangifte.py'
+    text = src.read_text(encoding='utf-8')
+    # The banner uses the icon='lock' branch in render_warnings.
+    assert "'lock'" in text and 'definitief afgesloten' in text, (
+        'aangifte.py must render a lock-banner when the jaar is definitief')
+
+
+# ============================================================
+# Lane 5 (review A7) — kosten_investeringen UI lock check
+# ============================================================
+
+@pytest.mark.asyncio
+async def test_kosten_investeringen_locks_definitief_year(db):
+    """`_is_jaar_definitief` returns True iff jaarafsluiting_status is
+    'definitief'. This is the helper that drives `is_locked` in the
+    afschrijving-override dialog (Lane 5 / review A7)."""
+    from database import upsert_fiscale_params, update_jaarafsluiting_status
+    from pages.kosten_investeringen import _is_jaar_definitief
+    from import_.seed_data import FISCALE_PARAMS
+
+    # No fiscale_params row yet → not locked.
+    assert await _is_jaar_definitief(db, 2099) is False
+
+    # Concept year → not locked.
+    await upsert_fiscale_params(db, **FISCALE_PARAMS[2024])
+    assert await _is_jaar_definitief(db, 2024) is False
+
+    # Definitief year → locked.
+    await update_jaarafsluiting_status(db, 2024, 'definitief')
+    assert await _is_jaar_definitief(db, 2024) is True
+
+    # Switching back to concept unlocks again.
+    await update_jaarafsluiting_status(db, 2024, 'concept')
+    assert await _is_jaar_definitief(db, 2024) is False
+
+
+@pytest.mark.asyncio
+async def test_kosten_investeringen_save_handler_catches_yearlocked():
+    """Source-pin: opslaan() in open_afschrijving_dialog wraps the
+    set_afschrijving_override / delete_afschrijving_override calls in
+    try/except YearLockedError. Lane 5 (review A7)."""
+    from pathlib import Path
+    src = Path(__file__).resolve().parents[1] \
+        / 'pages' / 'kosten_investeringen.py'
+    text = src.read_text(encoding='utf-8')
+
+    assert 'YearLockedError' in text, (
+        'pages/kosten_investeringen.py must import YearLockedError')
+
+    idx = text.find('async def opslaan():')
+    assert idx >= 0, 'opslaan() handler missing'
+    chunk = text[idx:idx + 2500]
+    assert 'except YearLockedError' in chunk, (
+        'opslaan() must catch YearLockedError')
+
+    # The new lock-check is on jaarafsluiting_status, not on a year cutoff.
+    assert '_is_jaar_definitief' in text and 'locked_years' in text, (
+        'kosten_investeringen.py must use _is_jaar_definitief / locked_years')
+
+
+@pytest.mark.asyncio
+async def test_facturen_herinnering_handler_catches_yearlocked():
+    """Source-pin: on_send_herinnering in pages/facturen.py wraps its
+    update_factuur_herinnering_datum call in try/except YearLockedError
+    (Lane 1 follow-up; Lane 5 verification)."""
+    from pathlib import Path
+    src = Path(__file__).resolve().parents[1] / 'pages' / 'facturen.py'
+    text = src.read_text(encoding='utf-8')
+
+    idx = text.find('async def on_send_herinnering(e):')
+    assert idx >= 0, 'on_send_herinnering handler missing'
+    chunk = text[idx:idx + 4000]
+    assert 'except YearLockedError' in chunk, (
+        'on_send_herinnering must catch YearLockedError')
+    assert 'update_factuur_herinnering_datum' in chunk, (
+        'on_send_herinnering must route through the year-locked helper')
+
+
+# ============================================================
+# L8 — codex follow-up findings (B1, B2, U1, U2, U4)
+# ============================================================
+
+@pytest.mark.asyncio
+async def test_get_uitgaven_per_categorie_excludes_positive_bank_link(db):
+    """B1: an uitgave linked to a POSITIVE bank-tx must drop out of the
+    per-categorie totaal — same defense the /kosten queries use against
+    the lazy-create-on-credit phantom path."""
+    from database import get_uitgaven_per_categorie
+    # One legit debit-linked uitgave (€40) + one phantom positive-linked
+    # uitgave (€100). Only the debit should count.
+    await _seed_banktx_row(db, id_=200, datum='2024-08-01', bedrag=-40.0,
+                           tegenpartij='Vendor X')
+    await _seed_banktx_row(db, id_=201, datum='2024-08-02', bedrag=+100.0,
+                           tegenpartij='Income Y')
+    uid_a = await add_uitgave(db, datum='2024-08-01', categorie='Telefoon',
+                              omschrijving='Real cost', bedrag=40.0)
+    uid_b = await add_uitgave(db, datum='2024-08-02', categorie='Telefoon',
+                              omschrijving='Phantom', bedrag=100.0)
+    import aiosqlite
+    async with aiosqlite.connect(db) as conn:
+        await conn.execute("UPDATE uitgaven SET bank_tx_id = ? WHERE id = ?",
+                           (200, uid_a))
+        await conn.execute("UPDATE uitgaven SET bank_tx_id = ? WHERE id = ?",
+                           (201, uid_b))
+        await conn.commit()
+    rows = await get_uitgaven_per_categorie(db, jaar=2024)
+    cats = {r['categorie']: r['totaal'] for r in rows}
+    # Phantom must be excluded; only the €40 debit-linked uitgave remains.
+    assert abs(cats.get('Telefoon', 0) - 40.0) < 1e-6
+
+
+@pytest.mark.asyncio
+async def test_get_representatie_totaal_excludes_positive_bank_link(db):
+    """B1: representatie totaal mirrors the per-categorie filter."""
+    from database import get_representatie_totaal
+    await _seed_banktx_row(db, id_=210, datum='2024-09-01', bedrag=-25.0,
+                           tegenpartij='Lunch real')
+    await _seed_banktx_row(db, id_=211, datum='2024-09-02', bedrag=+80.0,
+                           tegenpartij='Income confused as lunch')
+    uid_a = await add_uitgave(db, datum='2024-09-01', categorie='Representatie',
+                              omschrijving='Real lunch', bedrag=25.0)
+    uid_b = await add_uitgave(db, datum='2024-09-02', categorie='Representatie',
+                              omschrijving='Phantom', bedrag=80.0)
+    import aiosqlite
+    async with aiosqlite.connect(db) as conn:
+        await conn.execute("UPDATE uitgaven SET bank_tx_id = ? WHERE id = ?",
+                           (210, uid_a))
+        await conn.execute("UPDATE uitgaven SET bank_tx_id = ? WHERE id = ?",
+                           (211, uid_b))
+        await conn.commit()
+    totaal = await get_representatie_totaal(db, jaar=2024)
+    assert abs(totaal - 25.0) < 1e-6
+
+
+@pytest.mark.asyncio
+async def test_get_investeringen_excludes_genegeerd_bank(db):
+    """B2: investeringen linked to a privé-flagged bank-tx must drop out.
+    Without this the activastaat depreciates a privé-marked aankoop."""
+    from database import get_investeringen, mark_banktx_genegeerd
+    await _seed_banktx_row(db, id_=300, datum='2024-02-01', bedrag=-1500.0,
+                           tegenpartij='IT shop')
+    inv_id = await add_uitgave(db, datum='2024-02-01', categorie='Apparatuur',
+                               omschrijving='Privé laptop', bedrag=1500.0,
+                               is_investering=1)
+    import aiosqlite
+    async with aiosqlite.connect(db) as conn:
+        await conn.execute("UPDATE uitgaven SET bank_tx_id = ? WHERE id = ?",
+                           (300, inv_id))
+        await conn.commit()
+    # Sanity: investering present before privé flip.
+    invs = await get_investeringen(db, jaar=2024)
+    assert len(invs) == 1
+    # Flip privé.
+    await mark_banktx_genegeerd(db, 300, genegeerd=1)
+    invs = await get_investeringen(db, jaar=2024)
+    assert len(invs) == 0, (
+        'A privé-flagged investering must drop out of get_investeringen')
+
+
+@pytest.mark.asyncio
+async def test_get_investeringen_voor_afschrijving_excludes_genegeerd(db):
+    """B2 (mirror): the afschrijvings-feeder must apply the same filter.
+
+    Without this fix a privé-marked aankoop was still depreciated via the
+    activastaat / fiscal_utils.fetch_fiscal_data.
+    """
+    from database import (
+        get_investeringen_voor_afschrijving, mark_banktx_genegeerd,
+    )
+    await _seed_banktx_row(db, id_=310, datum='2023-03-15', bedrag=-2000.0,
+                           tegenpartij='IT supplier')
+    inv_id = await add_uitgave(db, datum='2023-03-15', categorie='Apparatuur',
+                               omschrijving='Privé scanner', bedrag=2000.0,
+                               is_investering=1)
+    import aiosqlite
+    async with aiosqlite.connect(db) as conn:
+        await conn.execute("UPDATE uitgaven SET bank_tx_id = ? WHERE id = ?",
+                           (310, inv_id))
+        await conn.commit()
+    rows = await get_investeringen_voor_afschrijving(db, tot_jaar=2026)
+    assert len(rows) == 1
+    await mark_banktx_genegeerd(db, 310, genegeerd=1)
+    rows = await get_investeringen_voor_afschrijving(db, tot_jaar=2026)
+    assert len(rows) == 0
+
+
+def test_definitief_year_inputs_rendered_disabled():
+    """U1 (source-pin): each user-mutating input on /aangifte gets a
+    `props('disable')` call when the displayed year is definitief.
+
+    A pure runtime assertion would need a NiceGUI page context; the
+    source-pin guarantees that a refactor dropping the disable-call
+    surfaces here.
+    """
+    from pathlib import Path
+    src = Path(__file__).resolve().parents[1] / 'pages' / 'aangifte.py'
+    text = src.read_text(encoding='utf-8')
+    # is_locked computed in each render section.
+    assert text.count("'jaarafsluiting_status', 'concept'") >= 3, (
+        'render_winst, render_prive, and render_box3 must each derive '
+        'is_locked from jaarafsluiting_status')
+    # At minimum the inputs exposed in B/U1 (ZA/SA, prive, box3 inputs)
+    # must each have a `.props('disable')` siphon when locked.
+    for marker in (
+        'za_check.props(\'disable\')',
+        'sa_check.props(\'disable\')',
+        'woz_input.props(\'disable\')',
+        'hyp_input.props(\'disable\')',
+        'aov_input.props(\'disable\')',
+        'va_ib_input.props(\'disable\')',
+        'va_zvw_input.props(\'disable\')',
+        'partner_loon_input.props(\'disable\')',
+        'partner_lh_input.props(\'disable\')',
+        'bank_input.props(\'disable\')',
+        'overig_input.props(\'disable\')',
+        'schuld_input.props(\'disable\')',
+        'partner_check.props(\'disable\')',
+    ):
+        assert marker in text, f'/aangifte must disable input when locked: {marker}'
+
+
+def test_aangifte_upload_rejects_definitief_year_before_writing_file():
+    """U2 (source-pin): handle_upload calls assert_year_writable BEFORE
+    write_bytes, so a definitief-jaar upload does not corrupt an existing
+    file's contents on disk before the DB rejects it.
+
+    We compare against the actual `await asyncio.to_thread(file_path.write_bytes`
+    call (not the literal string "write_bytes" which also appears in the
+    rationale comment).
+    """
+    from pathlib import Path
+    src = Path(__file__).resolve().parents[1] / 'pages' / 'aangifte.py'
+    text = src.read_text(encoding='utf-8')
+    upload_idx = text.find('async def handle_upload(')
+    assert upload_idx >= 0, 'handle_upload missing'
+    body = text[upload_idx:upload_idx + 4000]
+    # The pre-write guard must appear, AND it must come before write_bytes.
+    assert_idx = body.find('await assert_year_writable(DB_PATH, jaar)')
+    write_idx = body.find('file_path.write_bytes')
+    assert assert_idx > 0, (
+        'handle_upload must call assert_year_writable up-front')
+    assert write_idx > 0, 'handle_upload must still call file_path.write_bytes'
+    assert assert_idx < write_idx, (
+        'assert_year_writable must run BEFORE write_bytes; otherwise an '
+        'upload to a definitief year overwrites the file before the DB '
+        'rejects.')
+
+
+@pytest.mark.asyncio
+async def test_upsert_fiscale_params_preserves_unspecified_kia_brackets(db):
+    """B4: a partial upsert (omitting the KIA-bracket kwargs) must NOT
+    overwrite the existing values with 0. Pre-fix the function passed
+    `kwargs.get('kia_plateau_bedrag', 0)` which clobbered configured
+    plateau/afbouw values whenever a caller did not re-pass them.
+    """
+    base = dict(FISCALE_PARAMS[2024])
+    base['jaar'] = 2024
+    # Seed with explicit KIA brackets.
+    base['kia_plateau_bedrag'] = 19535
+    base['kia_plateau_eind'] = 129194
+    base['kia_afbouw_eind'] = 387580
+    base['kia_afbouw_pct'] = 7.56
+    base['kia_drempel_per_item'] = 451
+    await upsert_fiscale_params(db, **base)
+
+    # Now repeat the upsert WITHOUT the KIA-bracket kwargs. The fix
+    # must coalesce missing values back to the existing row, not 0/450.
+    minimal = dict(base)
+    for k in ('kia_plateau_bedrag', 'kia_plateau_eind',
+              'kia_afbouw_eind', 'kia_afbouw_pct',
+              'kia_drempel_per_item'):
+        minimal.pop(k, None)
+    await upsert_fiscale_params(db, **minimal)
+
+    params = await get_fiscale_params(db, 2024)
+    assert params is not None
+    # Each KIA-bracket field must have survived the partial upsert.
+    assert params.kia_plateau_bedrag == 19535, (
+        'kia_plateau_bedrag must be preserved when caller omits it')
+    assert params.kia_plateau_eind == 129194
+    assert params.kia_afbouw_eind == 387580
+    assert abs(params.kia_afbouw_pct - 7.56) < 1e-6
+    assert params.kia_drempel_per_item == 451
+
+
+def test_kosten_investeringen_renders_lock_state_before_table():
+    """U4 (source-pin): laad_activastaat computes is_jaar_locked BEFORE
+    rendering the activa table, surfaces a Dutch banner, and disables the
+    per-row tune-button when the displayed jaar is definitief.
+    """
+    from pathlib import Path
+    src = Path(__file__).resolve().parents[1] / 'pages' / 'kosten_investeringen.py'
+    text = src.read_text(encoding='utf-8')
+    # locked-state computed BEFORE the table render begins.
+    func_idx = text.find('async def laad_activastaat(')
+    assert func_idx >= 0
+    body = text[func_idx:func_idx + 4000]
+    is_locked_idx = body.find('is_jaar_locked = await _is_jaar_definitief(')
+    table_idx = body.find('ui.table(columns=columns')
+    assert is_locked_idx > 0, (
+        'laad_activastaat must compute is_jaar_locked via _is_jaar_definitief')
+    assert table_idx > 0, 'activa table render expected'
+    assert is_locked_idx < table_idx, (
+        'is_jaar_locked must be computed BEFORE ui.table render')
+    # Banner shown when locked.
+    assert 'definitief afgesloten' in text, (
+        'kosten_investeringen.py must render a definitief-afgesloten banner')

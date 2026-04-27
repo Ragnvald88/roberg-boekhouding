@@ -16,6 +16,12 @@ from database import (
     upsert_fiscale_params,
     update_ib_inputs, update_za_sa_toggles, update_ew_naar_partner,
     update_box3_fiscaal_partner, update_box3_inputs, update_partner_inputs,
+    set_afschrijving_override, delete_afschrijving_override,
+    get_afschrijving_overrides,
+    add_aangifte_document, delete_aangifte_document, get_aangifte_documenten,
+    update_factuur_herinnering_datum,
+    add_klant_locatie, delete_klant_locatie, get_klant_locaties,
+    get_db_ctx,
 )
 from import_.seed_data import FISCALE_PARAMS
 
@@ -731,3 +737,311 @@ async def test_save_factuur_atomic_rejected_when_linking_locked_werkdag(db):
     assert wd.factuurnummer == '', (
         "locked werkdag's factuurnummer was mutated"
     )
+
+
+# === A9 / Lane 2: OLD-werkdag unlink guards ===
+
+@pytest.mark.asyncio
+async def test_delete_factuur_rejected_when_linked_werkdag_in_locked_year(db):
+    """delete_factuur unlinks werkdagen by setting factuurnummer=''.
+    A 2025 concept factuur linked to a 2024 werkdag must NOT be deletable
+    once 2024 is locked: the unlink is a mutation on a frozen-year row.
+    """
+    kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=0)
+    await _seed_fiscale_params_row(db, 2024)
+    await _seed_fiscale_params_row(db, 2025)
+    # Werkdag in 2024 (still writable at seed time).
+    wid = await add_werkdag(db, datum='2024-09-15', klant_id=kid,
+                            uren=8, tarief=80, km=0, km_tarief=0)
+    # Concept factuur in 2025.
+    fid = await add_factuur(db, nummer='2025-XLINK', klant_id=kid,
+                            datum='2025-03-01', totaal_bedrag=640.00,
+                            status='concept')
+    # Link the 2024 werkdag to the 2025 factuur.
+    await link_werkdagen_to_factuur(
+        db, werkdag_ids=[wid], factuurnummer='2025-XLINK')
+    # Now freeze 2024.
+    await update_jaarafsluiting_status(db, 2024, 'definitief')
+    # delete_factuur on the 2025 concept would unlink the 2024 werkdag — reject.
+    with pytest.raises(YearLockedError, match='2024'):
+        await delete_factuur(db, factuur_id=fid)
+    # Werkdag's factuurnummer must still be the link (not flipped to '').
+    rows = await get_werkdagen(db)
+    wd = next(w for w in rows if w.id == wid)
+    assert wd.factuurnummer == '2025-XLINK', (
+        "delete_factuur leaked through OLD-werkdag year-lock guard"
+    )
+    # Factuur must still exist (delete was rejected before mutation).
+    facturen = await get_facturen(db)
+    assert any(f.id == fid for f in facturen), (
+        "factuur was deleted despite locked-year werkdag link"
+    )
+
+
+@pytest.mark.asyncio
+async def test_save_factuur_atomic_step1_rejected_when_old_werkdag_in_locked_year(db):
+    """save_factuur_atomic step 1 (replacing an existing factuur) unlinks the
+    OLD nummer's werkdagen via UPDATE werkdagen SET factuurnummer=''.
+    If any of those werkdagen sit in a locked year, that unlink is a
+    mutation on a frozen-year row and must be rejected.
+    """
+    kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=0)
+    await _seed_fiscale_params_row(db, 2024)
+    await _seed_fiscale_params_row(db, 2025)
+    # 2024 werkdag (still writable at seed time).
+    wid_old = await add_werkdag(db, datum='2024-09-15', klant_id=kid,
+                                uren=8, tarief=80, km=0, km_tarief=0)
+    # 2025 concept factuur '2025-100', linked to the 2024 werkdag.
+    fid = await add_factuur(db, nummer='2025-100', klant_id=kid,
+                            datum='2025-03-01', totaal_bedrag=640.00,
+                            status='concept')
+    await link_werkdagen_to_factuur(
+        db, werkdag_ids=[wid_old], factuurnummer='2025-100')
+    # Freeze 2024 AFTER setup.
+    await update_jaarafsluiting_status(db, 2024, 'definitief')
+    # Now: replace 2025-100 with a new 2025 concept that does NOT include
+    # the 2024 werkdag (empty werkdag_ids). Step 1 would unlink it.
+    with pytest.raises(YearLockedError, match='2024'):
+        await save_factuur_atomic(
+            db, nummer='2025-100', klant_id=kid, datum='2025-04-01',
+            totaal_bedrag=320.00, regels_json='[]', werkdag_ids=[],
+            replacing_factuur_id=fid,
+        )
+    # Original factuur must still exist with original totaal_bedrag.
+    facturen = await get_facturen(db)
+    f = next(x for x in facturen if x.id == fid)
+    assert f.totaal_bedrag == 640.00, (
+        "step 1 leaked: old factuur was deleted/replaced despite locked werkdag"
+    )
+    assert f.datum == '2025-03-01'
+    # Werkdag's factuurnummer must remain pointing at the original.
+    rows = await get_werkdagen(db)
+    wd = next(w for w in rows if w.id == wid_old)
+    assert wd.factuurnummer == '2025-100', (
+        "save_factuur_atomic step 1 unlinked a locked-year werkdag"
+    )
+
+
+@pytest.mark.asyncio
+async def test_save_factuur_atomic_step1_succeeds_when_old_werkdag_in_writable_year(db):
+    """Happy-path regression: when both factuur years are writable, step 1
+    proceeds normally — old factuur replaced, werkdag unlinked + relinked.
+    """
+    kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=0)
+    await _seed_fiscale_params_row(db, 2025)
+    wid = await add_werkdag(db, datum='2025-02-15', klant_id=kid,
+                            uren=8, tarief=80, km=0, km_tarief=0)
+    fid_old = await add_factuur(db, nummer='2025-200', klant_id=kid,
+                                datum='2025-03-01', totaal_bedrag=640.00,
+                                status='concept')
+    await link_werkdagen_to_factuur(
+        db, werkdag_ids=[wid], factuurnummer='2025-200')
+    # Replace with a new 2025 concept that re-includes the werkdag.
+    new_id = await save_factuur_atomic(
+        db, nummer='2025-200', klant_id=kid, datum='2025-04-01',
+        totaal_bedrag=320.00, regels_json='[]', werkdag_ids=[wid],
+        replacing_factuur_id=fid_old,
+    )
+    assert new_id is not None
+    # Exactly one factuur exists; old row replaced by new with updated values.
+    # (SQLite may reuse the rowid, so we don't assert id inequality.)
+    facturen = await get_facturen(db, jaar=2025)
+    assert len(facturen) == 1
+    f_new = facturen[0]
+    assert f_new.nummer == '2025-200'
+    assert f_new.totaal_bedrag == 320.00
+    assert f_new.datum == '2025-04-01'
+    # Werkdag re-linked to the same nummer.
+    rows = await get_werkdagen(db)
+    wd = next(w for w in rows if w.id == wid)
+    assert wd.factuurnummer == '2025-200'
+
+
+# === L1.2 (A7): afschrijving_overrides year-lock ===
+
+@pytest.mark.asyncio
+async def test_set_afschrijving_override_rejected_in_definitief_year(db):
+    """Locked-year override write is blocked."""
+    # Seed an investering uitgave (unrelated year so we can later seed and
+    # lock 2025 specifically without the uitgave itself being affected).
+    uid = await add_uitgave(
+        db, datum='2024-06-01', categorie='Apparatuur',
+        omschrijving='Laptop', bedrag=2000.00,
+        is_investering=1, levensduur_jaren=5,
+        aanschaf_bedrag=2000.00, zakelijk_pct=100)
+    await _seed_fiscale_params_row(db, 2025)
+    await update_jaarafsluiting_status(db, 2025, 'definitief')
+    with pytest.raises(YearLockedError, match='2025'):
+        await set_afschrijving_override(
+            db, uitgave_id=uid, jaar=2025, bedrag=400.00)
+    # No row was inserted.
+    rows = await get_afschrijving_overrides(db, uitgave_id=uid)
+    assert 2025 not in rows
+
+
+@pytest.mark.asyncio
+async def test_delete_afschrijving_override_rejected_in_definitief_year(db):
+    """Locked-year override delete is blocked. Row must remain."""
+    uid = await add_uitgave(
+        db, datum='2024-06-01', categorie='Apparatuur',
+        omschrijving='Laptop', bedrag=2000.00,
+        is_investering=1, levensduur_jaren=5,
+        aanschaf_bedrag=2000.00, zakelijk_pct=100)
+    await _seed_fiscale_params_row(db, 2025)
+    # Seed an override before locking.
+    await set_afschrijving_override(
+        db, uitgave_id=uid, jaar=2025, bedrag=400.00)
+    await update_jaarafsluiting_status(db, 2025, 'definitief')
+    with pytest.raises(YearLockedError, match='2025'):
+        await delete_afschrijving_override(db, uitgave_id=uid, jaar=2025)
+    rows = await get_afschrijving_overrides(db, uitgave_id=uid)
+    assert rows.get(2025) == 400.00
+
+
+@pytest.mark.asyncio
+async def test_set_afschrijving_override_succeeds_in_concept_year(db):
+    """Regression: writable years still take overrides normally."""
+    uid = await add_uitgave(
+        db, datum='2024-06-01', categorie='Apparatuur',
+        omschrijving='Laptop', bedrag=2000.00,
+        is_investering=1, levensduur_jaren=5,
+        aanschaf_bedrag=2000.00, zakelijk_pct=100)
+    await _seed_fiscale_params_row(db, 2026)
+    await set_afschrijving_override(
+        db, uitgave_id=uid, jaar=2026, bedrag=350.00)
+    rows = await get_afschrijving_overrides(db, uitgave_id=uid)
+    assert rows.get(2026) == 350.00
+
+
+# === L1.3 (A8): aangifte_documenten year-lock ===
+
+@pytest.mark.asyncio
+async def test_add_aangifte_document_rejected_in_definitief_year(db):
+    await _seed_fiscale_params_row(db, 2024)
+    await update_jaarafsluiting_status(db, 2024, 'definitief')
+    with pytest.raises(YearLockedError, match='2024'):
+        await add_aangifte_document(
+            db, jaar=2024, categorie='eigen_woning',
+            documenttype='woz_beschikking',
+            bestandsnaam='WOZ_2024.pdf',
+            bestandspad='/data/aangifte/2024/eigen_woning/WOZ_2024.pdf',
+            upload_datum='2026-03-04',
+        )
+    docs = await get_aangifte_documenten(db, jaar=2024)
+    assert len(docs) == 0
+
+
+@pytest.mark.asyncio
+async def test_delete_aangifte_document_rejected_in_definitief_year(db):
+    """Concept-year doc inserted, year locked, delete rejected."""
+    await _seed_fiscale_params_row(db, 2024)
+    doc_id = await add_aangifte_document(
+        db, jaar=2024, categorie='pensioen',
+        documenttype='upo_eigen',
+        bestandsnaam='UPO.pdf',
+        bestandspad='/data/aangifte/2024/pensioen/UPO.pdf',
+        upload_datum='2026-03-04',
+    )
+    await update_jaarafsluiting_status(db, 2024, 'definitief')
+    with pytest.raises(YearLockedError, match='2024'):
+        await delete_aangifte_document(db, doc_id=doc_id)
+    docs = await get_aangifte_documenten(db, jaar=2024)
+    assert len(docs) == 1
+
+
+@pytest.mark.asyncio
+async def test_delete_aangifte_document_nonexistent_does_not_raise(db):
+    """Regression: deleting an unknown doc_id stays a no-op (no jaar to look up)."""
+    # No row, no fiscale_params — must not raise.
+    await delete_aangifte_document(db, doc_id=99999)
+
+
+# === L1.4 (A11): update_factuur_herinnering_datum helper ===
+
+@pytest.mark.asyncio
+async def test_update_factuur_herinnering_datum_writes_value(db):
+    """Concept-year factuur: helper writes the herinnering_datum normally."""
+    kid = await add_klant(db, naam='Test', tarief_uur=80, retour_km=0)
+    fid = await add_factuur(
+        db, nummer='2025-H1', klant_id=kid, datum='2025-06-01',
+        totaal_bedrag=100.00, status='verstuurd')
+    await update_factuur_herinnering_datum(db, factuur_id=fid, datum='2026-04-27')
+    async with get_db_ctx(db) as conn:
+        cur = await conn.execute(
+            "SELECT herinnering_datum FROM facturen WHERE id = ?", (fid,))
+        row = await cur.fetchone()
+    assert row['herinnering_datum'] == '2026-04-27'
+
+
+@pytest.mark.asyncio
+async def test_update_factuur_herinnering_datum_rejected_in_definitief_year(db):
+    """Helper must guard via the factuur's datum, not the new herinnering datum."""
+    kid = await add_klant(db, naam='Test', tarief_uur=80, retour_km=0)
+    await _seed_fiscale_params_row(db, 2024)
+    fid = await add_factuur(
+        db, nummer='2024-H1', klant_id=kid, datum='2024-12-15',
+        totaal_bedrag=100.00, status='verstuurd')
+    await update_jaarafsluiting_status(db, 2024, 'definitief')
+    with pytest.raises(YearLockedError, match='2024'):
+        await update_factuur_herinnering_datum(
+            db, factuur_id=fid, datum='2026-04-27')
+    # Field was not written.
+    async with get_db_ctx(db) as conn:
+        cur = await conn.execute(
+            "SELECT herinnering_datum FROM facturen WHERE id = ?", (fid,))
+        row = await cur.fetchone()
+    assert (row['herinnering_datum'] or '') == ''
+
+
+# === L1.5 (A12): delete_klant_locatie year-lock via werkdagen ===
+
+@pytest.mark.asyncio
+async def test_delete_klant_locatie_rejected_when_werkdag_in_definitief_year(db):
+    """Schema FK is ON DELETE SET NULL on werkdagen.locatie_id. Deleting a
+    locatie referenced by a werkdag in a locked year would silently null
+    that werkdag's locatie_id — a stealth mutation on a frozen-year row.
+    Reject the delete."""
+    kid = await add_klant(db, naam='Test', tarief_uur=80, retour_km=0)
+    lid = await add_klant_locatie(
+        db, klant_id=kid, naam='Assen', retour_km=60)
+    await _seed_fiscale_params_row(db, 2024)
+    await add_werkdag(
+        db, datum='2024-09-15', klant_id=kid, uren=8, tarief=80,
+        km=0, km_tarief=0, locatie_id=lid)
+    await update_jaarafsluiting_status(db, 2024, 'definitief')
+    with pytest.raises(YearLockedError, match='2024'):
+        await delete_klant_locatie(db, locatie_id=lid)
+    # Locatie still exists.
+    locaties = await get_klant_locaties(db, klant_id=kid)
+    assert any(loc.id == lid for loc in locaties)
+
+
+@pytest.mark.asyncio
+async def test_delete_klant_locatie_succeeds_when_no_locked_werkdagen(db):
+    """Regression: ordinary delete still works when nothing is locked."""
+    kid = await add_klant(db, naam='Test', tarief_uur=80, retour_km=0)
+    lid_keep = await add_klant_locatie(
+        db, klant_id=kid, naam='Keep', retour_km=10)
+    lid_drop = await add_klant_locatie(
+        db, klant_id=kid, naam='Drop', retour_km=20)
+    # No werkdagen referencing lid_drop in any year.
+    await delete_klant_locatie(db, locatie_id=lid_drop)
+    locaties = await get_klant_locaties(db, klant_id=kid)
+    ids = {loc.id for loc in locaties}
+    assert lid_keep in ids
+    assert lid_drop not in ids
+
+
+@pytest.mark.asyncio
+async def test_delete_klant_locatie_succeeds_when_werkdagen_only_in_concept_years(db):
+    """Locatie used by werkdagen only in writable years → delete is allowed."""
+    kid = await add_klant(db, naam='Test', tarief_uur=80, retour_km=0)
+    lid = await add_klant_locatie(
+        db, klant_id=kid, naam='Concept', retour_km=10)
+    await _seed_fiscale_params_row(db, 2026)  # concept
+    await add_werkdag(
+        db, datum='2026-04-15', klant_id=kid, uren=8, tarief=80,
+        km=0, km_tarief=0, locatie_id=lid)
+    await delete_klant_locatie(db, locatie_id=lid)
+    locaties = await get_klant_locaties(db, klant_id=kid)
+    assert all(loc.id != lid for loc in locaties)

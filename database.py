@@ -246,7 +246,12 @@ CREATE TABLE IF NOT EXISTS fiscale_params (
     box3_fiscaal_partner REAL DEFAULT 1,
     -- Migration 5 columns
     arbeidskorting_brackets TEXT DEFAULT '',
-    jaarafsluiting_status TEXT DEFAULT 'concept'
+    jaarafsluiting_status TEXT DEFAULT 'concept',
+    -- Migration 29 + 31 columns (KIA bracket function)
+    kia_plateau_eind REAL DEFAULT 0,
+    kia_afbouw_eind REAL DEFAULT 0,
+    kia_afbouw_pct REAL DEFAULT 0,
+    kia_plateau_bedrag REAL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS bedrijfsgegevens (
@@ -467,6 +472,59 @@ MIGRATIONS = [
     (28, "unique_partial_index_uitgaven_bank_tx", [
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_uitgaven_bank_tx_unique "
         "ON uitgaven(bank_tx_id) WHERE bank_tx_id IS NOT NULL",
+    ]),
+    (29, "add_kia_plateau_afbouw_columns", [
+        # KIA bracket function above kia_bovengrens (Belastingdienst tabel):
+        # below kia_ondergrens → 0; ondergrens..bovengrens → kia_pct%;
+        # bovengrens..kia_plateau_eind → vast plateau-bedrag (= bovengrens × pct);
+        # plateau_eind..afbouw_eind → plateau − afbouw_pct% × (invest − plateau_eind);
+        # > afbouw_eind → 0.
+        # Default 0 = brackets niet geconfigureerd → engine valt terug op de
+        # cliff (huidige gedrag, backwards-compatible).
+        "ALTER TABLE fiscale_params ADD COLUMN kia_plateau_eind REAL DEFAULT 0",
+        "ALTER TABLE fiscale_params ADD COLUMN kia_afbouw_eind REAL DEFAULT 0",
+        "ALTER TABLE fiscale_params ADD COLUMN kia_afbouw_pct REAL DEFAULT 0",
+    ]),
+    (30, "seed_kia_brackets_2024_2025_2026", [
+        # Belastingdienst-bevestigde waarden voor 2024, 2025, 2026.
+        # Bron 2025: belastingdienst.nl/.../kleinschaligheidsinvesteringsaftrek-2025
+        #   plateau € 19.769 t/m € 130.744; afbouw 7,56% per euro tot € 392.230
+        # Bron 2024: belastingdienst.nl/.../kleinschaligheidsinvesteringsaftrek-2024
+        #   plateau € 19.535 t/m € 129.194; afbouw 7,56% per euro tot € 387.580
+        # Bron 2026: belastingdienst.nl/.../kleinschaligheidsinvesteringsaftrek-2026
+        #   plateau € 20.072 t/m € 132.746; afbouw 7,56% per euro tot € 398.236
+        # 2023: bewust niet geseed — bestaande seed kia_bovengrens=69764 wijkt
+        #   af van Belastingdienst (€63.716); we laten 2023 op cliff staan om
+        #   bestaande Boekhouder referentietests niet te breken. User kan later via
+        #   /instellingen de 2023-brackets corrigeren.
+        "UPDATE fiscale_params SET kia_plateau_eind = 129194, "
+        "kia_afbouw_eind = 387580, kia_afbouw_pct = 7.56 "
+        "WHERE jaar = 2024 AND kia_plateau_eind = 0",
+        "UPDATE fiscale_params SET kia_plateau_eind = 130744, "
+        "kia_afbouw_eind = 392230, kia_afbouw_pct = 7.56 "
+        "WHERE jaar = 2025 AND kia_plateau_eind = 0",
+        "UPDATE fiscale_params SET kia_plateau_eind = 132746, "
+        "kia_afbouw_eind = 398236, kia_afbouw_pct = 7.56 "
+        "WHERE jaar = 2026 AND kia_plateau_eind = 0",
+    ]),
+    (31, "add_kia_plateau_bedrag_column", [
+        # Plateau-bedrag = vast aftrekbedrag in de plateau-band (boven kia_bovengrens
+        # tot kia_plateau_eind). Belastingdienst rondt dit op hele euro's
+        # (= bovengrens × 28% afgerond), dus we slaan het apart op ipv het te
+        # berekenen — vermijdt 0,x€-rounding-drift t.o.v. de gepubliceerde tabel.
+        "ALTER TABLE fiscale_params ADD COLUMN kia_plateau_bedrag REAL DEFAULT 0",
+    ]),
+    (32, "seed_kia_plateau_bedrag_2024_2025_2026", [
+        # Belastingdienst-tabelwaarden:
+        # 2024: € 19.535 (jortt mirror Belastingdienst tabel)
+        # 2025: € 19.769
+        # 2026: € 20.072
+        "UPDATE fiscale_params SET kia_plateau_bedrag = 19535 "
+        "WHERE jaar = 2024 AND kia_plateau_bedrag = 0",
+        "UPDATE fiscale_params SET kia_plateau_bedrag = 19769 "
+        "WHERE jaar = 2025 AND kia_plateau_bedrag = 0",
+        "UPDATE fiscale_params SET kia_plateau_bedrag = 20072 "
+        "WHERE jaar = 2026 AND kia_plateau_bedrag = 0",
     ]),
 ]
 
@@ -1244,6 +1302,30 @@ async def update_factuur(db_path: Path = DB_PATH, factuur_id: int = 0,
         await conn.commit()
 
 
+async def update_factuur_herinnering_datum(
+        db_path: Path, factuur_id: int, datum: str) -> None:
+    """Set herinnering_datum on a factuur. Year-locked against the factuur datum.
+
+    L1.4 (review A11): the page-side handler `pages/facturen.py:on_send_herinnering`
+    used to do a raw `UPDATE facturen SET herinnering_datum=...` directly,
+    bypassing assert_year_writable. A herinnering on a closed-jaar factuur
+    is a stealth metadata mutation; route through this helper so the guard
+    runs.
+    """
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            "SELECT datum FROM facturen WHERE id = ?", (factuur_id,))
+        row = await cur.fetchone()
+    if row is None:
+        return
+    await assert_year_writable(db_path, row['datum'])
+    async with get_db_ctx(db_path) as conn:
+        await conn.execute(
+            "UPDATE facturen SET herinnering_datum = ? WHERE id = ?",
+            (datum, factuur_id))
+        await conn.commit()
+
+
 async def delete_factuur(db_path: Path = DB_PATH, factuur_id: int = 0) -> None:
     """Delete a factuur: unlink werkdagen, remove PDF, delete record.
 
@@ -1274,6 +1356,17 @@ async def delete_factuur(db_path: Path = DB_PATH, factuur_id: int = 0) -> None:
         )
 
     await assert_year_writable(db_path, datum)
+
+    # OLD-werkdag unlink guard (Plan 2026-04-26 Lane 2 / A9): a 2025-dated
+    # factuur may have a 2024 werkdag linked. Setting `factuurnummer=''`
+    # mutates a frozen-year row if 2024 is locked. Collect the IDs about
+    # to be unlinked and year-check them BEFORE running the UPDATE.
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            "SELECT id FROM werkdagen WHERE factuurnummer = ?", (nummer,))
+        linked_ids = [r['id'] for r in await cur.fetchall()]
+    if linked_ids:
+        await _assert_werkdagen_writable(db_path, linked_ids)
 
     async with get_db_ctx(db_path) as conn:
         # Unlink werkdagen
@@ -1331,11 +1424,23 @@ async def save_factuur_atomic(
     if replacing_factuur_id:
         async with get_db_ctx(db_path) as conn:
             cur = await conn.execute(
-                "SELECT datum FROM facturen WHERE id = ?",
+                "SELECT datum, nummer FROM facturen WHERE id = ?",
                 (replacing_factuur_id,))
             old_row = await cur.fetchone()
         if old_row:
             await assert_year_writable(db_path, old_row['datum'])
+            # OLD-werkdag unlink guard (Plan 2026-04-26 Lane 2 / A9):
+            # step 1 below does
+            #   UPDATE werkdagen SET factuurnummer='' WHERE factuurnummer=<old>
+            # which silently mutates a frozen-year werkdag if the old
+            # factuur was linked to one. Year-check those IDs up front.
+            async with get_db_ctx(db_path) as conn:
+                cur = await conn.execute(
+                    "SELECT id FROM werkdagen WHERE factuurnummer = ?",
+                    (old_row['nummer'],))
+                old_linked_ids = [r['id'] for r in await cur.fetchall()]
+            if old_linked_ids:
+                await _assert_werkdagen_writable(db_path, old_linked_ids)
     if werkdag_ids:
         await _assert_werkdagen_writable(db_path, werkdag_ids)
     async with get_db_ctx(db_path) as conn:
@@ -1562,26 +1667,58 @@ async def delete_uitgave(db_path: Path = DB_PATH, uitgave_id: int = 0) -> None:
 
 async def get_uitgaven_per_categorie(db_path: Path = DB_PATH,
                                       jaar: int = None) -> list[dict]:
+    """Sum uitgaven per categorie for the aangifte kosten breakdown.
+
+    L1.1 (review A1): excludes uitgaven whose linked bank-tx has
+    `banktransacties.genegeerd=1`. Cash uitgaven (bank_tx_id IS NULL) are
+    always counted; the privé filter only applies to bank-linked rows.
+
+    L8/B1 (codex follow-up): also excludes uitgaven incorrectly linked to a
+    POSITIVE (income) bank-tx. Mirrors the filter in `get_kosten_breakdown`
+    / `get_kosten_per_maand` so /aangifte and /kosten see the same totals.
+    A phantom-uitgave on a positive bank-tx (lazy-create on a credit row)
+    must not contaminate fiscale kosten.
+    """
     async with get_db_ctx(db_path) as conn:
-        sql = "SELECT categorie, SUM(bedrag) as totaal FROM uitgaven WHERE is_investering = 0"
+        sql = (
+            "SELECT u.categorie, SUM(u.bedrag) as totaal "
+            "FROM uitgaven u "
+            "LEFT JOIN banktransacties b ON b.id = u.bank_tx_id "
+            "WHERE u.is_investering = 0 "
+            "AND (u.bank_tx_id IS NULL OR (b.genegeerd = 0 AND b.bedrag < 0))"
+        )
         params = []
         if jaar:
-            sql += " AND datum >= ? AND datum < ?"
+            sql += " AND u.datum >= ? AND u.datum < ?"
             params.extend([f'{jaar}-01-01', f'{jaar+1}-01-01'])
-        sql += " GROUP BY categorie ORDER BY totaal DESC"
+        sql += " GROUP BY u.categorie ORDER BY totaal DESC"
         cursor = await conn.execute(sql, params)
         rows = await cursor.fetchall()
         return [{'categorie': r['categorie'], 'totaal': r['totaal']} for r in rows]
 
 
 async def get_investeringen(db_path: Path = DB_PATH, jaar: int = None) -> list[Uitgave]:
+    """Return zakelijke investeringen for the given year (or all years).
+
+    L8/B2 (codex follow-up): excludes investments linked to a privé-flagged
+    bank-tx (`banktransacties.genegeerd=1`) or to a positive bank-tx.
+    Without this filter a privé-marked investering still counted toward
+    KIA + activastaat afschrijvingen via fiscal_utils.fetch_fiscal_data,
+    silently inflating the aangifte. Mirrors the LEFT JOIN pattern used by
+    `get_uitgaven_per_categorie` and `get_kosten_breakdown`.
+    """
     async with get_db_ctx(db_path) as conn:
-        sql = "SELECT * FROM uitgaven WHERE is_investering = 1"
+        sql = (
+            "SELECT u.* FROM uitgaven u "
+            "LEFT JOIN banktransacties b ON b.id = u.bank_tx_id "
+            "WHERE u.is_investering = 1 "
+            "AND (u.bank_tx_id IS NULL OR (b.genegeerd = 0 AND b.bedrag < 0))"
+        )
         params = []
         if jaar:
-            sql += " AND datum >= ? AND datum < ?"
+            sql += " AND u.datum >= ? AND u.datum < ?"
             params.extend([f'{jaar}-01-01', f'{jaar+1}-01-01'])
-        sql += " ORDER BY datum"
+        sql += " ORDER BY u.datum"
         cursor = await conn.execute(sql, params)
         rows = await cursor.fetchall()
         return [_row_to_uitgave(r) for r in rows]
@@ -1715,6 +1852,18 @@ async def mark_banktx_genegeerd(
     "matched" state from the bank-tx becoming invisible. Unsetting
     (genegeerd=0) on a factuur-linked row remains unconditional so the
     inconsistency is repairable from the UI.
+
+    L1.6 (review): uitgave-linked rows (debit-bank-tx with a row in
+    `uitgaven` via `bank_tx_id`) are intentionally still allowed to flip
+    to genegeerd=1. The aangifte queries (`get_uitgaven_per_categorie`,
+    `get_representatie_totaal`) filter on `banktransacties.genegeerd`, so
+    flipping the bank-tx to privé already removes the linked uitgave from
+    the kosten-totaal — there is no double-count to defend against. We
+    deliberately keep `uitgaven.categorie` in place so the user can flip
+    back without losing categorisation work; forcing them to delete the
+    uitgave first would be hostile UX. (Contrast with the factuur case
+    above, where flipping to privé would silently break the matched
+    state — that one we still reject.)
     """
     if genegeerd not in (0, 1):
         raise ValueError("genegeerd must be 0 or 1")
@@ -1728,6 +1877,17 @@ async def mark_banktx_genegeerd(
         datum = row['datum']
         koppeling_type = row['koppeling_type'] or ''
 
+        # L8/B3 (codex follow-up): also fetch linked uitgave datums so we
+        # can year-lock-check the cross-year case where the bank-tx is in
+        # year Y but the linked uitgave booking is in Y-1 (a late-payment
+        # bank tx for a prior-year invoice). Migration 28 enforces at-most
+        # one uitgave per bank_tx_id, but we loop over the result set as
+        # defense-in-depth in case that ever changes.
+        cur = await conn.execute(
+            "SELECT datum FROM uitgaven WHERE bank_tx_id = ?",
+            (bank_tx_id,))
+        uitgave_datums = [r['datum'] for r in await cur.fetchall()]
+
     # Note: only `koppeling_type='factuur'` is currently written by the
     # codebase (see e.g. apply_factuur_matches). If new koppeling types
     # are introduced (uitgave, anw, etc.) and they should also block
@@ -1739,6 +1899,12 @@ async def mark_banktx_genegeerd(
         )
 
     await assert_year_writable(db_path, datum)
+    # L8/B3: lock-check every linked uitgave year too, so flipping a 2025
+    # bank-tx privé cannot stealth-hide a 2024 (definitief) uitgave from
+    # the aangifte. We always run the bank-datum check first so the loud
+    # error message references the bank-tx year when it is itself locked.
+    for u_datum in uitgave_datums:
+        await assert_year_writable(db_path, u_datum)
 
     async with get_db_ctx(db_path) as conn:
         await conn.execute(
@@ -2114,6 +2280,10 @@ def _row_to_fiscale_params(r) -> FiscaleParams:
         kia_bovengrens=r['kia_bovengrens'],
         kia_pct=r['kia_pct'],
         kia_drempel_per_item=_v(r['kia_drempel_per_item'], 450),
+        kia_plateau_eind=r['kia_plateau_eind'] or 0,
+        kia_afbouw_eind=r['kia_afbouw_eind'] or 0,
+        kia_afbouw_pct=r['kia_afbouw_pct'] or 0,
+        kia_plateau_bedrag=r['kia_plateau_bedrag'] or 0,
         km_tarief=r['km_tarief'],
         schijf1_grens=r['schijf1_grens'],
         schijf1_pct=r['schijf1_pct'],
@@ -2202,14 +2372,21 @@ async def upsert_fiscale_params(db_path: Path = DB_PATH, **kwargs) -> None:
             "ew_naar_partner, "
             "balans_bank_saldo, balans_crediteuren, "
             "balans_overige_vorderingen, balans_overige_schulden, "
-            "lijfrente_premie, jaarafsluiting_status "
+            "lijfrente_premie, jaarafsluiting_status, "
+            # L8/B4 (codex follow-up): also preserve the KIA bracket
+            # fields when the caller does not pass them, instead of
+            # silently overwriting an existing configured value with 0.
+            "kia_drempel_per_item, kia_plateau_eind, kia_afbouw_eind, "
+            "kia_afbouw_pct, kia_plateau_bedrag "
             "FROM fiscale_params WHERE jaar = ?",
             (kwargs['jaar'],))
         existing = await cur.fetchone()
         await conn.execute(
             """INSERT INTO fiscale_params
                (jaar, zelfstandigenaftrek, startersaftrek, mkb_vrijstelling_pct,
-                kia_ondergrens, kia_bovengrens, kia_pct, kia_drempel_per_item, km_tarief,
+                kia_ondergrens, kia_bovengrens, kia_pct, kia_drempel_per_item,
+                kia_plateau_eind, kia_afbouw_eind, kia_afbouw_pct,
+                kia_plateau_bedrag, km_tarief,
                 schijf1_grens, schijf1_pct, schijf2_grens, schijf2_pct, schijf3_pct,
                 ahk_max, ahk_afbouw_pct, ahk_drempel, ak_max,
                 zvw_pct, zvw_max_grondslag, repr_aftrek_pct,
@@ -2229,8 +2406,8 @@ async def upsert_fiscale_params(db_path: Path = DB_PATH, **kwargs) -> None:
                 balans_overige_vorderingen, balans_overige_schulden,
                 jaarafsluiting_status)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(jaar) DO UPDATE SET
                     zelfstandigenaftrek = excluded.zelfstandigenaftrek,
                     startersaftrek = excluded.startersaftrek,
@@ -2239,6 +2416,10 @@ async def upsert_fiscale_params(db_path: Path = DB_PATH, **kwargs) -> None:
                     kia_bovengrens = excluded.kia_bovengrens,
                     kia_pct = excluded.kia_pct,
                     kia_drempel_per_item = excluded.kia_drempel_per_item,
+                    kia_plateau_eind = excluded.kia_plateau_eind,
+                    kia_afbouw_eind = excluded.kia_afbouw_eind,
+                    kia_afbouw_pct = excluded.kia_afbouw_pct,
+                    kia_plateau_bedrag = excluded.kia_plateau_bedrag,
                     km_tarief = excluded.km_tarief,
                     schijf1_grens = excluded.schijf1_grens,
                     schijf1_pct = excluded.schijf1_pct,
@@ -2290,7 +2471,32 @@ async def upsert_fiscale_params(db_path: Path = DB_PATH, **kwargs) -> None:
             (kwargs['jaar'], kwargs['zelfstandigenaftrek'], kwargs.get('startersaftrek'),
              kwargs['mkb_vrijstelling_pct'], kwargs['kia_ondergrens'],
              kwargs['kia_bovengrens'], kwargs['kia_pct'],
-             kwargs.get('kia_drempel_per_item', 450), kwargs['km_tarief'],
+             # L8/B4: preserve existing KIA bracket values when the caller
+             # omits them. The legacy default was a hard 0 — that silently
+             # overwrote a configured plateau/afbouw with 0, breaking
+             # subsequent KIA calculations. The original 450 default for
+             # `kia_drempel_per_item` is kept for first-write rows only.
+             kwargs.get(
+                 'kia_drempel_per_item',
+                 existing['kia_drempel_per_item'] if existing else 450,
+             ),
+             kwargs.get(
+                 'kia_plateau_eind',
+                 existing['kia_plateau_eind'] if existing else 0,
+             ),
+             kwargs.get(
+                 'kia_afbouw_eind',
+                 existing['kia_afbouw_eind'] if existing else 0,
+             ),
+             kwargs.get(
+                 'kia_afbouw_pct',
+                 existing['kia_afbouw_pct'] if existing else 0,
+             ),
+             kwargs.get(
+                 'kia_plateau_bedrag',
+                 existing['kia_plateau_bedrag'] if existing else 0,
+             ),
+             kwargs['km_tarief'],
              kwargs['schijf1_grens'], kwargs['schijf1_pct'],
              kwargs['schijf2_grens'], kwargs['schijf2_pct'], kwargs['schijf3_pct'],
              kwargs['ahk_max'], kwargs['ahk_afbouw_pct'], kwargs['ahk_drempel'],
@@ -2607,13 +2813,23 @@ async def get_representatie_totaal(db_path: Path = DB_PATH, jaar: int = 2026) ->
     example) are depreciated separately via activastaat; including their
     full purchase price here would double-count against fiscale winst (the
     20% bijtelling on the representation deduction would apply twice).
+
+    L1.1 (review A1): excludes uitgaven whose linked bank-tx has
+    `banktransacties.genegeerd=1`. Cash representatie (bank_tx_id IS NULL)
+    is always counted.
+
+    L8/B1 (codex follow-up): also excludes uitgaven linked to a POSITIVE
+    bank-tx. Mirrors the filter in `get_uitgaven_per_categorie` so a
+    phantom-lazy-create on a credit row does not inflate the 80%-bijtelling.
     """
     async with get_db_ctx(db_path) as conn:
         cur = await conn.execute(
-            "SELECT COALESCE(SUM(bedrag), 0) FROM uitgaven "
-            "WHERE datum >= ? AND datum < ? "
-            "AND categorie = 'Representatie' "
-            "AND is_investering = 0",
+            "SELECT COALESCE(SUM(u.bedrag), 0) FROM uitgaven u "
+            "LEFT JOIN banktransacties b ON b.id = u.bank_tx_id "
+            "WHERE u.datum >= ? AND u.datum < ? "
+            "AND u.categorie = 'Representatie' "
+            "AND u.is_investering = 0 "
+            "AND (u.bank_tx_id IS NULL OR (b.genegeerd = 0 AND b.bedrag < 0))",
             (f'{jaar}-01-01', f'{jaar+1}-01-01')
         )
         return (await cur.fetchone())[0]
@@ -2794,11 +3010,20 @@ async def get_km_totaal(db_path: Path = DB_PATH, jaar: int = 2026) -> dict:
 
 async def get_investeringen_voor_afschrijving(db_path: Path = DB_PATH,
                                                tot_jaar: int = 2026) -> list[Uitgave]:
-    """Get all investments up to and including given year."""
+    """Get all zakelijke investments up to and including given year.
+
+    L8/B2 (codex follow-up): excludes investments linked to a privé-flagged
+    bank-tx or to a positive bank-tx — same filter as `get_investeringen`
+    so the activastaat does not depreciate a privé-marked aankoop.
+    """
     async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
-            "SELECT * FROM uitgaven WHERE is_investering = 1 "
-            "AND CAST(substr(datum, 1, 4) AS INTEGER) <= ? ORDER BY datum",
+            "SELECT u.* FROM uitgaven u "
+            "LEFT JOIN banktransacties b ON b.id = u.bank_tx_id "
+            "WHERE u.is_investering = 1 "
+            "AND (u.bank_tx_id IS NULL OR (b.genegeerd = 0 AND b.bedrag < 0)) "
+            "AND CAST(substr(u.datum, 1, 4) AS INTEGER) <= ? "
+            "ORDER BY u.datum",
             (tot_jaar,)
         )
         rows = await cursor.fetchall()
@@ -2848,7 +3073,14 @@ async def set_afschrijving_override(db_path: Path = DB_PATH,
                                      uitgave_id: int = 0,
                                      jaar: int = 0,
                                      bedrag: float = 0.0) -> None:
-    """Set (upsert) a depreciation override for a specific investment+year."""
+    """Set (upsert) a depreciation override for a specific investment+year.
+
+    L1.2 (review A7): year-locked against `jaar`. An override row directly
+    feeds the activastaat / fiscal engine for that year, so writing one
+    into a definitief jaar would mutate aangifte cijfers without an
+    'Heropenen' step.
+    """
+    await assert_year_writable(db_path, jaar)
     async with get_db_ctx(db_path) as conn:
         await conn.execute(
             """INSERT INTO afschrijving_overrides (uitgave_id, jaar, bedrag)
@@ -2861,7 +3093,13 @@ async def set_afschrijving_override(db_path: Path = DB_PATH,
 async def delete_afschrijving_override(db_path: Path = DB_PATH,
                                         uitgave_id: int = 0,
                                         jaar: int = 0) -> None:
-    """Delete a specific depreciation override."""
+    """Delete a specific depreciation override.
+
+    L1.2 (review A7): year-locked against `jaar`. Removing an override
+    flips the activastaat back to the auto-computed bedrag for that year,
+    which is also a fiscal-cijfers mutation.
+    """
+    await assert_year_writable(db_path, jaar)
     async with get_db_ctx(db_path) as conn:
         await conn.execute(
             "DELETE FROM afschrijving_overrides WHERE uitgave_id = ? AND jaar = ?",
@@ -2892,7 +3130,13 @@ async def add_aangifte_document(db_path: Path = DB_PATH, jaar: int = 0,
                                  bestandsnaam: str = '', bestandspad: str = '',
                                  upload_datum: str = '',
                                  notitie: str = '') -> int:
-    """Add a new aangifte document record. Returns id."""
+    """Add a new aangifte document record. Returns id.
+
+    L1.3 (review A8): year-locked against `jaar`. Aangifte documents are
+    legal supporting attachments for the snapshot of that year; once the
+    year is definitief they should not change without an explicit Heropenen.
+    """
+    await assert_year_writable(db_path, jaar)
     async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
             """INSERT INTO aangifte_documenten
@@ -2906,7 +3150,19 @@ async def add_aangifte_document(db_path: Path = DB_PATH, jaar: int = 0,
 
 async def delete_aangifte_document(db_path: Path = DB_PATH,
                                     doc_id: int = 0) -> None:
-    """Delete an aangifte document record."""
+    """Delete an aangifte document record.
+
+    L1.3 (review A8): year-locked against the document's `jaar`. The
+    function signature only takes `doc_id`, so we look up the row first;
+    a missing doc_id is a no-op (preserves prior behaviour).
+    """
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            "SELECT jaar FROM aangifte_documenten WHERE id = ?", (doc_id,))
+        row = await cur.fetchone()
+    if row is None:
+        return
+    await assert_year_writable(db_path, row['jaar'])
     async with get_db_ctx(db_path) as conn:
         await conn.execute(
             "DELETE FROM aangifte_documenten WHERE id = ?", (doc_id,))
@@ -3349,7 +3605,23 @@ async def add_klant_locatie(db_path, klant_id, naam, retour_km):
 
 
 async def delete_klant_locatie(db_path, locatie_id):
-    """Delete a location by id."""
+    """Delete a location by id.
+
+    L1.5 (review A12): the schema FK on `werkdagen.locatie_id` is
+    `ON DELETE SET NULL`. Deleting a locatie referenced by a werkdag in a
+    definitief year would silently null `werkdagen.locatie_id` on that
+    frozen-year row — a stealth mutation that bypasses assert_year_writable.
+    Pre-flight: scan all werkdagen referencing this locatie, collect their
+    distinct years, and reject the whole delete if any year is locked.
+    """
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            "SELECT DISTINCT substr(datum, 1, 4) AS jaar "
+            "FROM werkdagen WHERE locatie_id = ?",
+            (locatie_id,))
+        jaren = [int(r['jaar']) for r in await cur.fetchall() if r['jaar']]
+    for jaar in jaren:
+        await assert_year_writable(db_path, jaar)
     async with get_db_ctx(db_path) as conn:
         await conn.execute(
             "DELETE FROM klant_locaties WHERE id = ?", (locatie_id,))

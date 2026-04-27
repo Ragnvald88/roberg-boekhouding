@@ -110,3 +110,48 @@ async def test_mark_genegeerd_allows_unset_when_factuur_linked(db):
     # The unset call must succeed.
     await mark_banktx_genegeerd(db, 1, genegeerd=0)
     assert await _get_genegeerd(db, 1) == 0
+
+
+# === L8/B3 — cross-year linked-uitgave year-lock guard ===
+
+@pytest.mark.asyncio
+async def test_mark_genegeerd_rejects_when_linked_uitgave_in_locked_year(db):
+    """Cross-year case: 2025 bank-tx + linked 2024 uitgave (lazy-created
+    from a late-payment bank row). Marking the bank-tx privé would hide
+    the linked 2024 uitgave from /aangifte even though 2024 is definitief.
+    The B3 fix lock-checks the linked-uitgave datum too.
+    """
+    # Set up: insert 2024 uitgave + 2025 bank-tx + link, THEN flip 2024
+    # definitief. We bypass add_uitgave because once 2024 is definitief
+    # `add_uitgave` itself would refuse to write the row — but the
+    # historical scenario we're guarding against is one where the link
+    # already existed before the year was closed.
+    async with aiosqlite.connect(db) as conn:
+        await conn.execute("INSERT INTO fiscale_params (jaar) VALUES (2024)")
+        await conn.execute("INSERT INTO fiscale_params (jaar) VALUES (2025)")
+        await conn.execute(
+            "INSERT INTO banktransacties (id, datum, bedrag) "
+            "VALUES (1, '2025-02-10', -50.0)")
+        await conn.execute(
+            "INSERT INTO uitgaven "
+            "(datum, categorie, omschrijving, bedrag, bank_tx_id) "
+            "VALUES ('2024-12-30', 'Telefoon', 'Late-paid', 50.0, 1)")
+        await conn.commit()
+    await update_jaarafsluiting_status(db, 2024, "definitief")
+    # Flipping the 2025 bank-tx privé must be rejected because the linked
+    # 2024 uitgave would silently disappear from the (frozen) aangifte.
+    with pytest.raises(YearLockedError):
+        await mark_banktx_genegeerd(db, 1, genegeerd=1)
+    # And nothing was actually flipped.
+    assert await _get_genegeerd(db, 1) == 0
+
+
+@pytest.mark.asyncio
+async def test_mark_genegeerd_no_uitgave_link_unaffected_by_b3(db):
+    """A bank-tx without a linked uitgave should still flip cleanly even
+    after B3 — the new check is bounded by the SELECT result set being
+    empty.
+    """
+    await _seed_banktx(db, 1, "2026-04-01")
+    await mark_banktx_genegeerd(db, 1, genegeerd=1)
+    assert await _get_genegeerd(db, 1) == 1

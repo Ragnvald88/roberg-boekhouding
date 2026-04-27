@@ -4,6 +4,8 @@ import pytest
 from database import (
     add_klant, add_werkdag, add_factuur, add_uitgave,
     add_banktransacties, delete_banktransacties,
+    get_banktransacties, get_uitgaven_per_categorie,
+    mark_banktx_genegeerd,
     get_omzet_totaal, get_omzet_per_maand, get_representatie_totaal,
     get_debiteuren_op_peildatum,
     find_factuur_matches, apply_factuur_matches, MatchProposal,
@@ -1449,4 +1451,87 @@ async def test_bulk_delete_mixed_linked_unlinked(db):
         cur = await conn.execute("SELECT status FROM facturen WHERE id=?", (fid,))
         assert (await cur.fetchone())['status'] == 'verstuurd'
 
+
+# === L1.1 (A1): privé filter on aangifte sums ===
+# Bank-tx flagged genegeerd=1 must NOT show up in aangifte kosten totals,
+# even if a categorised uitgave is linked. Cash uitgaven (bank_tx_id IS NULL)
+# stay counted unconditionally.
+
+@pytest.mark.asyncio
+async def test_get_uitgaven_per_categorie_excludes_genegeerd_bank(db):
+    """A debit-uitgave linked to a privé-marked bank-tx must not be summed."""
+    # Bank debit, uitgave linked.
+    await add_banktransacties(db, [
+        {'datum': '2026-03-01', 'bedrag': -50, 'tegenpartij': 'KPN',
+         'omschrijving': 'mobiel', 'categorie': ''},
+    ], csv_bestand='march.csv')
+    bank_id = (await get_banktransacties(db))[0].id
+    await add_uitgave(
+        db, datum='2026-03-01', categorie='Telefoon/KPN',
+        omschrijving='KPN abonnement', bedrag=50.00, bank_tx_id=bank_id)
+    # Sanity: the categorie shows up before flipping privé.
+    pre = await get_uitgaven_per_categorie(db, jaar=2026)
+    pre_cats = {r['categorie']: r['totaal'] for r in pre}
+    assert pre_cats.get('Telefoon/KPN') == 50.00
+
+    # User flips bank-tx to privé.
+    await mark_banktx_genegeerd(db, bank_tx_id=bank_id, genegeerd=1)
+
+    # Now the categorie must be gone (totaal would have been 0; we GROUP BY
+    # categorie so it should not appear at all).
+    post = await get_uitgaven_per_categorie(db, jaar=2026)
+    post_cats = {r['categorie']: r['totaal'] for r in post}
+    assert 'Telefoon/KPN' not in post_cats, (
+        "privé-marked bank-tx is still leaking into aangifte kosten totaal"
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_uitgaven_per_categorie_includes_cash_uitgave(db):
+    """Cash uitgaven (bank_tx_id IS NULL) are unaffected by the privé filter."""
+    await add_uitgave(
+        db, datum='2026-04-01', categorie='Bankkosten',
+        omschrijving='cash betaling', bedrag=12.50)
+    res = await get_uitgaven_per_categorie(db, jaar=2026)
+    cats = {r['categorie']: r['totaal'] for r in res}
+    assert cats.get('Bankkosten') == 12.50
+
+
+@pytest.mark.asyncio
+async def test_get_uitgaven_per_categorie_includes_non_genegeerd_bank(db):
+    """A debit-uitgave linked to a normal (genegeerd=0) bank-tx is still summed."""
+    await add_banktransacties(db, [
+        {'datum': '2026-05-01', 'bedrag': -25, 'tegenpartij': 'KPN',
+         'omschrijving': 'mobiel', 'categorie': ''},
+    ], csv_bestand='may.csv')
+    bank_id = (await get_banktransacties(db))[0].id
+    await add_uitgave(
+        db, datum='2026-05-01', categorie='Telefoon/KPN',
+        omschrijving='KPN abonnement', bedrag=25.00, bank_tx_id=bank_id)
+    res = await get_uitgaven_per_categorie(db, jaar=2026)
+    cats = {r['categorie']: r['totaal'] for r in res}
+    assert cats.get('Telefoon/KPN') == 25.00
+
+
+@pytest.mark.asyncio
+async def test_get_representatie_totaal_excludes_genegeerd_bank(db):
+    """Representatie totaal must apply the same privé filter."""
+    # Cash representatie (always counted)
+    await add_uitgave(
+        db, datum='2026-01-10', categorie='Representatie',
+        omschrijving='Lunch contant', bedrag=30.00)
+    # Bank-linked representatie that gets flipped to privé.
+    await add_banktransacties(db, [
+        {'datum': '2026-02-15', 'bedrag': -100, 'tegenpartij': 'Restaurant',
+         'omschrijving': 'lunch', 'categorie': ''},
+    ], csv_bestand='feb.csv')
+    bank_id = (await get_banktransacties(db))[0].id
+    await add_uitgave(
+        db, datum='2026-02-15', categorie='Representatie',
+        omschrijving='Lunch zakelijk?', bedrag=100.00, bank_tx_id=bank_id)
+    # Pre-flip total = 130.
+    assert await get_representatie_totaal(db, jaar=2026) == 130.00
+    # Flip privé — only the cash €30 should remain.
+    await mark_banktx_genegeerd(db, bank_tx_id=bank_id, genegeerd=1)
+    assert await get_representatie_totaal(db, jaar=2026) == 30.00
 
