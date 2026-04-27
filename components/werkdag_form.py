@@ -223,6 +223,10 @@ async def open_werkdag_dialog(on_save=None, werkdag=None):
                         locatie_select.value = loc.id
                         km_input.value = loc.retour_km
                         break
+            # Restore the historical tarief from the werkdag (may differ
+            # from current klant default — A6: editing an old werkdag must
+            # not silently inherit a later klant-tariff change).
+            tarief_input.value = werkdag.tarief
             # Restore the actual km from the werkdag (may differ from location default)
             km_input.value = werkdag.km
 

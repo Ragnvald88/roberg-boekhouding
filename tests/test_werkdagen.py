@@ -100,6 +100,45 @@ async def test_ongefactureerd_filter(seeded_db):
     assert ongefact[0].status == 'ongefactureerd'
 
 
+def test_werkdag_form_edit_restores_historical_tarief():
+    """A6 regression: source-pin guard.
+
+    Editing a werkdag must restore ``werkdag.tarief`` after
+    ``_load_klant_data`` (which sets the *current* klant default tarief).
+    Without that restoration line, opening + saving an old werkdag whose
+    klant's tarief_uur changed since then would silently overwrite the
+    historical tarief on the row, shifting omzet for that year.
+
+    The behaviour lives inside an async NiceGUI dialog handler that can
+    only be exercised via a UI runtime — so we pin the source line
+    directly. If a future refactor moves the edit-mode block, this test
+    will fail and force the author to re-verify that tarief is still
+    restored before km.
+    """
+    import re
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parent.parent / 'components' / 'werkdag_form.py'
+    text = src.read_text()
+
+    # The edit-mode block must restore tarief from the stored werkdag,
+    # *after* _load_klant_data ran (so it overrides the klant default),
+    # and *before* km is restored.
+    pattern = re.compile(
+        r'await\s+_load_klant_data\(werkdag\.klant_id\)'
+        r'.*?'
+        r'tarief_input\.value\s*=\s*werkdag\.tarief'
+        r'.*?'
+        r'km_input\.value\s*=\s*werkdag\.km',
+        re.DOTALL,
+    )
+    assert pattern.search(text), (
+        "Expected edit-mode block to restore werkdag.tarief between "
+        "_load_klant_data and km restoration. The historical tarief "
+        "preservation line may have been removed (A6 regression)."
+    )
+
+
 @pytest.mark.asyncio
 async def test_link_werkdagen_to_factuur(seeded_db):
     """Werkdagen koppelen aan factuur."""

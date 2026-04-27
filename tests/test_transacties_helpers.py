@@ -161,3 +161,44 @@ def test_initials_empty():
 
 def test_initials_strips_punct():
     assert initials("Boekhouder Verzekering") == "VS"
+
+
+def test_bulk_set_cat_iterates_snapshot_not_live_selection():
+    """A15 regression: source-pin guard.
+
+    The /transacties bulk-categorie handler captures
+    ``selected = list(table_ref['table'].selected or [])`` at handler
+    entry. The inner ``apply_bulk_cat`` loop must iterate that snapshot,
+    NOT ``table_ref['table'].selected`` (live ref) — otherwise a stray
+    click between iterations widens the bulk's scope mid-loop, the same
+    anti-pattern previously fixed for ``bulk_negeren`` and
+    ``bulk_delete``.
+
+    Behaviour lives inside an async NiceGUI dialog handler that needs a
+    UI runtime to exercise. Source-pin keeps the contract enforced.
+    """
+    import re
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parent.parent / 'pages' / 'transacties.py'
+    text = src.read_text()
+
+    # Match the apply_bulk_cat block — must iterate the captured snapshot.
+    match = re.search(
+        r'async\s+def\s+apply_bulk_cat\s*\(\s*\)\s*:\s*'
+        r'(?P<body>.*?)(?=\n\s{24}ui\.button)',
+        text,
+        re.DOTALL,
+    )
+    assert match, "apply_bulk_cat handler not found in pages/transacties.py"
+    body = match.group('body')
+
+    assert 'for r in selected:' in body, (
+        "apply_bulk_cat must iterate the `selected` snapshot, not "
+        "table_ref['table'].selected (A15 regression — see bulk_negeren "
+        "and bulk_delete for the same pattern)."
+    )
+    assert "table_ref['table'].selected" not in body, (
+        "apply_bulk_cat must not read live selection inside the loop "
+        "(A15 regression)."
+    )

@@ -897,8 +897,12 @@ async def transacties_page(jaar: int | None = None,
                             .props('flat')
 
                         async def apply_bulk_cat():
+                            # A15: iterate the snapshot captured above so
+                            # a stray click between iterations cannot widen
+                            # the scope mid-loop. Mirrors bulk_negeren and
+                            # bulk_delete.
                             n_ok, n_skip = 0, 0
-                            for r in table_ref['table'].selected:
+                            for r in selected:
                                 try:
                                     if r.get('id_bank') is not None:
                                         await set_banktx_categorie(
