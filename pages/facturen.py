@@ -1828,6 +1828,27 @@ async def facturen_page():
                                 (klant_id, datum, round(float(bedrag), 2)))
                             imported += 1
 
+                            # Mirror the imported PDF to the SynologyDrive
+                            # archive so /Inkomen en Uitgaven/{jaar}/
+                            # Inkomsten/{Dagpraktijk|ANW_Diensten}/ stays
+                            # complete. Best-effort, non-blocking — same
+                            # contract as the builder's archive call.
+                            # Filename keeps the user's original upload
+                            # name when known (`_filename`) so the archive
+                            # matches their existing convention (e.g.
+                            # `0224_HAP_Drenthe.pdf`); falls back to the
+                            # local-storage basename `{nummer}.pdf` only
+                            # when the upload didn't carry a name.
+                            if pdf_dest.exists():
+                                orig_filename = (
+                                    item.get('_filename') or pdf_dest.name)
+                                await asyncio.to_thread(
+                                    archive_factuur_pdf, pdf_dest,
+                                    factuur_type=ftype,
+                                    factuur_datum=datum,
+                                    archive_filename=orig_filename,
+                                )
+
                             # Create or link werkdagen
                             if opt_werkdagen['value'] and line_items:
                                 async with get_db_ctx(DB_PATH) as conn:

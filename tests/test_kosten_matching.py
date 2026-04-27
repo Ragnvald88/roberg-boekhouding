@@ -18,7 +18,7 @@ def _mock_archive(tmp_path, files: list[tuple[str, str]]) -> None:
     the monkeypatched ARCHIVE_BASE: tmp_path/{year}/Uitgaven/{folder}/.
     """
     for folder, fname in files:
-        d = tmp_path / "2026" / "Uitgaven" / folder
+        d = tmp_path / "Inkomen en Uitgaven" / "2026" / "Uitgaven" / folder
         d.mkdir(parents=True, exist_ok=True)
         (d / fname).write_bytes(b"%PDF-1.4\n")
 

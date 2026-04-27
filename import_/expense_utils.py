@@ -100,7 +100,7 @@ def scan_archive(year: int, existing_filenames: set[str] | None = None) -> list[
         existing_filenames: Set of filenames already imported (for dedup display).
                            These are the pdf_pad values from the uitgaven table.
     """
-    archive_dir = archive_paths.ARCHIVE_BASE / str(year) / 'Uitgaven'
+    archive_dir = archive_paths.jaar_dir(year) / 'Uitgaven'
     if not archive_dir.exists():
         return []
 

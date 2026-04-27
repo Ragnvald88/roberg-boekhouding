@@ -1,11 +1,12 @@
 """WeasyPrint PDF factuur generator + SynologyDrive archivering."""
 
 import logging
+import os
 import shutil
 from pathlib import Path
 from datetime import datetime, timedelta
 
-from components.archive_paths import ARCHIVE_BASE
+from components import archive_paths
 from components.template_env import TEMPLATE_DIR, _env
 from components.utils import format_datum
 from database import DB_PATH
@@ -21,30 +22,114 @@ _TYPE_TO_SUBDIR = {
 }
 
 
+def _safe_archive_basename(
+    archive_filename: str | None, fallback: str) -> str:
+    """Return a safe basename for the archive destination.
+
+    Strips path components from `archive_filename` so a malicious or
+    typo'd upload name like '../../etc/passwd' or '/abs/path/file.pdf'
+    can't escape `target_dir`. Rejects embedded NUL (would raise
+    ValueError in shutil.copy2 — POSIX paths can't contain \\0). Falls
+    back to `fallback` (the local pdf_path.name) when the result would
+    be empty, a non-name like '.' / '..', or contain NUL.
+    """
+    if archive_filename and '\x00' not in archive_filename:
+        stripped = Path(archive_filename).name
+        if stripped and stripped not in ('.', '..') and '\x00' not in stripped:
+            return stripped
+    return fallback
+
+
+def _is_free_path(target: Path) -> bool:
+    """True if no file/symlink/directory entry exists at `target`.
+
+    `Path.exists()` returns False for dangling symlinks, which would
+    let `shutil.copy2` follow the symlink and write outside the
+    intended dir. `os.path.lexists` catches this case.
+    """
+    return not os.path.lexists(str(target))
+
+
+def _files_identical(a: Path, b: Path) -> bool:
+    """Byte-equal content check, robust against transient FS errors."""
+    try:
+        return (a.stat().st_size == b.stat().st_size
+                and a.read_bytes() == b.read_bytes())
+    except OSError:
+        return False
+
+
+def _resolve_collision(target: Path, source: Path) -> tuple[Path, bool]:
+    """Pick the destination path and whether a copy is still needed.
+
+    Returns ``(path, needs_write)``:
+    - ``(target, True)`` if the spot is free.
+    - ``(existing_path, False)`` if the same content is already archived
+      at ``target`` or any ``_N`` suffix — idempotent re-import.
+    - ``(_N_candidate, True)`` for a fresh suffix slot when content
+      differs (closes the silent-overwrite case where two HAP-uploads
+      with the same filename but different months would otherwise stomp
+      on each other).
+    """
+    if _is_free_path(target):
+        return target, True
+    if _files_identical(target, source):
+        return target, False
+    stem, suffix = target.stem, target.suffix
+    n = 2
+    while True:
+        candidate = target.with_name(f"{stem}_{n}{suffix}")
+        if _is_free_path(candidate):
+            return candidate, True
+        if _files_identical(candidate, source):
+            return candidate, False
+        n += 1
+
+
 def archive_factuur_pdf(
     pdf_path: Path,
     factuur_type: str = 'factuur',
     factuur_datum: str = '',
+    archive_filename: str | None = None,
 ) -> Path | None:
     """Copy a factuur PDF to the SynologyDrive financial archive.
 
-    Target: ARCHIVE_BASE / {jaar} / {type_subdir} / {filename}
-    Returns the archive path on success, None on failure (offline, permissions, etc).
-    Never raises — archiving failure must not block the main workflow.
+    Target: archive_paths.jaar_dir(jaar) / {type_subdir} / {filename}.
+    `archive_filename` (optional) overrides the destination basename so
+    imported PDFs can keep the user's original filename convention
+    (e.g. `0224_HAP_Drenthe.pdf`) rather than the app's internal
+    `{nummer}.pdf` form. When None, falls back to pdf_path.name.
+
+    Path-traversal protected: archive_filename is stripped to its
+    basename before use. Collision-aware: identical content under the
+    same archive name is skipped (idempotent re-import); different
+    content gets a `_N` suffix instead of silently overwriting.
+
+    Returns the archive path on success, None on failure (offline,
+    permissions, etc). Never raises — archiving failure must not block
+    the main workflow.
     """
     if not pdf_path.exists():
         return None
     jaar = factuur_datum[:4] if factuur_datum and len(factuur_datum) >= 4 else str(datetime.now().year)
     subdir = _TYPE_TO_SUBDIR.get(factuur_type, 'Inkomsten')
-    target_dir = ARCHIVE_BASE / 'Inkomen en Uitgaven' / jaar / subdir
+    target_dir = archive_paths.jaar_dir(jaar) / subdir
+    target_name = _safe_archive_basename(archive_filename, pdf_path.name)
     try:
         target_dir.mkdir(parents=True, exist_ok=True)
-        target = target_dir / pdf_path.name
-        shutil.copy2(str(pdf_path), str(target))
-        log.info("Factuur gearchiveerd: %s", target)
-        return target
-    except OSError as exc:
-        log.warning("Archivering mislukt (SynologyDrive offline?): %s", exc)
+        target = target_dir / target_name
+        resolved, needs_write = _resolve_collision(target, pdf_path)
+        if not needs_write:
+            log.info(
+                "Factuur al gearchiveerd (identieke content): %s", resolved)
+            return resolved
+        shutil.copy2(str(pdf_path), str(resolved))
+        log.info("Factuur gearchiveerd: %s", resolved)
+        return resolved
+    except (OSError, ValueError) as exc:
+        # ValueError covers embedded-NUL paths that slip past the
+        # basename sanitizer (shutil/POSIX reject \0 in paths).
+        log.warning("Archivering mislukt: %s", exc)
         return None
 
 

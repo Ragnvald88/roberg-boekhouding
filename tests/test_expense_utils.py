@@ -7,7 +7,7 @@ from import_.expense_utils import (
     scan_archive,
     FOLDER_TO_CATEGORIE,
 )
-from components.archive_paths import ARCHIVE_BASE
+from components.archive_paths import jaar_dir as _jaar_dir_main
 
 
 
@@ -275,8 +275,8 @@ class TestFolderMapping:
 
 
 
-archive_2025_exists = (ARCHIVE_BASE / '2025' / 'Uitgaven').exists()
-archive_2024_exists = (ARCHIVE_BASE / '2024' / 'Uitgaven').exists()
+archive_2025_exists = (_jaar_dir_main(2025) / 'Uitgaven').exists()
+archive_2024_exists = (_jaar_dir_main(2024) / 'Uitgaven').exists()
 
 
 class TestScanArchive:
