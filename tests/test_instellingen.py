@@ -1,6 +1,15 @@
 """Tests for fiscale_params input validation in pages/instellingen.py."""
 
-from pages.instellingen import _validate_fiscal_params
+import re
+from pathlib import Path
+
+from pages.instellingen import (
+    _validate_arbeidskorting_brackets,
+    _validate_fiscal_params,
+)
+
+
+INSTELLINGEN_SRC = Path(__file__).resolve().parent.parent / 'pages' / 'instellingen.py'
 
 
 VALID_2024 = {
@@ -214,3 +223,277 @@ def test_validate_rejects_missing_arbeidskorting_brackets():
     del bad['arbeidskorting_brackets']
     errors = _validate_fiscal_params(bad)
     assert any('arbeidskorting_brackets' in e for e in errors)
+
+
+# --- Arbeidskorting brackets validator -----------------------------------
+
+VALID_BRACKETS = [
+    {'lower': 0, 'upper': 11490, 'rate': 0.08425, 'base': 0},
+    {'lower': 11490, 'upper': 24820, 'rate': 0.31433, 'base': 968},
+    {'lower': 24820, 'upper': 39957, 'rate': 0.02471, 'base': 5158},
+    {'lower': 39957, 'upper': 124934, 'rate': -0.06510, 'base': 5532},
+    {'lower': 124934, 'upper': None, 'rate': 0, 'base': 0},
+]
+
+
+def test_validate_ak_brackets_accepts_canonical_2024():
+    assert _validate_arbeidskorting_brackets(VALID_BRACKETS) == []
+
+
+def test_validate_ak_brackets_rejects_empty_list():
+    errors = _validate_arbeidskorting_brackets([])
+    assert any('minstens 1 schijf' in e for e in errors)
+
+
+def test_validate_ak_brackets_rejects_non_list():
+    errors = _validate_arbeidskorting_brackets('not a list')  # type: ignore[arg-type]
+    assert any('minstens 1 schijf' in e for e in errors)
+
+
+def test_validate_ak_brackets_rejects_missing_field():
+    bad = [dict(VALID_BRACKETS[0])]
+    del bad[0]['rate']
+    errors = _validate_arbeidskorting_brackets(bad)
+    assert any('rate' in e for e in errors)
+
+
+def test_validate_ak_brackets_rejects_non_contiguous():
+    bad = [dict(b) for b in VALID_BRACKETS]
+    # Break contiguity between schijf 1 and 2
+    bad[0]['upper'] = 10000  # was 11490 = lower of bracket[1]
+    errors = _validate_arbeidskorting_brackets(bad)
+    assert any('aaneensluiten' in e for e in errors)
+
+
+def test_validate_ak_brackets_rejects_descending_lower():
+    bad = [dict(b) for b in VALID_BRACKETS]
+    bad[2]['lower'] = 10  # was 24820 — now lower than bracket[1].lower
+    errors = _validate_arbeidskorting_brackets(bad)
+    assert any('groter zijn dan' in e for e in errors)
+
+
+def test_validate_ak_brackets_rejects_open_upper_in_non_last():
+    bad = [
+        {'lower': 0, 'upper': None, 'rate': 0.08, 'base': 0},  # not allowed
+        {'lower': 0, 'upper': None, 'rate': 0, 'base': 0},
+    ]
+    errors = _validate_arbeidskorting_brackets(bad)
+    assert any('laatste schijf' in e for e in errors)
+
+
+def test_validate_ak_brackets_accepts_open_upper_in_last():
+    bracket = [
+        {'lower': 0, 'upper': 100, 'rate': 0.10, 'base': 0},
+        {'lower': 100, 'upper': None, 'rate': 0, 'base': 0},
+    ]
+    assert _validate_arbeidskorting_brackets(bracket) == []
+
+
+def test_validate_ak_brackets_rejects_rate_above_one():
+    bad = [{'lower': 0, 'upper': None, 'rate': 1.5, 'base': 0}]
+    errors = _validate_arbeidskorting_brackets(bad)
+    assert any('tarief' in e.lower() for e in errors)
+
+
+def test_validate_ak_brackets_accepts_negative_rate_in_afbouw():
+    """Arbeidskorting heeft een afbouwband met negatief tarief (~ -0.06510)."""
+    bracket = [
+        {'lower': 0, 'upper': 50000, 'rate': 0.30, 'base': 0},
+        {'lower': 50000, 'upper': None, 'rate': -0.0651, 'base': 0},
+    ]
+    assert _validate_arbeidskorting_brackets(bracket) == []
+
+
+def test_validate_ak_brackets_rejects_negative_base():
+    bad = [{'lower': 0, 'upper': None, 'rate': 0, 'base': -1}]
+    errors = _validate_arbeidskorting_brackets(bad)
+    assert any('basisbedrag' in e for e in errors)
+
+
+def test_validate_ak_brackets_rejects_negative_lower():
+    bad = [
+        {'lower': -1, 'upper': 100, 'rate': 0, 'base': 0},
+        {'lower': 100, 'upper': None, 'rate': 0, 'base': 0},
+    ]
+    errors = _validate_arbeidskorting_brackets(bad)
+    assert any('ondergrens' in e for e in errors)
+
+
+def test_validate_ak_brackets_rejects_string_lower_without_typeerror():
+    """Malformed JSON with strings where numbers expected must produce a
+    Dutch validation error, not crash with TypeError."""
+    bad = [
+        {'lower': 'abc', 'upper': 100, 'rate': 0.1, 'base': 0},
+        {'lower': 100, 'upper': None, 'rate': 0, 'base': 0},
+    ]
+    # The key invariant: no TypeError raised. Errors list must be non-empty.
+    errors = _validate_arbeidskorting_brackets(bad)
+    assert errors
+    assert any('ondergrens' in e and 'getal' in e for e in errors)
+
+
+def test_validate_ak_brackets_rejects_bool_as_number():
+    """isinstance check must reject booleans (which are int in Python)."""
+    bad = [
+        {'lower': 0, 'upper': True, 'rate': 0.1, 'base': 0},
+        {'lower': True, 'upper': None, 'rate': 0, 'base': 0},
+    ]
+    errors = _validate_arbeidskorting_brackets(bad)
+    assert errors
+
+
+# === L8/U3 — _is_num NaN/Infinity defenses ===
+
+def test_validate_arbeidskorting_brackets_rejects_nan():
+    """U3: a NaN literal in lower/upper/rate/base must be rejected as
+    a non-number, not silently passed through. NaN compares False to
+    everything, so an undetected NaN bracket would silently fall out of
+    the engine without an error.
+    """
+    nan = float('nan')
+    bad = [
+        {'lower': 0, 'upper': 100, 'rate': nan, 'base': 0},
+        {'lower': 100, 'upper': None, 'rate': 0, 'base': 0},
+    ]
+    errors = _validate_arbeidskorting_brackets(bad)
+    assert errors
+    assert any('tarief' in e.lower() for e in errors)
+
+
+def test_validate_arbeidskorting_brackets_rejects_infinity():
+    """U3: ±Infinity must also be rejected — only the LAST bracket may
+    have an open upper, and that is encoded as `None`, not Infinity.
+    """
+    inf = float('inf')
+    bad = [
+        {'lower': 0, 'upper': inf, 'rate': 0.1, 'base': 0},
+        {'lower': inf, 'upper': None, 'rate': 0, 'base': 0},
+    ]
+    errors = _validate_arbeidskorting_brackets(bad)
+    assert errors
+
+
+def test_validate_arbeidskorting_brackets_rejects_negative_infinity():
+    """U3: -Infinity must be rejected as a number (NaN-equivalent)."""
+    neg_inf = float('-inf')
+    bad = [
+        {'lower': neg_inf, 'upper': 100, 'rate': 0.1, 'base': 0},
+        {'lower': 100, 'upper': None, 'rate': 0, 'base': 0},
+    ]
+    errors = _validate_arbeidskorting_brackets(bad)
+    assert errors
+
+
+def test_validate_arbeidskorting_brackets_rejects_bool_as_lower():
+    """U3 (defense): bool sub-classes int but is NOT a legitimate grens.
+    The pre-existing `not isinstance(x, bool)` check must remain, because
+    True/False would otherwise compare against a Decimal grondslag and
+    silently produce 0/1 schijven.
+    """
+    bad = [
+        {'lower': True, 'upper': 100, 'rate': 0.1, 'base': 0},
+        {'lower': 100, 'upper': None, 'rate': 0, 'base': 0},
+    ]
+    errors = _validate_arbeidskorting_brackets(bad)
+    assert errors
+
+
+# --- Source-pin tests for the UI behaviour --------------------------------
+
+def test_save_params_catches_yearlocked():
+    """save_params has a try/except YearLockedError around upsert."""
+    src = INSTELLINGEN_SRC.read_text()
+    # Find the save_params function body inside the page closure
+    save_idx = src.find('async def save_params(')
+    assert save_idx != -1
+    body = src[save_idx:save_idx + 4000]
+    assert 'YearLockedError' in body, (
+        'save_params must handle YearLockedError so a definitief-jaar save '
+        'shows a Dutch warning instead of raising an unhandled background '
+        'traceback')
+
+
+def test_add_jaar_catches_yearlocked():
+    src = INSTELLINGEN_SRC.read_text()
+    add_idx = src.find('async def add_jaar(')
+    assert add_idx != -1
+    body = src[add_idx:add_idx + 6000]
+    assert 'YearLockedError' in body
+
+
+def test_add_jaar_copies_kia_bracket_fields():
+    """The 'Kopieer vorig jaar' kwargs must include all 4 KIA bracket params."""
+    src = INSTELLINGEN_SRC.read_text()
+    add_idx = src.find('async def add_jaar(')
+    assert add_idx != -1
+    body = src[add_idx:add_idx + 8000]
+    for fld in (
+        'kia_plateau_bedrag', 'kia_plateau_eind',
+        'kia_afbouw_eind', 'kia_afbouw_pct',
+        'kia_drempel_per_item',
+    ):
+        assert f"'{fld}': latest.{fld}" in body, (
+            f'add_jaar must copy {fld} from the previous year so a new'
+            f' year template inherits the KIA bracket configuration')
+
+
+def test_add_jaar_copies_partner_toggles():
+    src = INSTELLINGEN_SRC.read_text()
+    add_idx = src.find('async def add_jaar(')
+    assert add_idx != -1
+    body = src[add_idx:add_idx + 8000]
+    assert 'ew_naar_partner' in body
+    assert 'box3_fiscaal_partner' in body
+
+
+def test_kia_bracket_fields_present_in_grouped_fields():
+    """Investeringsaftrek section in the page exposes all 4 KIA bracket
+    params as editable inputs (not just read-only text)."""
+    src = INSTELLINGEN_SRC.read_text()
+    for fld in (
+        'kia_plateau_bedrag', 'kia_plateau_eind',
+        'kia_afbouw_eind', 'kia_afbouw_pct',
+    ):
+        # Each field must appear as a tuple-key in the grouped_fields list.
+        # The pattern is: ('label …', 'kia_xxx', '%.0f', 1)
+        pattern = rf"'{re.escape(fld)}'"
+        assert re.search(pattern, src), (
+            f'{fld} must appear as a key in the grouped_fields metadata so'
+            f' the user can edit it via /instellingen')
+
+
+def test_partner_toggles_are_editable_checkboxes():
+    src = INSTELLINGEN_SRC.read_text()
+    assert 'ew_naar_partner' in src
+    assert 'box3_fiscaal_partner' in src
+    # And they must be wired as inputs (so save_params reads .value)
+    assert "inputs['ew_naar_partner']" in src
+    assert "inputs['box3_fiscaal_partner']" in src
+
+
+def test_arbeidskorting_brackets_editable_via_save_path():
+    """Save path must json.dumps(bracket_state) — proving the brackets are
+    serialised back to DB rather than only displayed read-only."""
+    src = INSTELLINGEN_SRC.read_text()
+    assert 'json.dumps(\n                                        bracket_ref)' in src or \
+           'json.dumps(bracket_ref)' in src.replace('\n', '').replace(' ', ''), (
+        'save_params must serialise bracket_state back to JSON; without this '
+        'the AK editor only updates the in-memory list')
+
+
+def test_arbeidskorting_brackets_validated_before_save():
+    src = INSTELLINGEN_SRC.read_text()
+    save_idx = src.find('async def save_params(')
+    assert save_idx != -1
+    body = src[save_idx:save_idx + 6000]
+    assert '_validate_arbeidskorting_brackets' in body
+
+
+def test_locked_year_save_is_blocked():
+    """A definitief-jaar save shows a warning toast instead of mutating."""
+    src = INSTELLINGEN_SRC.read_text()
+    save_idx = src.find('async def save_params(')
+    assert save_idx != -1
+    body = src[save_idx:save_idx + 6000]
+    assert 'if locked:' in body
+    assert 'definitief' in body
