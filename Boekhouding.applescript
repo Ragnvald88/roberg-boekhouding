@@ -26,12 +26,14 @@ on run
 		return
 	end try
 
-	-- Wait up to ~15s for the pywebview window to appear, then exit.
+	-- Wait up to ~30s for the pywebview window to appear, then exit.
+	-- (15s was tight after schema migrations + WAL setup; bumped to give
+	-- enough headroom when the DB needs initialisation work.)
 	set startTime to current date
 	repeat
 		if my isServerResponding() then exit repeat
-		if ((current date) - startTime) > 15 then
-			display alert "Boekhouding kon niet worden gestart" message "De server reageert niet na 15 seconden." & return & "Controleer /tmp/boekhouding.log voor details." as critical
+		if ((current date) - startTime) > 30 then
+			display alert "Boekhouding kon niet worden gestart" message "De server reageert niet na 30 seconden." & return & "Controleer /tmp/boekhouding.log voor details." as critical
 			return
 		end if
 		delay 0.5
