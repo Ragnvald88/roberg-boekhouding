@@ -16,7 +16,7 @@
 - v3 → blockers + majors verwerkt: testbare helpers (`_get_local_aliases` / `_get_json_aliases`) zodat JSON-fallback echt geïsoleerd te testen is; `parse_anw_text` ongewijzigd (heeft eigen extractor, geen `skip_words` param); rollback-pad in Task 13 via JSON-snapshot i.p.v. git history; auto-learn confirm-loop geëxtraheerd als testbare helper; TDD-volgorde overal: failing test in step 1.
 
 **Phasing:**
-- **Phase 1 (Tasks 1-7)** — foundation: schema + helpers + parser/resolver refactor + tests + Zwart-scrub. Every commit is fully green.
+- **Phase 1 (Tasks 1-7)** — foundation: schema + helpers + parser/resolver refactor + tests + Klant16-scrub. Every commit is fully green.
 - **Phase 2 (Tasks 8-15)** — UI + cleanup: auto-learn flow, alias-CRUD UI, audit, public-safe verify, _local.py cleanup, push.
 
 ---
@@ -753,16 +753,16 @@ def _bg(**overrides):
 
 
 def test_normalize_phone_plain_06():
-    assert _normalize_phone_digits('06 4326 7791') == '0643267791'
+    assert _normalize_phone_digits('06 1234 5678') == '0612345678'
 
 def test_normalize_phone_plus31():
-    assert _normalize_phone_digits('+31 6 4326 7791') == '0643267791'
+    assert _normalize_phone_digits('+31 6 4326 7791') == '0612345678'
 
 def test_normalize_phone_0031():
-    assert _normalize_phone_digits('0031 6 4326 7791') == '0643267791'
+    assert _normalize_phone_digits('0031 6 4326 7791') == '0612345678'
 
 def test_normalize_phone_compact_0031():
-    assert _normalize_phone_digits('0031643267791') == '0643267791'
+    assert _normalize_phone_digits('0031643267791') == '0612345678'
 
 def test_normalize_phone_too_short():
     assert _normalize_phone_digits('06 12') is None
@@ -778,11 +778,11 @@ def test_derive_none_returns_generic():
 def test_derive_full_bg_includes_personal_tokens():
     bg = _bg(naam='Test Persoon', bedrijfsnaam='TestBV',
              adres='Hoofdstraat 1', postcode_plaats='1234 AB Stad',
-             telefoon='06 4326 7791', email='info@example.nl')
+             telefoon='06 1234 5678', email='info@example.nl')
     result = derive_skip_words(bg)
     for token in ('Test Persoon', 'TestBV', 'Hoofdstraat 1',
                   '1234 AB', 'Stad',
-                  '0643', '064326', '06 432', '0643267791',
+                  '0643', '064326', '06 432', '0612345678',
                   'info@example.nl', 'info'):
         assert token in result, f'missing: {token!r}'
 
@@ -845,10 +845,10 @@ GENERIC_SKIP_WORDS: tuple[str, ...] = (
 def _normalize_phone_digits(telefoon: str) -> str | None:
     """Return canonical 10-digit national form, or None.
 
-    '06 4326 7791'         → '0643267791'
-    '+31 6 4326 7791'      → '0643267791'
-    '0031 6 4326 7791'     → '0643267791'
-    '0031643267791'        → '0643267791'
+    '06 1234 5678'         → '0612345678'
+    '+31 6 4326 7791'      → '0612345678'
+    '0031 6 4326 7791'     → '0612345678'
+    '0031643267791'        → '0612345678'
     """
     digits = ''.join(c for c in telefoon if c.isdigit())
     if digits.startswith('0031'):
@@ -1438,7 +1438,7 @@ source .venv/bin/activate && export DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib
 ```
 
 Open Facturen page, drag in a known PDF (e.g. one of your monthly
-Doktersdienst Groningen ANW exports). Confirm the import preview shows
+HAP NoordOost ANW exports). Confirm the import preview shows
 the right klant resolved automatically. Close window when satisfied.
 
 - [ ] **Step 8: Commit**
@@ -1450,7 +1450,7 @@ git commit -m "feat(facturen): await async resolve_klant + inject derived skip_w
 
 ---
 
-### Task 7b: Scrub remaining `Zwart` leak
+### Task 7b: Scrub remaining `Klant16` leak
 
 **Files:**
 - Modify: `tests/test_archive_factuur.py`
@@ -1458,26 +1458,26 @@ git commit -m "feat(facturen): await async resolve_klant + inject derived skip_w
 - [ ] **Step 1: Identify lines**
 
 ```
-grep -n "Zwart" tests/test_archive_factuur.py
+grep -n "Klant16" tests/test_archive_factuur.py
 ```
 
-- [ ] **Step 2: Replace `Zwart` → `Klant16`** (use Edit tool with `replace_all=True`)
+- [ ] **Step 2: Replace `Klant16` → `Klant16`** (use Edit tool with `replace_all=True`)
 
-`Zwart` → `Klant16` (replaces in `2026-027_Zwart.pdf` paths and any other
+`Klant16` → `Klant16` (replaces in `2026-027_Klant16.pdf` paths and any other
 mention).
 
-- [ ] **Step 3: Run affected tests + verify no Zwart anywhere**
+- [ ] **Step 3: Run affected tests + verify no Klant16 anywhere**
 
 ```
 DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib .venv/bin/python -m pytest tests/test_archive_factuur.py -q
-git grep -F "Zwart"   # expect empty
+git grep -F "Klant16"   # expect empty
 ```
 
 - [ ] **Step 4: Commit**
 
 ```bash
 git add tests/test_archive_factuur.py
-git commit -m "test: scrub remaining 'Zwart' customer-name leak"
+git commit -m "test: scrub remaining 'Klant16' customer-name leak"
 ```
 
 ---
@@ -2405,7 +2405,7 @@ gh repo edit Ragnvald88/roberg-boekhouding --visibility public
 - ✅ Public-safety verificatie → Task 12
 - ✅ Cleanup _local.py + .gitignore + JSON safety net → Tasks 11, 13
 - ✅ Push → Task 15
-- ✅ Zwart-leak scrub → Task 7b
+- ✅ Klant16-leak scrub → Task 7b
 - ✅ Underscore in `_MIGRATION_CALLABLES` → Task 2
 
 **Placeholder scan:** No "TBD", "TODO" placeholders remain. Every

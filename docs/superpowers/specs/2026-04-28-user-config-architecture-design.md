@@ -12,7 +12,7 @@ gescrubd. Tijdens die scrub zijn 3 modules gerefactored zodat ze user-data
 uit gitignored `*_local.py` files in de repo-map laden. Die oplossing is
 fragiel: bij een verse `git clone` zijn die files weg en breken
 PDF-import herkenning + eigen-naam filter. Bovendien zijn er nog twee
-customer-name leaks (`M. Zwart`, `M. de Vijlder` — nieuwe klanten ná de
+customer-name leaks (`M. Klant16`, `M. Klant17` — nieuwe klanten ná de
 scrub-lijst) die meteen worden meegenomen.
 
 ## Doel
@@ -74,9 +74,9 @@ def _normalize_phone_digits(telefoon: str) -> str | None:
     """Return canonical 10-digit national form (`'0612345678'`), or None.
 
     Examples:
-      '06 4326 7791'    → '0643267791'
-      '+31 6 4326 7791' → '0643267791'  (strips '+31', prepends '0')
-      '0031 6 4326 ...'  → '0643267791'  (strips '0031', prepends '0')
+      '06 1234 5678'    → '0612345678'
+      '+31 6 4326 7791' → '0612345678'  (strips '+31', prepends '0')
+      '0031 6 4326 ...'  → '0612345678'  (strips '0031', prepends '0')
     """
     digits = ''.join(c for c in telefoon if c.isdigit())
     if digits.startswith('0031'):
@@ -119,10 +119,10 @@ def derive_skip_words(bg) -> tuple[str, ...]:
 deletie). Print-only; geen automatische actie.
 
 DB-status (28 april 2026): meerdere klanten zonder locaties
-(`H.C. Spijker`, `Huisartspraktijk de Wilp`, `M. Zandwijk`, `M. Zwart`,
-`M. de Vijlder`, `P.P. de Jonge`, `RoBerg Huisartswaarnemer`).
+(`H.C. Klant4`, `Praktijk K13`, `M. Klant15`, `M. Klant16`,
+`M. Klant17`, `P.P. Klant5`, `TestBV Huisartswaarnemer`).
 Seed-bestand had alleen entries voor 1 daarvan onder een verkeerde naam
-(`Huisartsenpraktijk de Wilp` vs DB `Huisartspraktijk de Wilp`).
+(`Huisartsenpraktijk de Wilp` vs DB `Praktijk K13`).
 Effectief niet load-bearing → schrappen.
 
 ## Refactor van `resolve_klant` / `resolve_anw_klant`
@@ -417,7 +417,7 @@ force-push). Als phase-1 stuk gaat is phase-2 makkelijk uit te zetten:
 - Refactor `import_/pdf_parser.py` naar `skip_words` parameter
 - Update `pages/facturen.py` callers (await + skip_words injection)
 - `tests/test_pdf_parser.py` refactor + 4 nieuwe test-files
-- Scrub `Zwart` in `tests/test_archive_factuur.py`
+- Scrub `Klant16` in `tests/test_archive_factuur.py`
 
 **Phase 2 — UI + cleanup** (volgende commit):
 - Auto-learn checkbox + conflict-modal in `pages/facturen.py`
@@ -449,7 +449,7 @@ Na succesvolle migratie + groene tests + verificatie counts:
 
 ## Public-safety verificatie (refined — codex round-3 finding 4)
 
-Vorige versie zou `Groningen` flaggen door `Doktersdienst Groningen`
+Vorige versie zou `Groningen` flaggen door `HAP NoordOost`
 (false positive op stadsnaam). Refined approach:
 
 ```python
@@ -571,7 +571,7 @@ aantal hangt af van breakdown van CRUD-UI tests.
 | `derive_skip_words` mist token-variant | Eigen header parseert als klant_name | Auto-learn + handmatige klant-keuze vangt op |
 | Async-conversie breekt caller | Runtime fail | Pyright + grep verifies enige callers |
 | Schrappen `KLANT_LOCATIES` verbreekt iets | Audit toont eerst | Pre-flight script + handmatig review |
-| Customer-name leak (Zwart, etc.) | Repo niet veilig publiek | `verify_public_safe.py` tot 0 leaks |
+| Customer-name leak (Klant16, etc.) | Repo niet veilig publiek | `verify_public_safe.py` tot 0 leaks |
 | /klanten UI breekt op alias-edit edge case | Klein UI-bug | Test class voor de UI |
 
 ## Volledigheid t.o.v. doel
@@ -619,7 +619,7 @@ aantal hangt af van breakdown van CRUD-UI tests.
 11. `tests/test_remember_alias.py` (nieuw)
 12. `tests/test_resolve_klant_strategy_order.py` (nieuw)
 13. `tests/test_klanten_page_aliases.py` (nieuw)
-14. `tests/test_archive_factuur.py`: scrub `Zwart` → placeholder
+14. `tests/test_archive_factuur.py`: scrub `Klant16` → placeholder
 15. `scripts/audit_missing_locaties.py` (tijdelijk)
 16. `scripts/verify_public_safe.py` (tijdelijk)
 17. `rm` 3 `_local.py` files; clean `.gitignore`

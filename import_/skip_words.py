@@ -21,10 +21,10 @@ GENERIC_SKIP_WORDS: tuple[str, ...] = (
 def _normalize_phone_digits(telefoon: str) -> str | None:
     """Return canonical 10-digit national form, or None.
 
-    '06 4326 7791'         → '0643267791'
-    '+31 6 4326 7791'      → '0643267791'
-    '0031 6 4326 7791'     → '0643267791'
-    '0031643267791'        → '0643267791'
+    '06 1234 5678'         → '0612345678'
+    '+31 6 4326 7791'      → '0612345678'
+    '0031 6 4326 7791'     → '0612345678'
+    '0031643267791'        → '0612345678'
     """
     digits = ''.join(c for c in telefoon if c.isdigit())
     if digits.startswith('0031'):

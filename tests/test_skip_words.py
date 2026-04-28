@@ -15,16 +15,16 @@ def _bg(**overrides):
 
 
 def test_normalize_phone_plain_06():
-    assert _normalize_phone_digits('06 4326 7791') == '0643267791'
+    assert _normalize_phone_digits('06 1234 5678') == '0612345678'
 
 def test_normalize_phone_plus31():
-    assert _normalize_phone_digits('+31 6 4326 7791') == '0643267791'
+    assert _normalize_phone_digits('+31 6 1234 5678') == '0612345678'
 
 def test_normalize_phone_0031():
-    assert _normalize_phone_digits('0031 6 4326 7791') == '0643267791'
+    assert _normalize_phone_digits('0031 6 1234 5678') == '0612345678'
 
 def test_normalize_phone_compact_0031():
-    assert _normalize_phone_digits('0031643267791') == '0643267791'
+    assert _normalize_phone_digits('0031612345678') == '0612345678'
 
 def test_normalize_phone_too_short():
     assert _normalize_phone_digits('06 12') is None
@@ -40,11 +40,11 @@ def test_derive_none_returns_generic():
 def test_derive_full_bg_includes_personal_tokens():
     bg = _bg(naam='Test Persoon', bedrijfsnaam='TestBV',
              adres='Hoofdstraat 1', postcode_plaats='1234 AB Stad',
-             telefoon='06 4326 7791', email='info@example.nl')
+             telefoon='06 1234 5678', email='info@example.nl')
     result = derive_skip_words(bg)
     for token in ('Test Persoon', 'TestBV', 'Hoofdstraat 1',
                   '1234 AB', 'Stad',
-                  '0643', '064326', '06 432', '0643267791',
+                  '0612', '061234', '06 123', '0612345678',
                   'info@example.nl', 'info'):
         assert token in result, f'missing: {token!r}'
 
