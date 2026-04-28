@@ -215,38 +215,10 @@ async def seed_fiscale_params(db_path: Path) -> int:
     return count
 
 
-# Real customer locaties live in `seed_data_local.py` (gitignored).
-# When that file is missing the seeder installs zero locaties and the user
-# adds them manually via /klanten.
-KLANT_LOCATIES: dict[str, list[tuple[str, int]]] = {}
-
-try:
-    from .seed_data_local import KLANT_LOCATIES  # type: ignore[import-not-found,no-redef]  # noqa: F811
-except ImportError:
-    pass
-
-
-async def seed_klant_locaties(db_path):
-    """Seed locations for existing klanten. Skips if locations already exist."""
-    from database import get_klanten, add_klant_locatie, get_klant_locaties
-    klanten = await get_klanten(db_path, alleen_actief=False)
-    klant_by_naam = {k.naam: k for k in klanten}
-    count = 0
-    for klant_naam, locaties in KLANT_LOCATIES.items():
-        klant = klant_by_naam.get(klant_naam)
-        if not klant:
-            continue
-        existing = await get_klant_locaties(db_path, klant.id)
-        if existing:
-            continue  # Already seeded
-        for naam, km in locaties:
-            await add_klant_locatie(db_path, klant.id, naam, km)
-            count += 1
-    return count
-
-
 async def seed_all(db_path: Path) -> tuple[int, int]:
-    """Seed fiscale parameters and klant locaties."""
+    """Seed fiscale parameters. Returns (fp_count, 0); the second slot was
+    formerly seed_klant_locaties (removed — locaties zijn user-data, niet
+    seed-data). Backwards-compat: callers unpack `(fp, loc)` so we keep
+    the tuple shape; second element is now always 0."""
     fp_count = await seed_fiscale_params(db_path)
-    loc_count = await seed_klant_locaties(db_path)
-    return fp_count, loc_count
+    return fp_count, 0
