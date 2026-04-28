@@ -1420,8 +1420,13 @@ async def facturen_page():
             parsed_items = []
 
             klanten = await get_klanten(DB_PATH, alleen_actief=False)
-            klant_lookup = {k.naam: k.id for k in klanten}
             klant_options = {k.id: k.naam for k in klanten}
+
+            # Derive PDF-parser skip-words from bedrijfsgegevens once per dialog
+            from import_.skip_words import derive_skip_words
+            from database import get_bedrijfsgegevens
+            bg = await get_bedrijfsgegevens(DB_PATH)
+            skip_words_for_parse = derive_skip_words(bg)
 
             # Load existing factuurnummers + (klant, datum, bedrag)
             # fingerprints for dedup. The fingerprint catches PDFs
@@ -1473,7 +1478,8 @@ async def facturen_page():
 
                             if inv_type == 'dagpraktijk':
                                 parsed = parse_dagpraktijk_text(
-                                    text, filename)
+                                    text, filename,
+                                    skip_words=skip_words_for_parse)
                             elif inv_type == 'anw':
                                 parsed = parse_anw_text(text, filename)
                             else:
@@ -1497,12 +1503,13 @@ async def facturen_page():
                                     filename.split('_', 1)[1]
                                     .replace('.pdf', '')
                                     if '_' in filename else None)
-                                db_naam, klant_id = resolve_klant(
-                                    parsed.get('klant_name'), suffix,
-                                    klant_lookup)
+                                db_naam, klant_id = await resolve_klant(
+                                    DB_PATH,
+                                    pdf_name=parsed.get('klant_name'),
+                                    filename_suffix=suffix)
                             else:
-                                db_naam, klant_id = resolve_anw_klant(
-                                    filename, klant_lookup)
+                                db_naam, klant_id = await resolve_anw_klant(
+                                    DB_PATH, filename=filename)
 
                             parsed['_klant_naam'] = db_naam
                             parsed['_klant_id'] = klant_id
