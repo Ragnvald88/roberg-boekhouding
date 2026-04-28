@@ -550,6 +550,7 @@ MIGRATIONS = [
         )""",
         "CREATE INDEX IF NOT EXISTS idx_klant_aliases_lookup ON klant_aliases(type, pattern)",
     ]),
+    (34, "seed_klant_aliases_from_local_if_present", None),
 ]
 
 
@@ -762,7 +763,94 @@ async def _run_migration_27(conn):
         conn.row_factory = prev_factory
 
 
-_MIGRATION_CALLABLES = {7: _run_migration_7, 8: _run_migration_8, 18: _run_migration_18, 20: _run_migration_20, 21: _run_migration_21, 27: _run_migration_27}
+def _get_local_module_aliases() -> list[tuple[str, str, str]] | None:
+    """Return [(klant_naam, type, pattern), ...] from klant_mapping_local.py
+    or None if the module is not importable."""
+    try:
+        from import_ import klant_mapping_local as src
+    except ImportError:
+        return None
+    rows: list[tuple[str, str, str]] = []
+    for type_name, source_dict in (
+        ('suffix', getattr(src, 'SUFFIX_TO_KLANT', {})),
+        ('pdf_text', getattr(src, 'PDF_KLANT_TO_DB', {})),
+        ('anw_filename', getattr(src, 'ANW_FILENAME_TO_KLANT', {})),
+    ):
+        for pattern, klant_naam in source_dict.items():
+            rows.append((klant_naam, type_name, pattern))
+    return rows
+
+
+def _get_json_snapshot_aliases() -> list[tuple[str, str, str]] | None:
+    """Return [(klant_naam, type, pattern), ...] from
+    `~/Library/Application Support/Boekhouding/config/klant_aliases_backup.json`
+    (override via BOEKHOUDING_CONFIG_DIR env-var); None if file absent or invalid."""
+    import os
+    import json
+    from pathlib import Path
+    config_dir = os.environ.get('BOEKHOUDING_CONFIG_DIR')
+    if config_dir:
+        json_path = Path(config_dir) / 'klant_aliases_backup.json'
+    else:
+        json_path = (Path.home() / 'Library' / 'Application Support'
+                     / 'Boekhouding' / 'config' / 'klant_aliases_backup.json')
+    if not json_path.exists():
+        return None
+    try:
+        data = json.loads(json_path.read_text(encoding='utf-8'))
+    except (OSError, json.JSONDecodeError):
+        return None
+    rows: list[tuple[str, str, str]] = []
+    for entry in data:
+        if not isinstance(entry, dict):
+            continue
+        kn = entry.get('klant_naam')
+        tn = entry.get('type')
+        pt = entry.get('pattern')
+        if kn and tn and pt:
+            rows.append((kn, tn, pt))
+    return rows
+
+
+async def _seed_klant_aliases_from_local(conn) -> None:
+    """Migration 34 callable: seed klant_aliases.
+
+    Source priority:
+      1. `klant_mapping_local.py` module (testable via `_get_local_module_aliases`)
+      2. JSON snapshot in user config dir (testable via `_get_json_snapshot_aliases`)
+      3. otherwise no-op
+
+    Idempotent (INSERT OR IGNORE). Permanently retained as no-op:
+    - Existing user (DB version 32 → 33+34): runs once on upgrade.
+    - Fresh users: both source-helpers return None → early return.
+    Caller (the migration runner) handles commit + version bump — do NOT
+    call conn.commit() inside this function.
+    """
+    rows_to_insert = _get_local_module_aliases()
+    if rows_to_insert is None:
+        rows_to_insert = _get_json_snapshot_aliases()
+    if not rows_to_insert:
+        return
+
+    prev_factory = conn.row_factory
+    conn.row_factory = aiosqlite.Row
+    try:
+        cur = await conn.execute("SELECT id, naam FROM klanten")
+        klant_id_by_naam = {r['naam']: r['id'] for r in await cur.fetchall()}
+    finally:
+        conn.row_factory = prev_factory
+
+    for klant_naam, type_name, pattern in rows_to_insert:
+        klant_id = klant_id_by_naam.get(klant_naam)
+        if not klant_id or len((pattern or '').strip()) < 3:
+            continue
+        await conn.execute(
+            "INSERT OR IGNORE INTO klant_aliases (klant_id, type, pattern) "
+            "VALUES (?, ?, ?)",
+            (klant_id, type_name, pattern.strip()))
+
+
+_MIGRATION_CALLABLES = {7: _run_migration_7, 8: _run_migration_8, 18: _run_migration_18, 20: _run_migration_20, 21: _run_migration_21, 27: _run_migration_27, 34: _seed_klant_aliases_from_local}
 
 
 async def init_db(db_path: Path = DB_PATH) -> None:

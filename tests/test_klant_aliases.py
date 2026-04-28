@@ -83,3 +83,104 @@ async def test_index_exists(db):
             "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_klant_aliases_lookup'")
         row = await cur.fetchone()
     assert row is not None
+
+
+# --- Migration 34: data callable + JSON fallback ---
+
+
+async def test_migration_34_uses_module_source_when_returned(db, monkeypatch):
+    """If `_get_local_module_aliases` returns rows, those are used."""
+    k1 = await add_klant(db, naam='HAP K14', tarief_uur=100.0)
+    import database as dbm
+    monkeypatch.setattr(dbm, '_get_local_module_aliases', lambda: [
+        ('HAP K14', 'suffix', 'Winsum'),
+        ('HAP K14', 'suffix', 'XX'),  # < 3 chars → must be skipped
+        ('HAP K14', 'pdf_text', 'Centrum K14'),
+        ('Klant Niet In DB', 'pdf_text', 'GHOST'),  # klant absent → skipped
+        ('HAP K14', 'anw_filename', 'DDG'),
+    ])
+    monkeypatch.setattr(dbm, '_get_json_snapshot_aliases', lambda: None)
+
+    from database import _seed_klant_aliases_from_local
+    async with get_db_ctx(db) as conn:
+        await _seed_klant_aliases_from_local(conn)
+        await conn.commit()
+        cur = await conn.execute(
+            "SELECT type, pattern FROM klant_aliases ORDER BY type, pattern")
+        rows = [(r[0], r[1]) for r in await cur.fetchall()]
+    assert ('anw_filename', 'DDG') in rows
+    assert ('pdf_text', 'Centrum K14') in rows
+    assert ('suffix', 'Winsum') in rows
+    assert ('suffix', 'XX') not in rows
+    assert ('pdf_text', 'GHOST') not in rows
+
+
+async def test_migration_34_falls_back_to_json_when_module_returns_none(db, monkeypatch):
+    """When `_get_local_module_aliases` returns None, JSON snapshot is used."""
+    k1 = await add_klant(db, naam='HAP K14', tarief_uur=100.0)
+    import database as dbm
+    monkeypatch.setattr(dbm, '_get_local_module_aliases', lambda: None)
+    monkeypatch.setattr(dbm, '_get_json_snapshot_aliases', lambda: [
+        ('HAP K14', 'pdf_text', 'Centrum K14'),
+        ('HAP K14', 'suffix', 'Winsum'),
+    ])
+    from database import _seed_klant_aliases_from_local
+    async with get_db_ctx(db) as conn:
+        await _seed_klant_aliases_from_local(conn)
+        await conn.commit()
+        cur = await conn.execute(
+            "SELECT type, pattern FROM klant_aliases ORDER BY type")
+        rows = [(r[0], r[1]) for r in await cur.fetchall()]
+    assert ('pdf_text', 'Centrum K14') in rows
+    assert ('suffix', 'Winsum') in rows
+
+
+async def test_migration_34_no_op_when_both_sources_empty(db, monkeypatch):
+    """No source available → no-op."""
+    import database as dbm
+    monkeypatch.setattr(dbm, '_get_local_module_aliases', lambda: None)
+    monkeypatch.setattr(dbm, '_get_json_snapshot_aliases', lambda: None)
+    from database import _seed_klant_aliases_from_local
+    async with get_db_ctx(db) as conn:
+        await _seed_klant_aliases_from_local(conn)
+        await conn.commit()
+        cur = await conn.execute("SELECT COUNT(*) FROM klant_aliases")
+        cnt = (await cur.fetchone())[0]
+    assert cnt == 0
+
+
+async def test_migration_34_idempotent(db, monkeypatch):
+    """Running migration 34 twice does not duplicate."""
+    k1 = await add_klant(db, naam='HAP K14', tarief_uur=100.0)
+    import database as dbm
+    monkeypatch.setattr(dbm, '_get_local_module_aliases', lambda: [
+        ('HAP K14', 'suffix', 'Winsum'),
+    ])
+    monkeypatch.setattr(dbm, '_get_json_snapshot_aliases', lambda: None)
+    from database import _seed_klant_aliases_from_local
+    async with get_db_ctx(db) as conn:
+        await _seed_klant_aliases_from_local(conn)
+        await _seed_klant_aliases_from_local(conn)
+        await conn.commit()
+        cur = await conn.execute("SELECT COUNT(*) FROM klant_aliases")
+        cnt = (await cur.fetchone())[0]
+    assert cnt == 1
+
+
+def test_get_json_snapshot_aliases_reads_file(tmp_path, monkeypatch):
+    """Pure-function test for the JSON loader."""
+    import json
+    from database import _get_json_snapshot_aliases
+    monkeypatch.setenv('BOEKHOUDING_CONFIG_DIR', str(tmp_path))
+    (tmp_path / 'klant_aliases_backup.json').write_text(json.dumps([
+        {'klant_naam': 'A', 'type': 'pdf_text', 'pattern': 'PA'},
+        {'klant_naam': 'B', 'type': 'suffix', 'pattern': 'PB'},
+    ]))
+    rows = _get_json_snapshot_aliases()
+    assert rows == [('A', 'pdf_text', 'PA'), ('B', 'suffix', 'PB')]
+
+
+def test_get_json_snapshot_aliases_missing_file(tmp_path, monkeypatch):
+    monkeypatch.setenv('BOEKHOUDING_CONFIG_DIR', str(tmp_path))
+    from database import _get_json_snapshot_aliases
+    assert _get_json_snapshot_aliases() is None
