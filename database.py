@@ -299,6 +299,18 @@ CREATE TABLE IF NOT EXISTS schema_version (
     description TEXT NOT NULL,
     applied_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS klant_aliases (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    klant_id INTEGER NOT NULL REFERENCES klanten(id) ON DELETE CASCADE,
+    type TEXT NOT NULL CHECK (type IN ('suffix', 'pdf_text', 'anw_filename')),
+    pattern TEXT NOT NULL COLLATE NOCASE
+        CHECK (length(trim(pattern)) >= 3),
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (type, pattern)
+);
+CREATE INDEX IF NOT EXISTS idx_klant_aliases_lookup
+    ON klant_aliases(type, pattern);
 """
 
 
@@ -525,6 +537,18 @@ MIGRATIONS = [
         "WHERE jaar = 2025 AND kia_plateau_bedrag = 0",
         "UPDATE fiscale_params SET kia_plateau_bedrag = 20072 "
         "WHERE jaar = 2026 AND kia_plateau_bedrag = 0",
+    ]),
+    (33, "add_klant_aliases_table", [
+        """CREATE TABLE IF NOT EXISTS klant_aliases (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            klant_id INTEGER NOT NULL REFERENCES klanten(id) ON DELETE CASCADE,
+            type TEXT NOT NULL CHECK (type IN ('suffix', 'pdf_text', 'anw_filename')),
+            pattern TEXT NOT NULL COLLATE NOCASE
+                CHECK (length(trim(pattern)) >= 3),
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE (type, pattern)
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_klant_aliases_lookup ON klant_aliases(type, pattern)",
     ]),
 ]
 
