@@ -3740,6 +3740,117 @@ async def delete_klant_locatie(db_path, locatie_id):
         await conn.commit()
 
 
+async def get_klant_aliases(db_path: Path = DB_PATH,
+                             klant_id: int | None = None) -> list[dict]:
+    """Return aliases for one klant (newest first), or all if klant_id is None."""
+    async with get_db_ctx(db_path) as conn:
+        if klant_id is None:
+            cur = await conn.execute(
+                "SELECT id, klant_id, type, pattern, created_at FROM klant_aliases "
+                "ORDER BY created_at DESC, id DESC")
+        else:
+            cur = await conn.execute(
+                "SELECT id, klant_id, type, pattern, created_at FROM klant_aliases "
+                "WHERE klant_id = ? ORDER BY created_at DESC, id DESC",
+                (klant_id,))
+        rows = await cur.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def add_klant_alias(db_path: Path, klant_id: int,
+                           type_name: str, pattern: str) -> int:
+    """Insert alias row. Raises aiosqlite.IntegrityError on UNIQUE/CHECK violation."""
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            "INSERT INTO klant_aliases (klant_id, type, pattern) VALUES (?, ?, ?)",
+            (klant_id, type_name, pattern.strip()))
+        await conn.commit()
+        return cur.lastrowid
+
+
+async def delete_klant_alias(db_path: Path, alias_id: int) -> bool:
+    """Delete alias by id. Returns True if a row was deleted."""
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            "DELETE FROM klant_aliases WHERE id = ?", (alias_id,))
+        await conn.commit()
+        return cur.rowcount == 1
+
+
+async def update_klant_alias_target(db_path: Path, alias_id: int,
+                                     expected_old_klant_id: int,
+                                     new_klant_id: int) -> bool:
+    """Re-assign alias to a different klant with optimistic lock.
+
+    Returns True iff the alias's klant_id was exactly expected_old_klant_id at
+    time of update.
+    """
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            "UPDATE klant_aliases SET klant_id = ? WHERE id = ? AND klant_id = ?",
+            (new_klant_id, alias_id, expected_old_klant_id))
+        await conn.commit()
+        return cur.rowcount == 1
+
+
+async def remember_alias(db_path: Path, klant_id: int,
+                          pdf_extracted_name: str | None,
+                          filename_suffix: str | None) -> dict:
+    """Insert klant_aliases rows for an auto-learn (post manual klant pick).
+
+    Race-vrij: try INSERT first; on UNIQUE conflict, re-read existing row to
+    classify as 'already_correct' (same klant) or 'conflict' (different klant).
+
+    Returns {'inserted': int, 'already_correct': int, 'conflicts': list[dict]}.
+    Each conflict dict: {alias_id, type, pattern, existing_klant_id, existing_klant_naam}.
+    """
+    candidates = [
+        ('pdf_text', pdf_extracted_name),
+        ('suffix', filename_suffix),
+    ]
+    inserted = 0
+    already_correct = 0
+    conflicts: list[dict] = []
+    async with get_db_ctx(db_path) as conn:
+        prev_factory = conn.row_factory
+        conn.row_factory = aiosqlite.Row
+        try:
+            for type_name, pattern in candidates:
+                if not pattern or len(pattern.strip()) < 3:
+                    continue
+                pattern = pattern.strip()
+                try:
+                    await conn.execute(
+                        "INSERT INTO klant_aliases (klant_id, type, pattern) "
+                        "VALUES (?, ?, ?)",
+                        (klant_id, type_name, pattern))
+                    inserted += 1
+                except aiosqlite.IntegrityError:
+                    cur = await conn.execute(
+                        "SELECT a.id, a.klant_id, k.naam FROM klant_aliases a "
+                        "JOIN klanten k ON k.id = a.klant_id "
+                        "WHERE a.type = ? AND a.pattern = ?",
+                        (type_name, pattern))
+                    row = await cur.fetchone()
+                    if row is None:
+                        continue
+                    if row['klant_id'] == klant_id:
+                        already_correct += 1
+                    else:
+                        conflicts.append({
+                            'alias_id': row['id'],
+                            'type': type_name,
+                            'pattern': pattern,
+                            'existing_klant_id': row['klant_id'],
+                            'existing_klant_naam': row['naam'],
+                        })
+            await conn.commit()
+        finally:
+            conn.row_factory = prev_factory
+    return {'inserted': inserted, 'already_correct': already_correct,
+            'conflicts': conflicts}
+
+
 async def find_pdf_matches_for_banktx(
     db_path: Path, bank_tx_id: int, jaar: int,
 ) -> list[PdfMatch]:
