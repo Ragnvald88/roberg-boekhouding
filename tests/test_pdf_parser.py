@@ -598,23 +598,6 @@ class TestANWDDG:
 
 # ── Klant resolution ───────────────────────────────────────────────
 
-MOCK_KLANTEN = {
-    'HAP K14': 1,
-    'Klant2': 3,
-    'HAP MiddenLand': 4,
-    'HAP NoordOost': 5,
-    "HAP K6": 6,
-    'Praktijk K9': 7,
-    'Praktijk K13': 8,
-    'Praktijk K12': 9,
-    'Praktijk K11': 10,
-    'K. Klant7': 11,
-    'Praktijk K10': 12,
-    'K. Klant4': 14,
-    'K. Klant5': 15,
-    'K. Klant8': 16,
-}
-
 
 # ── ANW parsing: DDG declaratie format ──────────────────────────────
 
@@ -666,132 +649,129 @@ class TestANWDDGDeclaratie:
 
 # ── Klant resolution ───────────────────────────────────────────────
 
-# Self-contained test mappings — keep tests independent of klant_mapping_local.py
-# (gitignored runtime overrides). Inserted into the production module via the
-# autouse fixture below.
-_TEST_SUFFIX_TO_KLANT = {
-    'Winsum': 'HAP K14',
-    'Klant2': 'Klant2',
-    'Vlagtwedde': 'Klant2',
-    'Marum': 'HAP K6',
-    'Klant7': 'K. Klant7',
-}
-_TEST_PDF_KLANT_TO_DB = {
-    'Centrum K14': 'HAP K14',
-    'K. Klant1': 'HAP K14',
-    'Praktijk K6': 'HAP K6',
-    'Praktijk K12': 'Praktijk K12',
-    'HAP NoordOost': 'HAP NoordOost',
-}
-_TEST_ANW_FILENAME_TO_KLANT = {
-    'DokterDrenthe': 'HAP MiddenLand',
-    'Drenthe': 'HAP MiddenLand',
-    'DokNoord': 'HAP NoordOost',
-    'DDG': 'HAP NoordOost',
-    'Groningen': 'HAP NoordOost',
-    'Gr_Factuur': 'HAP NoordOost',
-}
-
 
 @pytest.fixture
-def _stub_klant_mapping(monkeypatch):
-    from import_ import klant_mapping
-    monkeypatch.setattr(klant_mapping, 'SUFFIX_TO_KLANT', _TEST_SUFFIX_TO_KLANT)
-    monkeypatch.setattr(klant_mapping, 'PDF_KLANT_TO_DB', _TEST_PDF_KLANT_TO_DB)
-    monkeypatch.setattr(klant_mapping, 'ANW_FILENAME_TO_KLANT', _TEST_ANW_FILENAME_TO_KLANT)
+async def db_with_aliases(db):
+    """DB seeded with placeholder klanten + aliases mirroring the old
+    MOCK_KLANTEN test data."""
+    from database import add_klant, get_db_ctx
+    k_winsum = await add_klant(db, naam='HAP K14', tarief_uur=100.0)
+    k_klant2 = await add_klant(db, naam='Klant2', tarief_uur=100.0)
+    k_middenland = await add_klant(db, naam='HAP MiddenLand', tarief_uur=100.0)
+    k_noordoost = await add_klant(db, naam='HAP NoordOost', tarief_uur=100.0)
+    k_k6 = await add_klant(db, naam='HAP K6', tarief_uur=100.0)
+    k_p9 = await add_klant(db, naam='Praktijk K9', tarief_uur=100.0)
+    k_p12 = await add_klant(db, naam='Praktijk K12', tarief_uur=100.0)
+    k_klant7 = await add_klant(db, naam='K. Klant7', tarief_uur=100.0)
+    async with get_db_ctx(db) as conn:
+        await conn.executemany(
+            "INSERT INTO klant_aliases (klant_id, type, pattern) VALUES (?, ?, ?)",
+            [
+                (k_winsum, 'suffix', 'Winsum'),
+                (k_winsum, 'pdf_text', 'Centrum K14'),
+                (k_winsum, 'pdf_text', 'K. Klant1'),
+                (k_klant2, 'suffix', 'Klant2'),
+                (k_klant2, 'suffix', 'Vlagtwedde'),
+                (k_k6, 'suffix', 'Marum'),
+                (k_k6, 'pdf_text', 'Praktijk K6'),
+                (k_p12, 'pdf_text', 'Praktijk K12'),
+                (k_klant7, 'suffix', 'Klant7'),
+                (k_middenland, 'anw_filename', 'DokterDrenthe'),
+                (k_middenland, 'anw_filename', 'Drenthe'),
+                (k_noordoost, 'anw_filename', 'DokNoord'),
+                (k_noordoost, 'anw_filename', 'DDG'),
+                (k_noordoost, 'anw_filename', 'Groningen'),
+                (k_noordoost, 'anw_filename', 'Gr_Factuur'),
+            ])
+        await conn.commit()
+    return {
+        'db': db,
+        'HAP K14': k_winsum, 'Klant2': k_klant2,
+        'HAP MiddenLand': k_middenland, 'HAP NoordOost': k_noordoost,
+        'HAP K6': k_k6, 'Praktijk K9': k_p9, 'Praktijk K12': k_p12,
+        'K. Klant7': k_klant7,
+    }
 
 
-@pytest.mark.usefixtures('_stub_klant_mapping')
 class TestResolveKlant:
-    def test_suffix_winsum(self):
-        name, kid = resolve_klant(None, 'Winsum', MOCK_KLANTEN)
+    async def test_suffix_winsum(self, db_with_aliases):
+        name, kid = await resolve_klant(db_with_aliases['db'], None, 'Winsum')
         assert name == 'HAP K14'
-        assert kid == 1
+        assert kid == db_with_aliases['HAP K14']
 
-    def test_suffix_klant2(self):
-        name, kid = resolve_klant(None, 'Klant2', MOCK_KLANTEN)
+    async def test_suffix_klant2(self, db_with_aliases):
+        name, kid = await resolve_klant(db_with_aliases['db'], None, 'Klant2')
+        assert name == 'Klant2' and kid == db_with_aliases['Klant2']
+
+    async def test_suffix_vlagtwedde_maps_to_klant2(self, db_with_aliases):
+        name, kid = await resolve_klant(db_with_aliases['db'], None, 'Vlagtwedde')
         assert name == 'Klant2'
-        assert kid == 3
 
-    def test_suffix_vlagtwedde_maps_to_klant2(self):
-        name, kid = resolve_klant(None, 'Vlagtwedde', MOCK_KLANTEN)
-        assert name == 'Klant2'
-        assert kid == 3
+    async def test_suffix_marum_maps_to_klant6(self, db_with_aliases):
+        name, kid = await resolve_klant(db_with_aliases['db'], None, 'Marum')
+        assert name == 'HAP K6'
 
-    def test_suffix_marum_maps_to_klant6(self):
-        name, kid = resolve_klant(None, 'Marum', MOCK_KLANTEN)
-        assert name == "HAP K6"
-        assert kid == 6
-
-    def test_pdf_name_gezondheidscentrum_winsum(self):
-        name, kid = resolve_klant('Centrum K14', None, MOCK_KLANTEN)
+    async def test_pdf_name_centrum_k14(self, db_with_aliases):
+        name, kid = await resolve_klant(db_with_aliases['db'], 'Centrum K14', None)
         assert name == 'HAP K14'
-        assert kid == 1
 
-    def test_pdf_name_s_klant1(self):
-        name, kid = resolve_klant('K. Klant1', None, MOCK_KLANTEN)
+    async def test_pdf_name_k_klant1(self, db_with_aliases):
+        name, kid = await resolve_klant(db_with_aliases['db'], 'K. Klant1', None)
         assert name == 'HAP K14'
-        assert kid == 1
 
-    def test_pdf_name_klant6_no_apostrophe(self):
-        name, kid = resolve_klant("Praktijk K6", None, MOCK_KLANTEN)
-        assert name == "HAP K6"
-        assert kid == 6
+    async def test_pdf_name_praktijk_k6(self, db_with_aliases):
+        name, kid = await resolve_klant(db_with_aliases['db'], 'Praktijk K6', None)
+        assert name == 'HAP K6'
 
-    def test_pdf_name_klant12_no_initials(self):
-        name, kid = resolve_klant('Praktijk K12', None, MOCK_KLANTEN)
+    async def test_pdf_name_praktijk_k12(self, db_with_aliases):
+        name, kid = await resolve_klant(db_with_aliases['db'], 'Praktijk K12', None)
         assert name == 'Praktijk K12'
-        assert kid == 9
 
-    def test_pdf_name_doknord(self):
-        name, kid = resolve_klant('HAP NoordOost', None, MOCK_KLANTEN)
+    async def test_pdf_name_direct_klanten_match_case_insensitive(self, db_with_aliases):
+        name, kid = await resolve_klant(db_with_aliases['db'], 'hap noordoost', None)
         assert name == 'HAP NoordOost'
-        assert kid == 5
 
-    def test_suffix_takes_precedence(self):
-        """Suffix should win over PDF name when both available."""
-        name, kid = resolve_klant('Some Other Name', 'Klant7', MOCK_KLANTEN)
+    async def test_suffix_takes_precedence(self, db_with_aliases):
+        name, kid = await resolve_klant(
+            db_with_aliases['db'], 'Some Other Name', 'Klant7')
         assert name == 'K. Klant7'
-        assert kid == 11
 
-    def test_unknown_returns_none(self):
-        name, kid = resolve_klant('Unknown Practice', None, MOCK_KLANTEN)
-        assert name is None
-        assert kid is None
+    async def test_unknown_returns_none(self, db_with_aliases):
+        name, kid = await resolve_klant(
+            db_with_aliases['db'], 'Unknown Practice XYZ', None)
+        assert (name, kid) == (None, None)
 
 
-@pytest.mark.usefixtures('_stub_klant_mapping')
 class TestResolveANWKlant:
-    def test_drenthe_2023(self):
-        name, kid = resolve_anw_klant('2023-09_DokterDrenthe.pdf', MOCK_KLANTEN)
+    async def test_drenthe_2023(self, db_with_aliases):
+        name, kid = await resolve_anw_klant(
+            db_with_aliases['db'], '2023-09_DokterDrenthe.pdf')
         assert name == 'HAP MiddenLand'
-        assert kid == 4
 
-    def test_drenthe_2024(self):
-        name, kid = resolve_anw_klant('Drenthe_02-24.pdf', MOCK_KLANTEN)
+    async def test_drenthe_2024(self, db_with_aliases):
+        name, kid = await resolve_anw_klant(
+            db_with_aliases['db'], 'Drenthe_02-24.pdf')
         assert name == 'HAP MiddenLand'
-        assert kid == 4
 
-    def test_drenthe_2025(self):
-        name, kid = resolve_anw_klant('0225_HAP_Drenthe.pdf', MOCK_KLANTEN)
+    async def test_drenthe_2025(self, db_with_aliases):
+        name, kid = await resolve_anw_klant(
+            db_with_aliases['db'], '0225_HAP_Drenthe.pdf')
         assert name == 'HAP MiddenLand'
-        assert kid == 4
 
-    def test_groningen_2024(self):
-        name, kid = resolve_anw_klant('Groningen_05-24.pdf', MOCK_KLANTEN)
+    async def test_groningen_2024(self, db_with_aliases):
+        name, kid = await resolve_anw_klant(
+            db_with_aliases['db'], 'Groningen_05-24.pdf')
         assert name == 'HAP NoordOost'
-        assert kid == 5
 
-    def test_groningen_2025(self):
-        name, kid = resolve_anw_klant('0225_HAP_Groningen.pdf', MOCK_KLANTEN)
+    async def test_groningen_2025(self, db_with_aliases):
+        name, kid = await resolve_anw_klant(
+            db_with_aliases['db'], '0225_HAP_Groningen.pdf')
         assert name == 'HAP NoordOost'
-        assert kid == 5
 
-    def test_gr_factuur_matches_groningen(self):
-        """'Gr_Factuur' pattern maps to HAP NoordOost."""
-        name, kid = resolve_anw_klant('2512_Gr_Factuur.pdf', MOCK_KLANTEN)
+    async def test_gr_factuur_matches_groningen(self, db_with_aliases):
+        name, kid = await resolve_anw_klant(
+            db_with_aliases['db'], '2512_Gr_Factuur.pdf')
         assert name == 'HAP NoordOost'
-        assert kid == MOCK_KLANTEN['HAP NoordOost']
 
 
 # ============================================================

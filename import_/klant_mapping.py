@@ -1,65 +1,111 @@
 """Klant name resolution for invoice import.
 
-Maps PDF-extracted klant names and filename suffixes to DB klant names.
+Resolves a PDF-extracted klant name and/or filename suffix to a klant_id
+via the `klant_aliases` DB table (no module-level state).
 
-The actual mapping tables live in `klant_mapping_local.py` (gitignored)
-because they contain real customer-identifying data. If that file is
-missing, the maps are empty and `resolve_klant` / `resolve_anw_klant`
-return (None, None) — manual klant selection in the UI.
+Strategy order (resolve_klant):
+  1. Exact suffix match (filename_suffix → type='suffix')
+  2. Exact pdf_text match (pdf_name → type='pdf_text')
+  3. Direct klanten.naam match (case-insensitive)
+  4. Fuzzy bidirectional substring (length(pattern) >= 3, longest pattern wins)
+
+For ANW filenames: pattern-substring-of-filename match, case-insensitive,
+longest pattern wins.
 """
 
-SUFFIX_TO_KLANT: dict[str, str] = {}
-PDF_KLANT_TO_DB: dict[str, str] = {}
-ANW_FILENAME_TO_KLANT: dict[str, str] = {}
-
-try:
-    from .klant_mapping_local import (  # type: ignore[import-not-found]
-        SUFFIX_TO_KLANT,
-        PDF_KLANT_TO_DB,
-        ANW_FILENAME_TO_KLANT,
-    )
-except ImportError:
-    pass
+from __future__ import annotations
+from pathlib import Path
+import aiosqlite
+from database import DB_PATH, get_db_ctx
 
 
-def resolve_klant(pdf_name: str | None, filename_suffix: str | None,
-                  klant_lookup: dict[str, int]) -> tuple[str | None, int | None]:
-    """Resolve a klant name from PDF or filename suffix to (db_naam, klant_id).
+async def _query_one(db_path: Path, sql: str,
+                      params: tuple) -> tuple[str, int] | None:
+    """Run sql, return (naam, id) of first row or None. Uses Row factory."""
+    async with get_db_ctx(db_path) as conn:
+        prev_factory = conn.row_factory
+        conn.row_factory = aiosqlite.Row
+        try:
+            cur = await conn.execute(sql, params)
+            row = await cur.fetchone()
+        finally:
+            conn.row_factory = prev_factory
+    if row is None:
+        return None
+    return row['naam'], row['id']
 
-    Args:
-        pdf_name: Klant name extracted from PDF content (may be None)
-        filename_suffix: Klant suffix from filename (e.g., 'Winsum') (may be None)
-        klant_lookup: dict mapping DB klant naam → klant_id
 
-    Returns:
-        (db_naam, klant_id) or (None, None) if not resolved
+async def resolve_klant(db_path: Path = DB_PATH,
+                        pdf_name: str | None = None,
+                        filename_suffix: str | None = None
+                        ) -> tuple[str | None, int | None]:
+    """Resolve klant by PDF text and/or filename suffix.
+
+    Returns (klant_naam, klant_id) or (None, None) if no match.
     """
-    if filename_suffix and filename_suffix in SUFFIX_TO_KLANT:
-        db_name = SUFFIX_TO_KLANT[filename_suffix]
-        if db_name in klant_lookup:
-            return db_name, klant_lookup[db_name]
-
-    if pdf_name and pdf_name in PDF_KLANT_TO_DB:
-        db_name = PDF_KLANT_TO_DB[pdf_name]
-        if db_name in klant_lookup:
-            return db_name, klant_lookup[db_name]
+    if filename_suffix:
+        match = await _query_one(db_path, """
+            SELECT k.naam AS naam, k.id AS id FROM klant_aliases a
+            JOIN klanten k ON k.id = a.klant_id
+            WHERE a.type = 'suffix' AND a.pattern = ?
+            LIMIT 1
+        """, (filename_suffix.strip(),))
+        if match:
+            return match
 
     if pdf_name:
-        for pdf_variant, db_name in PDF_KLANT_TO_DB.items():
-            if pdf_variant.lower() in pdf_name.lower() or pdf_name.lower() in pdf_variant.lower():
-                if db_name in klant_lookup:
-                    return db_name, klant_lookup[db_name]
+        match = await _query_one(db_path, """
+            SELECT k.naam AS naam, k.id AS id FROM klant_aliases a
+            JOIN klanten k ON k.id = a.klant_id
+            WHERE a.type = 'pdf_text' AND a.pattern = ?
+            LIMIT 1
+        """, (pdf_name.strip(),))
+        if match:
+            return match
 
-    if pdf_name and pdf_name in klant_lookup:
-        return pdf_name, klant_lookup[pdf_name]
+        match = await _query_one(db_path, """
+            SELECT id, naam FROM klanten
+            WHERE naam = ? COLLATE NOCASE
+            ORDER BY id ASC
+            LIMIT 1
+        """, (pdf_name.strip(),))
+        if match:
+            return match
+
+        match = await _query_one(db_path, """
+            SELECT k.naam AS naam, k.id AS id FROM klant_aliases a
+            JOIN klanten k ON k.id = a.klant_id
+            WHERE a.type = 'pdf_text'
+              AND length(a.pattern) >= 3
+              AND (instr(LOWER(?), LOWER(a.pattern)) > 0
+                OR instr(LOWER(a.pattern), LOWER(?)) > 0)
+            ORDER BY length(a.pattern) DESC, k.id ASC
+            LIMIT 1
+        """, (pdf_name.strip(), pdf_name.strip()))
+        if match:
+            return match
 
     return None, None
 
 
-def resolve_anw_klant(filename: str, klant_lookup: dict[str, int]) -> tuple[str | None, int | None]:
-    """Resolve ANW klant from filename pattern."""
-    for pattern, db_name in ANW_FILENAME_TO_KLANT.items():
-        if pattern.lower() in filename.lower():
-            if db_name in klant_lookup:
-                return db_name, klant_lookup[db_name]
-    return None, None
+async def resolve_anw_klant(db_path: Path = DB_PATH,
+                             filename: str = ''
+                             ) -> tuple[str | None, int | None]:
+    """Resolve ANW klant from filename via klant_aliases (type='anw_filename').
+
+    Pattern is a substring of filename, case-insensitive. Longest pattern wins,
+    then ASC klant_id for determinism. Returns (klant_naam, klant_id) or
+    (None, None).
+    """
+    if not filename:
+        return None, None
+    match = await _query_one(db_path, """
+        SELECT k.naam AS naam, k.id AS id FROM klant_aliases a
+        JOIN klanten k ON k.id = a.klant_id
+        WHERE a.type = 'anw_filename'
+          AND length(a.pattern) >= 3
+          AND instr(LOWER(?), LOWER(a.pattern)) > 0
+        ORDER BY length(a.pattern) DESC, k.id ASC
+        LIMIT 1
+    """, (filename.strip(),))
+    return match if match else (None, None)
