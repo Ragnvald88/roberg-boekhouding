@@ -91,7 +91,7 @@ def test_archive_anw_lands_in_anw_diensten(tmp_path, monkeypatch):
 
 def test_archive_vergoeding_lands_in_inkomsten_root(tmp_path, monkeypatch):
     """vergoeding type writes to Inkomsten/ flat (matches user pattern of
-    e.g. 2026-027_Zwart.pdf at the root)."""
+    e.g. 2026-027_Klant16.pdf at the root)."""
     from components import archive_paths
     monkeypatch.setattr(archive_paths, 'ARCHIVE_BASE', tmp_path)
     from components.invoice_generator import archive_factuur_pdf
@@ -102,10 +102,10 @@ def test_archive_vergoeding_lands_in_inkomsten_root(tmp_path, monkeypatch):
 
     result = archive_factuur_pdf(
         src, factuur_type='vergoeding', factuur_datum='2026-04-01',
-        archive_filename='2026-027_Zwart.pdf')
+        archive_filename='2026-027_Klant16.pdf')
 
     expected = (tmp_path / 'Inkomen en Uitgaven' / '2026'
-                / 'Inkomsten' / '2026-027_Zwart.pdf')
+                / 'Inkomsten' / '2026-027_Klant16.pdf')
     assert result == expected
     assert expected.exists()
 
