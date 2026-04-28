@@ -8,6 +8,7 @@ from nicegui import ui
 from database import (
     add_klant, update_klant,
     get_klant_locaties, add_klant_locatie, delete_klant_locatie,
+    get_klant_aliases, add_klant_alias, delete_klant_alias,
     DB_PATH,
 )
 
@@ -239,6 +240,73 @@ async def open_klant_dialog(klant: dict | None = None,
                             'flat dense round color=primary')
 
             await refresh_locaties()
+
+        # -- Aliassen voor PDF-import (edit mode only) --
+        if is_edit and klant.get('id'):
+            klant_id_alias = klant['id']
+            ui.separator().classes('q-my-md')
+            _section_label('Aliassen voor PDF-import')
+            ui.label(
+                'PDF-namen of bestandssuffixen die deze klant herkennen '
+                'tijdens import. Auto-leren via /facturen vult deze ook.'
+            ).classes('text-caption text-grey-5')
+
+            alias_container = ui.column().classes('w-full gap-1 q-mt-xs')
+
+            async def refresh_aliases():
+                alias_container.clear()
+                rows = await get_klant_aliases(DB_PATH, klant_id_alias)
+                with alias_container:
+                    if not rows:
+                        ui.label('(nog geen aliassen)').classes(
+                            'text-italic text-grey')
+                    for r in rows:
+                        with ui.row().classes('w-full items-center gap-2'):
+                            ui.badge(r['type']).props('color=grey-6')
+                            ui.label(r['pattern']).classes('flex-grow q-ml-sm')
+
+                            async def del_alias(aid=r['id']):
+                                await delete_klant_alias(DB_PATH, aid)
+                                ui.notify('Alias verwijderd', type='info')
+                                await refresh_aliases()
+
+                            ui.button(icon='close', on_click=del_alias).props(
+                                'flat dense round size=sm color=negative')
+
+                    # Add-row
+                    with ui.row().classes('w-full items-end gap-2'):
+                        new_type = ui.select(
+                            ['suffix', 'pdf_text', 'anw_filename'],
+                            value='pdf_text', label='Type',
+                        ).classes('w-32').props('dense')
+                        new_pattern = ui.input('Patroon').classes(
+                            'flex-grow').props('dense')
+
+                        async def add_alias():
+                            pat = (new_pattern.value or '').strip()
+                            if len(pat) < 3:
+                                ui.notify(
+                                    'Patroon moet minimaal 3 tekens zijn',
+                                    type='warning')
+                                return
+                            try:
+                                await add_klant_alias(
+                                    DB_PATH, klant_id_alias,
+                                    new_type.value, pat)
+                            except Exception as e:
+                                ui.notify(
+                                    f'Kon niet toevoegen: {e}',
+                                    type='negative')
+                                return
+                            new_pattern.value = ''
+                            ui.notify(f'Alias "{pat}" toegevoegd',
+                                      type='positive')
+                            await refresh_aliases()
+
+                        ui.button(icon='add', on_click=add_alias).props(
+                            'flat dense round color=primary')
+
+            await refresh_aliases()
 
         # -- Actions --
         with ui.row().classes('w-full justify-end gap-2 q-mt-lg'):
