@@ -3851,6 +3851,50 @@ async def remember_alias(db_path: Path, klant_id: int,
             'conflicts': conflicts}
 
 
+async def process_remember_alias(db_path: Path,
+                                  klant_id: int,
+                                  target_klant_naam: str,
+                                  pdf_extracted_name: str | None,
+                                  filename_suffix: str | None,
+                                  on_conflict) -> dict:
+    """Auto-learn orchestrator: call remember_alias, then resolve conflicts via callback.
+
+    `on_conflict(conflict_dict) -> str`: async callback that decides each
+    conflict. Must return 'keep' or 'reassign'.
+
+    Returns:
+      'inserted': int           (new aliases added)
+      'already_correct': int    (alias already mapped to klant_id)
+      'conflicts_resolved': int (callback said 'reassign' AND optimistic-lock succeeded)
+      'conflicts_lost': int     (callback said 'reassign' but alias was concurrently moved)
+      'conflicts_kept': int     (callback said 'keep')
+    """
+    base = await remember_alias(db_path, klant_id, pdf_extracted_name, filename_suffix)
+    resolved = 0
+    lost = 0
+    kept = 0
+    for c in base['conflicts']:
+        decision = await on_conflict(c)
+        if decision == 'reassign':
+            ok = await update_klant_alias_target(
+                db_path, c['alias_id'],
+                expected_old_klant_id=c['existing_klant_id'],
+                new_klant_id=klant_id)
+            if ok:
+                resolved += 1
+            else:
+                lost += 1
+        else:
+            kept += 1
+    return {
+        'inserted': base['inserted'],
+        'already_correct': base['already_correct'],
+        'conflicts_resolved': resolved,
+        'conflicts_lost': lost,
+        'conflicts_kept': kept,
+    }
+
+
 async def find_pdf_matches_for_banktx(
     db_path: Path, bank_tx_id: int, jaar: int,
 ) -> list[PdfMatch]:

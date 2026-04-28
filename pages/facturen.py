@@ -45,6 +45,28 @@ PDF_DIR.mkdir(parents=True, exist_ok=True)
 app.add_static_files('/facturen-files', str(PDF_DIR))
 
 
+async def _show_alias_conflict_dialog(pattern: str,
+                                       existing_klant_naam: str,
+                                       target_klant_naam: str) -> str:
+    """Modal dialog for alias-conflict resolution during auto-learn.
+
+    Returns 'keep' or 'reassign'. Closing the dialog (X / click outside)
+    falls back to 'keep' (safe default — no overwrite).
+    """
+    with ui.dialog() as dialog, ui.card():
+        ui.label(
+            f"Alias '{pattern}' is al gekoppeld aan "
+            f"'{existing_klant_naam}'."
+        ).classes('text-lg')
+        ui.label(f"Wil je 'm verplaatsen naar '{target_klant_naam}'?")
+        with ui.row().classes('q-gutter-sm'):
+            ui.button('Behoud', on_click=lambda: dialog.submit('keep'))
+            ui.button('Verplaats', color='warning',
+                      on_click=lambda: dialog.submit('reassign'))
+    result = await dialog
+    return result if result in ('keep', 'reassign') else 'keep'
+
+
 def _is_editable(row: dict) -> bool:
     """Can this factuur show 'Bewerken' in the menu?
 
@@ -1498,6 +1520,7 @@ async def facturen_page():
 
                             # Klant resolution first — we need klant_id
                             # to compute the fuzzy dedup signature.
+                            suffix = None
                             if inv_type == 'dagpraktijk':
                                 suffix = (
                                     filename.split('_', 1)[1]
@@ -1513,6 +1536,8 @@ async def facturen_page():
 
                             parsed['_klant_naam'] = db_naam
                             parsed['_klant_id'] = klant_id
+                            parsed['_suffix'] = suffix
+                            parsed['_remember_alias'] = False
 
                             # Dedup: reject missing nummer, known nummer,
                             # or matching (klant,datum,bedrag) fingerprint
@@ -1671,6 +1696,29 @@ async def facturen_page():
                                             return handler
                                         sel.on_value_change(
                                             _make_klant_handler(i, sel))
+
+                                        # Auto-learn alias checkbox
+                                        # (default OFF — explicit opt-in
+                                        # so a wrong manual pick doesn't
+                                        # silently become permanent).
+                                        remember_label = (
+                                            f'Onthoud "'
+                                            f'{item.get("klant_name") or item.get("_suffix") or item.get("_filename", "")}'
+                                            f'"')
+
+                                        def _make_remember_handler(idx):
+                                            def handler(e):
+                                                parsed_items[idx][
+                                                    '_remember_alias'
+                                                ] = bool(e.value)
+                                            return handler
+                                        cb_remember = ui.checkbox(
+                                            remember_label,
+                                            value=False,
+                                        ).props('dense').classes(
+                                            'q-ml-sm')
+                                        cb_remember.on_value_change(
+                                            _make_remember_handler(i))
 
                                     if status == 'fout':
                                         ui.label(
@@ -1834,6 +1882,41 @@ async def facturen_page():
                             existing_signatures.add(
                                 (klant_id, datum, round(float(bedrag), 2)))
                             imported += 1
+
+                            # Auto-learn alias if user opted in via the
+                            # row-checkbox. Wrapped in try/except so a
+                            # failure in alias-bookkeeping never blocks
+                            # the import itself.
+                            if item.get('_remember_alias') and item.get('_klant_id'):
+                                try:
+                                    from database import process_remember_alias
+                                    target_klant_naam = (
+                                        item.get('_klant_naam')
+                                        or 'gekozen klant')
+
+                                    async def _on_conflict(c):
+                                        return await _show_alias_conflict_dialog(
+                                            pattern=c['pattern'],
+                                            existing_klant_naam=c['existing_klant_naam'],
+                                            target_klant_naam=target_klant_naam)
+
+                                    res = await process_remember_alias(
+                                        DB_PATH,
+                                        klant_id=item['_klant_id'],
+                                        target_klant_naam=target_klant_naam,
+                                        pdf_extracted_name=item.get('klant_name'),
+                                        filename_suffix=item.get('_suffix'),
+                                        on_conflict=_on_conflict)
+                                    if res['conflicts_lost']:
+                                        ui.notify(
+                                            f"{res['conflicts_lost']}× alias "
+                                            "kon niet verplaatst worden — "
+                                            "ondertussen elders aangepast.",
+                                            type='warning')
+                                except Exception as ex:
+                                    logging.warning(
+                                        'remember_alias mislukt voor '
+                                        f"factuur {nummer}: {ex}")
 
                             # Mirror the imported PDF to the SynologyDrive
                             # archive so /Inkomen en Uitgaven/{jaar}/
