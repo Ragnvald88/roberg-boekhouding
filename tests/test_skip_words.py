@@ -73,3 +73,16 @@ def test_derive_short_telefoon_skipped():
     bg = _bg(telefoon='12345')
     result = derive_skip_words(bg)
     assert '12345' not in result
+
+
+def test_extract_klant_name_case_insensitive_skip():
+    """Mixed-case header line should still be skipped if skip_word is canonical."""
+    from import_.pdf_parser import _extract_klant_name
+    text = """\
+testbv huisartswaarnemer
+        SomeKlant BV
+"""
+    # 'TestBV' canonical case in GENERIC_SKIP_WORDS; 'testbv' lowercase in fixture
+    # should still be skipped via case-insensitive matching.
+    result = _extract_klant_name(text, skip_words=GENERIC_SKIP_WORDS)
+    assert result == 'SomeKlant BV'

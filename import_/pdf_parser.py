@@ -16,23 +16,7 @@ import re
 import subprocess
 from pathlib import Path
 
-# Generic skip-tokens used by `_extract_klant_name` to avoid mistaking
-# the freelancer's own header lines for the customer name. Personal
-# tokens (own name, address, phone, email) live in `pdf_parser_local.py`
-# (gitignored) and override this default at import time.
-PERSONAL_SKIP_WORDS: tuple[str, ...] = (
-    'Datum', 'FACTUUR', 'Tel', 'KvK', 'IBAN', 'Mail:', 'Bank:',
-    'TestBV', 'huisartswaarnemer', 'Test Gebruiker', 'T. Gebruiker',
-    'Teststraat 1', '1234 AB', '1234AB', 'testuser', '06 000', '0600',
-    '@example.com',
-)
-
-try:
-    from .pdf_parser_local import PERSONAL_SKIP_WORDS as _local_skip_words  # type: ignore[import-not-found]
-    PERSONAL_SKIP_WORDS = PERSONAL_SKIP_WORDS + _local_skip_words
-    del _local_skip_words
-except ImportError:
-    pass
+from .skip_words import GENERIC_SKIP_WORDS
 
 
 def extract_pdf_text(pdf_path: Path) -> str:
@@ -209,20 +193,26 @@ def _extract_totaal_bedrag(text: str) -> float | None:
     return None
 
 
-def _extract_klant_name(text: str) -> str | None:
+def _extract_klant_name(text: str,
+                         skip_words: tuple[str, ...] | None = None
+                         ) -> str | None:
     """Extract klant name from invoice text.
 
-    Tries multiple strategies based on format variations.
+    skip_words: optional tuple of header tokens to skip; defaults to
+    GENERIC_SKIP_WORDS. Production callers pass derive_skip_words(bg) for
+    proper personalisation.
     """
+    if skip_words is None:
+        skip_words = GENERIC_SKIP_WORDS
+    skip_lower = tuple(s.lower() for s in skip_words)
     lines = text.split('\n')
-    skip_words = PERSONAL_SKIP_WORDS
 
     # Strategy 1: "Factuur aan:" section (2025 app-generated, 2024-041)
     for i, line in enumerate(lines):
         if 'Factuur aan:' in line:
             for j in range(i + 1, min(i + 4, len(lines))):
                 candidate = lines[j].strip()
-                if candidate and not any(s in candidate for s in skip_words):
+                if candidate and not any(s in candidate.lower() for s in skip_lower):
                     return candidate
             break
 
@@ -231,7 +221,7 @@ def _extract_klant_name(text: str) -> str | None:
         if 'Factuuradres:' in line:
             for j in range(i + 1, min(i + 5, len(lines))):
                 candidate = lines[j].strip()
-                if candidate and not any(s in candidate for s in skip_words):
+                if candidate and not any(s in candidate.lower() for s in skip_lower):
                     return candidate
             break
 
@@ -240,7 +230,7 @@ def _extract_klant_name(text: str) -> str | None:
         if line.strip() == 'Aan:':
             for j in range(i + 1, min(i + 4, len(lines))):
                 candidate = lines[j].strip()
-                if candidate and not any(s in candidate for s in skip_words):
+                if candidate and not any(s in candidate.lower() for s in skip_lower):
                     return candidate
             break
 
@@ -249,14 +239,14 @@ def _extract_klant_name(text: str) -> str | None:
         m = re.match(r'\s*Factuur aan:\s*(.+)', line)
         if m:
             name = m.group(1).strip()
-            if name and not any(s in name for s in skip_words):
+            if name and not any(s in name.lower() for s in skip_lower):
                 return name
 
     # Strategy 5: First non-header left-side text (2023 early, 2024 middle, Klant4)
     for line in lines[0:8]:
         parts = re.split(r'\s{5,}', line.strip())
         left = parts[0].strip() if parts else ''
-        if left and not any(s in left for s in skip_words) and len(left) > 3:
+        if left and not any(s in left.lower() for s in skip_lower) and len(left) > 3:
             # Avoid picking up address lines (postcodes, streets)
             if re.match(r'^\d{4}\s', left):
                 continue
@@ -271,7 +261,7 @@ def _extract_klant_name(text: str) -> str | None:
     # Strategy 6: Indented left-side text (2025-002 format with big right-side header)
     for line in lines[5:20]:
         stripped = line.strip()
-        if stripped and not any(s in stripped for s in skip_words):
+        if stripped and not any(s in stripped.lower() for s in skip_lower):
             # Must look like a practice/person name (not an address or code)
             if re.match(r'^(Huisarts|Dokter|Dhr\.|Mw\.|S\.|M\.|K\.|HAP|Gezond|Praktijk|Centrum|Klant)', stripped):
                 return stripped
@@ -563,13 +553,14 @@ def extract_anw_diensten(text: str) -> list[dict]:
     return sorted(diensten_by_date.values(), key=lambda d: d['datum'])
 
 
-def parse_dagpraktijk_text(text: str, filename: str = '') -> dict:
+def parse_dagpraktijk_text(text: str, filename: str = '',
+                           skip_words: tuple[str, ...] | None = None) -> dict:
     """Parse dagpraktijk invoice from already-extracted text."""
     return {
         'factuurnummer': _extract_factuurnummer(text),
         'factuurdatum': _extract_factuurdatum(text),
         'totaal_bedrag': _extract_totaal_bedrag(text),
-        'klant_name': _extract_klant_name(text),
+        'klant_name': _extract_klant_name(text, skip_words=skip_words),
         'work_dates': _extract_work_dates(text),
         'line_items': extract_dagpraktijk_line_items(text),
         'filename': filename,
