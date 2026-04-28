@@ -15,9 +15,4 @@ Boekhouding.app/
 codex.md
 .claude/.codex-review-state
 
-# Local overrides containing personally-identifying / customer data —
-# loaded by their public counterparts via try/except ImportError.
-import_/klant_mapping_local.py
-import_/seed_data_local.py
-import_/pdf_parser_local.py
 .git-scrub-*
