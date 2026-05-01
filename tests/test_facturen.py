@@ -1131,3 +1131,51 @@ def test_werkdag_validator_blocks_tarief_zero_at_import():
     }
     with pytest.raises(ValidationError, match='tarief=0'):
         validate_werkdag_record(bad_item, inv_type='factuur')
+
+
+# ---------------------------------------------------------------------------
+# B11 — on_send_mail year-lock pre-flight (source-pin)
+# ---------------------------------------------------------------------------
+# Nested closure handler in @ui.page is niet direct unit-testbaar zonder
+# UI-mock. Source-pin verifieert dat de invariant 'year-lock vóór Mail.app'
+# in de code aanwezig is, identiek aan de bestaande on_send_herinnering
+# handler.
+
+
+class TestOnSendMailSourcePin:
+
+    def test_on_send_mail_has_year_lock_preflight(self):
+        """on_send_mail moet assert_year_writable + YearLockedError catch
+        + warning toast hebben tussen handler-start en _ensure_factuur_pdf."""
+        import inspect
+        from pages import facturen
+        src = inspect.getsource(facturen)
+        idx = src.find('async def on_send_mail(e):')
+        assert idx > 0, "on_send_mail not found"
+        end_idx = src.find('_ensure_factuur_pdf', idx)
+        assert end_idx > idx
+        block = src[idx:end_idx]
+
+        assert "await assert_year_writable(DB_PATH, row['datum'])" in block, (
+            "on_send_mail mist exact year-lock preflight (B11) — "
+            "expected: await assert_year_writable(DB_PATH, row['datum'])")
+        assert "except YearLockedError" in block, (
+            "on_send_mail mist YearLockedError catch (B11)")
+        assert "type='warning'" in block, (
+            "on_send_mail mist warning toast (B11)")
+
+    def test_on_send_mail_pattern_matches_on_send_herinnering(self):
+        """Reference: on_send_herinnering had het patroon eerst. Pin dat
+        on_send_mail dezelfde elementen heeft (defensive against drift)."""
+        import inspect
+        from pages import facturen
+        src = inspect.getsource(facturen)
+        for handler in ('on_send_mail', 'on_send_herinnering'):
+            idx = src.find(f'async def {handler}(e):')
+            assert idx > 0, f"{handler} not found"
+            end = src.find('_ensure_factuur_pdf', idx)
+            block = src[idx:end]
+            assert 'assert_year_writable' in block, (
+                f"{handler} mist year-lock check")
+            assert 'YearLockedError' in block, (
+                f"{handler} mist YearLockedError catch")
