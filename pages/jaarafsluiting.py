@@ -13,7 +13,7 @@ from fiscal.constants import URENCRITERIUM_DEFAULT
 from components.shared_ui import year_options
 from components.kpi_card import kpi_strip
 from components.layout import create_layout, page_title
-from components.utils import format_euro
+from components.utils import format_euro, write_pdf_atomic
 from database import (
     update_balans_inputs,
     update_jaarafsluiting_status,
@@ -805,11 +805,12 @@ async def jaarafsluiting_page():
                 pdf_dir = DB_PATH.parent / 'pdf' / str(jaar)
                 pdf_dir.mkdir(parents=True, exist_ok=True)
                 pdf_path = pdf_dir / f'Jaarcijfers_{jaar}.pdf'
+                # K2: atomic write helper — voorkomt corrupte PDF bij
+                # WeasyPrint crash mid-write.
                 try:
-                    from weasyprint import HTML
-                    await asyncio.to_thread(
-                        lambda: HTML(string=html).write_pdf(str(pdf_path)))
-                    ui.notify(f'PDF opgeslagen: {pdf_path.name}', type='positive')
+                    await write_pdf_atomic(html, pdf_path)
+                    ui.notify(f'PDF opgeslagen: {pdf_path.name}',
+                              type='positive')
                 except Exception as e:
                     ui.notify(f'PDF fout: {e}', type='negative')
 

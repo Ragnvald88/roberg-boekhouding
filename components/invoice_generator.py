@@ -269,5 +269,15 @@ def generate_invoice(factuur_nummer: str, klant: dict, werkdagen: list[dict],
     output_path = output_dir / f"{factuur_nummer}_{klant_naam}.pdf"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    doc.write_pdf(str(output_path))
+    # K2: atomic write — write naar .tmp, dan os.replace. Bij WeasyPrint-
+    # crash mid-write blijft de bestaande PDF intact en wordt .tmp opgeruimd.
+    tmp_path = output_path.with_suffix(output_path.suffix + '.tmp')
+    try:
+        doc.write_pdf(str(tmp_path))
+        os.replace(tmp_path, output_path)
+    except Exception:
+        if tmp_path.exists():
+            tmp_path.unlink()
+        raise
+
     return output_path

@@ -1,6 +1,8 @@
 """Tests for invoice rendering, line-item conversion, and subtotal calculations."""
 
+import os
 import pytest
+from pathlib import Path
 from types import SimpleNamespace
 
 from components.invoice_preview import render_invoice_html
@@ -360,3 +362,62 @@ def test_werkdagen_to_items_subtotal_integration():
     assert subtotaal_werk == 1360.0
     # wd1: 50*0.23=11.50 → km=11.50
     assert subtotaal_km == 11.50
+
+
+def test_invoice_generator_keeps_existing_pdf_on_write_failure(
+        tmp_path, monkeypatch):
+    """K2 regression: invoice_generator schrijft via .tmp + os.replace.
+    Bij doc.write_pdf crash mid-write blijft een bestaande PDF intact en
+    wordt de .tmp opgeruimd.
+
+    We mock alleen os.replace in de generator-namespace om te crashen na
+    een succesvolle .tmp-write. Dat triggert de cleanup-branch zonder
+    een echte WeasyPrint-render te hoeven faken.
+    """
+    from components import invoice_generator
+
+    klant = {
+        'naam': 'Sentinel BV',
+        'contactpersoon': 'Test Contact',
+        'adres': 'Sentinellaan 1', 'postcode': '1234 AB',
+        'plaats': 'Teststad',
+    }
+    werkdagen = [{
+        'datum': '2026-02-01', 'activiteit': 'Waarneming',
+        'uren': 8, 'tarief': 75, 'km': 0, 'km_tarief': 0,
+    }]
+
+    factuur_nummer = '2026-TEST'
+    klant_naam_part = klant['naam'].split()[-1].replace("'", '')
+    output_path = tmp_path / f"{factuur_nummer}_{klant_naam_part}.pdf"
+
+    sentinel = b'%PDF-1.4 SENTINEL EXISTING'
+    output_path.write_bytes(sentinel)
+
+    def boom_replace(src, dst):  # noqa: ARG001
+        # .tmp moet zijn aangemaakt vóór de boom
+        assert Path(src).exists(), '.tmp must exist before replace'
+        raise OSError("simulated replace failure")
+
+    monkeypatch.setattr(os, 'replace', boom_replace)
+
+    with pytest.raises(OSError, match="simulated replace failure"):
+        invoice_generator.generate_invoice(
+            factuur_nummer=factuur_nummer,
+            klant=klant,
+            werkdagen=werkdagen,
+            output_dir=tmp_path,
+            factuur_datum='2026-02-15',
+            bedrijfsgegevens={
+                'bedrijfsnaam': 'Test', 'naam': 'J. Test', 'functie': 'Arts',
+                'adres': 'Hoofdstraat 1', 'postcode_plaats': '1000AA Dorp',
+                'kvk': '12345678', 'iban': 'NL00BANK0000000000',
+                'thuisplaats': 'Dorp',
+            },
+        )
+
+    # Sentinel intact: bestaande PDF niet gemuteerd
+    assert output_path.read_bytes() == sentinel
+    # Geen leftover .tmp
+    leftovers = list(tmp_path.glob('*.tmp'))
+    assert leftovers == []
