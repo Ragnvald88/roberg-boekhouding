@@ -383,6 +383,17 @@ FACTUREERBARE_WERKDAG_FILTER_W_PREFIX = (
 )
 
 
+def _today_iso() -> str:
+    """ISO-formatted vandaag.
+
+    Wrapper rond `_date.today()` zodat tests met `monkeypatch.setattr(
+    database, '_today_iso', lambda: '2026-06-15')` reproduceerbare datums
+    kunnen forceren — `datetime.date.today()` is een immutable builtin
+    en niet direct patchbaar.
+    """
+    return _date.today().isoformat()
+
+
 # --- Versioned migrations ---
 # Each tuple: (version, description, sql_list_or_None)
 # sql_list=None means a callable handles it (see MIGRATION_CALLABLES).
@@ -1315,7 +1326,7 @@ async def get_werkdagen_ongefactureerd(db_path: Path = DB_PATH,
     future-werkdagen uit). Behoud JOIN klanten voor klant_naam in
     _row_to_werkdag.
     """
-    today_iso = _date.today().isoformat()
+    today_iso = _today_iso()
     async with get_db_ctx(db_path) as conn:
         sql = (
             f"""SELECT w.*, k.naam as klant_naam
@@ -1846,7 +1857,7 @@ async def get_uitgaven_per_categorie(db_path: Path = DB_PATH,
             "FROM uitgaven u "
             "LEFT JOIN banktransacties b ON b.id = u.bank_tx_id "
             "WHERE u.is_investering = 0 "
-            "AND (u.bank_tx_id IS NULL OR (b.genegeerd = 0 AND b.bedrag < 0))"
+            "AND (u.bank_tx_id IS NULL OR (COALESCE(b.genegeerd, 0) = 0 AND b.bedrag < 0))"
         )
         params = []
         if jaar:
@@ -1873,7 +1884,7 @@ async def get_investeringen(db_path: Path = DB_PATH, jaar: int = None) -> list[U
             "SELECT u.* FROM uitgaven u "
             "LEFT JOIN banktransacties b ON b.id = u.bank_tx_id "
             "WHERE u.is_investering = 1 "
-            "AND (u.bank_tx_id IS NULL OR (b.genegeerd = 0 AND b.bedrag < 0))"
+            "AND (u.bank_tx_id IS NULL OR (COALESCE(b.genegeerd, 0) = 0 AND b.bedrag < 0))"
         )
         params = []
         if jaar:
@@ -2966,11 +2977,15 @@ async def get_data_counts(db_path: Path = DB_PATH, jaar: int = 2026) -> dict:
         n_facturen = (await cur.fetchone())[0]
         # B1: zelfde filter als get_kpis — n_uitgaven moet alleen zichtbare
         # zakelijke uitgaven tellen, consistent met /kosten breakdown.
+        # Codex round-3 follow-up: óók is_investering=0 zoals get_kpis,
+        # zodat 'aantal uitgaven' het kosten-deel telt, niet de
+        # afschrijfbare investeringen die via aparte kanaal lopen.
         cur = await conn.execute(
             f"""SELECT COUNT(*)
                 FROM uitgaven u
                 LEFT JOIN banktransacties b ON b.id = u.bank_tx_id
                 WHERE u.datum >= ? AND u.datum < ?
+                  AND u.is_investering = 0
                   AND {ZICHTBARE_ZAKELIJKE_UITGAVE_FILTER}""",
             (jaar_start, jaar_end))
         n_uitgaven = (await cur.fetchone())[0]
@@ -3008,7 +3023,7 @@ async def get_representatie_totaal(db_path: Path = DB_PATH, jaar: int = 2026) ->
             "WHERE u.datum >= ? AND u.datum < ? "
             "AND u.categorie = 'Representatie' "
             "AND u.is_investering = 0 "
-            "AND (u.bank_tx_id IS NULL OR (b.genegeerd = 0 AND b.bedrag < 0))",
+            "AND (u.bank_tx_id IS NULL OR (COALESCE(b.genegeerd, 0) = 0 AND b.bedrag < 0))",
             (f'{jaar}-01-01', f'{jaar+1}-01-01')
         )
         return (await cur.fetchone())[0]
@@ -3023,7 +3038,7 @@ async def get_werkdagen_ongefactureerd_summary(
     OPLEIDING) uit. Banner-count is daarmee consistent met /werkdagen
     'echt-factureerbaar' weergave.
     """
-    today_iso = _date.today().isoformat()
+    today_iso = _today_iso()
     async with get_db_ctx(db_path) as conn:
         cur = await conn.execute(
             f"""SELECT COUNT(*) as aantal,
@@ -3207,7 +3222,7 @@ async def get_investeringen_voor_afschrijving(db_path: Path = DB_PATH,
             "SELECT u.* FROM uitgaven u "
             "LEFT JOIN banktransacties b ON b.id = u.bank_tx_id "
             "WHERE u.is_investering = 1 "
-            "AND (u.bank_tx_id IS NULL OR (b.genegeerd = 0 AND b.bedrag < 0)) "
+            "AND (u.bank_tx_id IS NULL OR (COALESCE(b.genegeerd, 0) = 0 AND b.bedrag < 0)) "
             "AND CAST(substr(u.datum, 1, 4) AS INTEGER) <= ? "
             "ORDER BY u.datum",
             (tot_jaar,)
@@ -3657,7 +3672,7 @@ async def get_nog_te_factureren(db_path: Path = DB_PATH, jaar: int = 0) -> float
     in 'nog te factureren' bedrag — verwarrend voor de gebruiker die
     werkdagen vooruitplant.
     """
-    today_iso = _date.today().isoformat()
+    today_iso = _today_iso()
     async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
             f"""SELECT COALESCE(SUM(uren * tarief + km * km_tarief), 0.0)
@@ -4312,7 +4327,7 @@ async def get_kosten_breakdown(db_path: Path, jaar: int) -> dict[str, float]:
     LEFT JOIN banktransacties b ON u.bank_tx_id = b.id
     WHERE u.datum >= ? AND u.datum < ?
       AND u.is_investering = 0
-      AND (b.id IS NULL OR (b.genegeerd = 0 AND b.bedrag < 0))
+      AND (b.id IS NULL OR (COALESCE(b.genegeerd, 0) = 0 AND b.bedrag < 0))
     GROUP BY COALESCE(u.categorie, '')
     """
     async with get_db_ctx(db_path) as conn:
@@ -4336,7 +4351,7 @@ async def get_kosten_per_maand(db_path: Path, jaar: int) -> list[float]:
     LEFT JOIN banktransacties b ON u.bank_tx_id = b.id
     WHERE u.datum >= ? AND u.datum < ?
       AND u.is_investering = 0
-      AND (b.id IS NULL OR (b.genegeerd = 0 AND b.bedrag < 0))
+      AND (b.id IS NULL OR (COALESCE(b.genegeerd, 0) = 0 AND b.bedrag < 0))
     GROUP BY m
     """
     out = [0.0] * 12

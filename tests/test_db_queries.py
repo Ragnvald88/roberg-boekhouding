@@ -1,6 +1,6 @@
 """Tests voor untested database query functions (KPIs, omzet, debiteuren, etc.)."""
 
-from datetime import date, timedelta
+from datetime import date
 
 import pytest
 from database import (
@@ -1667,20 +1667,27 @@ async def test_get_werkdagen_ongefactureerd_summary_returns_aantal_key(db):
 
 
 @pytest.mark.asyncio
-async def test_get_werkdagen_ongefactureerd_summary_excludes_future_dates(db):
-    """B7: werkdag in de toekomst (geplande dienst) telt niet mee in banner."""
-    kid = await add_klant(db, naam="Test", tarief_uur=80)
-    today = date.today()
-    past = (today - timedelta(days=30)).isoformat()
-    future = (today + timedelta(days=30)).isoformat()
-    # Past werkdag (datum in jaar 'today.year')
-    await add_werkdag(db, datum=past, klant_id=kid,
-                      uren=8, tarief=80, urennorm=1)
-    # Future werkdag (zelfde jaar, nog niet plaatsgevonden)
-    await add_werkdag(db, datum=future, klant_id=kid,
-                      uren=8, tarief=80, urennorm=1)
+async def test_get_werkdagen_ongefactureerd_summary_excludes_future_dates(
+        db, monkeypatch):
+    """B7: werkdag in de toekomst (geplande dienst) telt niet mee in banner.
 
-    result = await get_werkdagen_ongefactureerd_summary(db, jaar=today.year)
+    Codex round-3: monkeypatch _date.today naar fixed midyear date zodat
+    de test niet flaky is rond januari/december (waar past/future
+    over jaargrenzen lopen).
+    """
+    import database
+    fixed_today = date(2026, 6, 15)
+    monkeypatch.setattr(database, '_today_iso',
+                         lambda: fixed_today.isoformat())
+
+    kid = await add_klant(db, naam="Test", tarief_uur=80)
+    # Past en future binnen 2026
+    await add_werkdag(db, datum='2026-05-15', klant_id=kid,
+                      uren=8, tarief=80, urennorm=1)  # past
+    await add_werkdag(db, datum='2026-07-15', klant_id=kid,
+                      uren=8, tarief=80, urennorm=1)  # future
+
+    result = await get_werkdagen_ongefactureerd_summary(db, jaar=2026)
     assert result['aantal'] == 1, (
         "Toekomstige werkdag mag niet als 'ongefactureerd' tellen")
 
@@ -1702,18 +1709,20 @@ async def test_get_werkdagen_ongefactureerd_summary_excludes_zero_tarief(db):
 
 
 @pytest.mark.asyncio
-async def test_get_werkdagen_ongefactureerd_excludes_future_and_zero_tarief(db):
+async def test_get_werkdagen_ongefactureerd_excludes_future_and_zero_tarief(
+        db, monkeypatch):
     """B18: get_werkdagen_ongefactureerd (de lijst-helper) moet zelfde filter
     toepassen als de summary."""
+    import database
+    fixed_today = date(2026, 6, 15)
+    monkeypatch.setattr(database, '_today_iso',
+                         lambda: fixed_today.isoformat())
     kid = await add_klant(db, naam="Test", tarief_uur=80)
-    today = date.today()
-    past = (today - timedelta(days=30)).isoformat()
-    future = (today + timedelta(days=30)).isoformat()
-    await add_werkdag(db, datum=past, klant_id=kid,
+    await add_werkdag(db, datum='2026-05-15', klant_id=kid,
                       uren=8, tarief=80, urennorm=1)
-    await add_werkdag(db, datum=future, klant_id=kid,
+    await add_werkdag(db, datum='2026-07-15', klant_id=kid,
                       uren=8, tarief=80, urennorm=1)
-    await add_werkdag(db, datum=past, klant_id=kid,
+    await add_werkdag(db, datum='2026-05-15', klant_id=kid,
                       uren=24, tarief=0, urennorm=0)
 
     result = await get_werkdagen_ongefactureerd(db)
@@ -1722,15 +1731,17 @@ async def test_get_werkdagen_ongefactureerd_excludes_future_and_zero_tarief(db):
 
 
 @pytest.mark.asyncio
-async def test_get_werkdagen_ongefactureerd_klant_id_optional(db):
-    """B18: klant_id=None geeft alle factureerbare werkdagen — niet KaPOT."""
+async def test_get_werkdagen_ongefactureerd_klant_id_optional(db, monkeypatch):
+    """B18: klant_id=None geeft alle factureerbare werkdagen."""
+    import database
+    fixed_today = date(2026, 6, 15)
+    monkeypatch.setattr(database, '_today_iso',
+                         lambda: fixed_today.isoformat())
     kid1 = await add_klant(db, naam="A", tarief_uur=80)
     kid2 = await add_klant(db, naam="B", tarief_uur=80)
-    today = date.today()
-    past = (today - timedelta(days=10)).isoformat()
-    await add_werkdag(db, datum=past, klant_id=kid1,
+    await add_werkdag(db, datum='2026-06-05', klant_id=kid1,
                       uren=8, tarief=80, urennorm=1)
-    await add_werkdag(db, datum=past, klant_id=kid2,
+    await add_werkdag(db, datum='2026-06-05', klant_id=kid2,
                       uren=8, tarief=80, urennorm=1)
 
     # Geen klant_id → alle klanten
@@ -1743,12 +1754,15 @@ async def test_get_werkdagen_ongefactureerd_klant_id_optional(db):
 
 
 @pytest.mark.asyncio
-async def test_get_werkdagen_ongefactureerd_returns_klant_naam(db):
+async def test_get_werkdagen_ongefactureerd_returns_klant_naam(
+        db, monkeypatch):
     """B18: JOIN klanten moet behouden — _row_to_werkdag verwacht klant_naam."""
+    import database
+    fixed_today = date(2026, 6, 15)
+    monkeypatch.setattr(database, '_today_iso',
+                         lambda: fixed_today.isoformat())
     kid = await add_klant(db, naam="Praktijk Acme", tarief_uur=80)
-    today = date.today()
-    past = (today - timedelta(days=5)).isoformat()
-    await add_werkdag(db, datum=past, klant_id=kid,
+    await add_werkdag(db, datum='2026-06-10', klant_id=kid,
                       uren=8, tarief=80, urennorm=1)
 
     rows = await get_werkdagen_ongefactureerd(db, klant_id=kid)
@@ -1756,21 +1770,64 @@ async def test_get_werkdagen_ongefactureerd_returns_klant_naam(db):
     assert rows[0].klant_naam == 'Praktijk Acme'
 
 
+# ---------------------------------------------------------------------------
+# Codex round-3 follow-up coverage: legacy NULL genegeerd + tot_datum positive
+# ---------------------------------------------------------------------------
+
+
+# NB: codex round-3 vroeg om een 'NULL genegeerd legacy' test, maar het
+# huidige schema (migratie 24+) heeft `genegeerd INTEGER NOT NULL DEFAULT 0`.
+# NULL kan dus niet voorkomen. COALESCE in ZICHTBARE_ZAKELIJKE_UITGAVE_FILTER
+# blijft als forward-compatible defensieve guard (kost niets).
+
+
 @pytest.mark.asyncio
-async def test_get_nog_te_factureren_excludes_future_werkdagen(db):
+async def test_get_kpis_tot_datum_excludes_positive_banktx_uitgaven(db):
+    """B1 — get_kpis_tot_datum moet ook positieve-banktx-linked uitgaven
+    uitsluiten (parity met get_kpis)."""
+    await add_banktransacties(db, [
+        {'datum': '2026-04-05', 'bedrag': 25.0,  # positive = credit
+         'tegenpartij': 'Refund', 'omschrijving': 'x', 'categorie': ''},
+    ], csv_bestand='t.csv')
+    txns = await get_banktransacties(db, jaar=2026)
+    bid = txns[0].id
+    await ensure_uitgave_for_banktx(db, bank_tx_id=bid, categorie='Bankkosten')
+
+    out = await get_kpis_tot_datum(db, jaar=2026, max_datum='2026-12-31')
+    assert out['kosten'] == 0
+
+
+@pytest.mark.asyncio
+async def test_get_data_counts_excludes_investeringen_from_n_uitgaven(db):
+    """B1 codex round-3: n_uitgaven moet investeringen niet meetellen
+    (consistent met get_kpis kosten die ook is_investering=0 filtert)."""
+    await add_uitgave(db, datum="2026-01-10", categorie="Bankkosten",
+                      omschrijving="Cash kost", bedrag=10)
+    await add_uitgave(db, datum="2026-02-10", categorie="Apparatuur",
+                      omschrijving="Laptop", bedrag=2000, is_investering=1,
+                      levensduur_jaren=5)
+    counts = await get_data_counts(db, jaar=2026)
+    assert counts['n_uitgaven'] == 1, (
+        "n_uitgaven moet investeringen uitsluiten")
+
+
+@pytest.mark.asyncio
+async def test_get_nog_te_factureren_excludes_future_werkdagen(
+        db, monkeypatch):
     """Q7 (codex round-4): get_nog_te_factureren had wel tarief>0 filter
     maar geen datum<=today filter — toekomstige werkdagen telden mee
     in 'nog te factureren' bedrag."""
+    import database
+    fixed_today = date(2026, 6, 15)
+    monkeypatch.setattr(database, '_today_iso',
+                         lambda: fixed_today.isoformat())
     kid = await add_klant(db, naam="Test", tarief_uur=80)
-    today = date.today()
-    past = (today - timedelta(days=10)).isoformat()
-    future = (today + timedelta(days=20)).isoformat()
-    await add_werkdag(db, datum=past, klant_id=kid,
-                      uren=8, tarief=80, urennorm=1)  # 8*80 = 640
-    await add_werkdag(db, datum=future, klant_id=kid,
-                      uren=8, tarief=80, urennorm=1)  # 8*80 = 640 — moet niet meetellen
+    await add_werkdag(db, datum='2026-06-05', klant_id=kid,
+                      uren=8, tarief=80, urennorm=1)  # past, 8*80 = 640
+    await add_werkdag(db, datum='2026-07-05', klant_id=kid,
+                      uren=8, tarief=80, urennorm=1)  # future, mag niet tellen
 
-    bedrag = await get_nog_te_factureren(db, jaar=today.year)
+    bedrag = await get_nog_te_factureren(db, jaar=2026)
     assert bedrag == 640, (
         "Future werkdag mag niet meetellen in nog te factureren")
 
