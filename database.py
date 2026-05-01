@@ -343,6 +343,46 @@ async def _get_existing_columns(conn, table: str) -> set[str]:
     return {row[1] for row in rows}
 
 
+# ---------------------------------------------------------------------------
+# Shared SQL predicates — gebruik in queries die deze invariant moeten houden.
+# Round-2 review fragmenteerde dezelfde regel over 5+ queries; round-3
+# vond dat 3 dashboard-helpers gemist waren. Centralisatie voorkomt dat
+# de 6e/7e caller hetzelfde gat opnieuw introduceert.
+# ---------------------------------------------------------------------------
+
+# "Zakelijke uitgave die zichtbaar telt als kosten":
+#   - Cash-uitgaven (bank_tx_id IS NULL) tellen mee.
+#   - Bank-gekoppelde uitgaven tellen alleen als de bank-tx niet privé is
+#     (genegeerd=0; COALESCE voor legacy NULLs) EN de bedrag-sign correct
+#     is (debit, bedrag<0).
+#
+# Voorkomt: phantom-positive-banktx-linked uitgaven (P0-1) en privé-
+# gemarkeerde uitgaven die anders dashboard winst opblazen.
+#
+# Caller MOET 'u' alias gebruiken voor uitgaven en 'b' voor banktransacties:
+#   FROM uitgaven u LEFT JOIN banktransacties b ON b.id = u.bank_tx_id
+ZICHTBARE_ZAKELIJKE_UITGAVE_FILTER = (
+    "(u.bank_tx_id IS NULL "
+    "OR (COALESCE(b.genegeerd, 0) = 0 AND b.bedrag < 0))"
+)
+
+# "Factureerbare ongefactureerde werkdag":
+#   - factuurnummer leeg OF NULL = nog niet gefactureerd
+#     (legacy data heeft beide vormen)
+#   - tarief > 0 = sluit ACHTERWACHT/CONGRES/OPLEIDING uit
+#   - datum <= today (caller passes today_iso as the LAST ?)
+FACTUREERBARE_WERKDAG_FILTER = (
+    "(factuurnummer = '' OR factuurnummer IS NULL) "
+    "AND tarief > 0 AND datum <= ?"
+)
+
+# Idem maar met 'w.' alias voor JOIN-queries.
+FACTUREERBARE_WERKDAG_FILTER_W_PREFIX = (
+    "(w.factuurnummer = '' OR w.factuurnummer IS NULL) "
+    "AND w.tarief > 0 AND w.datum <= ?"
+)
+
+
 # --- Versioned migrations ---
 # Each tuple: (version, description, sql_list_or_None)
 # sql_list=None means a callable handles it (see MIGRATION_CALLABLES).
@@ -1269,11 +1309,20 @@ async def delete_werkdag(db_path: Path = DB_PATH, werkdag_id: int = 0) -> None:
 
 async def get_werkdagen_ongefactureerd(db_path: Path = DB_PATH,
                                         klant_id: int = None) -> list[Werkdag]:
+    """B18: factureerbare ongefactureerde werkdagen — optioneel per klant.
+
+    Past nu FACTUREERBARE_WERKDAG_FILTER_W_PREFIX toe (sluit tarief=0 +
+    future-werkdagen uit). Behoud JOIN klanten voor klant_naam in
+    _row_to_werkdag.
+    """
+    today_iso = _date.today().isoformat()
     async with get_db_ctx(db_path) as conn:
-        sql = """SELECT w.*, k.naam as klant_naam
-                 FROM werkdagen w JOIN klanten k ON w.klant_id = k.id
-                 WHERE (w.factuurnummer = '' OR w.factuurnummer IS NULL)"""
-        params = []
+        sql = (
+            f"""SELECT w.*, k.naam as klant_naam
+                FROM werkdagen w JOIN klanten k ON w.klant_id = k.id
+                WHERE {FACTUREERBARE_WERKDAG_FILTER_W_PREFIX}"""
+        )
+        params = [today_iso]
         if klant_id:
             sql += " AND w.klant_id = ?"
             params.append(klant_id)
@@ -2785,10 +2834,17 @@ async def get_kpis(db_path: Path = DB_PATH, jaar: int = 2026) -> dict:
         omzet = (await cur.fetchone())[0]
 
         # Kosten (excl. investeringen — die gaan via afschrijving)
+        # B1 (round-3): apply ZICHTBARE_ZAKELIJKE_UITGAVE_FILTER zodat
+        # privé-banktx-linked en phantom-positive-banktx-linked uitgaven
+        # uitgesloten worden, consistent met /kosten en jaarafsluiting.
         cur = await conn.execute(
-            "SELECT COALESCE(SUM(bedrag), 0) FROM uitgaven "
-            "WHERE datum >= ? AND datum < ? AND is_investering = 0", (jaar_start, jaar_end)
-        )
+            f"""SELECT COALESCE(SUM(u.bedrag), 0)
+                FROM uitgaven u
+                LEFT JOIN banktransacties b ON b.id = u.bank_tx_id
+                WHERE u.datum >= ? AND u.datum < ?
+                  AND u.is_investering = 0
+                  AND {ZICHTBARE_ZAKELIJKE_UITGAVE_FILTER}""",
+            (jaar_start, jaar_end))
         kosten = (await cur.fetchone())[0]
 
         # Uren (urennorm=1 only)
@@ -2830,9 +2886,14 @@ async def get_kpis_tot_datum(db_path: Path = DB_PATH, jaar: int = 2026,
             (f'{jaar}-01-01', max_datum))
         omzet = (await cur.fetchone())[0]
 
+        # B1: zelfde filter als get_kpis (codex round-4 punt — consistency).
         cur = await conn.execute(
-            "SELECT COALESCE(SUM(bedrag), 0) FROM uitgaven "
-            "WHERE datum >= ? AND datum <= ? AND is_investering = 0",
+            f"""SELECT COALESCE(SUM(u.bedrag), 0)
+                FROM uitgaven u
+                LEFT JOIN banktransacties b ON b.id = u.bank_tx_id
+                WHERE u.datum >= ? AND u.datum <= ?
+                  AND u.is_investering = 0
+                  AND {ZICHTBARE_ZAKELIJKE_UITGAVE_FILTER}""",
             (f'{jaar}-01-01', max_datum))
         kosten = (await cur.fetchone())[0]
 
@@ -2903,8 +2964,14 @@ async def get_data_counts(db_path: Path = DB_PATH, jaar: int = 2026) -> dict:
             "WHERE datum >= ? AND datum < ?",
             (jaar_start, jaar_end))
         n_facturen = (await cur.fetchone())[0]
+        # B1: zelfde filter als get_kpis — n_uitgaven moet alleen zichtbare
+        # zakelijke uitgaven tellen, consistent met /kosten breakdown.
         cur = await conn.execute(
-            "SELECT COUNT(*) FROM uitgaven WHERE datum >= ? AND datum < ?",
+            f"""SELECT COUNT(*)
+                FROM uitgaven u
+                LEFT JOIN banktransacties b ON b.id = u.bank_tx_id
+                WHERE u.datum >= ? AND u.datum < ?
+                  AND {ZICHTBARE_ZAKELIJKE_UITGAVE_FILTER}""",
             (jaar_start, jaar_end))
         n_uitgaven = (await cur.fetchone())[0]
         cur = await conn.execute(
@@ -2949,15 +3016,22 @@ async def get_representatie_totaal(db_path: Path = DB_PATH, jaar: int = 2026) ->
 
 async def get_werkdagen_ongefactureerd_summary(
         db_path: Path = DB_PATH, jaar: int = 2026) -> dict:
-    """Get count and estimated amount of unfactured werkdagen for a year."""
+    """Get count and estimated amount of unfactured werkdagen for a year.
+
+    B7: gebruikt nu FACTUREERBARE_WERKDAG_FILTER — sluit toekomstige
+    werkdagen (datum > vandaag) en zero-tarief (ACHTERWACHT/CONGRES/
+    OPLEIDING) uit. Banner-count is daarmee consistent met /werkdagen
+    'echt-factureerbaar' weergave.
+    """
+    today_iso = _date.today().isoformat()
     async with get_db_ctx(db_path) as conn:
         cur = await conn.execute(
-            """SELECT COUNT(*) as aantal,
+            f"""SELECT COUNT(*) as aantal,
                       COALESCE(SUM(uren * tarief + km * km_tarief), 0) as bedrag
                FROM werkdagen
-               WHERE (factuurnummer = '' OR factuurnummer IS NULL)
-                 AND datum >= ? AND datum < ?""",
-            (f'{jaar}-01-01', f'{jaar+1}-01-01'))
+               WHERE datum >= ? AND datum < ?
+                 AND {FACTUREERBARE_WERKDAG_FILTER}""",
+            (f'{jaar}-01-01', f'{jaar+1}-01-01', today_iso))
         r = await cur.fetchone()
         return {'aantal': r['aantal'], 'bedrag': r['bedrag']}
 
@@ -3578,15 +3652,19 @@ async def apply_factuur_matches(db_path: Path = DB_PATH,
 async def get_nog_te_factureren(db_path: Path = DB_PATH, jaar: int = 0) -> float:
     """Sum of (uren * tarief + km * km_tarief) for unfactured werkdagen in the given year.
 
-    Excludes werkdagen with zero revenue (admin/study hours) since those are
-    never invoiced — they only count toward urencriterium.
+    Q7 (codex round-4): voegt nu ook future-werkdag filter toe via
+    FACTUREERBARE_WERKDAG_FILTER. Eerder telde een toekomstige werkdag mee
+    in 'nog te factureren' bedrag — verwarrend voor de gebruiker die
+    werkdagen vooruitplant.
     """
+    today_iso = _date.today().isoformat()
     async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
-            "SELECT COALESCE(SUM(uren * tarief + km * km_tarief), 0.0) FROM werkdagen "
-            "WHERE (factuurnummer = '' OR factuurnummer IS NULL) AND datum >= ? AND datum < ? "
-            "AND tarief > 0",
-            (f'{jaar}-01-01', f'{jaar+1}-01-01'))
+            f"""SELECT COALESCE(SUM(uren * tarief + km * km_tarief), 0.0)
+                FROM werkdagen
+                WHERE datum >= ? AND datum < ?
+                  AND {FACTUREERBARE_WERKDAG_FILTER}""",
+            (f'{jaar}-01-01', f'{jaar+1}-01-01', today_iso))
         row = await cursor.fetchone()
         return float(row[0])
 

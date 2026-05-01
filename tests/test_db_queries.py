@@ -1,10 +1,14 @@
 """Tests voor untested database query functions (KPIs, omzet, debiteuren, etc.)."""
 
+from datetime import date, timedelta
+
 import pytest
 from database import (
     add_klant, add_werkdag, add_factuur, add_uitgave,
     add_banktransacties, delete_banktransacties,
+    ensure_uitgave_for_banktx,
     get_banktransacties, get_uitgaven_per_categorie,
+    get_werkdagen_ongefactureerd, get_werkdagen_ongefactureerd_summary,
     mark_banktx_genegeerd,
     get_omzet_totaal, get_omzet_per_maand, get_representatie_totaal,
     get_debiteuren_op_peildatum,
@@ -13,7 +17,7 @@ from database import (
     get_afschrijving_overrides, get_afschrijving_overrides_batch,
     set_afschrijving_override, delete_afschrijving_override,
     get_db_ctx, get_va_betalingen, get_openstaande_facturen,
-    update_factuur_status,
+    update_factuur_status, update_uitgave,
 )
 
 
@@ -1534,4 +1538,239 @@ async def test_get_representatie_totaal_excludes_genegeerd_bank(db):
     # Flip privé — only the cash €30 should remain.
     await mark_banktx_genegeerd(db, bank_tx_id=bank_id, genegeerd=1)
     assert await get_representatie_totaal(db, jaar=2026) == 30.00
+
+
+# ---------------------------------------------------------------------------
+# B1 — get_kpis / get_kpis_tot_datum / get_data_counts: privé/sign filter op uitgaven
+# ---------------------------------------------------------------------------
+# Round-2 review introduceerde ZICHTBARE_ZAKELIJKE_UITGAVE_FILTER op
+# get_uitgaven_per_categorie, get_representatie_totaal, get_investeringen,
+# get_investeringen_voor_afschrijving — maar de dashboard-KPI helpers werden
+# gemist. Deze tests verifiëren dat de filter nu uniform toegepast is.
+
+
+@pytest.mark.asyncio
+async def test_get_kpis_excludes_prive_flagged_banktx_uitgaven(db):
+    """B1: privé-gemarkeerde banktx + linked uitgave moet NIET in dashboard
+    kosten meetellen. Omdat /kosten ze terecht uitsluit en dashboard moet
+    consistent zijn."""
+    kid = await add_klant(db, naam="Test", tarief_uur=80)
+    await add_factuur(db, nummer="2026-001", klant_id=kid,
+                      datum="2026-01-15", totaal_bedrag=1000, status='betaald')
+    # Bank-debit van -100 (zakelijk); maak uitgave; flip dan naar privé
+    await add_banktransacties(db, [
+        {'datum': '2026-01-10', 'bedrag': -100.0,
+         'tegenpartij': 'Vendor', 'omschrijving': 'X', 'categorie': ''},
+    ], csv_bestand='t.csv')
+    txns = await get_banktransacties(db, jaar=2026)
+    bank_id = txns[0].id
+    uid = await ensure_uitgave_for_banktx(
+        db, bank_tx_id=bank_id, categorie='Bankkosten')
+    assert uid is not None
+
+    kpis = await get_kpis(db, jaar=2026)
+    assert kpis['kosten'] == 100, "uitgave moet meetellen voor we 'm privé maken"
+
+    # Markeer privé — uitgave moet uit kosten verdwijnen
+    await mark_banktx_genegeerd(db, bank_tx_id=bank_id, genegeerd=1)
+    kpis = await get_kpis(db, jaar=2026)
+    assert kpis['kosten'] == 0, (
+        "Privé-gemarkeerde banktx-uitgave mag niet in get_kpis kosten zitten")
+
+
+@pytest.mark.asyncio
+async def test_get_kpis_excludes_uitgaven_linked_to_positive_banktx(db):
+    """B1: een uitgave die per ongeluk gekoppeld is aan een POSITIVE
+    banktx (refund/teruggave) is een phantom — mag niet als zakelijke
+    kost meetellen. Test gebruik: uitgave met bedrag>0 op zelfde key
+    als get_uitgaven_per_categorie hem zou skippen."""
+    await add_banktransacties(db, [
+        # Positive bedrag = credit (geen kost!)
+        {'datum': '2026-02-05', 'bedrag': 50.0,
+         'tegenpartij': 'Refund Co', 'omschrijving': 'teruggave',
+         'categorie': ''},
+    ], csv_bestand='t.csv')
+    txns = await get_banktransacties(db, jaar=2026)
+    bank_id = txns[0].id
+    # Lazy-create uitgave gekoppeld aan deze positive — phantom-flow
+    await ensure_uitgave_for_banktx(
+        db, bank_tx_id=bank_id, categorie='Bankkosten')
+
+    kpis = await get_kpis(db, jaar=2026)
+    assert kpis['kosten'] == 0, (
+        "Uitgave gekoppeld aan positieve banktx mag niet meetellen")
+
+
+@pytest.mark.asyncio
+async def test_get_kpis_includes_cash_uitgaven(db):
+    """B1: cash uitgaven (bank_tx_id IS NULL) blijven gewoon meetellen."""
+    await add_uitgave(db, datum="2026-01-10", categorie="Bankkosten",
+                      omschrijving="Cash bonnetje", bedrag=42.0)
+    kpis = await get_kpis(db, jaar=2026)
+    assert kpis['kosten'] == 42.0
+
+
+@pytest.mark.asyncio
+async def test_get_kpis_tot_datum_excludes_prive(db):
+    """B1: zelfde filter ook in get_kpis_tot_datum."""
+    await add_banktransacties(db, [
+        {'datum': '2026-03-10', 'bedrag': -75.0,
+         'tegenpartij': 'V', 'omschrijving': 'x', 'categorie': ''},
+    ], csv_bestand='t.csv')
+    txns = await get_banktransacties(db, jaar=2026)
+    bank_id = txns[0].id
+    await ensure_uitgave_for_banktx(
+        db, bank_tx_id=bank_id, categorie='Telefoon/KPN')
+    await mark_banktx_genegeerd(db, bank_tx_id=bank_id, genegeerd=1)
+
+    out = await get_kpis_tot_datum(
+        db, jaar=2026, max_datum='2026-12-31')
+    assert out['kosten'] == 0, (
+        "get_kpis_tot_datum moet privé-banktx ook uitsluiten")
+
+
+@pytest.mark.asyncio
+async def test_get_data_counts_excludes_prive_from_uitgaven_count(db):
+    """B1: get_data_counts.n_uitgaven moet zelfde filter gebruiken zodat
+    'aantal uitgaven' het cijfer matcht dat /kosten toont."""
+    # Cash uitgave
+    await add_uitgave(db, datum="2026-01-10", categorie="Cash",
+                      omschrijving="X", bedrag=10)
+    # Bank-uitgave die we privé maken
+    await add_banktransacties(db, [
+        {'datum': '2026-01-15', 'bedrag': -50.0,
+         'tegenpartij': 'V', 'omschrijving': 'x', 'categorie': ''},
+    ], csv_bestand='t.csv')
+    txns = await get_banktransacties(db, jaar=2026)
+    bid = txns[0].id
+    await ensure_uitgave_for_banktx(db, bank_tx_id=bid, categorie='Bankkosten')
+    await mark_banktx_genegeerd(db, bank_tx_id=bid, genegeerd=1)
+
+    counts = await get_data_counts(db, jaar=2026)
+    assert counts['n_uitgaven'] == 1, (
+        "n_uitgaven moet alleen zichtbare zakelijke uitgaven tellen "
+        "(cash + niet-privé bank-debits)")
+
+
+# ---------------------------------------------------------------------------
+# B7 + B18 — Werkdag-queries: tarief>0 + datum<=today filter
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_werkdagen_ongefactureerd_summary_returns_aantal_key(db):
+    """Backward-compat: dashboard verwacht return-key 'aantal' (niet 'count').
+    Codex round-4 vond dat in originele plan-rewrite ik 'count' gebruikte."""
+    result = await get_werkdagen_ongefactureerd_summary(db, jaar=2026)
+    assert 'aantal' in result, "key moet 'aantal' zijn, niet 'count'"
+    assert 'bedrag' in result
+
+
+@pytest.mark.asyncio
+async def test_get_werkdagen_ongefactureerd_summary_excludes_future_dates(db):
+    """B7: werkdag in de toekomst (geplande dienst) telt niet mee in banner."""
+    kid = await add_klant(db, naam="Test", tarief_uur=80)
+    today = date.today()
+    past = (today - timedelta(days=30)).isoformat()
+    future = (today + timedelta(days=30)).isoformat()
+    # Past werkdag (datum in jaar 'today.year')
+    await add_werkdag(db, datum=past, klant_id=kid,
+                      uren=8, tarief=80, urennorm=1)
+    # Future werkdag (zelfde jaar, nog niet plaatsgevonden)
+    await add_werkdag(db, datum=future, klant_id=kid,
+                      uren=8, tarief=80, urennorm=1)
+
+    result = await get_werkdagen_ongefactureerd_summary(db, jaar=today.year)
+    assert result['aantal'] == 1, (
+        "Toekomstige werkdag mag niet als 'ongefactureerd' tellen")
+
+
+@pytest.mark.asyncio
+async def test_get_werkdagen_ongefactureerd_summary_excludes_zero_tarief(db):
+    """B7: werkdagen met tarief=0 (ACHTERWACHT/CONGRES/OPLEIDING) tellen
+    nooit als factureerbaar — die zijn intern voor uren-criterium."""
+    kid = await add_klant(db, naam="Test", tarief_uur=80)
+    # Reguliere werkdag (tarief>0)
+    await add_werkdag(db, datum="2026-01-10", klant_id=kid,
+                      uren=8, tarief=80, urennorm=1)
+    # ACHTERWACHT (tarief=0)
+    await add_werkdag(db, datum="2026-01-11", klant_id=kid,
+                      uren=24, tarief=0, urennorm=0)
+
+    result = await get_werkdagen_ongefactureerd_summary(db, jaar=2026)
+    assert result['aantal'] == 1, "tarief=0 werkdag niet meetellen"
+
+
+@pytest.mark.asyncio
+async def test_get_werkdagen_ongefactureerd_excludes_future_and_zero_tarief(db):
+    """B18: get_werkdagen_ongefactureerd (de lijst-helper) moet zelfde filter
+    toepassen als de summary."""
+    kid = await add_klant(db, naam="Test", tarief_uur=80)
+    today = date.today()
+    past = (today - timedelta(days=30)).isoformat()
+    future = (today + timedelta(days=30)).isoformat()
+    await add_werkdag(db, datum=past, klant_id=kid,
+                      uren=8, tarief=80, urennorm=1)
+    await add_werkdag(db, datum=future, klant_id=kid,
+                      uren=8, tarief=80, urennorm=1)
+    await add_werkdag(db, datum=past, klant_id=kid,
+                      uren=24, tarief=0, urennorm=0)
+
+    result = await get_werkdagen_ongefactureerd(db)
+    assert len(result) == 1, (
+        "alleen past werkdag met tarief>0 mag terugkomen")
+
+
+@pytest.mark.asyncio
+async def test_get_werkdagen_ongefactureerd_klant_id_optional(db):
+    """B18: klant_id=None geeft alle factureerbare werkdagen — niet KaPOT."""
+    kid1 = await add_klant(db, naam="A", tarief_uur=80)
+    kid2 = await add_klant(db, naam="B", tarief_uur=80)
+    today = date.today()
+    past = (today - timedelta(days=10)).isoformat()
+    await add_werkdag(db, datum=past, klant_id=kid1,
+                      uren=8, tarief=80, urennorm=1)
+    await add_werkdag(db, datum=past, klant_id=kid2,
+                      uren=8, tarief=80, urennorm=1)
+
+    # Geen klant_id → alle klanten
+    all_rows = await get_werkdagen_ongefactureerd(db)
+    assert len(all_rows) == 2
+
+    # Specifieke klant
+    klant1_only = await get_werkdagen_ongefactureerd(db, klant_id=kid1)
+    assert len(klant1_only) == 1
+
+
+@pytest.mark.asyncio
+async def test_get_werkdagen_ongefactureerd_returns_klant_naam(db):
+    """B18: JOIN klanten moet behouden — _row_to_werkdag verwacht klant_naam."""
+    kid = await add_klant(db, naam="Praktijk Acme", tarief_uur=80)
+    today = date.today()
+    past = (today - timedelta(days=5)).isoformat()
+    await add_werkdag(db, datum=past, klant_id=kid,
+                      uren=8, tarief=80, urennorm=1)
+
+    rows = await get_werkdagen_ongefactureerd(db, klant_id=kid)
+    assert len(rows) == 1
+    assert rows[0].klant_naam == 'Praktijk Acme'
+
+
+@pytest.mark.asyncio
+async def test_get_nog_te_factureren_excludes_future_werkdagen(db):
+    """Q7 (codex round-4): get_nog_te_factureren had wel tarief>0 filter
+    maar geen datum<=today filter — toekomstige werkdagen telden mee
+    in 'nog te factureren' bedrag."""
+    kid = await add_klant(db, naam="Test", tarief_uur=80)
+    today = date.today()
+    past = (today - timedelta(days=10)).isoformat()
+    future = (today + timedelta(days=20)).isoformat()
+    await add_werkdag(db, datum=past, klant_id=kid,
+                      uren=8, tarief=80, urennorm=1)  # 8*80 = 640
+    await add_werkdag(db, datum=future, klant_id=kid,
+                      uren=8, tarief=80, urennorm=1)  # 8*80 = 640 — moet niet meetellen
+
+    bedrag = await get_nog_te_factureren(db, jaar=today.year)
+    assert bedrag == 640, (
+        "Future werkdag mag niet meetellen in nog te factureren")
 
