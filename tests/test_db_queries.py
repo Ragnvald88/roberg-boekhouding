@@ -1797,6 +1797,68 @@ async def test_get_kpis_tot_datum_excludes_positive_banktx_uitgaven(db):
     assert out['kosten'] == 0
 
 
+# ---------------------------------------------------------------------------
+# B5 — VA kenmerk normalisatie
+# ---------------------------------------------------------------------------
+# Belastingdienst betalingskenmerken zijn 16 digits zonder separators per
+# spec, maar copy-paste uit BD-portaal of bepaalde bank-CSV's voegt soms
+# punten/spaties toe. Parser deed `kenmerk[10:12]` direct op raw string —
+# kenmerken met separators vielen in 'unmatched'.
+
+
+@pytest.mark.asyncio
+async def test_va_kenmerk_with_dots_routes_correctly(db):
+    """B5: kenmerk met punten moet normaliseren en correct splitten.
+    BELASTINGDIENST_IBAN debit met kenmerk waar [10:12] (na strippen) >= 50."""
+    from database import BELASTINGDIENST_IBAN
+    await add_banktransacties(db, [
+        # Raw kenmerk met dots: '1234567890512345' (digits only)
+        # met separators: '1234.5678.9051.2345'
+        # [10:12] na strip = '51' → ZVW
+        {'datum': '2026-03-10', 'bedrag': -1000.0,
+         'tegenrekening': BELASTINGDIENST_IBAN,
+         'tegenpartij': 'BD', 'omschrijving': 'voorlopige aanslag',
+         'betalingskenmerk': '1234.5678.9051.2345'},
+    ], csv_bestand='t.csv')
+
+    out = await get_va_betalingen(db, jaar=2026)
+    assert out['zvw_betaald'] == 1000, (
+        "Kenmerk met dots moet normaliseren naar ZVW (split-digits=51)")
+    assert out['ib_betaald'] == 0
+
+
+@pytest.mark.asyncio
+async def test_va_kenmerk_with_spaces_routes_correctly(db):
+    """B5: kenmerk met spaties → IB (split-digits 23 < 50)."""
+    from database import BELASTINGDIENST_IBAN
+    await add_banktransacties(db, [
+        # '1234 5678 9012 3456' → digits '1234567890123456' → [10:12]='23' → IB
+        {'datum': '2026-04-10', 'bedrag': -800.0,
+         'tegenrekening': BELASTINGDIENST_IBAN,
+         'tegenpartij': 'BD', 'omschrijving': 'va',
+         'betalingskenmerk': '1234 5678 9012 3456'},
+    ], csv_bestand='t.csv')
+
+    out = await get_va_betalingen(db, jaar=2026)
+    assert out['ib_betaald'] == 800
+    assert out['zvw_betaald'] == 0
+
+
+@pytest.mark.asyncio
+async def test_va_kenmerk_clean_format_still_works(db):
+    """B5 backward-compat: 16-digit zonder separators blijft werken."""
+    from database import BELASTINGDIENST_IBAN
+    await add_banktransacties(db, [
+        {'datum': '2026-05-10', 'bedrag': -500.0,
+         'tegenrekening': BELASTINGDIENST_IBAN,
+         'tegenpartij': 'BD', 'omschrijving': 'va',
+         'betalingskenmerk': '1234567890512345'},  # [10:12]='51' → ZVW
+    ], csv_bestand='t.csv')
+
+    out = await get_va_betalingen(db, jaar=2026)
+    assert out['zvw_betaald'] == 500
+
+
 @pytest.mark.asyncio
 async def test_get_data_counts_excludes_investeringen_from_n_uitgaven(db):
     """B1 codex round-3: n_uitgaven moet investeringen niet meetellen

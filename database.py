@@ -2283,6 +2283,19 @@ async def delete_banktransacties(db_path: Path = DB_PATH,
 BELASTINGDIENST_IBAN = 'NL86INGB0002445588'
 
 
+def _normalize_va_kenmerk(k: str) -> str:
+    """Strip non-digits van VA betalingskenmerk.
+
+    B5 review fix: Belastingdienst kenmerken zijn 16-digit per spec, maar
+    copy-paste uit BD-portaal of sommige bank-CSV's voegt punten/spaties
+    toe. Normalisatie zorgt dat positie [10:12] altijd de IB/ZVW-split-
+    digits zijn. Eerder werkte het 'toevallig' soms — afhankelijk van
+    waar de separators zaten in de string.
+    """
+    import re
+    return re.sub(r'[^0-9]', '', k or '')
+
+
 async def get_va_betalingen(db_path: Path = DB_PATH, jaar: int = 0) -> dict:
     """Get actual VA payments from bank transactions for a given year.
 
@@ -2314,8 +2327,10 @@ async def get_va_betalingen(db_path: Path = DB_PATH, jaar: int = 0) -> dict:
     unmatched = 0.0
 
     for amount, kenmerk in rows:
-        if kenmerk and len(kenmerk) >= 12 and kenmerk[10:12].isdigit():
-            year_type_digits = int(kenmerk[10:12])
+        # B5: normalize separators (dots, spaces) vóór positionele slice.
+        norm = _normalize_va_kenmerk(kenmerk)
+        if len(norm) >= 12 and norm[10:12].isdigit():
+            year_type_digits = int(norm[10:12])
             if year_type_digits >= 50:
                 zvw_betaald += amount
                 zvw_count += 1
