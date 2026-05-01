@@ -1045,3 +1045,114 @@ async def test_delete_klant_locatie_succeeds_when_werkdagen_only_in_concept_year
     await delete_klant_locatie(db, locatie_id=lid)
     locaties = await get_klant_locaties(db, klant_id=kid)
     assert all(loc.id != lid for loc in locaties)
+
+
+# ---------------------------------------------------------------------------
+# B19 — add_uitgave / update_uitgave: cross-year bank_tx_id year-lock
+# ---------------------------------------------------------------------------
+# add_uitgave year-lockte alleen het uitgave-jaar; update_uitgave alleen
+# het bestaande uitgave-jaar. Een uitgave linken aan een banktransactie
+# in een definitief jaar omzeilde de year-lock invariant.
+
+
+@pytest.mark.asyncio
+async def test_add_uitgave_with_bank_tx_in_locked_year_rejects(db):
+    """B19: add_uitgave(bank_tx_id=X) waar X in 2024 (locked) zit moet
+    YearLockedError raisen, ook als de uitgave-datum in 2025 (writable)."""
+    # Setup: insert banktx in 2024
+    await _seed_fiscale_params_row(db, 2024)
+    await add_banktransacties(db, [
+        {'datum': '2024-06-01', 'bedrag': -100.0,
+         'tegenpartij': 'V', 'omschrijving': 'x'},
+    ], csv_bestand='t.csv')
+    txns = await get_banktransacties(db, jaar=2024)
+    bid = txns[0].id
+    # Lock 2024
+    await update_jaarafsluiting_status(db, 2024, 'definitief')
+    # Setup 2025 fiscale_params (writable)
+    await _seed_fiscale_params_row(db, 2025)
+
+    # Try: uitgave datum in 2025 (writable), maar bank_tx_id naar 2024 (locked)
+    with pytest.raises(YearLockedError):
+        await add_uitgave(
+            db, datum='2025-01-15', categorie='Cash',
+            omschrijving='x', bedrag=100, bank_tx_id=bid)
+
+
+@pytest.mark.asyncio
+async def test_update_uitgave_repointing_to_locked_bank_tx_rejects(db):
+    """B19: update_uitgave(bank_tx_id=Y) waar Y in locked jaar zit moet
+    raisen — voorkomt stealth-link via post-hoc reassignment."""
+    # Setup: 2024 banktx + lock
+    await _seed_fiscale_params_row(db, 2024)
+    await add_banktransacties(db, [
+        {'datum': '2024-06-01', 'bedrag': -100.0,
+         'tegenpartij': 'V', 'omschrijving': 'x'},
+    ], csv_bestand='t.csv')
+    txns_2024 = await get_banktransacties(db, jaar=2024)
+    locked_bid = txns_2024[0].id
+    await update_jaarafsluiting_status(db, 2024, 'definitief')
+
+    # 2025 banktx + writable uitgave gelinked
+    await _seed_fiscale_params_row(db, 2025)
+    await add_banktransacties(db, [
+        {'datum': '2025-04-15', 'bedrag': -50.0,
+         'tegenpartij': 'V2', 'omschrijving': 'y'},
+    ], csv_bestand='t.csv')
+    txns_2025 = await get_banktransacties(db, jaar=2025)
+    writable_bid = txns_2025[0].id
+    uid = await add_uitgave(
+        db, datum='2025-04-15', categorie='X', omschrijving='x',
+        bedrag=50, bank_tx_id=writable_bid)
+
+    # Try: re-point naar 2024-locked banktx
+    with pytest.raises(YearLockedError):
+        await update_uitgave(
+            db, uitgave_id=uid, bank_tx_id=locked_bid)
+
+
+@pytest.mark.asyncio
+async def test_update_uitgave_unlink_from_locked_banktx_rejects(db):
+    """B19 codex round-3: ook UNLINK (bank_tx_id=None) moet de oude
+    banktx-jaar checken — anders kun je via 2025-uitgave een
+    2024-locked banktx loskoppelen."""
+    # Setup: 2024 banktx + uitgave gelinked + lock
+    await _seed_fiscale_params_row(db, 2024)
+    await add_banktransacties(db, [
+        {'datum': '2024-06-01', 'bedrag': -100.0,
+         'tegenpartij': 'V', 'omschrijving': 'x'},
+    ], csv_bestand='t.csv')
+    txns = await get_banktransacties(db, jaar=2024)
+    bid = txns[0].id
+    uid = await add_uitgave(
+        db, datum='2024-06-01', categorie='X', omschrijving='x',
+        bedrag=100, bank_tx_id=bid)
+    await update_jaarafsluiting_status(db, 2024, 'definitief')
+
+    # Try unlink (bank_tx_id=None)
+    # NB: dit faalt op de oude banktx-jaar check (2024 locked) ÉN op de
+    # uitgave-jaar check (uitgave datum=2024-06-01 ook locked) — de fix
+    # zit in beide guards.
+    with pytest.raises(YearLockedError):
+        await update_uitgave(
+            db, uitgave_id=uid, bank_tx_id=None)
+
+
+@pytest.mark.asyncio
+async def test_update_uitgave_missing_id_silent_noop_with_locked_bank_tx(db):
+    """B19 codex round-5: update_uitgave(uitgave_id=missing, bank_tx_id=X)
+    waar X in locked year — moet silent return zijn, GEEN YearLockedError.
+    Behoud bestaande no-op semantiek voor missing rows."""
+    await _seed_fiscale_params_row(db, 2024)
+    await add_banktransacties(db, [
+        {'datum': '2024-06-01', 'bedrag': -100.0,
+         'tegenpartij': 'V', 'omschrijving': 'x'},
+    ], csv_bestand='t.csv')
+    txns = await get_banktransacties(db, jaar=2024)
+    bid = txns[0].id
+    await update_jaarafsluiting_status(db, 2024, 'definitief')
+
+    # uitgave_id=99999 bestaat niet — moet silent return zijn ondanks
+    # bank_tx_id naar locked year.
+    await update_uitgave(db, uitgave_id=99999, bank_tx_id=bid)
+    # Geen exception → test passeert.

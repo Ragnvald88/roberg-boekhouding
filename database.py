@@ -1720,6 +1720,19 @@ async def get_uitgave_by_id(db_path: Path, uitgave_id: int) -> Uitgave | None:
 async def add_uitgave(db_path: Path = DB_PATH, **kwargs) -> int:
     _validate_datum(kwargs['datum'])
     await assert_year_writable(db_path, kwargs['datum'])
+
+    # B19: als bank_tx_id wordt gezet, ook year-lock check op het
+    # bank-tx jaar. Voorkomt dat een uitgave in 2025 (writable) silentlijk
+    # een 2024 (locked) banktransactie raakt via FK.
+    if kwargs.get('bank_tx_id') is not None:
+        async with get_db_ctx(db_path) as conn:
+            cur = await conn.execute(
+                "SELECT datum FROM banktransacties WHERE id = ?",
+                (kwargs['bank_tx_id'],))
+            bt_row = await cur.fetchone()
+        if bt_row is not None:
+            await assert_year_writable(db_path, bt_row[0])
+
     async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
             """INSERT INTO uitgaven
@@ -1793,16 +1806,40 @@ async def ensure_uitgave_for_banktx(
 async def update_uitgave(db_path: Path = DB_PATH, uitgave_id: int = 0, **kwargs) -> None:
     if 'datum' in kwargs:
         _validate_datum(kwargs['datum'])
-    # Fetch current datum to enforce year-lock on the existing row
+    # Fetch current row for year-lock checks
     async with get_db_ctx(db_path) as conn:
         cur = await conn.execute(
-            "SELECT datum FROM uitgaven WHERE id = ?", (uitgave_id,)
+            "SELECT datum, bank_tx_id FROM uitgaven WHERE id = ?",
+            (uitgave_id,)
         )
         row = await cur.fetchone()
-    if row:
-        await assert_year_writable(db_path, row[0])
+
+    # CRUCIAAL: bij missing row return DIRECT, vóór alle year-lock checks.
+    # update_uitgave(uitgave_id=missing, bank_tx_id=locked_id) moet silent
+    # no-op zijn — het missende-row-pad genereert geen YearLockedError.
+    if row is None:
+        return
+
+    await assert_year_writable(db_path, row[0])
     if 'datum' in kwargs:
         await assert_year_writable(db_path, kwargs['datum'])
+
+    # B19: bij bank_tx_id-wijziging year-lock zowel oude als nieuwe
+    # banktx-jaar — voorkomt stealth (un)link cross-year naar locked.
+    if 'bank_tx_id' in kwargs:
+        new_bt_id = kwargs['bank_tx_id']
+        old_bt_id = row['bank_tx_id']
+        async with get_db_ctx(db_path) as conn:
+            for bt_id in (old_bt_id, new_bt_id):
+                if bt_id is None:
+                    continue
+                cur = await conn.execute(
+                    "SELECT datum FROM banktransacties WHERE id = ?",
+                    (bt_id,))
+                bt_row = await cur.fetchone()
+                if bt_row is not None:
+                    await assert_year_writable(db_path, bt_row[0])
+
     async with get_db_ctx(db_path) as conn:
         fields = []
         values = []
