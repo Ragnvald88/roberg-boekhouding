@@ -9,7 +9,7 @@ Gebruik: bereken_volledig() voor de complete waterval.
 from dataclasses import dataclass, field
 from decimal import Decimal, ROUND_HALF_UP
 
-from fiscal.constants import URENCRITERIUM_DEFAULT
+from fiscal.constants import URENCRITERIUM_DEFAULT, VILLATAKS_PCT_DEFAULT
 from fiscal.heffingskortingen import (
     bereken_algemene_heffingskorting,
     bereken_arbeidskorting,
@@ -18,7 +18,7 @@ from fiscal.heffingskortingen import (
 
 def bereken_eigenwoningforfait(woz: float, ew_forfait_pct: float = 0.35,
                                 villataks_grens: float = 1_350_000,
-                                villataks_pct: float = 2.35) -> float:
+                                villataks_pct: float = VILLATAKS_PCT_DEFAULT) -> float:
     """Bereken eigenwoningforfait op basis van WOZ-waarde.
 
     Args:
@@ -341,7 +341,8 @@ def bereken_volledig(omzet: float, kosten: float, afschrijvingen: float,
             float(d_woz),
             ew_forfait_pct=params['ew_forfait_pct'],
             villataks_grens=params.get('villataks_grens', 1_350_000),
-            villataks_pct=params.get('villataks_pct', 2.35),
+            villataks_pct=params.get(
+                'villataks_pct', VILLATAKS_PCT_DEFAULT),
         )))
         d_ew_saldo = d_ew_forfait - d_hypotheekrente
         # Wet Hillen: als forfait > rente, verlaag de bijtelling

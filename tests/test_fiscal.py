@@ -454,6 +454,29 @@ class TestEigenwoningforfait:
         result = bereken_eigenwoningforfait(1_350_000)
         assert abs(result - 4725.0) < 0.01
 
+    def test_villataks_pct_default_constant_used_above_grens(self):
+        """B3: bereken_eigenwoningforfait gebruikt VILLATAKS_PCT_DEFAULT
+        (=2.35) als villataks_pct niet expliciet wordt meegegeven.
+
+        WOZ = 1.5M (boven default 1.35M):
+          forfait = 1_350_000 * 0.0035 (forfait normaal)
+                  + 150_000 * (2.35/100) (villataks)
+                  = 4725 + 3525 = 8250
+        """
+        from fiscal.constants import VILLATAKS_PCT_DEFAULT
+        assert VILLATAKS_PCT_DEFAULT == 2.35
+
+        forfait = bereken_eigenwoningforfait(woz=1_500_000)
+        expected = 1_350_000 * 0.0035 + 150_000 * (2.35 / 100)
+        assert abs(forfait - expected) < 0.01
+
+    def test_villataks_pct_can_be_overridden(self):
+        """Override blijft werken (geen hardcoded vergrendeling)."""
+        forfait = bereken_eigenwoningforfait(
+            woz=1_500_000, villataks_pct=3.0)
+        expected = 1_350_000 * 0.0035 + 150_000 * (3.0 / 100)
+        assert abs(forfait - expected) < 0.01
+
 
 class TestWetHillen:
     """Tests voor Wet Hillen in bereken_volledig."""
