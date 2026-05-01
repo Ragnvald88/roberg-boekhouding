@@ -1,7 +1,9 @@
 """Gedeelde formatting functies en constanten."""
 
 import asyncio
+import contextlib
 import os
+import tempfile
 from pathlib import Path
 
 
@@ -12,16 +14,30 @@ async def write_pdf_atomic(
 ) -> None:
     """Render HTML naar PDF via WeasyPrint, atomair (write-then-rename).
 
-    Schrijft eerst naar ``{output_path}.tmp``, dan ``os.replace``. Bij crash
-    (WeasyPrint segfault, OSError op rename, etc.) wordt ``.tmp`` opgeruimd
-    en de bestaande PDF (indien aanwezig) blijft intact.
+    Schrijft eerst naar een unieke temp file in dezelfde directory, dan
+    ``os.replace``. Bij crash (WeasyPrint segfault, OSError op rename,
+    etc.) wordt de temp file opgeruimd en de bestaande PDF (indien
+    aanwezig) blijft intact.
 
     K2 review: 2 call-sites delen dit patroon (factuur regen + jaarcijfers
     PDF export); helper maakt het testbaar via een gedeeld monkeypatch-
     target ipv inline copies in elke call-site.
+
+    Codex follow-up: unieke temp filename via tempfile.NamedTemporaryFile
+    (geen vaste ``<pdf>.tmp`` die collidet bij parallelle exports). Cleanup
+    in ``contextlib.suppress(OSError)`` zodat de original render/replace
+    error niet door een unlink-fail wordt gemaskeerd.
     """
     from weasyprint import HTML
-    tmp = output_path.with_suffix(output_path.suffix + '.tmp')
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    # Unieke temp file in dezelfde dir — atomic os.replace vereist same FS
+    fd, tmp_str = tempfile.mkstemp(
+        dir=output_path.parent,
+        prefix=output_path.stem + '.',
+        suffix='.tmp',
+    )
+    os.close(fd)
+    tmp = Path(tmp_str)
 
     def _render():
         kwargs = {'base_url': str(base_url)} if base_url else {}
@@ -31,8 +47,11 @@ async def write_pdf_atomic(
         await asyncio.to_thread(_render)
         await asyncio.to_thread(os.replace, tmp, output_path)
     except Exception:
-        await asyncio.to_thread(
-            lambda: tmp.unlink(missing_ok=True) if tmp.exists() else None)
+        # Cleanup: suppress unlink-failures zodat de echte error visible blijft
+        def _cleanup():
+            with contextlib.suppress(OSError):
+                tmp.unlink(missing_ok=True)
+        await asyncio.to_thread(_cleanup)
         raise
 
 KOSTEN_CATEGORIEEN = [
