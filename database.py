@@ -2923,6 +2923,13 @@ async def get_omzet_per_maand_tot_datum(
     """
     if not max_datum:
         max_datum = f'{jaar}-12-31'
+    # Codex round-3: clamp max_datum op jaar-eind. Anders zou een caller
+    # die per ongeluk max_datum='{jaar+1}-XX-YY' geeft, facturen uit het
+    # volgende jaar in dezelfde maand-slots groeperen (substr-based GROUP
+    # BY kent geen jaar-distinctie).
+    jaar_end_inclusief = f'{jaar}-12-31'
+    if max_datum > jaar_end_inclusief:
+        max_datum = jaar_end_inclusief
     jaar_start = f'{jaar}-01-01'
     async with get_db_ctx(db_path) as conn:
         cur = await conn.execute(

@@ -1964,3 +1964,24 @@ async def test_get_omzet_per_maand_tot_datum_dec_31_keeps_full_year(db):
     assert result[5] == 200  # juni
     assert result[11] == 300  # december
 
+
+@pytest.mark.asyncio
+async def test_get_omzet_per_maand_tot_datum_clamps_max_datum_to_jaar_end(db):
+    """B13 codex round-3: max_datum > jaar-eind moet worden geclampt naar
+    jaar-12-31. Anders zouden facturen uit volgend jaar door substr-based
+    GROUP BY in dezelfde maand-slots geteld worden."""
+    kid = await add_klant(db, naam="Test", tarief_uur=80)
+    await add_factuur(db, nummer='2025-001', klant_id=kid,
+                      datum='2025-01-15', totaal_bedrag=100,
+                      status='betaald')
+    # 2026 factuur — moet NIET als januari-2025 geteld worden ondanks
+    # de te hoge max_datum.
+    await add_factuur(db, nummer='2026-001', klant_id=kid,
+                      datum='2026-01-15', totaal_bedrag=999,
+                      status='betaald')
+
+    result = await get_omzet_per_maand_tot_datum(
+        db, jaar=2025, max_datum='2026-01-15')  # te hoge cutoff
+    assert result[0] == 100, (
+        "Januari-2025 = 100; 2026-factuur mag niet meegeteld worden")
+
