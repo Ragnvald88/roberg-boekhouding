@@ -1,7 +1,9 @@
 """Documenten pagina — document management per boekjaar."""
 
 import asyncio
+import contextlib
 import os
+import tempfile
 from datetime import date
 from pathlib import Path
 
@@ -83,12 +85,24 @@ async def _safe_atomic_write(
                 return candidate, False
             n += 1
 
-    tmp = candidate.with_suffix(candidate.suffix + '.tmp')
+    # Codex K2 follow-up: unique tempfile in same dir (geen vaste .tmp die
+    # collidet bij parallel uploads), en cleanup in suppress() zodat een
+    # falende unlink de oorspronkelijke OSError niet maskeert.
+    fd, tmp_str = tempfile.mkstemp(
+        dir=dest_dir,
+        prefix=candidate.stem + '.',
+        suffix='.tmp',
+    )
+    os.close(fd)
+    tmp = Path(tmp_str)
     try:
         await asyncio.to_thread(tmp.write_bytes, content)
         await asyncio.to_thread(os.replace, tmp, candidate)
     except Exception:
-        await asyncio.to_thread(tmp.unlink, missing_ok=True)
+        def _cleanup():
+            with contextlib.suppress(OSError):
+                tmp.unlink(missing_ok=True)
+        await asyncio.to_thread(_cleanup)
         raise
     return candidate, True
 
