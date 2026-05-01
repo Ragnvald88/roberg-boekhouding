@@ -2165,12 +2165,17 @@ async def set_banktx_categorie(
 ) -> None:
     """Write a categorie for a bank tx, routing by sign.
 
-    Debits (bedrag < 0) → route into uitgaven.categorie via
-    ensure_uitgave_for_banktx so /bank and /kosten agree.
-    Positives (bedrag >= 0) → stay on banktransacties.categorie.
+    Sign-aware routing:
+    - Credit (bedrag >= 0): write directly to banktransacties.categorie.
+    - Debit (bedrag < 0):
+      - If linked uitgave exists: update its categorie (incl. clear via '').
+      - If no linked uitgave AND categorie != '': lazy-create + set.
+      - If no linked uitgave AND categorie == '': NO-OP. (B6 review fix:
+        bulk-blanking met mixed-sign selectie zou anders phantom lege
+        uitgaven creëren.)
 
     Year-locked: the call chain (ensure_uitgave_for_banktx on create,
-    update_uitgave on update, update_banktransactie on positives) each
+    update_uitgave on update, update_banktransactie on credits) each
     enforce assert_year_writable, so YearLockedError surfaces naturally.
 
     Raises ValueError if the bank tx doesn't exist.
@@ -2183,19 +2188,34 @@ async def set_banktx_categorie(
     if row is None:
         raise ValueError(f"banktransactie {bank_tx_id} not found")
 
-    if row['bedrag'] < 0:
-        # ensure_uitgave_for_banktx returns the uitgave id (creating if
-        # missing). On the create path it sets categorie via overrides;
-        # on the already-linked path it returns early without touching
-        # categorie — so we call update_uitgave explicitly afterwards.
-        # update_uitgave re-enforces the year-lock on the existing row.
-        uitgave_id = await ensure_uitgave_for_banktx(
-            db_path, bank_tx_id=bank_tx_id, categorie=categorie)
-        await update_uitgave(
-            db_path, uitgave_id=uitgave_id, categorie=categorie)
-    else:
+    if row['bedrag'] >= 0:
+        # Credit-pad: directe write op banktransacties.categorie
         await update_banktransactie(
             db_path, transactie_id=bank_tx_id, categorie=categorie)
+        return
+
+    # Debit-pad: check existing linked uitgave
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            "SELECT id FROM uitgaven WHERE bank_tx_id = ?", (bank_tx_id,))
+        existing = await cur.fetchone()
+
+    if existing is not None:
+        # Bestaande uitgave: update (incl. clear via leeg cat)
+        await update_uitgave(
+            db_path, uitgave_id=existing[0], categorie=categorie)
+        return
+
+    if categorie == '':
+        # B6: blank-cat op debit zonder uitgave = NO-OP. Geen lazy-create
+        # van phantom lege uitgave (bulk-blanking pollutie voorkomen).
+        return
+
+    # Niet-leeg cat op debit zonder uitgave: lazy-create + set
+    # (single call: ensure_uitgave_for_banktx zet categorie via overrides
+    # op create-pad — geen dubbele update_uitgave nodig.)
+    await ensure_uitgave_for_banktx(
+        db_path, bank_tx_id=bank_tx_id, categorie=categorie)
 
 
 async def delete_banktransacties(db_path: Path = DB_PATH,

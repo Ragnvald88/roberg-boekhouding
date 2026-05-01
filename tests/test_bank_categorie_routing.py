@@ -155,3 +155,67 @@ async def test_set_categorie_on_debit_year_locked_raises(db):
 async def test_set_categorie_missing_banktx_raises(db):
     with pytest.raises(ValueError):
         await set_banktx_categorie(db, bank_tx_id=999, categorie='Kantoor')
+
+
+# ---------------------------------------------------------------------------
+# B6 — Sign-aware blank handling: blank-cat op debit zonder uitgave = no-op
+# ---------------------------------------------------------------------------
+# Bulk-blanking met mixed-sign selection in /transacties zou phantom lege
+# uitgaven creëren via lazy-create — silent data-pollution. Root-fix in
+# set_banktx_categorie zelf zodat alle callers geprotect zijn.
+
+
+@pytest.mark.asyncio
+async def test_blank_cat_on_debit_without_uitgave_is_noop(db):
+    """B6: debit zonder linked uitgave + blank-cat → no-op (geen
+    lazy-create van phantom lege uitgave)."""
+    await _seed_banktx(db, 1, '2026-03-15', -50.0)
+    # Geen seed_uitgave — geen linked uitgave
+    assert await _uitgave_count_for(db, 1) == 0
+
+    await set_banktx_categorie(db, bank_tx_id=1, categorie='')
+
+    # Geen uitgave aangemaakt
+    assert await _uitgave_count_for(db, 1) == 0
+
+
+@pytest.mark.asyncio
+async def test_blank_cat_on_debit_with_uitgave_clears_categorie(db):
+    """B6: debit met bestaande uitgave + blank-cat → uitgave behouden,
+    categorie naar '' (= explicit clear). Geen nieuwe uitgave."""
+    await _seed_banktx(db, 1, '2026-03-15', -50.0)
+    await _seed_uitgave(db, 10, '2026-03-15', 50.0,
+                        categorie='Telefoon/KPN', bank_tx_id=1)
+
+    await set_banktx_categorie(db, bank_tx_id=1, categorie='')
+
+    # Uitgave behouden, categorie cleared
+    assert await _uitgave_count_for(db, 1) == 1
+    assert await _get_uitgave_categorie(db, 1) == ''
+
+
+@pytest.mark.asyncio
+async def test_blank_cat_on_credit_writes_banktx_directly(db):
+    """B6: credit (bedrag>=0) + blank → banktx.categorie='' rechtstreeks,
+    GEEN uitgave-flow (credits hebben geen kosten-uitgave)."""
+    await _seed_banktx(db, 1, '2026-03-15', 1500.0,
+                       categorie='Omzet')
+
+    await set_banktx_categorie(db, bank_tx_id=1, categorie='')
+
+    assert await _get_banktx_categorie(db, 1) == ''
+    # Geen uitgave aangemaakt
+    assert await _uitgave_count_for(db, 1) == 0
+
+
+@pytest.mark.asyncio
+async def test_nonblank_cat_on_debit_without_uitgave_lazy_creates(db):
+    """B6 sanity: niet-blank cat op debit blijft normaal lazy-creëren.
+    (regressie-pin tegen overshoot van de B6 fix.)"""
+    await _seed_banktx(db, 1, '2026-03-15', -75.0)
+    assert await _uitgave_count_for(db, 1) == 0
+
+    await set_banktx_categorie(db, bank_tx_id=1, categorie='Bankkosten')
+
+    assert await _uitgave_count_for(db, 1) == 1
+    assert await _get_uitgave_categorie(db, 1) == 'Bankkosten'
