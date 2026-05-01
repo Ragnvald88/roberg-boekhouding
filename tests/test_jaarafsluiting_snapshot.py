@@ -210,20 +210,27 @@ async def test_load_jaarafsluiting_data_handles_old_snapshot_without_kia_bracket
     base['jaar'] = jaar
     await upsert_fiscale_params(db, **base)
 
-    # Stap 2: snapshot zonder nieuwere KIA-bracket fields
+    # Stap 2: snapshot mét params_dict zonder nieuwere KIA-bracket fields.
+    # NB: load_jaarafsluiting_data leest snapshot['params_dict'], NIET de
+    # apart opgeslagen fiscale_params_json column (codex round-3 punt).
+    # Dus de echte schema-tolerantie test zit in dit dict.
     old_snap = {
         'omzet': 50000.0,
         'totaal_kosten': 10000.0,
         'fiscale_winst': 40000.0,
         'belastbare_winst': 30000.0,
-        # Nieuwere fields ontbreken bewust
+        # Nieuwere snapshot-fields (kia_brackets_resultaat, etc.) ontbreken.
+        'params_dict': {
+            'jaar': jaar,
+            'urencriterium': 1225,
+            'zelfstandigenaftrek': 3750,
+            # KIA bracket fields ontbreken bewust:
+            # geen kia_plateau_bedrag, kia_afbouw_pct, kia_plateau_eind, etc.
+        },
     }
     old_balans = {'totaal_activa': 20000}
-    old_params = {
+    old_params = {  # gaat naar fiscale_params_json column
         'jaar': jaar,
-        'urencriterium': 1225,
-        'zelfstandigenaftrek': 3750,
-        # Geen kia_plateau_bedrag, kia_afbouw_pct, etc.
     }
     await save_jaarafsluiting_snapshot(
         db, jaar, old_snap, old_balans, old_params)
@@ -238,3 +245,9 @@ async def test_load_jaarafsluiting_data_handles_old_snapshot_without_kia_bracket
     # Spot check: oude waarden komen terug
     assert data['omzet'] == 50000.0
     assert data['fiscale_winst'] == 40000.0
+    # params is reconstructed als SimpleNamespace uit params_dict
+    # — getattr met default mag niet crashen op ontbrekende KIA-velden
+    assert data['params'].urencriterium == 1225
+    # Pin: getattr(...) op missing field returns default (geen KeyError)
+    assert getattr(data['params'], 'kia_plateau_bedrag', None) is None
+    assert getattr(data['params'], 'kia_afbouw_pct', None) is None
