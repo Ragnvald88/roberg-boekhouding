@@ -3,7 +3,8 @@
 import pytest
 from database import (
     get_health_alerts, add_banktransacties, add_factuur, add_klant,
-    add_werkdag, upsert_fiscale_params,
+    add_werkdag, upsert_fiscale_params, ensure_uitgave_for_banktx,
+    get_banktransacties,
 )
 from import_.seed_data import FISCALE_PARAMS
 
@@ -292,3 +293,175 @@ async def test_no_stale_werkdagen_when_factured(db):
         km=0, km_tarief=0, factuurnummer=f'{jaar}-001')
     alerts = await get_health_alerts(db, jaar)
     assert not any(a['key'] == 'stale_werkdagen' for a in alerts)
+
+
+# ---------------------------------------------------------------------------
+# B2 — Uncategorized health alert moet sign-aware zijn
+# ---------------------------------------------------------------------------
+# Voor debits ligt categorie op uitgaven.categorie (lazy-create flow);
+# voor credits op banktransacties.categorie. De alert telde alleen
+# banktransacties.categorie → debits met linked categorized uitgave werden
+# fout-positief gevlagd. Stale banktransacties.categorie op een debit zonder
+# linked uitgave mag GEEN echte uncategorized verbergen.
+
+
+@pytest.mark.asyncio
+async def test_uncategorized_alert_excludes_categorized_debit_via_uitgave(db):
+    """B2: debit -100 met linked uitgave categorie='Bankkosten' mag niet
+    in de uncategorized-alert tellen (die ziet user als false positive)."""
+    from datetime import date
+    jaar = date.today().year
+    await add_banktransacties(db, [
+        {'datum': f'{jaar}-01-15', 'bedrag': -100.0,
+         'tegenpartij': 'Vendor', 'omschrijving': 'x', 'categorie': ''},
+    ], csv_bestand='t.csv')
+    txns = await get_banktransacties(db, jaar=jaar)
+    bid = txns[0].id
+    # Lazy-create + categoriseer
+    await ensure_uitgave_for_banktx(
+        db, bank_tx_id=bid, categorie='Bankkosten')
+
+    alerts = await get_health_alerts(db, jaar)
+    uncat = [a for a in alerts if a['key'] == 'uncategorized_bank']
+    assert not uncat, (
+        "Een gecategoriseerde debit (via uitgave) mag niet als "
+        "uncategorized worden gemeld")
+
+
+@pytest.mark.asyncio
+async def test_uncategorized_alert_includes_uncategorized_debit(db):
+    """B2: een debit zonder linked uitgave (echt uncategorized) wordt wel
+    gemeld."""
+    from datetime import date
+    jaar = date.today().year
+    await add_banktransacties(db, [
+        {'datum': f'{jaar}-01-15', 'bedrag': -50.0,
+         'tegenpartij': 'V', 'omschrijving': 'x', 'categorie': ''},
+    ], csv_bestand='t.csv')
+
+    alerts = await get_health_alerts(db, jaar)
+    uncat = [a for a in alerts if a['key'] == 'uncategorized_bank']
+    assert len(uncat) == 1
+    assert uncat[0]['count'] == 1
+
+
+@pytest.mark.asyncio
+async def test_uncategorized_alert_credit_uses_banktx_categorie(db):
+    """B2: voor credits geldt banktransacties.categorie als source-of-truth.
+    Een credit met categorie='Omzet' is dus NIET uncategorized."""
+    from datetime import date
+    from database import update_banktransactie
+    jaar = date.today().year
+    await add_banktransacties(db, [
+        {'datum': f'{jaar}-02-10', 'bedrag': 1500.0,
+         'tegenpartij': 'Klant BV', 'omschrijving': 'factuur'},
+    ], csv_bestand='t.csv')
+    txns = await get_banktransacties(db, jaar=jaar)
+    # add_banktransacties slaat geen categorie op; zet via update.
+    await update_banktransactie(
+        db, transactie_id=txns[0].id, categorie='Omzet')
+
+    alerts = await get_health_alerts(db, jaar)
+    uncat = [a for a in alerts if a['key'] == 'uncategorized_bank']
+    assert not uncat
+
+
+@pytest.mark.asyncio
+async def test_uncategorized_alert_credit_without_categorie_is_alerted(db):
+    """B2: credit zonder categorie wordt wel gemeld."""
+    from datetime import date
+    jaar = date.today().year
+    await add_banktransacties(db, [
+        {'datum': f'{jaar}-02-10', 'bedrag': 1500.0,
+         'tegenpartij': 'Klant', 'omschrijving': 'x', 'categorie': ''},
+    ], csv_bestand='t.csv')
+
+    alerts = await get_health_alerts(db, jaar)
+    uncat = [a for a in alerts if a['key'] == 'uncategorized_bank']
+    assert len(uncat) == 1
+
+
+@pytest.mark.asyncio
+async def test_uncategorized_alert_debit_with_stale_banktx_categorie_still_alerted(
+        db):
+    """B2 codex round-3: een debit zonder linked uitgave moet als
+    uncategorized blijven tellen — ook als banktransacties.categorie een
+    stale waarde heeft. Anders kunnen oude / verkeerd-gemigreerde rijen
+    legitime uncategorized-alerts onderdrukken."""
+    from datetime import date
+    from database import update_banktransactie
+    jaar = date.today().year
+    await add_banktransacties(db, [
+        {'datum': f'{jaar}-03-15', 'bedrag': -75.0,
+         'tegenpartij': 'V', 'omschrijving': 'x'},
+    ], csv_bestand='t.csv')
+    txns = await get_banktransacties(db, jaar=jaar)
+    # Set stale banktx.categorie (verkeerd patroon, kan in legacy data)
+    await update_banktransactie(
+        db, transactie_id=txns[0].id, categorie='Telefoon/KPN')
+    # GEEN ensure_uitgave_for_banktx — dus geen linked uitgave
+
+    alerts = await get_health_alerts(db, jaar)
+    uncat = [a for a in alerts if a['key'] == 'uncategorized_bank']
+    assert len(uncat) == 1, (
+        "Stale banktx.categorie op debit zonder linked uitgave moet niet "
+        "een echte uncategorized verbergen")
+
+
+# ---------------------------------------------------------------------------
+# B17 — Concept-invoice alert moet imports uitsluiten
+# ---------------------------------------------------------------------------
+# Imports (type='anw' of bron='import') zijn frozen — kunnen niet uit
+# concept gehaald worden via UI. Een alert die ze blijft tonen is nag-noise
+# zonder actie. Behoud bestaande total + stale aggregate structuur — recente
+# concepten moeten info-alert blijven geven.
+
+
+@pytest.mark.asyncio
+async def test_concept_alert_excludes_imported_anw(db):
+    """B17: concept-factuur met type='anw' is geïmporteerd, frozen, mag
+    niet als alert verschijnen."""
+    from datetime import date
+    jaar = date.today().year
+    kid = await add_klant(db, naam="Test", tarief_uur=80)
+    await add_factuur(
+        db, nummer=f"{jaar}-001", klant_id=kid,
+        datum=f"{jaar}-01-15", totaal_bedrag=500,
+        status='concept', type='anw')
+
+    alerts = await get_health_alerts(db, jaar)
+    concepts = [a for a in alerts if a['key'] == 'concept_invoices']
+    assert not concepts, (
+        "ANW-import in concept mag niet als alert tellen")
+
+
+@pytest.mark.asyncio
+async def test_concept_alert_excludes_imported_bron(db):
+    """B17: bron='import' factuur in concept mag niet als alert tellen."""
+    from datetime import date
+    jaar = date.today().year
+    kid = await add_klant(db, naam="Test", tarief_uur=80)
+    await add_factuur(
+        db, nummer=f"{jaar}-002", klant_id=kid,
+        datum=f"{jaar}-01-15", totaal_bedrag=300,
+        status='concept', bron='import')
+
+    alerts = await get_health_alerts(db, jaar)
+    concepts = [a for a in alerts if a['key'] == 'concept_invoices']
+    assert not concepts
+
+
+@pytest.mark.asyncio
+async def test_concept_alert_includes_normal_concept(db):
+    """B17 sanity: gewone (niet-imported) concept fires alert nog steeds."""
+    from datetime import date
+    jaar = date.today().year
+    kid = await add_klant(db, naam="Test", tarief_uur=80)
+    await add_factuur(
+        db, nummer=f"{jaar}-003", klant_id=kid,
+        datum=f"{jaar}-01-15", totaal_bedrag=400,
+        status='concept')
+
+    alerts = await get_health_alerts(db, jaar)
+    concepts = [a for a in alerts if a['key'] == 'concept_invoices']
+    assert len(concepts) == 1, "Normale concept moet nog steeds alert geven"

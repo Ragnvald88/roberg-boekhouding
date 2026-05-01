@@ -3079,15 +3079,23 @@ async def get_health_alerts(db_path: Path = DB_PATH, jaar: int = 2026) -> list[d
 
     async with get_db_ctx(db_path) as conn:
         # 1. Uncategorized bank transactions: same filter as the
-        # /transacties?status=ongecategoriseerd view (genegeerd=0,
-        # no category, no koppeling). Otherwise the alert can over-
-        # count rows that the view will then hide.
+        # /transacties?status=ongecategoriseerd view.
+        # B2 (round-3): sign-aware uncategorized check. Voor debits is
+        # uitgaven.categorie source-of-truth (lazy-create flow); voor
+        # credits banktransacties.categorie. Stale banktx.categorie op
+        # een debit zonder linked uitgave mag GEEN echte uncategorized
+        # verbergen.
         cur = await conn.execute(
-            "SELECT COUNT(*) FROM banktransacties "
-            "WHERE datum >= ? AND datum < ? "
-            "AND (categorie IS NULL OR categorie = '') "
-            "AND (koppeling_type IS NULL OR koppeling_type = '') "
-            "AND (genegeerd = 0 OR genegeerd IS NULL)",
+            "SELECT COUNT(*) FROM banktransacties bt "
+            "LEFT JOIN uitgaven u ON u.bank_tx_id = bt.id "
+            "WHERE bt.datum >= ? AND bt.datum < ? "
+            "AND (bt.koppeling_type IS NULL OR bt.koppeling_type = '') "
+            "AND (bt.genegeerd = 0 OR bt.genegeerd IS NULL) "
+            "AND CASE "
+            "      WHEN bt.bedrag < 0 "
+            "        THEN COALESCE(u.categorie, '') = '' "
+            "      ELSE COALESCE(bt.categorie, '') = '' "
+            "    END",
             (jaar_start, jaar_end))
         uncat = (await cur.fetchone())[0]
         if uncat > 0:
@@ -3137,12 +3145,17 @@ async def get_health_alerts(db_path: Path = DB_PATH, jaar: int = 2026) -> list[d
 
         # 3. Concept invoices: escalate to warning when any >14d.
         # Single aggregate query: total + the >14d subset.
+        # B17: imports (type='anw' of bron='import') zijn frozen — kunnen
+        # niet uit concept gehaald worden via UI. Filter ze uit zowel total
+        # als stale aggregate. COALESCE voor legacy NULL bron/type.
         cur = await conn.execute(
             "SELECT COUNT(*) AS total, "
             "COALESCE(SUM(CASE WHEN datum < ? THEN 1 ELSE 0 END), 0) "
             "  AS stale "
             "FROM facturen "
             "WHERE status = 'concept' "
+            "AND COALESCE(bron, 'app') != 'import' "
+            "AND COALESCE(type, 'factuur') != 'anw' "
             "AND datum >= ? AND datum < ?",
             (concept_warn_cutoff, jaar_start, jaar_end))
         row = await cur.fetchone()
