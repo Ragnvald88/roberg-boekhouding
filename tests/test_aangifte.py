@@ -1157,12 +1157,13 @@ def test_definitief_year_inputs_rendered_disabled():
 
 def test_aangifte_upload_rejects_definitief_year_before_writing_file():
     """U2 (source-pin): handle_upload calls assert_year_writable BEFORE
-    write_bytes, so a definitief-jaar upload does not corrupt an existing
+    any disk write, so a definitief-jaar upload does not corrupt an existing
     file's contents on disk before the DB rejects it.
 
-    We compare against the actual `await asyncio.to_thread(file_path.write_bytes`
-    call (not the literal string "write_bytes" which also appears in the
-    rationale comment).
+    K1 update (2026-04-30): handle_upload nu via _safe_atomic_write helper
+    in plaats van direct file_path.write_bytes. Same intent (year-lock
+    before disk write), nieuwere implementatie. Source-pin assertie houdt
+    de invariant 'year-lock first' vast.
     """
     from pathlib import Path
     src = Path(__file__).resolve().parents[1] / 'pages' / 'aangifte.py'
@@ -1170,15 +1171,16 @@ def test_aangifte_upload_rejects_definitief_year_before_writing_file():
     upload_idx = text.find('async def handle_upload(')
     assert upload_idx >= 0, 'handle_upload missing'
     body = text[upload_idx:upload_idx + 4000]
-    # The pre-write guard must appear, AND it must come before write_bytes.
+    # Pre-write guard must appear, AND it must come before the atomic write.
     assert_idx = body.find('await assert_year_writable(DB_PATH, jaar)')
-    write_idx = body.find('file_path.write_bytes')
+    write_idx = body.find('_safe_atomic_write(')
     assert assert_idx > 0, (
         'handle_upload must call assert_year_writable up-front')
-    assert write_idx > 0, 'handle_upload must still call file_path.write_bytes'
+    assert write_idx > 0, (
+        'handle_upload must call _safe_atomic_write (K1 helper)')
     assert assert_idx < write_idx, (
-        'assert_year_writable must run BEFORE write_bytes; otherwise an '
-        'upload to a definitief year overwrites the file before the DB '
+        'assert_year_writable must run BEFORE _safe_atomic_write; otherwise '
+        'an upload to a definitief year writes the file before the DB '
         'rejects.')
 
 

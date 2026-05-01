@@ -1099,21 +1099,13 @@ async def aangifte_page():
 
     async def handle_upload(e: events.UploadEventArguments,
                             categorie: str, documenttype: str, dialog):
+        # K1: 4-step safe upload sequence via gedeelde helpers.
+        # Behoud /aangifte's eigen subdir-conventie: AANGIFTE_DIR/jaar/categorie.
+        from pages.documenten import (
+            _safe_documenten_basename, _safe_atomic_write)
         jaar = state['jaar']
-        target_dir = AANGIFTE_DIR / str(jaar) / categorie
-        target_dir.mkdir(parents=True, exist_ok=True)
 
-        safe_name = Path(e.file.name).name.replace(' ', '_')
-        file_path = target_dir / safe_name
-
-        # L8/U2 (codex follow-up): year-lock check FIRST, before we touch
-        # the disk. Without this an upload to a definitief year still
-        # writes/overwrites the bytes (because `target_dir.mkdir` and
-        # `write_bytes` were unconditional) and only the DB insert raised.
-        # On an existing filename that meant the previous file's contents
-        # were silently destroyed before the DB rejected the operation.
-        # The DB-level guard in add_aangifte_document still runs as
-        # belt-and-braces below.
+        # 1. Year-lock preflight
         try:
             await assert_year_writable(DB_PATH, jaar)
         except YearLockedError as ex:
@@ -1121,37 +1113,54 @@ async def aangifte_page():
             dialog.close()
             return
 
-        # Lane 5 (codex follow-up): check existence BEFORE writing so we
-        # only unlink a freshly-created file in the YearLockedError-cleanup
-        # branch — never an existing one that another DB-row still points at.
-        existed_before = file_path.exists()
-        content = await e.file.read()
-        await asyncio.to_thread(file_path.write_bytes, content)
+        # 2. Sanitize filename. Behoud space→underscore voor URL-vriendelijke
+        # static-files (we mount AANGIFTE_DIR via /aangifte-files), dan via
+        # de gedeelde safe-helper voor traversal/NUL/leading-dot/extension.
+        safe_name_pre = e.file.name.replace(' ', '_')
+        try:
+            safe_name = _safe_documenten_basename(safe_name_pre)
+        except ValueError as exc:
+            ui.notify(str(exc), type='negative', position='top')
+            dialog.close()
+            return
 
-        # Lane 5 (review A13/A8): if the year is definitief the DB
-        # helper raises YearLockedError. Surface a warning + clean
-        # up the just-written file so we don't leave an orphan on disk.
-        # (Belt-and-braces: the pre-write guard above should already have
-        # caught the locked case; this catches a race where the year was
-        # closed between the guard and the DB insert.)
+        # 3. Atomic write + collision in de jaar/categorie-subdir
+        target_dir = AANGIFTE_DIR / str(jaar) / categorie
+        content = await e.file.read()
+        try:
+            final_path, is_new = await _safe_atomic_write(
+                target_dir, safe_name, content)
+        except Exception as exc:
+            ui.notify(f'Schrijven mislukt: {exc}',
+                      type='negative', position='top')
+            dialog.close()
+            return
+
+        # 4. DB-row + cleanup-on-fail (alleen als WIJ geschreven hebben)
         try:
             await add_aangifte_document(
                 DB_PATH, jaar=jaar, categorie=categorie,
-                documenttype=documenttype, bestandsnaam=safe_name,
-                bestandspad=str(file_path),
+                documenttype=documenttype, bestandsnaam=final_path.name,
+                bestandspad=str(final_path),
                 upload_datum=date.today().isoformat())
         except YearLockedError as ex:
-            if not existed_before:
-                try:
-                    await asyncio.to_thread(file_path.unlink)
-                except FileNotFoundError:
-                    pass
+            if is_new:
+                await asyncio.to_thread(
+                    final_path.unlink, missing_ok=True)
             ui.notify(str(ex), type='warning', position='top')
+            dialog.close()
+            return
+        except Exception as ex:
+            if is_new:
+                await asyncio.to_thread(
+                    final_path.unlink, missing_ok=True)
+            ui.notify(f'Database-fout: {ex}',
+                      type='negative', position='top')
             dialog.close()
             return
 
         dialog.close()
-        ui.notify(f'{safe_name} geupload', type='positive')
+        ui.notify(f'{final_path.name} geupload', type='positive')
         docs = await get_aangifte_documenten(DB_PATH, state['jaar'])
         await render_progress(docs)
         await render_checklist(docs)

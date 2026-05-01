@@ -1,6 +1,7 @@
 """Documenten pagina — document management per boekjaar."""
 
 import asyncio
+import os
 from datetime import date
 from pathlib import Path
 
@@ -11,12 +12,85 @@ from components.layout import create_layout, page_title
 from components.shared_ui import year_options
 from database import (
     get_aangifte_documenten, add_aangifte_document, delete_aangifte_document,
-    DB_PATH,
+    DB_PATH, YearLockedError, assert_year_writable,
 )
 
 AANGIFTE_DIR = DB_PATH.parent / 'aangifte'
 AANGIFTE_DIR.mkdir(parents=True, exist_ok=True)
 app.add_static_files('/aangifte-files', str(AANGIFTE_DIR))
+
+
+def _safe_documenten_basename(
+    fname: str,
+    allowed_suffixes: tuple[str, ...] = ('.pdf', '.jpg', '.jpeg', '.png'),
+) -> str:
+    """Sanitize an upload filename for AANGIFTE_DIR storage.
+
+    Loud-fails (ValueError) on:
+      - empty / NUL byte
+      - any path component (slash, backslash, '..')
+      - leading dot (silent dot-stripping is rejected: '.env.pdf' may NOT
+        be silently turned into 'env.pdf' — user must see the rejection)
+      - disallowed file extensions
+
+    Design: loud-fail, never silent-sanitize.
+    """
+    if not fname or '\x00' in fname:
+        raise ValueError("Ongeldige bestandsnaam (leeg of NUL byte)")
+    if '/' in fname or '\\' in fname or '..' in fname:
+        raise ValueError("Bestandsnaam mag geen pad-componenten bevatten")
+    if fname.startswith('.'):
+        raise ValueError("Bestandsnaam mag niet beginnen met een punt")
+    suffix = Path(fname).suffix.lower()
+    if suffix not in allowed_suffixes:
+        raise ValueError(f"Bestandstype {suffix!r} niet toegestaan")
+    return fname
+
+
+async def _safe_atomic_write(
+    dest_dir: Path,
+    name: str,
+    content: bytes,
+) -> tuple[Path, bool]:
+    """Write `content` atomically into `dest_dir/name` with collision handling.
+
+    Returns ``(final_path, is_new_write)``.
+    - ``is_new_write=False`` betekent idempotent: bestaande file met identieke
+      content; geen schrijf-actie. Caller mag deze NIET ``unlink`` op DB-fail.
+    - ``is_new_write=True`` betekent: file is daadwerkelijk geschreven. Caller
+      MAG (en moet) deze opruimen als de DB-row niet committeert.
+
+    Atomiciteit: schrijft naar ``{dest}.tmp``, dan ``os.replace``. Bij crash
+    wordt ``.tmp`` opgeruimd en exception propageert.
+    """
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    candidate = dest_dir / name
+
+    # Idempotent shortcut + collision-suffix scan
+    if candidate.exists():
+        existing = await asyncio.to_thread(candidate.read_bytes)
+        if existing == content:
+            return candidate, False
+        # Verschillende content op zelfde naam — vind vrij _N suffix
+        stem, suffix = candidate.stem, candidate.suffix
+        n = 2
+        while True:
+            candidate = dest_dir / f"{stem}_{n}{suffix}"
+            if not candidate.exists():
+                break
+            existing = await asyncio.to_thread(candidate.read_bytes)
+            if existing == content:
+                return candidate, False
+            n += 1
+
+    tmp = candidate.with_suffix(candidate.suffix + '.tmp')
+    try:
+        await asyncio.to_thread(tmp.write_bytes, content)
+        await asyncio.to_thread(os.replace, tmp, candidate)
+    except Exception:
+        await asyncio.to_thread(tmp.unlink, missing_ok=True)
+        raise
+    return candidate, True
 
 @ui.page('/documenten')
 async def documenten_page():
@@ -90,23 +164,60 @@ async def documenten_page():
                                         'Selecteer categorie en documenttype',
                                         type='warning')
                                     return
-                                AANGIFTE_DIR.mkdir(parents=True, exist_ok=True)
-                                dest = AANGIFTE_DIR / fname
-                                await asyncio.to_thread(
-                                    dest.write_bytes, content)
-                                await add_aangifte_document(
-                                    DB_PATH, jaar=jaar_select.value,
-                                    categorie=cat_select.value,
-                                    documenttype=type_select.value,
-                                    bestandsnaam=fname,
-                                    bestandspad=str(dest),
-                                    upload_datum=date.today().isoformat(),
-                                )
+                                # K1: 4-step safe upload sequence
+                                # 1. Year-lock preflight
+                                try:
+                                    await assert_year_writable(
+                                        DB_PATH, jaar_select.value)
+                                except YearLockedError as exc:
+                                    ui.notify(str(exc), type='warning')
+                                    return
+                                # 2. Sanitize filename (loud-fail)
+                                try:
+                                    safe_name = _safe_documenten_basename(fname)
+                                except ValueError as exc:
+                                    ui.notify(str(exc), type='negative')
+                                    return
+                                # 3. Atomic write + collision resolution
+                                try:
+                                    final_path, is_new = await _safe_atomic_write(
+                                        AANGIFTE_DIR, safe_name, content)
+                                except Exception as exc:
+                                    ui.notify(
+                                        f'Schrijven mislukt: {exc}',
+                                        type='negative')
+                                    return
+                                # 4. DB-row + cleanup-on-fail (alleen als WIJ schreven)
+                                try:
+                                    await add_aangifte_document(
+                                        DB_PATH, jaar=jaar_select.value,
+                                        categorie=cat_select.value,
+                                        documenttype=type_select.value,
+                                        bestandsnaam=final_path.name,
+                                        bestandspad=str(final_path),
+                                        upload_datum=date.today().isoformat(),
+                                    )
+                                except YearLockedError as exc:
+                                    if is_new:
+                                        await asyncio.to_thread(
+                                            final_path.unlink,
+                                            missing_ok=True)
+                                    ui.notify(str(exc), type='warning')
+                                    return
+                                except Exception as exc:
+                                    if is_new:
+                                        await asyncio.to_thread(
+                                            final_path.unlink,
+                                            missing_ok=True)
+                                    ui.notify(
+                                        f'Database-fout: {exc}',
+                                        type='negative')
+                                    return
                                 cat_dlg.close()
                                 lbl = next(
                                     (d.label for d in AANGIFTE_DOCS
                                      if d.documenttype == type_select.value),
-                                    fname)
+                                    final_path.name)
                                 ui.notify(f'{lbl} opgeslagen', type='positive')
                                 await refresh()
 
@@ -308,8 +419,13 @@ def _render_uploaded_rows(spec, existing, jaar, show_preview_fn, refresh_fn):
                                   on_click=del_dlg.close).props('flat')
 
                         async def confirm_del():
-                            await delete_aangifte_document(
-                                DB_PATH, doc_id=did)
+                            try:
+                                await delete_aangifte_document(
+                                    DB_PATH, doc_id=did)
+                            except YearLockedError as exc:
+                                del_dlg.close()
+                                ui.notify(str(exc), type='warning')
+                                return
                             del_dlg.close()
                             ui.notify('Verwijderd', type='info')
                             await refresh_fn()
@@ -328,19 +444,45 @@ def _render_uploaded_rows(spec, existing, jaar, show_preview_fn, refresh_fn):
             e: events.UploadEventArguments,
             _spec=spec, _jaar=jaar,
         ):
-            AANGIFTE_DIR.mkdir(parents=True, exist_ok=True)
-            fname = e.file.name
-            dest = AANGIFTE_DIR / fname
+            # K1: 4-step safe upload sequence
+            try:
+                await assert_year_writable(DB_PATH, _jaar)
+            except YearLockedError as exc:
+                ui.notify(str(exc), type='warning')
+                return
+            try:
+                safe_name = _safe_documenten_basename(e.file.name)
+            except ValueError as exc:
+                ui.notify(str(exc), type='negative')
+                return
             content = await e.file.read()
-            await asyncio.to_thread(dest.write_bytes, content)
-            await add_aangifte_document(
-                DB_PATH, jaar=_jaar,
-                categorie=_spec.categorie,
-                documenttype=_spec.documenttype,
-                bestandsnaam=fname,
-                bestandspad=str(dest),
-                upload_datum=date.today().isoformat(),
-            )
+            try:
+                final_path, is_new = await _safe_atomic_write(
+                    AANGIFTE_DIR, safe_name, content)
+            except Exception as exc:
+                ui.notify(f'Schrijven mislukt: {exc}', type='negative')
+                return
+            try:
+                await add_aangifte_document(
+                    DB_PATH, jaar=_jaar,
+                    categorie=_spec.categorie,
+                    documenttype=_spec.documenttype,
+                    bestandsnaam=final_path.name,
+                    bestandspad=str(final_path),
+                    upload_datum=date.today().isoformat(),
+                )
+            except YearLockedError as exc:
+                if is_new:
+                    await asyncio.to_thread(
+                        final_path.unlink, missing_ok=True)
+                ui.notify(str(exc), type='warning')
+                return
+            except Exception as exc:
+                if is_new:
+                    await asyncio.to_thread(
+                        final_path.unlink, missing_ok=True)
+                ui.notify(f'Database-fout: {exc}', type='negative')
+                return
             ui.notify(f'{_spec.label} toegevoegd', type='positive')
             await refresh_fn()
 
@@ -370,19 +512,45 @@ def _render_missing_row(spec, jaar, refresh_fn):
             e: events.UploadEventArguments,
             _spec=spec, _jaar=jaar,
         ):
-            AANGIFTE_DIR.mkdir(parents=True, exist_ok=True)
-            fname = e.file.name
-            dest = AANGIFTE_DIR / fname
+            # K1: 4-step safe upload sequence
+            try:
+                await assert_year_writable(DB_PATH, _jaar)
+            except YearLockedError as exc:
+                ui.notify(str(exc), type='warning')
+                return
+            try:
+                safe_name = _safe_documenten_basename(e.file.name)
+            except ValueError as exc:
+                ui.notify(str(exc), type='negative')
+                return
             content = await e.file.read()
-            await asyncio.to_thread(dest.write_bytes, content)
-            await add_aangifte_document(
-                DB_PATH, jaar=_jaar,
-                categorie=_spec.categorie,
-                documenttype=_spec.documenttype,
-                bestandsnaam=fname,
-                bestandspad=str(dest),
-                upload_datum=date.today().isoformat(),
-            )
+            try:
+                final_path, is_new = await _safe_atomic_write(
+                    AANGIFTE_DIR, safe_name, content)
+            except Exception as exc:
+                ui.notify(f'Schrijven mislukt: {exc}', type='negative')
+                return
+            try:
+                await add_aangifte_document(
+                    DB_PATH, jaar=_jaar,
+                    categorie=_spec.categorie,
+                    documenttype=_spec.documenttype,
+                    bestandsnaam=final_path.name,
+                    bestandspad=str(final_path),
+                    upload_datum=date.today().isoformat(),
+                )
+            except YearLockedError as exc:
+                if is_new:
+                    await asyncio.to_thread(
+                        final_path.unlink, missing_ok=True)
+                ui.notify(str(exc), type='warning')
+                return
+            except Exception as exc:
+                if is_new:
+                    await asyncio.to_thread(
+                        final_path.unlink, missing_ok=True)
+                ui.notify(f'Database-fout: {exc}', type='negative')
+                return
             ui.notify(f'{_spec.label} geupload', type='positive')
             await refresh_fn()
 
