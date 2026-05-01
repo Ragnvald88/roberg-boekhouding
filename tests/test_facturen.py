@@ -1144,9 +1144,10 @@ def test_werkdag_validator_blocks_tarief_zero_at_import():
 
 class TestOnSendMailSourcePin:
 
-    def test_on_send_mail_has_year_lock_preflight(self):
-        """on_send_mail moet assert_year_writable + YearLockedError catch
-        + warning toast hebben tussen handler-start en _ensure_factuur_pdf."""
+    def test_on_send_mail_has_conditional_year_lock_preflight(self):
+        """on_send_mail moet year-lock check doen ALLEEN voor concept
+        (de enige DB-mutatie). Codex round-3 nuance: verstuurd/verlopen
+        mailen muteert niets en moet ook in locked year werken."""
         import inspect
         from pages import facturen
         src = inspect.getsource(facturen)
@@ -1156,13 +1157,16 @@ class TestOnSendMailSourcePin:
         assert end_idx > idx
         block = src[idx:end_idx]
 
+        # Conditional check op status == 'concept'
+        assert "row.get('status') == 'concept'" in block, (
+            "on_send_mail moet year-lock conditional op status='concept' "
+            "zijn (verstuurd/verlopen muteert niet)")
         assert "await assert_year_writable(DB_PATH, row['datum'])" in block, (
-            "on_send_mail mist exact year-lock preflight (B11) — "
-            "expected: await assert_year_writable(DB_PATH, row['datum'])")
+            "on_send_mail mist year-lock check binnen de conditie")
         assert "except YearLockedError" in block, (
-            "on_send_mail mist YearLockedError catch (B11)")
+            "on_send_mail mist YearLockedError catch")
         assert "type='warning'" in block, (
-            "on_send_mail mist warning toast (B11)")
+            "on_send_mail mist warning toast")
 
     def test_on_send_mail_pattern_matches_on_send_herinnering(self):
         """Reference: on_send_herinnering had het patroon eerst. Pin dat

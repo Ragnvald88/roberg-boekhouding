@@ -1282,15 +1282,17 @@ async def facturen_page():
             row = e.args
             nummer = row['nummer']
 
-            # B11: year-lock pre-flight (consistency met on_send_herinnering).
-            # Voorkomt dat we Mail.app openen voor een factuur in een
-            # definitief jaar — de status='verstuurd' update aan het eind
-            # zou anders falen met een cryptische "Fout bij Mail.app" toast.
-            try:
-                await assert_year_writable(DB_PATH, row['datum'])
-            except YearLockedError as ex:
-                ui.notify(str(ex), type='warning')
-                return
+            # B11: year-lock pre-flight ALLEEN voor concept-facturen.
+            # Concept → verstuurd is de enige DB-mutatie die plaatsvindt
+            # (regel ~1349 hieronder); voor verstuurd/verlopen is mailen
+            # puur communicatie zonder mutatie en mag dus ook in een
+            # definitief jaar. Codex round-3 nuance.
+            if row.get('status') == 'concept':
+                try:
+                    await assert_year_writable(DB_PATH, row['datum'])
+                except YearLockedError as ex:
+                    ui.notify(str(ex), type='warning')
+                    return
 
             # One-stop resolve: existing PDF → basename fallback → regenerate
             # from regels_json / werkdagen → clear error. Replaces the old
