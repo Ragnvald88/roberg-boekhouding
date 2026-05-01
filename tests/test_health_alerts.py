@@ -408,60 +408,7 @@ async def test_uncategorized_alert_debit_with_stale_banktx_categorie_still_alert
         "een echte uncategorized verbergen")
 
 
-# ---------------------------------------------------------------------------
-# B17 — Concept-invoice alert moet imports uitsluiten
-# ---------------------------------------------------------------------------
-# Imports (type='anw' of bron='import') zijn frozen — kunnen niet uit
-# concept gehaald worden via UI. Een alert die ze blijft tonen is nag-noise
-# zonder actie. Behoud bestaande total + stale aggregate structuur — recente
-# concepten moeten info-alert blijven geven.
-
-
-@pytest.mark.asyncio
-async def test_concept_alert_excludes_imported_anw(db):
-    """B17: concept-factuur met type='anw' is geïmporteerd, frozen, mag
-    niet als alert verschijnen."""
-    from datetime import date
-    jaar = date.today().year
-    kid = await add_klant(db, naam="Test", tarief_uur=80)
-    await add_factuur(
-        db, nummer=f"{jaar}-001", klant_id=kid,
-        datum=f"{jaar}-01-15", totaal_bedrag=500,
-        status='concept', type='anw')
-
-    alerts = await get_health_alerts(db, jaar)
-    concepts = [a for a in alerts if a['key'] == 'concept_invoices']
-    assert not concepts, (
-        "ANW-import in concept mag niet als alert tellen")
-
-
-@pytest.mark.asyncio
-async def test_concept_alert_excludes_imported_bron(db):
-    """B17: bron='import' factuur in concept mag niet als alert tellen."""
-    from datetime import date
-    jaar = date.today().year
-    kid = await add_klant(db, naam="Test", tarief_uur=80)
-    await add_factuur(
-        db, nummer=f"{jaar}-002", klant_id=kid,
-        datum=f"{jaar}-01-15", totaal_bedrag=300,
-        status='concept', bron='import')
-
-    alerts = await get_health_alerts(db, jaar)
-    concepts = [a for a in alerts if a['key'] == 'concept_invoices']
-    assert not concepts
-
-
-@pytest.mark.asyncio
-async def test_concept_alert_includes_normal_concept(db):
-    """B17 sanity: gewone (niet-imported) concept fires alert nog steeds."""
-    from datetime import date
-    jaar = date.today().year
-    kid = await add_klant(db, naam="Test", tarief_uur=80)
-    await add_factuur(
-        db, nummer=f"{jaar}-003", klant_id=kid,
-        datum=f"{jaar}-01-15", totaal_bedrag=400,
-        status='concept')
-
-    alerts = await get_health_alerts(db, jaar)
-    concepts = [a for a in alerts if a['key'] == 'concept_invoices']
-    assert len(concepts) == 1, "Normale concept moet nog steeds alert geven"
+# NB: B17 (concept-import-exclusion) is bewust NIET geïmplementeerd.
+# Codex round-3 wees op pages/facturen.py:793 — de "Markeer als verstuurd"
+# button toont voor ELKE concept-factuur (geen import-guard) en de handler
+# voert het uit. Imports in concept zijn dus actionable, alert is legitiem.

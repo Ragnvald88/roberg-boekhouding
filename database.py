@@ -3084,7 +3084,8 @@ async def get_health_alerts(db_path: Path = DB_PATH, jaar: int = 2026) -> list[d
         # uitgaven.categorie source-of-truth (lazy-create flow); voor
         # credits banktransacties.categorie. Stale banktx.categorie op
         # een debit zonder linked uitgave mag GEEN echte uncategorized
-        # verbergen.
+        # verbergen. TRIM matcht derive_status' .strip() in
+        # components/transacties_helpers.py.
         cur = await conn.execute(
             "SELECT COUNT(*) FROM banktransacties bt "
             "LEFT JOIN uitgaven u ON u.bank_tx_id = bt.id "
@@ -3093,8 +3094,8 @@ async def get_health_alerts(db_path: Path = DB_PATH, jaar: int = 2026) -> list[d
             "AND (bt.genegeerd = 0 OR bt.genegeerd IS NULL) "
             "AND CASE "
             "      WHEN bt.bedrag < 0 "
-            "        THEN COALESCE(u.categorie, '') = '' "
-            "      ELSE COALESCE(bt.categorie, '') = '' "
+            "        THEN TRIM(COALESCE(u.categorie, '')) = '' "
+            "      ELSE TRIM(COALESCE(bt.categorie, '')) = '' "
             "    END",
             (jaar_start, jaar_end))
         uncat = (await cur.fetchone())[0]
@@ -3106,11 +3107,11 @@ async def get_health_alerts(db_path: Path = DB_PATH, jaar: int = 2026) -> list[d
                 'count': uncat,
                 # `/bank` is a deprecated redirect — link directly to the
                 # filtered transacties view so the user lands on the same
-                # rows the alert just counted. Pass jaar so cross-year
-                # navigation from the dashboard's year selector lands on
-                # the same set the alert counted.
+                # rows the alert just counted. Pass jaar voor cross-year
+                # navigatie en type=bank zodat de pagina cash-uitgaven
+                # niet erbij toont (alert is bank-only).
                 'link': (f'/transacties?status=ongecategoriseerd'
-                         f'&jaar={jaar}'),
+                         f'&jaar={jaar}&type=bank'),
             })
 
         # 2. Overdue invoices: warning at 14-30d, critical when >30d.
@@ -3145,17 +3146,17 @@ async def get_health_alerts(db_path: Path = DB_PATH, jaar: int = 2026) -> list[d
 
         # 3. Concept invoices: escalate to warning when any >14d.
         # Single aggregate query: total + the >14d subset.
-        # B17: imports (type='anw' of bron='import') zijn frozen — kunnen
-        # niet uit concept gehaald worden via UI. Filter ze uit zowel total
-        # als stale aggregate. COALESCE voor legacy NULL bron/type.
+        # NB: B17 (concept-import-exclusion) is bewust NIET toegepast.
+        # Codex round-3 opmerking: pages/facturen.py:793 toont 'Markeer
+        # als verstuurd' voor ELKE concept-factuur (geen import-guard) en
+        # de handler op regel 1268 voert het uit zonder bron/type-check.
+        # Imports zijn dus actionable in concept; alert is legitiem.
         cur = await conn.execute(
             "SELECT COUNT(*) AS total, "
             "COALESCE(SUM(CASE WHEN datum < ? THEN 1 ELSE 0 END), 0) "
             "  AS stale "
             "FROM facturen "
             "WHERE status = 'concept' "
-            "AND COALESCE(bron, 'app') != 'import' "
-            "AND COALESCE(type, 'factuur') != 'anw' "
             "AND datum >= ? AND datum < ?",
             (concept_warn_cutoff, jaar_start, jaar_end))
         row = await cur.fetchone()
