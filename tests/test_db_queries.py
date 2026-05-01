@@ -14,6 +14,7 @@ from database import (
     get_debiteuren_op_peildatum,
     find_factuur_matches, apply_factuur_matches, MatchProposal,
     get_nog_te_factureren, get_kpis, get_kpis_tot_datum, get_data_counts,
+    get_omzet_per_maand_tot_datum,
     get_afschrijving_overrides, get_afschrijving_overrides_batch,
     set_afschrijving_override, delete_afschrijving_override,
     get_db_ctx, get_va_betalingen, get_openstaande_facturen,
@@ -1892,4 +1893,74 @@ async def test_get_nog_te_factureren_excludes_future_werkdagen(
     bedrag = await get_nog_te_factureren(db, jaar=2026)
     assert bedrag == 640, (
         "Future werkdag mag niet meetellen in nog te factureren")
+
+
+# ---------------------------------------------------------------------------
+# B13 — get_omzet_per_maand_tot_datum: real date-cutoff query
+# ---------------------------------------------------------------------------
+# Eerder gebruikte de cumulatieve grafiek voor vorig jaar de volle 12
+# maanden — visueel inconsistent met day-precise YoY badge die YTD-vs-YTD
+# rekent. Pro-rata cap helper was wiskundig fout voor lumpy data; juiste
+# aanpak is een echte date-range query.
+
+
+@pytest.mark.asyncio
+async def test_get_omzet_per_maand_tot_datum_returns_12_months(db):
+    """Output is altijd 12 entries (jan..dec)."""
+    result = await get_omzet_per_maand_tot_datum(
+        db, jaar=2025, max_datum='2025-12-31')
+    assert len(result) == 12
+
+
+@pytest.mark.asyncio
+async def test_get_omzet_per_maand_tot_datum_april_30_cuts_correctly(db):
+    """Cutoff 30-april bevatten mei-dec 0; jan-april alleen
+    facturen tot en met 30-april (geen pro-rata)."""
+    kid = await add_klant(db, naam="Test", tarief_uur=80)
+    await add_factuur(db, nummer='2025-001', klant_id=kid,
+                      datum='2025-04-15', totaal_bedrag=1000,
+                      status='betaald')
+    await add_factuur(db, nummer='2025-002', klant_id=kid,
+                      datum='2025-04-30', totaal_bedrag=500,
+                      status='betaald')
+    await add_factuur(db, nummer='2025-003', klant_id=kid,
+                      datum='2025-05-01', totaal_bedrag=999,  # NA cutoff
+                      status='betaald')
+
+    result = await get_omzet_per_maand_tot_datum(
+        db, jaar=2025, max_datum='2025-04-30')
+    # april (index 3) = 1500
+    assert result[3] == 1500
+    # alle andere maanden 0
+    assert all(r == 0 for i, r in enumerate(result) if i != 3)
+
+
+@pytest.mark.asyncio
+async def test_get_omzet_per_maand_tot_datum_excludes_concept(db):
+    """Concept facturen tellen niet (consistent met get_kpis/get_omzet_*)."""
+    kid = await add_klant(db, naam="Test", tarief_uur=80)
+    await add_factuur(db, nummer='2025-001', klant_id=kid,
+                      datum='2025-03-15', totaal_bedrag=1000,
+                      status='concept')
+
+    result = await get_omzet_per_maand_tot_datum(
+        db, jaar=2025, max_datum='2025-12-31')
+    assert all(r == 0 for r in result)
+
+
+@pytest.mark.asyncio
+async def test_get_omzet_per_maand_tot_datum_dec_31_keeps_full_year(db):
+    """Cutoff = jaar-eind = volledige jaar."""
+    kid = await add_klant(db, naam="Test", tarief_uur=80)
+    await add_factuur(db, nummer='2025-001', klant_id=kid,
+                      datum='2025-06-15', totaal_bedrag=200,
+                      status='betaald')
+    await add_factuur(db, nummer='2025-002', klant_id=kid,
+                      datum='2025-12-30', totaal_bedrag=300,
+                      status='betaald')
+
+    result = await get_omzet_per_maand_tot_datum(
+        db, jaar=2025, max_datum='2025-12-31')
+    assert result[5] == 200  # juni
+    assert result[11] == 300  # december
 

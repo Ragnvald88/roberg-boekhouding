@@ -13,6 +13,7 @@ from components.layout import create_layout, page_title
 from components.utils import format_euro
 from database import (
     get_kpis, get_kpis_tot_datum, get_omzet_per_maand,
+    get_omzet_per_maand_tot_datum,
     get_uitgaven_per_categorie, get_openstaande_facturen,
     get_werkdagen_ongefactureerd_summary, get_km_totaal,
     get_fiscale_params, get_aangifte_documenten,
@@ -470,11 +471,23 @@ async def dashboard_page():
             has_kosten = any(d['totaal'] > 0 for d in kosten_per_cat)
 
             # Cumulative sums for line chart
+            # B13: voor day-precise consistency met YoY badge — bij huidig
+            # jaar capen we vorig jaar omzet op de cutoff-datum (vandaag-
+            # min-1-jaar). Volle jaar zou anders een dec-piek tonen die
+            # de '+X% vs vorig jaar'-badge tegenspreekt.
+            if jaar == huidig_jaar:
+                # vorig_datum is reeds berekend rond regel 234 (day-precise)
+                omzet_vorig_capped = await get_omzet_per_maand_tot_datum(
+                    DB_PATH, jaar=jaar - 1, max_datum=vorig_datum)
+            else:
+                # Niet huidig jaar — beide jaren volledig is OK
+                omzet_vorig_capped = omzet_vorig
+
             cum_huidig, cum_vorig = [], []
             rh, rv = 0, 0
             for i in range(12):
                 rh += omzet_huidig[i]
-                rv += omzet_vorig[i]
+                rv += omzet_vorig_capped[i]
                 cum_huidig.append(round(rh))
                 cum_vorig.append(round(rv))
 

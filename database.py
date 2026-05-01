@@ -2908,6 +2908,36 @@ async def get_omzet_per_maand(db_path: Path = DB_PATH, jaar: int = 2026) -> list
         return [maand_map.get(f"{m:02d}", 0) for m in range(1, 13)]
 
 
+async def get_omzet_per_maand_tot_datum(
+        db_path: Path = DB_PATH, jaar: int = 2026,
+        max_datum: str = '') -> list[float]:
+    """B13: maandelijkse omzet voor jaar tot-en-met max_datum (inclusief).
+
+    Gebruikt door de dashboard cumulatieve grafiek voor day-precise YoY:
+    voor vorig jaar laden we niet het volle jaar maar tot dezelfde
+    kalenderdatum-een-jaar-geleden, zodat de chart visueel consistent
+    is met de '+X% vs vorig jaar'-badge (die YTD-vs-YTD rekent).
+
+    Returns 12 floats [jan, feb, ..., dec]. Maanden volledig na cutoff = 0.
+    Concept facturen blijven uitgesloten (status != 'concept').
+    """
+    if not max_datum:
+        max_datum = f'{jaar}-12-31'
+    jaar_start = f'{jaar}-01-01'
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            """SELECT substr(datum, 6, 2) as maand,
+                      COALESCE(SUM(totaal_bedrag), 0) AS totaal
+               FROM facturen
+               WHERE datum >= ? AND datum <= ?
+                 AND status != 'concept'
+               GROUP BY maand""",
+            (jaar_start, max_datum))
+        rows = await cur.fetchall()
+    by_month = {r['maand']: r['totaal'] for r in rows}
+    return [by_month.get(f"{m:02d}", 0.0) for m in range(1, 13)]
+
+
 async def get_kpis(db_path: Path = DB_PATH, jaar: int = 2026) -> dict:
     async with get_db_ctx(db_path) as conn:
         jaar_start = f'{jaar}-01-01'
