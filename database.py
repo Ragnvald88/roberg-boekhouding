@@ -1824,21 +1824,25 @@ async def update_uitgave(db_path: Path = DB_PATH, uitgave_id: int = 0, **kwargs)
     if 'datum' in kwargs:
         await assert_year_writable(db_path, kwargs['datum'])
 
-    # B19: bij bank_tx_id-wijziging year-lock zowel oude als nieuwe
+    # B19: bij bank_tx_id-WIJZIGING year-lock zowel oude als nieuwe
     # banktx-jaar — voorkomt stealth (un)link cross-year naar locked.
+    # Codex round-3 nuance: alleen wanneer old != new, anders zou een
+    # idempotente update (zelfde bank_tx_id) silent kunnen falen op
+    # een al-bestaande locked-year link.
     if 'bank_tx_id' in kwargs:
         new_bt_id = kwargs['bank_tx_id']
         old_bt_id = row['bank_tx_id']
-        async with get_db_ctx(db_path) as conn:
-            for bt_id in (old_bt_id, new_bt_id):
-                if bt_id is None:
-                    continue
-                cur = await conn.execute(
-                    "SELECT datum FROM banktransacties WHERE id = ?",
-                    (bt_id,))
-                bt_row = await cur.fetchone()
-                if bt_row is not None:
-                    await assert_year_writable(db_path, bt_row[0])
+        if new_bt_id != old_bt_id:
+            async with get_db_ctx(db_path) as conn:
+                for bt_id in (old_bt_id, new_bt_id):
+                    if bt_id is None:
+                        continue
+                    cur = await conn.execute(
+                        "SELECT datum FROM banktransacties WHERE id = ?",
+                        (bt_id,))
+                    bt_row = await cur.fetchone()
+                    if bt_row is not None:
+                        await assert_year_writable(db_path, bt_row[0])
 
     async with get_db_ctx(db_path) as conn:
         fields = []

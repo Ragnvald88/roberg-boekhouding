@@ -1113,29 +1113,62 @@ async def test_update_uitgave_repointing_to_locked_bank_tx_rejects(db):
 
 @pytest.mark.asyncio
 async def test_update_uitgave_unlink_from_locked_banktx_rejects(db):
-    """B19 codex round-3: ook UNLINK (bank_tx_id=None) moet de oude
-    banktx-jaar checken — anders kun je via 2025-uitgave een
-    2024-locked banktx loskoppelen."""
-    # Setup: 2024 banktx + uitgave gelinked + lock
+    """B19 codex round-3 nuance: ook UNLINK (bank_tx_id=None) moet de oude
+    banktx-jaar checken. Cross-year scenario isoleert de B19-fix:
+    uitgave 2025 (writable) gelinkt aan banktx 2024 (locked) — unlink
+    moet falen op de OUDE bank_tx_id year-lock check (niet op de
+    uitgave-eigen jaar, want die is writable)."""
+    # 2024 banktx (zal locked worden)
     await _seed_fiscale_params_row(db, 2024)
     await add_banktransacties(db, [
-        {'datum': '2024-06-01', 'bedrag': -100.0,
+        {'datum': '2024-12-15', 'bedrag': -100.0,
          'tegenpartij': 'V', 'omschrijving': 'x'},
     ], csv_bestand='t.csv')
     txns = await get_banktransacties(db, jaar=2024)
-    bid = txns[0].id
+    locked_bid = txns[0].id
+
+    # 2025 uitgave (writable) gelinkt aan 2024 banktx
+    # (late-payment scenario: factuur in jan 2025 betaalt 2024 banktx)
+    await _seed_fiscale_params_row(db, 2025)
     uid = await add_uitgave(
-        db, datum='2024-06-01', categorie='X', omschrijving='x',
-        bedrag=100, bank_tx_id=bid)
+        db, datum='2025-01-05', categorie='X', omschrijving='x',
+        bedrag=100, bank_tx_id=locked_bid)
+
+    # Lock 2024 NA de link
     await update_jaarafsluiting_status(db, 2024, 'definitief')
 
-    # Try unlink (bank_tx_id=None)
-    # NB: dit faalt op de oude banktx-jaar check (2024 locked) ÉN op de
-    # uitgave-jaar check (uitgave datum=2024-06-01 ook locked) — de fix
-    # zit in beide guards.
+    # Unlink moet falen op OUDE bank_tx_id year-lock check
+    # (uitgave-eigen 2025 is writable; alleen B19 vangt dit)
     with pytest.raises(YearLockedError):
         await update_uitgave(
             db, uitgave_id=uid, bank_tx_id=None)
+
+
+@pytest.mark.asyncio
+async def test_update_uitgave_idempotent_bank_tx_id_does_not_raise(db):
+    """B19 codex round-3 nuance: update_uitgave met dezelfde bank_tx_id
+    als al gezet is = idempotent. Mag NIET falen op year-lock check op
+    een eventueel locked banktx — de relatie is niet aan het wijzigen."""
+    await _seed_fiscale_params_row(db, 2024)
+    await add_banktransacties(db, [
+        {'datum': '2024-12-15', 'bedrag': -100.0,
+         'tegenpartij': 'V', 'omschrijving': 'x'},
+    ], csv_bestand='t.csv')
+    txns = await get_banktransacties(db, jaar=2024)
+    locked_bid = txns[0].id
+
+    await _seed_fiscale_params_row(db, 2025)
+    uid = await add_uitgave(
+        db, datum='2025-01-05', categorie='X', omschrijving='x',
+        bedrag=100, bank_tx_id=locked_bid)
+
+    await update_jaarafsluiting_status(db, 2024, 'definitief')
+
+    # Idempotent: zelfde bank_tx_id, alleen omschrijving wijzigen
+    # mag NIET YearLockedError raisen op de banktx-jaar check.
+    await update_uitgave(
+        db, uitgave_id=uid, bank_tx_id=locked_bid,
+        omschrijving='nieuwe omschrijving')
 
 
 @pytest.mark.asyncio
