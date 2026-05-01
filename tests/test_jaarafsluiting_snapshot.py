@@ -176,3 +176,65 @@ async def test_compute_checklist_issues_ongefactureerd_werkdag(db):
     severity, _message, link = matching[0]
     assert severity == 'warning'
     assert link == '/werkdagen'
+
+
+# ---------------------------------------------------------------------------
+# B8 — Snapshot schema-tolerantie regression-pin
+# ---------------------------------------------------------------------------
+# CLAUDE.md belooft: "Snapshot is schema-tolerant (altijd dict.get(key,
+# default) in render code)". Codex round-2 review wees op render-paden
+# die nog directe data[...] indexering doen. Deze test pin't minimaal
+# dat de loader-laag (load_jaarafsluiting_data) een oude snapshot zonder
+# nieuwere KIA-velden zonder KeyError kan teruggeven.
+#
+# CAVEAT (codex round-3): deze test bewijst alleen dat de SNAPSHOT-KEUZE
+# werkt. Render-code in pages/aangifte.py en pages/jaarafsluiting.py kan
+# alsnog crashen op ontbrekende keys — dat is een aparte audit-taak.
+
+
+@pytest.mark.asyncio
+async def test_load_jaarafsluiting_data_handles_old_snapshot_without_kia_brackets(db):
+    """B8: een snapshot opgeslagen vóór de KIA-bracket fields werden
+    toegevoegd moet nog renderbaar zijn via load_jaarafsluiting_data
+    zonder KeyError.
+
+    Setup (codex round-6):
+    1. fiscale_params row voor jaar (anders is update_jaarafsluiting_status
+       een silent no-op)
+    2. snapshot opgeslagen
+    3. status='definitief' zodat load_jaarafsluiting_data de snapshot kiest
+    """
+    jaar = 2024
+    # Stap 1: minimale fiscale_params row vóór status-lock
+    base = dict(FISCALE_PARAMS[jaar])
+    base['jaar'] = jaar
+    await upsert_fiscale_params(db, **base)
+
+    # Stap 2: snapshot zonder nieuwere KIA-bracket fields
+    old_snap = {
+        'omzet': 50000.0,
+        'totaal_kosten': 10000.0,
+        'fiscale_winst': 40000.0,
+        'belastbare_winst': 30000.0,
+        # Nieuwere fields ontbreken bewust
+    }
+    old_balans = {'totaal_activa': 20000}
+    old_params = {
+        'jaar': jaar,
+        'urencriterium': 1225,
+        'zelfstandigenaftrek': 3750,
+        # Geen kia_plateau_bedrag, kia_afbouw_pct, etc.
+    }
+    await save_jaarafsluiting_snapshot(
+        db, jaar, old_snap, old_balans, old_params)
+
+    # Stap 3: status definitief → load_jaarafsluiting_data leest snapshot
+    ok = await update_jaarafsluiting_status(db, jaar, 'definitief')
+    assert ok is True, "update_jaarafsluiting_status must succeed"
+
+    # Test: load_jaarafsluiting_data mag NIET crashen op KeyError
+    data = await load_jaarafsluiting_data(db, jaar)
+    assert data is not None
+    # Spot check: oude waarden komen terug
+    assert data['omzet'] == 50000.0
+    assert data['fiscale_winst'] == 40000.0
