@@ -360,8 +360,14 @@ async def confirm_expected(
 ) -> int:
     """Promote virtual expected entry → real werkdag.
 
-    Idempotent: als er al een werkdag bestaat voor (klant_id, datum) waar deze
-    pattern verantwoordelijk voor is, return existing.id zonder mutatie.
+    Idempotent: als er al EEN willekeurige werkdag bestaat voor (klant_id, datum) —
+    ongeacht of die door dit pattern of handmatig is aangemaakt — return existing.id
+    zonder mutatie. Rationale: een echte werkdag op die datum voldoet al aan de
+    "verwachte rooster"-constraint, dubbele creation zou semantisch fout zijn.
+
+    Als de bestaande werkdag een andere code heeft dan dit pattern (bv. handmatig
+    ANW_AVOND vs pattern WERKDAG), respecteert confirm_expected de bestaande rij —
+    de gebruiker kan via /werkdagen handmatig wijzigen indien gewenst.
 
     Race-protected: pattern_id moet bestaan AND actief=1, anders ConflictError.
 
@@ -373,7 +379,8 @@ async def confirm_expected(
     urennorm: 0 voor ACHTERWACHT/ZERO_UREN_CODES, 1 voor de rest.
 
     Raises:
-        ConflictError: pattern niet bestaat / inactief, of klant verwijderd
+        ConflictError: pattern niet bestaat / inactief, blocker bestaat al op datum,
+                       of klant verwijderd
         YearLockedError: datum in afgesloten jaar (via add_werkdag delegate)
         ValidationError: invalid tijden
     """
@@ -383,8 +390,20 @@ async def confirm_expected(
             f"Patroon {pattern_id} is verwijderd of inactief — refresh agenda."
         )
 
-    # Idempotency check: bestaande werkdag op (klant, datum)?
     datum_str = datum.isoformat()
+
+    # Defense-in-depth: weigeren als blocker op deze datum bestaat.
+    # UI prevents this click-path but service-layer should be symmetric with add_blocker.
+    existing_blocker = await database.db_list_blockers(
+        db_path, datum_str, datum_str,
+    )
+    if existing_blocker:
+        raise ConflictError(
+            f"Blocker bestaat al op {datum_str} ({existing_blocker[0].kind}) — "
+            f"verwijder de blocker eerst."
+        )
+
+    # Idempotency check: bestaande werkdag op (klant, datum)?
     async with database.get_db_ctx(db_path) as conn:
         cur = await conn.execute(
             "SELECT id FROM werkdagen WHERE datum = ? AND klant_id = ? "

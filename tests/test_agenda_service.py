@@ -598,3 +598,70 @@ async def test_confirm_expected_congres_urennorm_zero(db_with_klant):
         )
         row = await cur.fetchone()
     assert row[0] == 0
+
+
+@pytest.mark.asyncio
+async def test_confirm_expected_on_existing_blocker_raises(db_with_klant):
+    """Defense-in-depth: blocker on date prevents confirm_expected."""
+    pid = await _add_test_pattern(db_with_klant)
+    await svc.add_blocker(
+        db_with_klant, datum=date(2026, 5, 4),
+        kind='vacation', label='Vrije dag',
+    )
+    with pytest.raises(ConflictError):
+        await svc.confirm_expected(
+            db_with_klant, pattern_id=pid, datum=date(2026, 5, 4),
+        )
+
+
+@pytest.mark.asyncio
+async def test_confirm_expected_uses_current_klant_tarief_not_pattern_creation_value(db_with_klant):
+    """Klant-tarief change after pattern creation: confirm uses NEW tarief."""
+    pid = await _add_test_pattern(db_with_klant)
+    # Pattern created when klant.tarief_uur=80. Now change klant tarief to 95.
+    async with aiosqlite.connect(db_with_klant) as conn:
+        await conn.execute(
+            "UPDATE klanten SET tarief_uur = 95, retour_km = 30, "
+            "adres = 'Nieuwe Lokatie' WHERE id = 1"
+        )
+        await conn.commit()
+    werkdag_id = await svc.confirm_expected(
+        db_with_klant, pattern_id=pid, datum=date(2026, 5, 4),
+    )
+    async with aiosqlite.connect(db_with_klant) as conn:
+        cur = await conn.execute(
+            "SELECT tarief, km, locatie FROM werkdagen WHERE id = ?",
+            (werkdag_id,),
+        )
+        row = await cur.fetchone()
+    # Werkdag uses CURRENT klant data, not pattern-creation snapshot
+    assert row[0] == 95.0
+    assert row[1] == 30.0
+    assert row[2] == 'Nieuwe Lokatie'
+
+
+@pytest.mark.asyncio
+async def test_confirm_expected_returns_existing_werkdag_with_different_code(db_with_klant):
+    """Idempotency contract: any existing werkdag for (klant, datum) suffices,
+    regardless of pattern code."""
+    pid = await _add_test_pattern(db_with_klant, code='WERKDAG')
+    # Manually add a werkdag with different code
+    async with aiosqlite.connect(db_with_klant) as conn:
+        cur = await conn.execute(
+            "INSERT INTO werkdagen (datum, klant_id, code, uren, tarief) "
+            "VALUES ('2026-05-04', 1, 'ANW_AVOND', 6, 90) RETURNING id"
+        )
+        manual_id = (await cur.fetchone())[0]
+        await conn.commit()
+    # Confirm via WERKDAG pattern → returns the existing ANW row
+    confirmed_id = await svc.confirm_expected(
+        db_with_klant, pattern_id=pid, datum=date(2026, 5, 4),
+    )
+    assert confirmed_id == manual_id
+    # Werkdag NOT mutated — still has ANW code
+    async with aiosqlite.connect(db_with_klant) as conn:
+        cur = await conn.execute(
+            "SELECT code FROM werkdagen WHERE id = ?", (manual_id,),
+        )
+        code = (await cur.fetchone())[0]
+    assert code == 'ANW_AVOND'
