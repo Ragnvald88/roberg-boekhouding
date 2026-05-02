@@ -1495,6 +1495,65 @@ async def db_delete_pattern_soft(db_path: Path, pattern_id: int) -> None:
         await conn.commit()
 
 
+# ---------------------------------------------------------------------------
+# Blocker CRUD (table: blockers — see migratie 36)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class BlockerRow:
+    id: int
+    datum: str
+    kind: str
+    label: str
+
+
+async def db_add_blocker(db_path: Path, datum: str, kind: str, label: str = '') -> int:
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            "INSERT INTO blockers (datum, kind, label) VALUES (?, ?, ?) RETURNING id",
+            (datum, kind, label),
+        )
+        row = await cur.fetchone()
+        await conn.commit()
+    return row[0]
+
+
+async def db_get_blocker(db_path: Path, blocker_id: int) -> 'BlockerRow | None':
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            "SELECT id, datum, kind, label FROM blockers WHERE id = ?",
+            (blocker_id,),
+        )
+        r = await cur.fetchone()
+    return BlockerRow(id=r[0], datum=r[1], kind=r[2], label=r[3]) if r else None
+
+
+async def db_delete_blocker(db_path: Path, blocker_id: int) -> None:
+    async with get_db_ctx(db_path) as conn:
+        await conn.execute("DELETE FROM blockers WHERE id = ?", (blocker_id,))
+        await conn.commit()
+
+
+async def db_list_blockers(db_path: Path, vanaf: str, tot: str) -> list[BlockerRow]:
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            "SELECT id, datum, kind, label FROM blockers "
+            "WHERE datum >= ? AND datum <= ? ORDER BY datum",
+            (vanaf, tot),
+        )
+        rows = await cur.fetchall()
+    return [BlockerRow(id=r[0], datum=r[1], kind=r[2], label=r[3]) for r in rows]
+
+
+async def db_count_werkdagen_op_datum(db_path: Path, datum: str) -> int:
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            "SELECT COUNT(*) FROM werkdagen WHERE datum = ?", (datum,),
+        )
+        row = await cur.fetchone()
+    return row[0]
+
+
 async def add_werkdag(db_path: Path = DB_PATH, **kwargs) -> int:
     _validate_datum(kwargs['datum'])
     await assert_year_writable(db_path, kwargs['datum'])

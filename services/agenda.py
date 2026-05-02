@@ -13,9 +13,12 @@ from dataclasses import dataclass
 from datetime import date as _date
 from typing import Literal
 
+import aiosqlite
+
 import database
 from database import ConflictError, ValidationError
 from domain.codes import CODES as _WERKDAG_CODES
+from services.holidays import dutch_holidays
 
 # Note: orphan factuurnummer (factuurnummer != '' but factuur_status == '')
 # falls through to 'ongefactureerd' here as defensive fallback. UI-laag
@@ -255,3 +258,89 @@ async def update_pattern(db_path, pattern_id: int, **fields) -> None:
 async def delete_pattern(db_path, pattern_id: int) -> None:
     """Soft delete: SET actief=0. NIET year-locked. Idempotent."""
     await database.db_delete_pattern_soft(db_path, pattern_id)
+
+
+# ---------------------------------------------------------------------------
+# Blocker CRUD + holiday-merge
+# ---------------------------------------------------------------------------
+
+# 'holiday' is bewust UITGESLOTEN — die wordt computed via dutch_holidays en
+# is geen user-toevoegbaar kind. DB CHECK constraint voorkomt het ook, maar
+# we faken 'm hier expliciet om een nettere ValidationError te gooien dan een
+# IntegrityError uit SQLite.
+_VALID_BLOCKER_KINDS = frozenset({'vacation', 'sick', 'training'})
+
+
+@dataclass(frozen=True)
+class Blocker:
+    """User-facing blocker view. Includes computed holidays.
+
+    id is None for computed holidays (not in DB). User-blockers have id from DB.
+    """
+    id: int | None
+    datum: _date
+    kind: str            # 'vacation' | 'sick' | 'training' | 'holiday'
+    label: str
+
+
+async def add_blocker(db_path, datum: _date, kind: str, label: str = '') -> int:
+    """Add user-blocker. Year-locked.
+
+    Raises:
+        ValidationError: invalid kind (incl. 'holiday')
+        ConflictError:   blocker already exists for datum, OR werkdag exists for datum
+        YearLockedError: datum in afgesloten jaar
+    """
+    if kind not in _VALID_BLOCKER_KINDS:
+        raise ValidationError(
+            f"Invalid kind '{kind}'. Toegestaan: {sorted(_VALID_BLOCKER_KINDS)}"
+        )
+    datum_str = datum.isoformat()
+    await database.assert_year_writable(db_path, datum_str)
+    # Check werkdag conflict
+    n = await database.db_count_werkdagen_op_datum(db_path, datum_str)
+    if n > 0:
+        raise ConflictError(
+            f"Werkdag bestaat al op {datum_str} — verwijder de werkdag eerst."
+        )
+    # Insert (UNIQUE(datum) catches duplicate as IntegrityError)
+    try:
+        return await database.db_add_blocker(
+            db_path, datum=datum_str, kind=kind, label=label,
+        )
+    except aiosqlite.IntegrityError as e:
+        raise ConflictError(f"Datum {datum_str} heeft al een blocker") from e
+
+
+async def delete_blocker(db_path, blocker_id: int) -> None:
+    """Year-locked. Idempotent: silent no-op if blocker_id missing."""
+    blocker = await database.db_get_blocker(db_path, blocker_id)
+    if not blocker:
+        return  # idempotent silent no-op
+    await database.assert_year_writable(db_path, blocker.datum)
+    await database.db_delete_blocker(db_path, blocker_id)
+
+
+async def list_blockers(db_path, vanaf: _date, tot: _date) -> list[Blocker]:
+    """User-blockers + computed Dutch holidays merged in one list.
+
+    User-blockers and holidays may both be present on the same date —
+    UI-laag decides display priority. Sorted by datum, then by kind
+    (deterministic). Holidays have id=None.
+    """
+    user_rows = await database.db_list_blockers(
+        db_path, vanaf.isoformat(), tot.isoformat(),
+    )
+    out: list[Blocker] = [
+        Blocker(id=r.id, datum=_date.fromisoformat(r.datum),
+                kind=r.kind, label=r.label)
+        for r in user_rows
+    ]
+    # Compute holidays per year covered (1-2 years typical)
+    for jaar in range(vanaf.year, tot.year + 1):
+        for h in dutch_holidays(jaar):
+            if vanaf <= h.datum <= tot:
+                out.append(Blocker(id=None, datum=h.datum,
+                                   kind='holiday', label=h.label))
+    out.sort(key=lambda b: (b.datum, b.kind))
+    return out

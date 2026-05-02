@@ -288,3 +288,160 @@ async def test_pattern_update_unknown_field_raises(db_with_klant):
     )
     with pytest.raises(ValueError):  # database.py raises ValueError directly
         await database.db_update_pattern(db_with_klant, pid, eind_minute=900)  # typo
+
+
+# ---- Blocker CRUD + holiday-merge ----
+
+@pytest.mark.asyncio
+async def test_add_blocker_basic(db_with_klant):
+    bid = await svc.add_blocker(
+        db_with_klant, datum=date(2026, 7, 15),
+        kind='vacation', label='Zomervakantie',
+    )
+    assert bid > 0
+
+
+@pytest.mark.asyncio
+async def test_add_blocker_holiday_kind_raises(db_with_klant):
+    """'holiday' is computed-only, niet user-toevoegbaar."""
+    with pytest.raises(ValidationError):
+        await svc.add_blocker(
+            db_with_klant, datum=date(2026, 7, 15),
+            kind='holiday', label='X',
+        )
+
+
+@pytest.mark.asyncio
+async def test_add_blocker_invalid_kind_raises(db_with_klant):
+    with pytest.raises(ValidationError):
+        await svc.add_blocker(
+            db_with_klant, datum=date(2026, 7, 15),
+            kind='party', label='X',
+        )
+
+
+@pytest.mark.asyncio
+async def test_add_blocker_duplicate_datum_raises(db_with_klant):
+    """UNIQUE(datum) — second insert raises ConflictError."""
+    await svc.add_blocker(
+        db_with_klant, datum=date(2026, 7, 15),
+        kind='vacation', label='A',
+    )
+    with pytest.raises(ConflictError):
+        await svc.add_blocker(
+            db_with_klant, datum=date(2026, 7, 15),
+            kind='sick', label='B',
+        )
+
+
+@pytest.mark.asyncio
+async def test_add_blocker_on_existing_werkdag_raises(db_with_klant):
+    """Werkdag already exists on date → ConflictError."""
+    async with aiosqlite.connect(db_with_klant) as conn:
+        await conn.execute(
+            "INSERT INTO werkdagen (datum, klant_id, code, uren, tarief) "
+            "VALUES ('2026-07-15', 1, 'WERKDAG', 8, 80)"
+        )
+        await conn.commit()
+    with pytest.raises(ConflictError):
+        await svc.add_blocker(
+            db_with_klant, datum=date(2026, 7, 15),
+            kind='vacation', label='X',
+        )
+
+
+@pytest.mark.asyncio
+async def test_add_blocker_in_locked_year_raises(db_with_klant):
+    async with aiosqlite.connect(db_with_klant) as conn:
+        await conn.execute(
+            "INSERT INTO fiscale_params (jaar, jaarafsluiting_status) "
+            "VALUES (2025, 'definitief')"
+        )
+        await conn.commit()
+    with pytest.raises(YearLockedError):
+        await svc.add_blocker(
+            db_with_klant, datum=date(2025, 7, 15),
+            kind='vacation', label='X',
+        )
+
+
+@pytest.mark.asyncio
+async def test_delete_blocker_basic(db_with_klant):
+    bid = await svc.add_blocker(
+        db_with_klant, datum=date(2026, 7, 15),
+        kind='vacation', label='X',
+    )
+    await svc.delete_blocker(db_with_klant, bid)
+    blockers = await svc.list_blockers(
+        db_with_klant, vanaf=date(2026, 7, 1), tot=date(2026, 7, 31),
+    )
+    user_blockers = [b for b in blockers if b.kind != 'holiday']
+    assert user_blockers == []
+
+
+@pytest.mark.asyncio
+async def test_delete_blocker_in_locked_year_raises(db_with_klant):
+    bid = await svc.add_blocker(
+        db_with_klant, datum=date(2026, 7, 15),
+        kind='vacation', label='X',
+    )
+    async with aiosqlite.connect(db_with_klant) as conn:
+        await conn.execute(
+            "INSERT INTO fiscale_params (jaar, jaarafsluiting_status) "
+            "VALUES (2026, 'definitief')"
+        )
+        await conn.commit()
+    with pytest.raises(YearLockedError):
+        await svc.delete_blocker(db_with_klant, bid)
+
+
+@pytest.mark.asyncio
+async def test_delete_blocker_missing_id_silent(db_with_klant):
+    """Delete on non-existing id is silent no-op (idempotent)."""
+    await svc.delete_blocker(db_with_klant, 99999)
+    # No exception expected.
+
+
+@pytest.mark.asyncio
+async def test_list_blockers_includes_holidays(db_with_klant):
+    """Computed dutch_holidays are merged into list_blockers result."""
+    blockers = await svc.list_blockers(
+        db_with_klant, vanaf=date(2026, 4, 1), tot=date(2026, 4, 30),
+    )
+    holiday_dates = {b.datum for b in blockers if b.kind == 'holiday'}
+    # April 2026: Goede Vrijdag (3 apr), Eerste Paasdag (5 apr),
+    # Tweede Paasdag (6 apr), Koningsdag (27 apr).
+    assert date(2026, 4, 3) in holiday_dates
+    assert date(2026, 4, 5) in holiday_dates
+    assert date(2026, 4, 6) in holiday_dates
+    assert date(2026, 4, 27) in holiday_dates
+
+
+@pytest.mark.asyncio
+async def test_list_blockers_user_blocker_with_holiday_same_date(db_with_klant):
+    """User-blocker on holiday-datum is allowed; both surface in list_blockers,
+    UI-laag decides which to show."""
+    # Add user-blocker on Koningsdag 2026 (27 april)
+    await svc.add_blocker(
+        db_with_klant, datum=date(2026, 4, 27),
+        kind='vacation', label='Vrije dag',
+    )
+    blockers = await svc.list_blockers(
+        db_with_klant, vanaf=date(2026, 4, 27), tot=date(2026, 4, 27),
+    )
+    # Both should be present
+    kinds = sorted(b.kind for b in blockers)
+    assert 'holiday' in kinds
+    assert 'vacation' in kinds
+
+
+@pytest.mark.asyncio
+async def test_list_blockers_year_range_spans_years(db_with_klant):
+    """Range covering 2025-12-25 to 2026-01-02 includes holidays from both years."""
+    blockers = await svc.list_blockers(
+        db_with_klant, vanaf=date(2025, 12, 25), tot=date(2026, 1, 2),
+    )
+    holiday_dates = {b.datum for b in blockers if b.kind == 'holiday'}
+    assert date(2025, 12, 25) in holiday_dates  # Eerste Kerstdag
+    assert date(2025, 12, 26) in holiday_dates  # Tweede Kerstdag
+    assert date(2026, 1, 1) in holiday_dates    # Nieuwjaarsdag
