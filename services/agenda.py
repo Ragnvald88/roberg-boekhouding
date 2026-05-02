@@ -679,12 +679,15 @@ async def get_urencriterium_projectie(db_path, jaar: int) -> UrencriteriumState:
     if fp and getattr(fp, 'urencriterium', None):
         target = float(fp.urencriterium)
 
-    # Confirmed YTD (urennorm=1 only, datum <= today)
+    # Confirmed = ALLE werkdagen in dit jaar met urennorm=1 (incl. future-planned).
+    # Belastingdienst-semantic: alle uren besteed aan onderneming tellen,
+    # niet alleen YTD. User die diensten vooruit plant (typisch 6-8 wk
+    # voor huisarts) ziet die uren ook in will_make.
     async with database.get_db_ctx(db_path) as conn:
         cur = await conn.execute(
             "SELECT COALESCE(SUM(uren), 0) FROM werkdagen "
-            "WHERE substr(datum, 1, 4) = ? AND urennorm = 1 AND datum <= ?",
-            (str(jaar), today.isoformat()),
+            "WHERE substr(datum, 1, 4) = ? AND urennorm = 1",
+            (str(jaar),),
         )
         row = await cur.fetchone()
         confirmed = float(row[0] or 0)

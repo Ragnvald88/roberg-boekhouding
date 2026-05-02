@@ -1023,3 +1023,29 @@ async def test_urencriterium_pace_pct_at_year_end(db_with_klant, monkeypatch):
     monkeypatch.setattr(svc, '_today', lambda: date(2026, 12, 31))
     state = await svc.get_urencriterium_projectie(db_with_klant, jaar=2026)
     assert state.pace_pct == pytest.approx(100.0, abs=0.5)
+
+
+@pytest.mark.asyncio
+async def test_urencriterium_includes_future_planned_werkdagen(db_with_klant, monkeypatch):
+    """Codex regression: manueel ingeplande future werkdagen tellen voor will_make.
+
+    Use case: huisarts plant diensten 6-8 weken vooruit. Die uren moeten
+    in confirmed_uren zichtbaar zijn, niet pas wanneer datum<=today.
+    Belastingdienst-semantic: alle uren in jaar tellen, ongeacht today-cutoff.
+    """
+    monkeypatch.setattr(svc, '_today', lambda: date(2026, 5, 1))
+    async with aiosqlite.connect(db_with_klant) as conn:
+        # Past werkdag: 200u
+        await conn.execute(
+            "INSERT INTO werkdagen (datum, klant_id, code, uren, tarief, urennorm) "
+            "VALUES ('2026-04-15', 1, 'WERKDAG', 200, 80, 1)"
+        )
+        # Future-planned werkdag: 100u (na today)
+        await conn.execute(
+            "INSERT INTO werkdagen (datum, klant_id, code, uren, tarief, urennorm) "
+            "VALUES ('2026-08-15', 1, 'WERKDAG', 100, 80, 1)"
+        )
+        await conn.commit()
+    state = await svc.get_urencriterium_projectie(db_with_klant, jaar=2026)
+    # Beide tellen — confirmed = 200 + 100 = 300
+    assert state.confirmed_uren == pytest.approx(300.0)
