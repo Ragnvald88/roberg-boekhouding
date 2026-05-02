@@ -69,7 +69,9 @@ def test_holidays_no_external_imports():
     """Pure module — only stdlib (datetime, dataclasses, functools)."""
     import services.holidays as mod
     import ast
-    src = open(mod.__file__).read()
+    from pathlib import Path
+    assert mod.__file__ is not None
+    src = Path(mod.__file__).read_text(encoding='utf-8')
     tree = ast.parse(src)
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
@@ -79,3 +81,13 @@ def test_holidays_no_external_imports():
             for alias in node.names:
                 assert alias.name in ('datetime', 'dataclasses', 'functools'), \
                     f"Unexpected import: {alias.name}"
+
+
+def test_dutch_holidays_returns_immutable_tuple():
+    """Cache safety: tuple return prevents mutable cache pollution."""
+    holidays = dutch_holidays(2026)
+    assert isinstance(holidays, tuple)
+    # Type-system enforces immutability; tuple has no append/clear/etc.
+    # Re-call returns same content (cached) and remains 11 entries.
+    assert len(dutch_holidays(2026)) == 11
+    assert dutch_holidays(2026)[0].label == 'Nieuwjaarsdag'

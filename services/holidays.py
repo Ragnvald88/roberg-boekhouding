@@ -40,8 +40,8 @@ def easter_sunday(year: int) -> date:
 def koningsdag(year: int) -> date:
     """27 april, of 26 april als 27 een zondag is.
 
-    Wettelijke regel sinds Koningsbesluit 2014. Pre-2014 gold zelfde shift
-    voor Koninginnedag op zondag-30-april.
+    Geldig vanaf 2014 (Koningsbesluit). Pre-2014 (Koninginnedag, 30 april)
+    wordt niet ondersteund — dit project beslaat alleen 2014+.
     """
     candidate = date(year, 4, 27)
     if candidate.weekday() == 6:  # zondag
@@ -50,10 +50,11 @@ def koningsdag(year: int) -> date:
 
 
 @lru_cache(maxsize=32)
-def dutch_holidays(year: int) -> list[Holiday]:
+def dutch_holidays(year: int) -> tuple[Holiday, ...]:
     """Standaardlijst Nederlandse feestdagen voor het gegeven jaar.
 
-    Returns 11 holidays:
+    Returns 11 holidays als immutable tuple (lru_cache-veilig: caller kan niets
+    muteren).
     - Nieuwjaarsdag, Goede Vrijdag, Eerste/Tweede Paasdag, Koningsdag,
       Bevrijdingsdag, Hemelvaart, Eerste/Tweede Pinksterdag,
       Eerste/Tweede Kerstdag.
@@ -63,7 +64,7 @@ def dutch_holidays(year: int) -> list[Holiday]:
     werkdag toevoegen overschrijft de holiday-marker visueel).
     """
     easter = easter_sunday(year)
-    return [
+    return (
         Holiday(date(year, 1, 1), 'Nieuwjaarsdag'),
         Holiday(easter - timedelta(days=2), 'Goede Vrijdag'),
         Holiday(easter, 'Eerste Paasdag'),
@@ -75,4 +76,4 @@ def dutch_holidays(year: int) -> list[Holiday]:
         Holiday(easter + timedelta(days=50), 'Tweede Pinksterdag'),
         Holiday(date(year, 12, 25), 'Eerste Kerstdag'),
         Holiday(date(year, 12, 26), 'Tweede Kerstdag'),
-    ]
+    )
