@@ -106,9 +106,12 @@ class WerkdagMetStatus:
     factuurnummer: str             # '' = ongefactureerd
     factuur_datum: str             # '' if no factuur, else YYYY-MM-DD
     factuur_status: str            # '' | 'concept' | 'verstuurd' | 'betaald'
-    factuur_vervaldatum: str = ''  # computed in __post_init__
+    factuur_vervaldatum: str = field(init=False, default='')  # derived; see __post_init__
 
     def __post_init__(self):
+        # Always reset first so dataclasses.replace(factuur_datum='') correctly clears
+        # the stale vervaldatum that __init__ propagated from the source instance.
+        object.__setattr__(self, 'factuur_vervaldatum', '')
         # Compute vervaldatum from factuur_datum + 14 days.
         if self.factuur_datum:
             try:
