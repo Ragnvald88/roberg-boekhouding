@@ -145,7 +145,7 @@ async def db_with_werkdagen(db):
 @pytest.mark.asyncio
 async def test_get_werkdagen_met_factuur_status_returns_correct_status(db_with_werkdagen):
     rows = await database.get_werkdagen_met_factuur_status(
-        str(db_with_werkdagen), 2026, 5
+        db_with_werkdagen, 2026, 5
     )
     by_id = {r.id: r for r in rows}
     # mei: werkdag 1 (concept factuur) + werkdag 3 (ongefactureerd)
@@ -163,7 +163,7 @@ async def test_get_werkdagen_met_factuur_status_returns_correct_status(db_with_w
 @pytest.mark.asyncio
 async def test_get_werkdagen_met_factuur_status_filters_by_month(db_with_werkdagen):
     rows = await database.get_werkdagen_met_factuur_status(
-        str(db_with_werkdagen), 2026, 4
+        db_with_werkdagen, 2026, 4
     )
     # Alleen werkdag 2 valt in april
     ids = {r.id for r in rows}
@@ -175,8 +175,7 @@ async def test_get_werkdagen_met_factuur_status_filters_by_month(db_with_werkdag
     assert by_id[2].factuur_vervaldatum == '2026-04-15'
 
 
-@pytest.mark.asyncio
-async def test_werkdag_met_status_replace_clears_vervaldatum(db):
+def test_werkdag_met_status_replace_clears_vervaldatum():
     """Regression: dataclasses.replace(factuur_datum='') must reset vervaldatum."""
     import dataclasses
     w1 = database.WerkdagMetStatus(
@@ -191,8 +190,7 @@ async def test_werkdag_met_status_replace_clears_vervaldatum(db):
     assert w3.factuur_vervaldatum == ''
 
 
-@pytest.mark.asyncio
-async def test_werkdag_met_status_factuur_vervaldatum_not_init_field():
+def test_werkdag_met_status_factuur_vervaldatum_not_init_field():
     """factuur_vervaldatum is derived, not constructable directly."""
     import dataclasses
     fields = {f.name: f for f in dataclasses.fields(database.WerkdagMetStatus)}
@@ -221,7 +219,7 @@ async def db_with_betaald_factuur(db):
 @pytest.mark.asyncio
 async def test_get_werkdagen_met_factuur_status_betaald(db_with_betaald_factuur):
     rows = await database.get_werkdagen_met_factuur_status(
-        str(db_with_betaald_factuur), 2026, 3,
+        db_with_betaald_factuur, 2026, 3,
     )
     assert len(rows) == 1
     assert rows[0].factuur_status == 'betaald'
@@ -249,7 +247,7 @@ async def test_get_werkdagen_met_factuur_status_orphan_factuurnummer(db_with_orp
     must distinguish 'factuurnummer != "" AND factuur_status == ""' as orphan.
     Documents this contract."""
     rows = await database.get_werkdagen_met_factuur_status(
-        str(db_with_orphan_factuurnummer), 2026, 7,
+        db_with_orphan_factuurnummer, 2026, 7,
     )
     assert len(rows) == 1
     r = rows[0]
@@ -280,7 +278,7 @@ async def db_with_multi_werkdagen_same_day(db):
 async def test_get_werkdagen_met_factuur_status_multiple_same_day(db_with_multi_werkdagen_same_day):
     """Schema toestaat 2+ werkdagen op zelfde datum/klant — both must be returned."""
     rows = await database.get_werkdagen_met_factuur_status(
-        str(db_with_multi_werkdagen_same_day), 2026, 8,
+        db_with_multi_werkdagen_same_day, 2026, 8,
     )
     assert len(rows) == 2
     assert {r.id for r in rows} == {30, 31}
@@ -314,7 +312,7 @@ async def db_with_month_boundary_werkdagen(db):
 async def test_get_werkdagen_met_factuur_status_december_boundary(db_with_month_boundary_werkdagen):
     """December query includes 1st AND 31st, excludes 2027-01-01."""
     rows = await database.get_werkdagen_met_factuur_status(
-        str(db_with_month_boundary_werkdagen), 2026, 12,
+        db_with_month_boundary_werkdagen, 2026, 12,
     )
     assert {r.id for r in rows} == {40, 41}
 
@@ -323,6 +321,6 @@ async def test_get_werkdagen_met_factuur_status_december_boundary(db_with_month_
 async def test_get_werkdagen_met_factuur_status_january_boundary(db_with_month_boundary_werkdagen):
     """January 2027 query includes 2027-01-01, excludes 2026-12-* rows."""
     rows = await database.get_werkdagen_met_factuur_status(
-        str(db_with_month_boundary_werkdagen), 2027, 1,
+        db_with_month_boundary_werkdagen, 2027, 1,
     )
     assert {r.id for r in rows} == {42}
