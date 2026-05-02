@@ -602,6 +602,20 @@ MIGRATIONS = [
         "CREATE INDEX IF NOT EXISTS idx_klant_aliases_lookup ON klant_aliases(type, pattern)",
     ]),
     (34, "seed_klant_aliases_from_local_if_present", None),
+    (35, "add_klant_recurring_patterns", [
+        """CREATE TABLE IF NOT EXISTS klant_recurring_patterns (
+            id INTEGER PRIMARY KEY,
+            klant_id INTEGER NOT NULL REFERENCES klanten(id) ON DELETE CASCADE,
+            weekdays TEXT NOT NULL,
+            start_minuten INTEGER NOT NULL CHECK (start_minuten >= 0 AND start_minuten < 1440),
+            eind_minuten INTEGER NOT NULL CHECK (eind_minuten > start_minuten AND eind_minuten <= 1440),
+            code TEXT NOT NULL DEFAULT 'WERKDAG',
+            activiteit TEXT DEFAULT 'Waarneming dagpraktijk',
+            valid_from TEXT DEFAULT '',
+            valid_until TEXT DEFAULT '',
+            actief INTEGER NOT NULL DEFAULT 1 CHECK (actief IN (0, 1)))""",
+        "CREATE INDEX IF NOT EXISTS idx_klant_patterns_klant ON klant_recurring_patterns(klant_id, actief)",
+    ]),
 ]
 
 
