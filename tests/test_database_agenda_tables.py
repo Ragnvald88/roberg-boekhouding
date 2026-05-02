@@ -1,6 +1,8 @@
 import pytest
 import aiosqlite
 
+import database
+
 
 @pytest.mark.asyncio
 async def test_klant_recurring_patterns_table_exists(db):
@@ -101,3 +103,73 @@ async def test_blockers_kind_check_constraint(db):
                 "VALUES ('2026-05-21', 'holiday')"  # 'holiday' niet toegestaan
             )
             await conn.commit()
+
+
+@pytest.fixture
+async def db_with_werkdagen(db):
+    """DB with klant + werkdagen + facturen for status testing."""
+    async with aiosqlite.connect(db) as conn:
+        await conn.execute("PRAGMA foreign_keys = ON")
+        # Klant
+        await conn.execute(
+            "INSERT INTO klanten (id, naam, tarief_uur) VALUES (1, 'HAP', 80)"
+        )
+        # Concept factuur
+        await conn.execute(
+            "INSERT INTO facturen (nummer, klant_id, datum, totaal_bedrag, "
+            "betaald, status) VALUES ('2026-001', 1, '2026-05-01', 800, 0, 'concept')"
+        )
+        # Verstuurde factuur (april — 14 dagen na 1 april = 15 april — verlopen vanaf 16 april)
+        await conn.execute(
+            "INSERT INTO facturen (nummer, klant_id, datum, totaal_bedrag, "
+            "betaald, status) "
+            "VALUES ('2026-002', 1, '2026-04-01', 800, 0, 'verstuurd')"
+        )
+        # Werkdagen
+        await conn.execute(
+            "INSERT INTO werkdagen (id, datum, klant_id, code, uren, tarief, "
+            "factuurnummer) VALUES (1, '2026-05-04', 1, 'WERKDAG', 10, 80, '2026-001')"
+        )
+        await conn.execute(
+            "INSERT INTO werkdagen (id, datum, klant_id, code, uren, tarief, "
+            "factuurnummer) VALUES (2, '2026-04-04', 1, 'WERKDAG', 10, 80, '2026-002')"
+        )
+        await conn.execute(
+            "INSERT INTO werkdagen (id, datum, klant_id, code, uren, tarief, "
+            "factuurnummer) VALUES (3, '2026-05-11', 1, 'WERKDAG', 10, 80, '')"
+        )
+        await conn.commit()
+    return db
+
+
+@pytest.mark.asyncio
+async def test_get_werkdagen_met_factuur_status_returns_correct_status(db_with_werkdagen):
+    rows = await database.get_werkdagen_met_factuur_status(
+        str(db_with_werkdagen), 2026, 5
+    )
+    by_id = {r.id: r for r in rows}
+    # mei: werkdag 1 (concept factuur) + werkdag 3 (ongefactureerd)
+    assert by_id[1].factuur_status == 'concept'
+    assert by_id[1].factuurnummer == '2026-001'
+    assert by_id[1].factuur_datum == '2026-05-01'
+    # vervaldatum is computed: 2026-05-01 + 14 dagen = 2026-05-15
+    assert by_id[1].factuur_vervaldatum == '2026-05-15'
+    assert by_id[3].factuur_status == ''
+    assert by_id[3].factuurnummer == ''
+    assert by_id[3].factuur_datum == ''
+    assert by_id[3].factuur_vervaldatum == ''
+
+
+@pytest.mark.asyncio
+async def test_get_werkdagen_met_factuur_status_filters_by_month(db_with_werkdagen):
+    rows = await database.get_werkdagen_met_factuur_status(
+        str(db_with_werkdagen), 2026, 4
+    )
+    # Alleen werkdag 2 valt in april
+    ids = {r.id for r in rows}
+    assert ids == {2}
+    by_id = {r.id: r for r in rows}
+    # Werkdag 2 → factuur 2026-002 (verstuurd, datum 2026-04-01, vervaldatum 2026-04-15)
+    assert by_id[2].factuur_status == 'verstuurd'
+    assert by_id[2].factuur_datum == '2026-04-01'
+    assert by_id[2].factuur_vervaldatum == '2026-04-15'

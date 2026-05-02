@@ -84,6 +84,42 @@ class TransactieRow:
     is_manual: bool                # True only for source == 'manual'
 
 
+@dataclass(frozen=True)
+class WerkdagMetStatus:
+    """Werkdag with joined factuur status info — used by /agenda MonthGrid.
+
+    factuur_vervaldatum is COMPUTED as factuur_datum + 14 days (Dutch
+    convention). Empty string if werkdag is ongefactureerd. The vervaldatum
+    is not stored on the facturen-table — Task 2.2's
+    derive_werkdag_status_label uses this computed value to flag verlopen.
+    """
+    id: int
+    datum: str
+    klant_id: int
+    klant_naam: str
+    code: str
+    activiteit: str
+    uren: float
+    km: float
+    tarief: float
+    km_tarief: float
+    factuurnummer: str             # '' = ongefactureerd
+    factuur_datum: str             # '' if no factuur, else YYYY-MM-DD
+    factuur_status: str            # '' | 'concept' | 'verstuurd' | 'betaald'
+    factuur_vervaldatum: str = ''  # computed in __post_init__
+
+    def __post_init__(self):
+        # Compute vervaldatum from factuur_datum + 14 days.
+        if self.factuur_datum:
+            try:
+                d = _date.fromisoformat(self.factuur_datum) + _timedelta(days=14)
+                # frozen dataclass: bypass via object.__setattr__
+                object.__setattr__(self, 'factuur_vervaldatum', d.isoformat())
+            except ValueError:
+                # invalid datum string — leave vervaldatum as ''
+                pass
+
+
 _DEFAULT_DB_DIR = Path.home() / "Library" / "Application Support" / "Boekhouding" / "data"
 _ENV_OVERRIDE = os.environ.get("BOEKHOUDING_DB_DIR")
 _DB_DIR = Path(_ENV_OVERRIDE).expanduser() if _ENV_OVERRIDE else _DEFAULT_DB_DIR
@@ -1269,6 +1305,55 @@ async def get_werkdagen(db_path: Path = DB_PATH, jaar: int = None,
         cursor = await conn.execute(sql, params)
         rows = await cursor.fetchall()
         return [_row_to_werkdag(r) for r in rows]
+
+
+async def get_werkdagen_met_factuur_status(
+    db_path: Path = DB_PATH, jaar: int = 0, maand: int = 0
+) -> list[WerkdagMetStatus]:
+    """Werkdagen voor (jaar, maand) met factuur-status JOIN.
+
+    LEFT JOIN op facturen via werkdagen.factuurnummer = facturen.nummer.
+    factuur_status='' bij ongefactureerde werkdagen. factuur_vervaldatum
+    is computed in WerkdagMetStatus.__post_init__ als factuur_datum + 14
+    dagen (Dutch convention; geen kolom op facturen-tabel).
+    """
+    maand_str = f"{jaar:04d}-{maand:02d}"
+    query = """
+        SELECT
+            w.id, w.datum, w.klant_id, k.naam,
+            w.code, w.activiteit, w.uren, w.km, w.tarief, w.km_tarief,
+            COALESCE(w.factuurnummer, '') AS factuurnummer,
+            COALESCE(f.datum, '') AS factuur_datum,
+            COALESCE(f.status, '') AS factuur_status
+        FROM werkdagen w
+        JOIN klanten k ON k.id = w.klant_id
+        LEFT JOIN facturen f
+            ON f.nummer = w.factuurnummer
+           AND w.factuurnummer != ''
+        WHERE substr(w.datum, 1, 7) = ?
+        ORDER BY w.datum, w.id
+    """
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(query, (maand_str,))
+        rows = await cur.fetchall()
+    return [
+        WerkdagMetStatus(
+            id=r[0],
+            datum=r[1],
+            klant_id=r[2],
+            klant_naam=r[3],
+            code=r[4] or '',
+            activiteit=r[5] or '',
+            uren=r[6] or 0.0,
+            km=r[7] or 0.0,
+            tarief=r[8] or 0.0,
+            km_tarief=r[9] or 0.0,
+            factuurnummer=r[10],
+            factuur_datum=r[11],
+            factuur_status=r[12],
+        )
+        for r in rows
+    ]
 
 
 async def add_werkdag(db_path: Path = DB_PATH, **kwargs) -> int:
