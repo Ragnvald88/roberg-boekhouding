@@ -1,21 +1,10 @@
 import pytest
 import aiosqlite
-from pathlib import Path
-
-import database
-
-
-@pytest.fixture
-async def fresh_db(tmp_path):
-    """Fresh DB with all migrations applied."""
-    db = tmp_path / 'test.sqlite3'
-    await database.init_db(db)
-    return db
 
 
 @pytest.mark.asyncio
-async def test_klant_recurring_patterns_table_exists(fresh_db):
-    async with aiosqlite.connect(fresh_db) as conn:
+async def test_klant_recurring_patterns_table_exists(db):
+    async with aiosqlite.connect(db) as conn:
         cur = await conn.execute(
             "SELECT name FROM sqlite_master "
             "WHERE type='table' AND name='klant_recurring_patterns'"
@@ -25,8 +14,8 @@ async def test_klant_recurring_patterns_table_exists(fresh_db):
 
 
 @pytest.mark.asyncio
-async def test_klant_recurring_patterns_has_required_columns(fresh_db):
-    async with aiosqlite.connect(fresh_db) as conn:
+async def test_klant_recurring_patterns_has_required_columns(db):
+    async with aiosqlite.connect(db) as conn:
         cur = await conn.execute(
             "PRAGMA table_info(klant_recurring_patterns)"
         )
@@ -38,8 +27,8 @@ async def test_klant_recurring_patterns_has_required_columns(fresh_db):
 
 
 @pytest.mark.asyncio
-async def test_klant_recurring_patterns_cascade_on_klant_delete(fresh_db):
-    async with aiosqlite.connect(fresh_db) as conn:
+async def test_klant_recurring_patterns_cascade_on_klant_delete(db):
+    async with aiosqlite.connect(db) as conn:
         await conn.execute("PRAGMA foreign_keys = ON")
         cur = await conn.execute(
             "INSERT INTO klanten (naam, tarief_uur) VALUES ('Test', 80) RETURNING id"
@@ -61,8 +50,8 @@ async def test_klant_recurring_patterns_cascade_on_klant_delete(fresh_db):
 
 
 @pytest.mark.asyncio
-async def test_klant_recurring_patterns_check_minuten_range(fresh_db):
-    async with aiosqlite.connect(fresh_db) as conn:
+async def test_klant_recurring_patterns_check_minuten_range(db):
+    async with aiosqlite.connect(db) as conn:
         await conn.execute(
             "INSERT INTO klanten (naam, tarief_uur) VALUES ('K', 80)"
         )
