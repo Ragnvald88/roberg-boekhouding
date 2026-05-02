@@ -11,23 +11,9 @@ from datetime import date
 
 _KM_TARIEF_FALLBACK = 0
 
-# Activiteitscodes
-CODES = {
-    'WERKDAG': 'Waarneming dagpraktijk',
-    'WEEKEND_DAG': 'Waarneming weekenddienst (dag)',
-    'AVOND': 'Waarneming avonddienst',
-    'NACHT': 'Waarneming nachtdienst',
-    'ACHTERWACHT': 'Achterwacht',
-    'ANW_AVOND': 'ANW avonddienst',
-    'ANW_NACHT': 'ANW nachtdienst',
-    'ANW_WEEKEND': 'ANW weekenddienst',
-    'CONGRES': 'Congres/nascholing',
-    'OPLEIDING': 'Opleiding/cursus',
-    'OVERIG_ZAK': 'Overig zakelijk (geen patiëntenzorg)',
-}
-
-# Codes where uren=0 is expected (non-patient business trips)
-_ZERO_UREN_CODES = {'CONGRES', 'OPLEIDING', 'OVERIG_ZAK'}
+# Activiteitscodes — single source of truth in domain.codes (UI-free).
+# Re-export here for backcompat with callers that import from this module.
+from domain.codes import CODES, ZERO_UREN_CODES as _ZERO_UREN_CODES
 
 async def open_werkdag_dialog(on_save=None, werkdag=None):
     """Open dialog for adding or editing a werkdag.

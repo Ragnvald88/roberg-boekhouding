@@ -1464,9 +1464,18 @@ async def db_get_pattern(db_path: Path, pattern_id: int) -> 'RecurringPattern | 
     )
 
 
+_PATTERN_UPDATE_FIELDS = frozenset({
+    'weekdays', 'start_minuten', 'eind_minuten', 'code',
+    'activiteit', 'valid_from', 'valid_until', 'actief',
+})
+
+
 async def db_update_pattern(db_path: Path, pattern_id: int, **fields) -> None:
     if not fields:
         return
+    bad = set(fields) - _PATTERN_UPDATE_FIELDS
+    if bad:
+        raise ValueError(f"Onbekende velden voor pattern update: {sorted(bad)}")
     cols = ', '.join(f"{k} = ?" for k in fields)
     args = list(fields.values()) + [pattern_id]
     async with get_db_ctx(db_path) as conn:

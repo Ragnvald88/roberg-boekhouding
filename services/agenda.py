@@ -15,6 +15,7 @@ from typing import Literal
 
 import database
 from database import ConflictError, ValidationError
+from domain.codes import CODES as _WERKDAG_CODES
 
 # Note: orphan factuurnummer (factuurnummer != '' but factuur_status == '')
 # falls through to 'ongefactureerd' here as defensive fallback. UI-laag
@@ -107,18 +108,16 @@ def parse_weekdays(csv: str) -> list[int]:
 # Pattern CRUD (service-layer wrappers around database.db_*_pattern helpers)
 # ---------------------------------------------------------------------------
 
-# Import CODES from werkdag_form as single source of truth voor toegestane codes.
-from components.werkdag_form import CODES as _WERKDAG_CODES
-
+# CODES komt uit domain.codes (UI-free) — geen NiceGUI-import via components/werkdag_form.
 _VALID_PATTERN_CODES = frozenset(_WERKDAG_CODES.keys())
 
 
 @dataclass(frozen=True)
 class Pattern:
-    """User-facing recurring-pattern view. weekdays is parsed list[int] (vs DB-CSV)."""
+    """User-facing recurring-pattern view. weekdays is parsed tuple[int, ...] (vs DB-CSV)."""
     id: int
     klant_id: int
-    weekdays: list[int]
+    weekdays: tuple[int, ...]
     start_minuten: int
     eind_minuten: int
     code: str
@@ -182,7 +181,7 @@ async def list_patterns_for_klant(db_path, klant_id: int,
     return [
         Pattern(
             id=r.id, klant_id=r.klant_id,
-            weekdays=parse_weekdays(r.weekdays),
+            weekdays=tuple(parse_weekdays(r.weekdays)),
             start_minuten=r.start_minuten, eind_minuten=r.eind_minuten,
             code=r.code, activiteit=r.activiteit,
             valid_from=r.valid_from, valid_until=r.valid_until,
@@ -194,24 +193,62 @@ async def list_patterns_for_klant(db_path, klant_id: int,
 async def update_pattern(db_path, pattern_id: int, **fields) -> None:
     """NIET year-locked. Validates known fields if provided.
 
-    Special handling: if 'weekdays' is in fields as list[int], converts to CSV.
+    Accepts 'weekdays' as list[int] OR CSV-string ("1,3,5"); both are
+    validated and canonicalised to CSV before write. Other input types
+    raise ValidationError.
+
     Cross-field validation: if start_minuten or eind_minuten changes, fetch
     existing to verify the resulting (start, eind) pair is valid.
+
+    Validation errors are *collected* — caller gets one ValidationError
+    with all problems joined by '; ' (better UX than first-error-wins).
     """
+    errors: list[str] = []
+
     if 'weekdays' in fields:
         wd = fields['weekdays']
-        if isinstance(wd, list):
-            _validate_pattern_weekdays(wd)
-            fields['weekdays'] = ','.join(str(w) for w in sorted(set(wd)))
+        if isinstance(wd, str):
+            try:
+                wd = parse_weekdays(wd)
+            except ValidationError as e:
+                errors.append(str(e))
+                wd = None
+        elif isinstance(wd, tuple):
+            # Pattern.weekdays is tuple — accept round-trip without coercion at caller.
+            wd = list(wd)
+        elif not isinstance(wd, list):
+            errors.append(
+                f"weekdays moet list[int]/tuple[int,...] of CSV-string zijn, "
+                f"kreeg {type(wd).__name__}"
+            )
+            wd = None
+        if wd is not None:
+            try:
+                _validate_pattern_weekdays(wd)
+                fields['weekdays'] = ','.join(str(w) for w in sorted(set(wd)))
+            except ValidationError as e:
+                errors.append(str(e))
+
     if 'start_minuten' in fields or 'eind_minuten' in fields:
         existing = await database.db_get_pattern(db_path, pattern_id)
         if existing is None:
             raise ConflictError(f"Pattern {pattern_id} bestaat niet")
         start = fields.get('start_minuten', existing.start_minuten)
         eind = fields.get('eind_minuten', existing.eind_minuten)
-        _validate_pattern_minuten(start, eind)
+        try:
+            _validate_pattern_minuten(start, eind)
+        except ValidationError as e:
+            errors.append(str(e))
+
     if 'code' in fields:
-        _validate_pattern_code(fields['code'])
+        try:
+            _validate_pattern_code(fields['code'])
+        except ValidationError as e:
+            errors.append(str(e))
+
+    if errors:
+        raise ValidationError('; '.join(errors))
+
     await database.db_update_pattern(db_path, pattern_id, **fields)
 
 

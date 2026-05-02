@@ -40,7 +40,7 @@ async def test_pattern_list_for_klant(db_with_klant):
     )
     patterns = await svc.list_patterns_for_klant(db_with_klant, klant_id=1)
     assert len(patterns) == 1
-    assert patterns[0].weekdays == [1, 3]
+    assert patterns[0].weekdays == (1, 3)
     assert patterns[0].code == 'WERKDAG'
     assert patterns[0].start_minuten == 480
     assert patterns[0].eind_minuten == 1020
@@ -136,7 +136,7 @@ async def test_pattern_update_weekdays(db_with_klant):
     )
     await svc.update_pattern(db_with_klant, pid, weekdays=[1, 5])
     patterns = await svc.list_patterns_for_klant(db_with_klant, klant_id=1)
-    assert patterns[0].weekdays == [1, 5]
+    assert patterns[0].weekdays == (1, 5)
 
 
 @pytest.mark.asyncio
@@ -208,3 +208,83 @@ async def test_pattern_cascade_on_klant_delete(db_with_klant):
         await conn.commit()
     pattern = await database.db_get_pattern(db_with_klant, pid)
     assert pattern is None
+
+
+# ---- Review-fix regression tests (C2/C1/I1) ----
+
+def test_services_agenda_no_nicegui_import():
+    """C2 boundary: services.agenda must not transitively pull nicegui — UI-free invariant."""
+    import importlib
+    import sys
+    # Snapshot existing modules to detect what services.agenda imports
+    pre = set(sys.modules.keys())
+    # Force re-import
+    if 'services.agenda' in sys.modules:
+        del sys.modules['services.agenda']
+    importlib.import_module('services.agenda')
+    new_modules = set(sys.modules.keys()) - pre
+    nicegui_modules = [m for m in new_modules if m.startswith('nicegui')]
+    assert not nicegui_modules, (
+        f"services.agenda transitively imports nicegui: {nicegui_modules}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_pattern_update_weekdays_string_input_is_validated(db_with_klant):
+    """C1 regression: string weekdays must be validated, not bypass."""
+    pid = await svc.add_pattern(
+        db_with_klant, klant_id=1, weekdays=[1],
+        start_minuten=480, eind_minuten=1020,
+    )
+    with pytest.raises(ValidationError):
+        await svc.update_pattern(db_with_klant, pid, weekdays='1,8,99')
+
+
+@pytest.mark.asyncio
+async def test_pattern_update_weekdays_string_csv_accepted(db_with_klant):
+    """Valid CSV string is accepted and parsed."""
+    pid = await svc.add_pattern(
+        db_with_klant, klant_id=1, weekdays=[1],
+        start_minuten=480, eind_minuten=1020,
+    )
+    await svc.update_pattern(db_with_klant, pid, weekdays='2,4')
+    patterns = await svc.list_patterns_for_klant(db_with_klant, klant_id=1)
+    assert patterns[0].weekdays == (2, 4)  # tuple after I2 fix
+
+
+@pytest.mark.asyncio
+async def test_pattern_update_weekdays_invalid_type_raises(db_with_klant):
+    """Non-list/non-str raises ValidationError, not silent corruption."""
+    pid = await svc.add_pattern(
+        db_with_klant, klant_id=1, weekdays=[1],
+        start_minuten=480, eind_minuten=1020,
+    )
+    with pytest.raises(ValidationError):
+        await svc.update_pattern(db_with_klant, pid, weekdays=42)
+
+
+@pytest.mark.asyncio
+async def test_pattern_update_weekdays_tuple_input_accepted(db_with_klant):
+    """Round-trip Pattern.weekdays (tuple) back into update_pattern must work."""
+    pid = await svc.add_pattern(
+        db_with_klant, klant_id=1, weekdays=[1],
+        start_minuten=480, eind_minuten=1020,
+    )
+    patterns = await svc.list_patterns_for_klant(db_with_klant, klant_id=1)
+    # Take the existing tuple weekdays and pass back unchanged
+    await svc.update_pattern(db_with_klant, pid, weekdays=patterns[0].weekdays)
+    # And with a new tuple
+    await svc.update_pattern(db_with_klant, pid, weekdays=(2, 6))
+    patterns = await svc.list_patterns_for_klant(db_with_klant, klant_id=1)
+    assert patterns[0].weekdays == (2, 6)
+
+
+@pytest.mark.asyncio
+async def test_pattern_update_unknown_field_raises(db_with_klant):
+    """I1: typos surface as ValueError, not silent OperationalError."""
+    pid = await svc.add_pattern(
+        db_with_klant, klant_id=1, weekdays=[1],
+        start_minuten=480, eind_minuten=1020,
+    )
+    with pytest.raises(ValueError):  # database.py raises ValueError directly
+        await database.db_update_pattern(db_with_klant, pid, eind_minute=900)  # typo
