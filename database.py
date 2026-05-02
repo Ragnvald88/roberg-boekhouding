@@ -617,12 +617,13 @@ MIGRATIONS = [
         "CREATE INDEX IF NOT EXISTS idx_klant_patterns_klant ON klant_recurring_patterns(klant_id, actief)",
     ]),
     (36, "add_blockers", [
+        # datum UNIQUE auto-creates sqlite_autoindex_blockers_1 — geen extra
+        # explicit index nodig (zou dubbele dead-weight index op zelfde kolom geven).
         """CREATE TABLE IF NOT EXISTS blockers (
             id INTEGER PRIMARY KEY,
             datum TEXT NOT NULL UNIQUE,
             kind TEXT NOT NULL CHECK (kind IN ('vacation', 'sick', 'training')),
             label TEXT NOT NULL DEFAULT '')""",
-        "CREATE INDEX IF NOT EXISTS idx_blockers_datum ON blockers(datum)",
     ]),
 ]
 
