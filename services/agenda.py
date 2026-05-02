@@ -17,7 +17,7 @@ import aiosqlite
 
 import database
 from database import ConflictError, ValidationError
-from domain.codes import CODES as _WERKDAG_CODES
+from domain.codes import CODES as _WERKDAG_CODES, ZERO_UREN_CODES as _ZERO_UREN_CODES
 from services.holidays import dutch_holidays
 
 # Note: orphan factuurnummer (factuurnummer != '' but factuur_status == '')
@@ -344,3 +344,83 @@ async def list_blockers(db_path, vanaf: _date, tot: _date) -> list[Blocker]:
                                    kind='holiday', label=h.label))
     out.sort(key=lambda b: (b.datum, b.kind))
     return out
+
+
+# ---------------------------------------------------------------------------
+# confirm_expected — promote virtual rooster-entry → real werkdag
+# ---------------------------------------------------------------------------
+
+async def confirm_expected(
+    db_path,
+    pattern_id: int,
+    datum: _date,
+    start_minuten: int | None = None,
+    eind_minuten: int | None = None,
+    activiteit: str | None = None,
+) -> int:
+    """Promote virtual expected entry → real werkdag.
+
+    Idempotent: als er al een werkdag bestaat voor (klant_id, datum) waar deze
+    pattern verantwoordelijk voor is, return existing.id zonder mutatie.
+
+    Race-protected: pattern_id moet bestaan AND actief=1, anders ConflictError.
+
+    Tijden: start/eind_minuten None = pattern-defaults. Beide moeten valid zijn
+    (eind > start, in 0-1440 range) anders ValidationError.
+
+    Klant-data (tarief, retour_km, adres) komt uit klanten-row op moment van
+    bevestigen — NIET uit pattern (pattern is rooster-template).
+    urennorm: 0 voor ACHTERWACHT/ZERO_UREN_CODES, 1 voor de rest.
+
+    Raises:
+        ConflictError: pattern niet bestaat / inactief, of klant verwijderd
+        YearLockedError: datum in afgesloten jaar (via add_werkdag delegate)
+        ValidationError: invalid tijden
+    """
+    pattern = await database.db_get_pattern(db_path, pattern_id)
+    if pattern is None or not pattern.actief:
+        raise ConflictError(
+            f"Patroon {pattern_id} is verwijderd of inactief — refresh agenda."
+        )
+
+    # Idempotency check: bestaande werkdag op (klant, datum)?
+    datum_str = datum.isoformat()
+    async with database.get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            "SELECT id FROM werkdagen WHERE datum = ? AND klant_id = ? "
+            "ORDER BY id LIMIT 1",
+            (datum_str, pattern.klant_id),
+        )
+        existing = await cur.fetchone()
+    if existing:
+        return existing[0]
+
+    # Resolve fields with optional overrides
+    start = start_minuten if start_minuten is not None else pattern.start_minuten
+    eind = eind_minuten if eind_minuten is not None else pattern.eind_minuten
+    _validate_pattern_minuten(start, eind)
+    uren = (eind - start) / 60.0
+    act = activiteit if activiteit is not None else pattern.activiteit
+
+    klant = await database.get_klant_by_id(db_path, pattern.klant_id)
+    if klant is None:
+        raise ConflictError(f"Klant {pattern.klant_id} bestaat niet meer.")
+
+    urennorm = 0 if pattern.code in _ZERO_UREN_CODES or pattern.code == 'ACHTERWACHT' else 1
+
+    # add_werkdag does year-lock validation + INSERT
+    return await database.add_werkdag(
+        db_path,
+        datum=datum_str,
+        klant_id=pattern.klant_id,
+        code=pattern.code,
+        activiteit=act,
+        locatie=klant.adres or '',
+        locatie_id=None,
+        uren=uren,
+        km=klant.retour_km or 0,
+        tarief=klant.tarief_uur,
+        km_tarief=0.23,
+        urennorm=urennorm,
+        opmerking='',
+    )

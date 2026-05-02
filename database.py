@@ -1196,6 +1196,26 @@ async def get_klanten(db_path: Path = DB_PATH, alleen_actief: bool = False) -> l
         ) for r in rows]
 
 
+async def get_klant_by_id(db_path: Path = DB_PATH, klant_id: int = 0) -> 'Klant | None':
+    """Single klant by id — None if not found."""
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            "SELECT * FROM klanten WHERE id = ?", (klant_id,),
+        )
+        r = await cur.fetchone()
+    if not r:
+        return None
+    return Klant(
+        id=r['id'], naam=r['naam'], tarief_uur=r['tarief_uur'],
+        retour_km=r['retour_km'], adres=r['adres'] or '',
+        kvk=r['kvk'] or '', actief=bool(r['actief']),
+        email=r['email'] or '',
+        contactpersoon=r['contactpersoon'] or '',
+        postcode=r['postcode'] or '',
+        plaats=r['plaats'] or '',
+    )
+
+
 async def add_klant(db_path: Path = DB_PATH, **kwargs) -> int:
     async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(

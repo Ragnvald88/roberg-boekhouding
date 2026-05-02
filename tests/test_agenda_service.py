@@ -445,3 +445,156 @@ async def test_list_blockers_year_range_spans_years(db_with_klant):
     assert date(2025, 12, 25) in holiday_dates  # Eerste Kerstdag
     assert date(2025, 12, 26) in holiday_dates  # Tweede Kerstdag
     assert date(2026, 1, 1) in holiday_dates    # Nieuwjaarsdag
+
+
+# ---- confirm_expected ----
+
+async def _add_test_pattern(db, klant_id=1, code='WERKDAG'):
+    return await svc.add_pattern(
+        db, klant_id=klant_id, weekdays=[1, 3],  # Ma, Wo
+        start_minuten=480, eind_minuten=1020, code=code,
+    )
+
+
+@pytest.mark.asyncio
+async def test_confirm_expected_creates_werkdag(db_with_klant):
+    pid = await _add_test_pattern(db_with_klant)
+    # 4 mei 2026 = maandag
+    werkdag_id = await svc.confirm_expected(
+        db_with_klant, pattern_id=pid, datum=date(2026, 5, 4),
+    )
+    assert werkdag_id > 0
+    async with aiosqlite.connect(db_with_klant) as conn:
+        cur = await conn.execute(
+            "SELECT klant_id, code, uren, urennorm FROM werkdagen WHERE id = ?",
+            (werkdag_id,),
+        )
+        row = await cur.fetchone()
+    assert row[0] == 1
+    assert row[1] == 'WERKDAG'
+    assert row[2] == pytest.approx(9.0)  # 480→1020 = 540 min = 9u
+    assert row[3] == 1  # urennorm=1 voor WERKDAG
+
+
+@pytest.mark.asyncio
+async def test_confirm_expected_idempotent(db_with_klant):
+    """Second call met zelfde (klant, datum) returnt zelfde werkdag-id."""
+    pid = await _add_test_pattern(db_with_klant)
+    id1 = await svc.confirm_expected(
+        db_with_klant, pattern_id=pid, datum=date(2026, 5, 4),
+    )
+    id2 = await svc.confirm_expected(
+        db_with_klant, pattern_id=pid, datum=date(2026, 5, 4),
+    )
+    assert id1 == id2
+    # En slechts 1 werkdag in DB
+    async with aiosqlite.connect(db_with_klant) as conn:
+        cur = await conn.execute("SELECT COUNT(*) FROM werkdagen")
+        count = (await cur.fetchone())[0]
+    assert count == 1
+
+
+@pytest.mark.asyncio
+async def test_confirm_expected_with_overrides(db_with_klant):
+    pid = await _add_test_pattern(db_with_klant)
+    werkdag_id = await svc.confirm_expected(
+        db_with_klant, pattern_id=pid, datum=date(2026, 5, 4),
+        start_minuten=540, eind_minuten=1080,  # 09:00-18:00 = 9u
+    )
+    async with aiosqlite.connect(db_with_klant) as conn:
+        cur = await conn.execute(
+            "SELECT uren FROM werkdagen WHERE id = ?", (werkdag_id,),
+        )
+        uren = (await cur.fetchone())[0]
+    assert uren == pytest.approx(9.0)
+
+
+@pytest.mark.asyncio
+async def test_confirm_expected_in_locked_year_raises(db_with_klant):
+    pid = await _add_test_pattern(db_with_klant)
+    async with aiosqlite.connect(db_with_klant) as conn:
+        await conn.execute(
+            "INSERT INTO fiscale_params (jaar, jaarafsluiting_status) "
+            "VALUES (2025, 'definitief')"
+        )
+        await conn.commit()
+    with pytest.raises(YearLockedError):
+        await svc.confirm_expected(
+            db_with_klant, pattern_id=pid, datum=date(2025, 6, 2),
+        )
+
+
+@pytest.mark.asyncio
+async def test_confirm_expected_on_deleted_pattern_raises(db_with_klant):
+    """Race-protection: pattern verwijderd tussen render en confirm → ConflictError."""
+    pid = await _add_test_pattern(db_with_klant)
+    await svc.delete_pattern(db_with_klant, pid)
+    with pytest.raises(ConflictError):
+        await svc.confirm_expected(
+            db_with_klant, pattern_id=pid, datum=date(2026, 5, 4),
+        )
+
+
+@pytest.mark.asyncio
+async def test_confirm_expected_on_missing_pattern_raises(db_with_klant):
+    """Pattern_id that never existed → ConflictError."""
+    with pytest.raises(ConflictError):
+        await svc.confirm_expected(
+            db_with_klant, pattern_id=999, datum=date(2026, 5, 4),
+        )
+
+
+@pytest.mark.asyncio
+async def test_confirm_expected_invalid_minuten_raises(db_with_klant):
+    pid = await _add_test_pattern(db_with_klant)
+    with pytest.raises(ValidationError):
+        await svc.confirm_expected(
+            db_with_klant, pattern_id=pid, datum=date(2026, 5, 4),
+            start_minuten=600, eind_minuten=400,  # eind < start
+        )
+
+
+@pytest.mark.asyncio
+async def test_confirm_expected_anw_pattern_keeps_anw_code(db_with_klant):
+    """Pattern code='ANW_AVOND' propagates to werkdag.code."""
+    pid = await _add_test_pattern(db_with_klant, code='ANW_AVOND')
+    werkdag_id = await svc.confirm_expected(
+        db_with_klant, pattern_id=pid, datum=date(2026, 5, 4),
+    )
+    async with aiosqlite.connect(db_with_klant) as conn:
+        cur = await conn.execute(
+            "SELECT code, urennorm FROM werkdagen WHERE id = ?", (werkdag_id,),
+        )
+        row = await cur.fetchone()
+    assert row[0] == 'ANW_AVOND'
+    assert row[1] == 1  # ANW telt voor urencriterium
+
+
+@pytest.mark.asyncio
+async def test_confirm_expected_achterwacht_urennorm_zero(db_with_klant):
+    """ACHTERWACHT pattern → urennorm=0 (telt niet voor 1225)."""
+    pid = await _add_test_pattern(db_with_klant, code='ACHTERWACHT')
+    werkdag_id = await svc.confirm_expected(
+        db_with_klant, pattern_id=pid, datum=date(2026, 5, 4),
+    )
+    async with aiosqlite.connect(db_with_klant) as conn:
+        cur = await conn.execute(
+            "SELECT urennorm FROM werkdagen WHERE id = ?", (werkdag_id,),
+        )
+        row = await cur.fetchone()
+    assert row[0] == 0
+
+
+@pytest.mark.asyncio
+async def test_confirm_expected_congres_urennorm_zero(db_with_klant):
+    """CONGRES (in ZERO_UREN_CODES) → urennorm=0."""
+    pid = await _add_test_pattern(db_with_klant, code='CONGRES')
+    werkdag_id = await svc.confirm_expected(
+        db_with_klant, pattern_id=pid, datum=date(2026, 5, 4),
+    )
+    async with aiosqlite.connect(db_with_klant) as conn:
+        cur = await conn.execute(
+            "SELECT urennorm FROM werkdagen WHERE id = ?", (werkdag_id,),
+        )
+        row = await cur.fetchone()
+    assert row[0] == 0
