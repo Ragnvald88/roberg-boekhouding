@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from calendar import monthrange
 from dataclasses import dataclass
-from datetime import date as _date, timedelta as _timedelta
+from datetime import date as _date
 from typing import Literal
 
 import aiosqlite
