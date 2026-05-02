@@ -9,11 +9,16 @@ Frozen dataclasses for view-objects to keep Swift-port mental model intact.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import date as _date
 from typing import Literal
 
 from database import ValidationError
+
+# Note: orphan factuurnummer (factuurnummer != '' but factuur_status == '')
+# falls through to 'ongefactureerd' here as defensive fallback. UI-laag
+# (MonthGrid, Day-Inspector in Sessie 3) kan separately detecteren via
+# `factuurnummer != '' and factuur_status == ''` voor een warning-indicator
+# zonder dat dit de status-bar-kleur beïnvloedt.
 
 
 # ---------------------------------------------------------------------------
