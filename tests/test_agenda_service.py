@@ -665,3 +665,202 @@ async def test_confirm_expected_returns_existing_werkdag_with_different_code(db_
         )
         code = (await cur.fetchone())[0]
     assert code == 'ANW_AVOND'
+
+
+# ---- get_maand / get_dag ----
+
+@pytest.fixture
+def fake_today_2026_05_01(monkeypatch):
+    """Pin today to 2026-05-01 (Friday) for deterministic expected-entry tests."""
+    monkeypatch.setattr(svc, '_today', lambda: date(2026, 5, 1))
+
+
+@pytest.mark.asyncio
+async def test_get_maand_returns_correct_structure(db_with_klant, fake_today_2026_05_01):
+    pid = await _add_test_pattern(db_with_klant)  # weekdays=[1,3], 480-1020
+    view = await svc.get_maand(db_with_klant, jaar=2026, maand=5)
+    assert view.jaar == 2026
+    assert view.maand == 5
+    assert len(view.dagen) == 31  # mei 2026 has 31 days
+    assert all(d.datum.year == 2026 and d.datum.month == 5 for d in view.dagen)
+
+
+@pytest.mark.asyncio
+async def test_get_maand_expected_only_for_future_dates(db_with_klant, fake_today_2026_05_01):
+    """Today=2026-05-01 (vrijdag). Pattern op Ma+Wo. Expected entries alleen
+    voor dagen >= today+1 (toekomst)."""
+    pid = await _add_test_pattern(db_with_klant)  # Ma+Wo
+    view = await svc.get_maand(db_with_klant, jaar=2026, maand=5)
+    by_date = {d.datum: d for d in view.dagen}
+    # Maandag 4 mei (toekomst, Ma) — expected aanwezig
+    assert len(by_date[date(2026, 5, 4)].expected) == 1
+    # Maandag 27 april valt buiten mei
+    # Vrijdag 1 mei (today) — geen expected (today is niet toekomst)
+    assert by_date[date(2026, 5, 1)].expected == ()
+    # Donderdag 7 mei — Pattern niet op Do, dus geen expected
+    assert by_date[date(2026, 5, 7)].expected == ()
+
+
+@pytest.mark.asyncio
+async def test_get_maand_expected_blocked_by_existing_werkdag(db_with_klant, fake_today_2026_05_01):
+    """Werkdag op datum onderdrukt expected entry op die datum."""
+    pid = await _add_test_pattern(db_with_klant)
+    # Werkdag op 4 mei (Ma) — pattern-day
+    async with aiosqlite.connect(db_with_klant) as conn:
+        await conn.execute(
+            "INSERT INTO werkdagen (datum, klant_id, code, uren, tarief) "
+            "VALUES ('2026-05-04', 1, 'WERKDAG', 9, 80)"
+        )
+        await conn.commit()
+    view = await svc.get_maand(db_with_klant, jaar=2026, maand=5)
+    by_date = {d.datum: d for d in view.dagen}
+    dag = by_date[date(2026, 5, 4)]
+    assert len(dag.werkdagen) == 1
+    assert dag.expected == ()  # onderdrukt door werkdag
+
+
+@pytest.mark.asyncio
+async def test_get_maand_expected_blocked_by_blocker(db_with_klant, fake_today_2026_05_01):
+    """Blocker op datum onderdrukt expected entry."""
+    pid = await _add_test_pattern(db_with_klant)
+    await svc.add_blocker(
+        db_with_klant, datum=date(2026, 5, 4),
+        kind='vacation', label='Vrije dag',
+    )
+    view = await svc.get_maand(db_with_klant, jaar=2026, maand=5)
+    by_date = {d.datum: d for d in view.dagen}
+    dag = by_date[date(2026, 5, 4)]
+    assert dag.expected == ()
+    assert dag.blocker is not None
+    assert dag.blocker.kind == 'vacation'
+
+
+@pytest.mark.asyncio
+async def test_get_maand_expected_blocked_by_holiday(db_with_klant, fake_today_2026_05_01):
+    """Computed holiday onderdrukt expected entry."""
+    pid = await _add_test_pattern(db_with_klant)  # Ma+Wo, dus 27-april (Ma=Koningsdag) match
+    view = await svc.get_maand(db_with_klant, jaar=2026, maand=4)
+    by_date = {d.datum: d for d in view.dagen}
+    koningsdag = by_date[date(2026, 4, 27)]
+    assert koningsdag.expected == ()
+    assert koningsdag.blocker is not None
+    assert koningsdag.blocker.kind == 'holiday'
+
+
+@pytest.mark.asyncio
+async def test_get_maand_returns_factuur_status_per_werkdag(db_with_klant, fake_today_2026_05_01):
+    """Kern-feature: factuur-status zichtbaar per werkdag in MaandView."""
+    async with aiosqlite.connect(db_with_klant) as conn:
+        await conn.execute(
+            "INSERT INTO facturen (nummer, klant_id, datum, totaal_bedrag, "
+            "betaald, status) VALUES ('2026-001', 1, '2026-05-04', 800, 0, 'concept')"
+        )
+        await conn.execute(
+            "INSERT INTO werkdagen (datum, klant_id, code, uren, tarief, factuurnummer) "
+            "VALUES ('2026-05-04', 1, 'WERKDAG', 8, 80, '2026-001')"
+        )
+        await conn.commit()
+    view = await svc.get_maand(db_with_klant, jaar=2026, maand=5)
+    by_date = {d.datum: d for d in view.dagen}
+    pill = by_date[date(2026, 5, 4)].werkdagen[0]
+    assert pill.factuur_status == 'concept'
+    assert pill.status_label == 'concept'
+    assert pill.category == 'dagpraktijk'
+    assert pill.bedrag == pytest.approx(8 * 80)
+
+
+@pytest.mark.asyncio
+async def test_get_maand_anw_werkdag_categorized_correctly(db_with_klant, fake_today_2026_05_01):
+    async with aiosqlite.connect(db_with_klant) as conn:
+        await conn.execute(
+            "INSERT INTO werkdagen (datum, klant_id, code, uren, tarief) "
+            "VALUES ('2026-05-04', 1, 'ANW_AVOND', 6, 90)"
+        )
+        await conn.commit()
+    view = await svc.get_maand(db_with_klant, jaar=2026, maand=5)
+    by_date = {d.datum: d for d in view.dagen}
+    pill = by_date[date(2026, 5, 4)].werkdagen[0]
+    assert pill.category == 'anw'
+
+
+@pytest.mark.asyncio
+async def test_get_maand_include_expected_false_returns_empty_expected(db_with_klant, fake_today_2026_05_01):
+    pid = await _add_test_pattern(db_with_klant)
+    view = await svc.get_maand(db_with_klant, jaar=2026, maand=5, include_expected=False)
+    for dag in view.dagen:
+        assert dag.expected == ()
+
+
+@pytest.mark.asyncio
+async def test_get_dag_returns_single_day(db_with_klant, fake_today_2026_05_01):
+    pid = await _add_test_pattern(db_with_klant)
+    dag = await svc.get_dag(db_with_klant, datum=date(2026, 5, 4))
+    assert dag.datum == date(2026, 5, 4)
+    assert len(dag.expected) == 1
+    assert dag.expected[0].pattern_id == pid
+
+
+@pytest.mark.asyncio
+async def test_get_dag_blocker(db_with_klant, fake_today_2026_05_01):
+    await svc.add_blocker(
+        db_with_klant, datum=date(2026, 7, 15),
+        kind='vacation', label='Zomer',
+    )
+    dag = await svc.get_dag(db_with_klant, datum=date(2026, 7, 15))
+    assert dag.blocker is not None
+    assert dag.blocker.kind == 'vacation'
+
+
+@pytest.mark.asyncio
+async def test_get_maand_expected_uses_klant_tarief(db_with_klant, fake_today_2026_05_01):
+    """ExpectedEntry.bedrag computes from klant.tarief_uur (current value)."""
+    pid = await _add_test_pattern(db_with_klant)  # 480-1020 = 9u
+    view = await svc.get_maand(db_with_klant, jaar=2026, maand=5)
+    by_date = {d.datum: d for d in view.dagen}
+    expected = by_date[date(2026, 5, 4)].expected[0]
+    assert expected.uren == pytest.approx(9.0)
+    assert expected.klant_naam == 'HAP'
+    assert expected.code == 'WERKDAG'
+
+
+@pytest.mark.asyncio
+async def test_get_maand_pattern_validity_window(db_with_klant, fake_today_2026_05_01):
+    """Pattern with valid_until in past should NOT generate expected."""
+    pid = await svc.add_pattern(
+        db_with_klant, klant_id=1, weekdays=[1, 3],
+        start_minuten=480, eind_minuten=1020,
+        valid_until='2026-04-30',  # only valid until april
+    )
+    view = await svc.get_maand(db_with_klant, jaar=2026, maand=5)
+    for dag in view.dagen:
+        assert dag.expected == ()  # pattern expired
+
+
+@pytest.mark.asyncio
+async def test_get_maand_inactive_klant_no_expected(db_with_klant, fake_today_2026_05_01):
+    """Codex B1: gedeactiveerde klanten mogen geen expected genereren,
+    ook al hebben ze nog actieve patterns."""
+    pid = await _add_test_pattern(db_with_klant)  # Ma+Wo
+    # Deactiveer klant
+    async with aiosqlite.connect(db_with_klant) as conn:
+        await conn.execute("UPDATE klanten SET actief = 0 WHERE id = 1")
+        await conn.commit()
+    view = await svc.get_maand(db_with_klant, jaar=2026, maand=5)
+    for dag in view.dagen:
+        assert dag.expected == ()  # geen expected van inactive klanten
+
+
+@pytest.mark.asyncio
+async def test_get_maand_expected_includes_km_vergoeding(db_with_klant, fake_today_2026_05_01):
+    """Codex B2: ExpectedEntry.bedrag = uren*tarief + retour_km*0.23
+    (consistent met confirm_expected → add_werkdag)."""
+    # Klant heeft retour_km=40
+    async with aiosqlite.connect(db_with_klant) as conn:
+        await conn.execute("UPDATE klanten SET retour_km = 40 WHERE id = 1")
+        await conn.commit()
+    pid = await _add_test_pattern(db_with_klant)  # 9u, tarief=80
+    view = await svc.get_maand(db_with_klant, jaar=2026, maand=5)
+    by_date = {d.datum: d for d in view.dagen}
+    expected = by_date[date(2026, 5, 4)].expected[0]
+    # 9 * 80 + 40 * 0.23 = 720 + 9.20 = 729.20
+    assert expected.bedrag == pytest.approx(9 * 80 + 40 * 0.23)

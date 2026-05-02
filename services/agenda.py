@@ -9,8 +9,9 @@ Frozen dataclasses for view-objects to keep Swift-port mental model intact.
 """
 from __future__ import annotations
 
+from calendar import monthrange
 from dataclasses import dataclass
-from datetime import date as _date
+from datetime import date as _date, timedelta as _timedelta
 from typing import Literal
 
 import aiosqlite
@@ -344,6 +345,223 @@ async def list_blockers(db_path, vanaf: _date, tot: _date) -> list[Blocker]:
                                    kind='holiday', label=h.label))
     out.sort(key=lambda b: (b.datum, b.kind))
     return out
+
+
+# ---------------------------------------------------------------------------
+# View functions for /agenda
+# ---------------------------------------------------------------------------
+
+def _today() -> _date:
+    """Indirection voor test-monkeypatch via monkeypatch.setattr(svc, '_today', ...)."""
+    return _date.today()
+
+
+def _iso_weekday(d: _date) -> int:
+    """ISO weekday: Monday=1, Sunday=7."""
+    return d.isoweekday()
+
+
+@dataclass(frozen=True)
+class WerkdagPill:
+    """Bevestigde werkdag + factuur-status + categorie voor MonthGrid rendering."""
+    id: int
+    klant_id: int
+    klant_naam: str
+    code: str
+    uren: float
+    bedrag: float
+    factuurnummer: str
+    factuur_status: str
+    factuur_vervaldatum: str
+    status_label: WerkdagStatusLabel
+    category: WerkdagCategory
+
+
+@dataclass(frozen=True)
+class ExpectedEntry:
+    """Verwachte werkdag uit recurring pattern (NOT in DB; computed on read)."""
+    pattern_id: int
+    klant_id: int
+    klant_naam: str
+    start_minuten: int
+    eind_minuten: int
+    uren: float
+    bedrag: float
+    code: str
+    activiteit: str
+    category: WerkdagCategory
+
+
+@dataclass(frozen=True)
+class DagView:
+    """Aggregaat voor één dag in /agenda."""
+    datum: _date
+    werkdagen: tuple[WerkdagPill, ...]
+    expected: tuple[ExpectedEntry, ...]
+    blocker: 'Blocker | None'
+
+
+@dataclass(frozen=True)
+class MaandView:
+    """Aggregaat voor een hele maand."""
+    jaar: int
+    maand: int
+    dagen: tuple[DagView, ...]
+
+
+def _is_in_pattern_validity(pattern, datum: _date) -> bool:
+    """Check pattern.valid_from / valid_until window. Empty string = no bound."""
+    if pattern.valid_from:
+        try:
+            if datum < _date.fromisoformat(pattern.valid_from):
+                return False
+        except ValueError:
+            pass  # invalid date, treat as no lower bound
+    if pattern.valid_until:
+        try:
+            if datum > _date.fromisoformat(pattern.valid_until):
+                return False
+        except ValueError:
+            pass  # invalid date, treat as no upper bound
+    return True
+
+
+def _expected_for_datum(datum: _date,
+                         today: _date,
+                         patterns_by_klant: dict,
+                         klanten_by_id: dict) -> tuple:
+    """Compute expected entries for a future date. Pure function — no DB.
+
+    Returns tuple[ExpectedEntry, ...]. Empty tuple for past/today, blocked,
+    or no matching pattern.
+    """
+    if datum <= today:
+        return ()
+    iso = _iso_weekday(datum)
+    out: list[ExpectedEntry] = []
+    for klant_id, plist in patterns_by_klant.items():
+        klant = klanten_by_id.get(klant_id)
+        if not klant:
+            continue
+        for p in plist:
+            if not p.actief:
+                continue
+            if iso not in p.weekdays:
+                continue
+            if not _is_in_pattern_validity(p, datum):
+                continue
+            uren = (p.eind_minuten - p.start_minuten) / 60.0
+            # Bedrag-formule moet matchen met confirm_expected → add_werkdag:
+            # uren*tarief + retour_km*0.23. Anders onderschat de prognose
+            # dagen met km-vergoeding (codex review B2).
+            bedrag = uren * (klant.tarief_uur or 0) + (klant.retour_km or 0) * 0.23
+            out.append(ExpectedEntry(
+                pattern_id=p.id,
+                klant_id=klant_id,
+                klant_naam=klant.naam,
+                start_minuten=p.start_minuten,
+                eind_minuten=p.eind_minuten,
+                uren=uren,
+                bedrag=bedrag,
+                code=p.code,
+                activiteit=p.activiteit,
+                category=categorize_werkdag(p.code),
+            ))
+    return tuple(out)
+
+
+async def get_maand(db_path, jaar: int, maand: int,
+                     include_expected: bool = True) -> MaandView:
+    """Aggregate werkdagen + factuur-status + expected (van patterns) + blockers
+    voor één maand.
+
+    Expected entries verschijnen alleen voor toekomstige datums (datum > today),
+    en alleen als er geen werkdag of blocker op die datum is.
+
+    Returns MaandView met DagView per dag (1..lastDay).
+    """
+    today = _today()
+
+    # 1. Werkdagen + factuur-status
+    werkdagen_raw = await database.get_werkdagen_met_factuur_status(
+        db_path, jaar, maand,
+    )
+    werkdagen_by_datum: dict[_date, list[WerkdagPill]] = {}
+    for w in werkdagen_raw:
+        d = _date.fromisoformat(w.datum)
+        # km_tarief: ANW codes hebben legitiem km_tarief=0 (reiskosten zit
+        # in ANW-tarief), DAGPRAKTIJK heeft default 0.23. WerkdagMetStatus
+        # coerced NULL→0.0 al, dus we kunnen NULL niet meer detecteren —
+        # gebruik de waarde as-is. (Codex review B3: weeg af, in praktijk
+        # is NULL niet voorkomend door schema-default 0.23.)
+        bedrag = (w.uren or 0) * (w.tarief or 0) + (w.km or 0) * (w.km_tarief or 0)
+        pill = WerkdagPill(
+            id=w.id, klant_id=w.klant_id, klant_naam=w.klant_naam,
+            code=w.code, uren=w.uren, bedrag=bedrag,
+            factuurnummer=w.factuurnummer,
+            factuur_status=w.factuur_status,
+            factuur_vervaldatum=w.factuur_vervaldatum,
+            status_label=derive_werkdag_status_label(w, today),
+            category=categorize_werkdag(w.code),
+        )
+        werkdagen_by_datum.setdefault(d, []).append(pill)
+
+    # 2. Blockers (user + holidays) for full month
+    last_day = monthrange(jaar, maand)[1]
+    vanaf = _date(jaar, maand, 1)
+    tot = _date(jaar, maand, last_day)
+    blockers = await list_blockers(db_path, vanaf, tot)
+    # Holiday wins over user-blocker for display (per spec)
+    blockers_by_datum: dict[_date, 'Blocker'] = {}
+    for b in blockers:
+        if b.datum in blockers_by_datum:
+            # Already have one — prefer 'holiday' if either is holiday
+            existing = blockers_by_datum[b.datum]
+            if existing.kind != 'holiday' and b.kind == 'holiday':
+                blockers_by_datum[b.datum] = b
+        else:
+            blockers_by_datum[b.datum] = b
+
+    # 3. Patterns + klanten for expected (only if needed)
+    patterns_by_klant: dict[int, list] = {}
+    klanten_by_id: dict[int, object] = {}
+    if include_expected:
+        # alleen_actief=True: gedeactiveerde klanten mogen geen expected
+        # entries genereren (en daarna via confirm_expected echte werkdagen
+        # worden). Codex review B1.
+        klanten = await database.get_klanten(db_path, alleen_actief=True)
+        for k in klanten:
+            klanten_by_id[k.id] = k
+            patterns_by_klant[k.id] = await list_patterns_for_klant(
+                db_path, k.id, include_inactive=False,
+            )
+
+    # 4. Build DagView per day
+    dagen: list[DagView] = []
+    for day in range(1, last_day + 1):
+        d = _date(jaar, maand, day)
+        wd_list = tuple(werkdagen_by_datum.get(d, []))
+        block = blockers_by_datum.get(d)
+        # Expected only when no werkdag, no blocker, and include_expected
+        if include_expected and not wd_list and block is None:
+            expected = _expected_for_datum(d, today, patterns_by_klant, klanten_by_id)
+        else:
+            expected = ()
+        dagen.append(DagView(
+            datum=d, werkdagen=wd_list, expected=expected, blocker=block,
+        ))
+
+    return MaandView(jaar=jaar, maand=maand, dagen=tuple(dagen))
+
+
+async def get_dag(db_path, datum: _date,
+                   include_expected: bool = True) -> DagView:
+    """Single-day view voor inspector-refresh. Wraps get_maand."""
+    view = await get_maand(db_path, datum.year, datum.month, include_expected)
+    for d in view.dagen:
+        if d.datum == datum:
+            return d
+    return DagView(datum=datum, werkdagen=(), expected=(), blocker=None)
 
 
 # ---------------------------------------------------------------------------
