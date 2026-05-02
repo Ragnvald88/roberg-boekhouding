@@ -1073,6 +1073,27 @@ class YearLockedError(ValueError):
     """
 
 
+class ConflictError(ValueError):
+    """Raised when an operation conflicts with current state.
+
+    e.g. confirm_expected on deleted pattern, blocker on existing werkdag,
+    UNIQUE-constraint violation surfaced as user-friendly conflict.
+
+    Subclasses ValueError for backward-compat with existing
+    `except ValueError` catch-sites.
+    """
+
+
+class ValidationError(ValueError):
+    """Raised when user-provided input fails validation rules.
+
+    e.g. invalid weekdays in pattern, eind_minuten <= start_minuten,
+    invalid code value.
+
+    Subclasses ValueError for backward-compat.
+    """
+
+
 async def assert_year_writable(db_path, jaar_or_datum) -> None:
     """Raise YearLockedError if the year is marked 'definitief'.
 
