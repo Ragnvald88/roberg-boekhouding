@@ -9,10 +9,12 @@ Frozen dataclasses for view-objects to keep Swift-port mental model intact.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date as _date
 from typing import Literal
 
-from database import ValidationError
+import database
+from database import ConflictError, ValidationError
 
 # Note: orphan factuurnummer (factuurnummer != '' but factuur_status == '')
 # falls through to 'ongefactureerd' here as defensive fallback. UI-laag
@@ -99,3 +101,120 @@ def parse_weekdays(csv: str) -> list[int]:
     if len(set(parts)) != len(parts):
         raise ValidationError(f"weekdays bevat duplicaten: {parts}")
     return sorted(parts)
+
+
+# ---------------------------------------------------------------------------
+# Pattern CRUD (service-layer wrappers around database.db_*_pattern helpers)
+# ---------------------------------------------------------------------------
+
+# Import CODES from werkdag_form as single source of truth voor toegestane codes.
+from components.werkdag_form import CODES as _WERKDAG_CODES
+
+_VALID_PATTERN_CODES = frozenset(_WERKDAG_CODES.keys())
+
+
+@dataclass(frozen=True)
+class Pattern:
+    """User-facing recurring-pattern view. weekdays is parsed list[int] (vs DB-CSV)."""
+    id: int
+    klant_id: int
+    weekdays: list[int]
+    start_minuten: int
+    eind_minuten: int
+    code: str
+    activiteit: str
+    valid_from: str
+    valid_until: str
+    actief: bool
+
+
+def _validate_pattern_code(code: str) -> None:
+    if code not in _VALID_PATTERN_CODES:
+        raise ValidationError(
+            f"Ongeldige code '{code}'. Toegestaan: {sorted(_VALID_PATTERN_CODES)}"
+        )
+
+
+def _validate_pattern_minuten(start: int, eind: int) -> None:
+    if not (0 <= start < 1440):
+        raise ValidationError(f"start_minuten {start} buiten 0-1439")
+    if not (0 < eind <= 1440):
+        raise ValidationError(f"eind_minuten {eind} buiten 1-1440")
+    if eind <= start:
+        raise ValidationError(f"eind_minuten ({eind}) moet > start_minuten ({start})")
+
+
+def _validate_pattern_weekdays(weekdays: list[int]) -> None:
+    if not weekdays:
+        raise ValidationError("weekdays mag niet leeg zijn")
+    if any(w < 1 or w > 7 for w in weekdays):
+        raise ValidationError(f"weekdays moeten 1-7 zijn, kreeg: {weekdays}")
+    if len(set(weekdays)) != len(weekdays):
+        raise ValidationError(f"weekdays bevat duplicaten: {weekdays}")
+
+
+async def add_pattern(db_path, klant_id: int, weekdays: list[int],
+                      start_minuten: int, eind_minuten: int,
+                      code: str = 'WERKDAG',
+                      activiteit: str = 'Waarneming dagpraktijk',
+                      valid_from: str = '', valid_until: str = '') -> int:
+    """Add new recurring pattern. NIET year-locked (projection-data, not fiscal facts).
+
+    Validates weekdays (1-7, no duplicates, non-empty), minuten range, and code.
+    """
+    _validate_pattern_weekdays(weekdays)
+    _validate_pattern_minuten(start_minuten, eind_minuten)
+    _validate_pattern_code(code)
+    csv = ','.join(str(w) for w in sorted(set(weekdays)))
+    return await database.db_add_pattern(
+        db_path, klant_id=klant_id, weekdays=csv,
+        start_minuten=start_minuten, eind_minuten=eind_minuten,
+        code=code, activiteit=activiteit,
+        valid_from=valid_from, valid_until=valid_until,
+    )
+
+
+async def list_patterns_for_klant(db_path, klant_id: int,
+                                   include_inactive: bool = False) -> list[Pattern]:
+    rows = await database.db_list_patterns_for_klant(
+        db_path, klant_id, include_inactive=include_inactive,
+    )
+    return [
+        Pattern(
+            id=r.id, klant_id=r.klant_id,
+            weekdays=parse_weekdays(r.weekdays),
+            start_minuten=r.start_minuten, eind_minuten=r.eind_minuten,
+            code=r.code, activiteit=r.activiteit,
+            valid_from=r.valid_from, valid_until=r.valid_until,
+            actief=r.actief,
+        ) for r in rows
+    ]
+
+
+async def update_pattern(db_path, pattern_id: int, **fields) -> None:
+    """NIET year-locked. Validates known fields if provided.
+
+    Special handling: if 'weekdays' is in fields as list[int], converts to CSV.
+    Cross-field validation: if start_minuten or eind_minuten changes, fetch
+    existing to verify the resulting (start, eind) pair is valid.
+    """
+    if 'weekdays' in fields:
+        wd = fields['weekdays']
+        if isinstance(wd, list):
+            _validate_pattern_weekdays(wd)
+            fields['weekdays'] = ','.join(str(w) for w in sorted(set(wd)))
+    if 'start_minuten' in fields or 'eind_minuten' in fields:
+        existing = await database.db_get_pattern(db_path, pattern_id)
+        if existing is None:
+            raise ConflictError(f"Pattern {pattern_id} bestaat niet")
+        start = fields.get('start_minuten', existing.start_minuten)
+        eind = fields.get('eind_minuten', existing.eind_minuten)
+        _validate_pattern_minuten(start, eind)
+    if 'code' in fields:
+        _validate_pattern_code(fields['code'])
+    await database.db_update_pattern(db_path, pattern_id, **fields)
+
+
+async def delete_pattern(db_path, pattern_id: int) -> None:
+    """Soft delete: SET actief=0. NIET year-locked. Idempotent."""
+    await database.db_delete_pattern_soft(db_path, pattern_id)

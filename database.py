@@ -1380,6 +1380,112 @@ async def get_werkdagen_met_factuur_status(
     ]
 
 
+# ---------------------------------------------------------------------------
+# Recurring patterns (klant_recurring_patterns) — projectie-data, niet year-locked
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class RecurringPattern:
+    id: int
+    klant_id: int
+    weekdays: str          # CSV "1,3,5"
+    start_minuten: int
+    eind_minuten: int
+    code: str
+    activiteit: str
+    valid_from: str
+    valid_until: str
+    actief: bool
+
+
+async def db_add_pattern(db_path: Path, klant_id: int, weekdays: str,
+                          start_minuten: int, eind_minuten: int,
+                          code: str = 'WERKDAG',
+                          activiteit: str = 'Waarneming dagpraktijk',
+                          valid_from: str = '', valid_until: str = '') -> int:
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            """INSERT INTO klant_recurring_patterns
+               (klant_id, weekdays, start_minuten, eind_minuten,
+                code, activiteit, valid_from, valid_until)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id""",
+            (klant_id, weekdays, start_minuten, eind_minuten,
+             code, activiteit, valid_from, valid_until),
+        )
+        row = await cur.fetchone()
+        await conn.commit()
+    return row[0]
+
+
+async def db_list_patterns_for_klant(db_path: Path, klant_id: int,
+                                      include_inactive: bool = False) -> list[RecurringPattern]:
+    where = "WHERE klant_id = ?"
+    args: list = [klant_id]
+    if not include_inactive:
+        where += " AND actief = 1"
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            f"""SELECT id, klant_id, weekdays, start_minuten, eind_minuten,
+                       code, activiteit, valid_from, valid_until, actief
+                FROM klant_recurring_patterns {where}
+                ORDER BY id""",
+            args,
+        )
+        rows = await cur.fetchall()
+    return [
+        RecurringPattern(
+            id=r[0], klant_id=r[1], weekdays=r[2],
+            start_minuten=r[3], eind_minuten=r[4],
+            code=r[5], activiteit=r[6],
+            valid_from=r[7], valid_until=r[8],
+            actief=bool(r[9]),
+        ) for r in rows
+    ]
+
+
+async def db_get_pattern(db_path: Path, pattern_id: int) -> 'RecurringPattern | None':
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            """SELECT id, klant_id, weekdays, start_minuten, eind_minuten,
+                       code, activiteit, valid_from, valid_until, actief
+                FROM klant_recurring_patterns WHERE id = ?""",
+            (pattern_id,),
+        )
+        r = await cur.fetchone()
+    if not r:
+        return None
+    return RecurringPattern(
+        id=r[0], klant_id=r[1], weekdays=r[2],
+        start_minuten=r[3], eind_minuten=r[4],
+        code=r[5], activiteit=r[6],
+        valid_from=r[7], valid_until=r[8],
+        actief=bool(r[9]),
+    )
+
+
+async def db_update_pattern(db_path: Path, pattern_id: int, **fields) -> None:
+    if not fields:
+        return
+    cols = ', '.join(f"{k} = ?" for k in fields)
+    args = list(fields.values()) + [pattern_id]
+    async with get_db_ctx(db_path) as conn:
+        await conn.execute(
+            f"UPDATE klant_recurring_patterns SET {cols} WHERE id = ?",
+            args,
+        )
+        await conn.commit()
+
+
+async def db_delete_pattern_soft(db_path: Path, pattern_id: int) -> None:
+    async with get_db_ctx(db_path) as conn:
+        await conn.execute(
+            "UPDATE klant_recurring_patterns SET actief = 0 WHERE id = ?",
+            (pattern_id,),
+        )
+        await conn.commit()
+
+
 async def add_werkdag(db_path: Path = DB_PATH, **kwargs) -> int:
     _validate_datum(kwargs['datum'])
     await assert_year_writable(db_path, kwargs['datum'])
