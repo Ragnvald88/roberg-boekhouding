@@ -89,6 +89,31 @@ def derive_werkdag_status_label(werkdag, today: _date) -> WerkdagStatusLabel:
     return 'ongefactureerd'
 
 
+def compute_overdue_days(werkdag, today: _date) -> int:
+    """Days past vervaldatum, alleen wanneer factuur 'verstuurd' is. Pure function.
+
+    werkdag must have attributes factuur_status + factuur_vervaldatum.
+    Returns 0 voor concept (geen vervaldatum-discipline), betaald (al voldaan),
+    ongefactureerd (geen factuur), of als vervaldatum >= today (nog niet over).
+
+    Spiegelt de semantiek van derive_werkdag_status_label('verlopen'): alleen
+    'verstuurd' + verval < today telt als verlopen. Codex review: zonder deze
+    status-gating zou een betaald-met-late-betaling-factuur (vervaldatum < today
+    maar betaald_datum > vervaldatum) onterecht overdue_days > 0 krijgen.
+    """
+    if werkdag.factuur_status != 'verstuurd':
+        return 0
+    if not werkdag.factuur_vervaldatum:
+        return 0
+    try:
+        verval = _date.fromisoformat(werkdag.factuur_vervaldatum)
+    except ValueError:
+        return 0
+    if verval >= today:
+        return 0
+    return (today - verval).days
+
+
 def parse_weekdays(csv: str) -> list[int]:
     """Parse weekdays CSV ("1,3,5") to sorted unique list of ints 1-7.
 
@@ -178,11 +203,17 @@ async def add_pattern(db_path, klant_id: int, weekdays: list[int],
 
 
 async def list_patterns_for_klant(db_path, klant_id: int,
-                                   include_inactive: bool = False) -> list[Pattern]:
+                                   include_inactive: bool = False) -> tuple[Pattern, ...]:
+    """Returns immutable tuple voor Swift-port-friendly value-types.
+
+    Consistent met get_zes_weken_prognose / MaandView.dagen die ook tuples
+    teruggeven. Comparisons met `== []` blijven werken niet — caller moet
+    `== ()` gebruiken; dat staat in de tests.
+    """
     rows = await database.db_list_patterns_for_klant(
         db_path, klant_id, include_inactive=include_inactive,
     )
-    return [
+    return tuple(
         Pattern(
             id=r.id, klant_id=r.klant_id,
             weekdays=tuple(parse_weekdays(r.weekdays)),
@@ -191,7 +222,7 @@ async def list_patterns_for_klant(db_path, klant_id: int,
             valid_from=r.valid_from, valid_until=r.valid_until,
             actief=r.actief,
         ) for r in rows
-    ]
+    )
 
 
 async def update_pattern(db_path, pattern_id: int, **fields) -> None:
@@ -322,12 +353,15 @@ async def delete_blocker(db_path, blocker_id: int) -> None:
     await database.db_delete_blocker(db_path, blocker_id)
 
 
-async def list_blockers(db_path, vanaf: _date, tot: _date) -> list[Blocker]:
-    """User-blockers + computed Dutch holidays merged in one list.
+async def list_blockers(db_path, vanaf: _date, tot: _date) -> tuple[Blocker, ...]:
+    """User-blockers + computed Dutch holidays merged in one tuple.
 
     User-blockers and holidays may both be present on the same date —
     UI-laag decides display priority. Sorted by datum, then by kind
     (deterministic). Holidays have id=None.
+
+    Returns tuple voor consistency met de andere immutable view-types
+    in dit module (Swift-port-friendly value-types).
     """
     user_rows = await database.db_list_blockers(
         db_path, vanaf.isoformat(), tot.isoformat(),
@@ -344,7 +378,7 @@ async def list_blockers(db_path, vanaf: _date, tot: _date) -> list[Blocker]:
                 out.append(Blocker(id=None, datum=h.datum,
                                    kind='holiday', label=h.label))
     out.sort(key=lambda b: (b.datum, b.kind))
-    return out
+    return tuple(out)
 
 
 # ---------------------------------------------------------------------------
@@ -363,7 +397,12 @@ def _iso_weekday(d: _date) -> int:
 
 @dataclass(frozen=True)
 class WerkdagPill:
-    """Bevestigde werkdag + factuur-status + categorie voor MonthGrid rendering."""
+    """Bevestigde werkdag + factuur-status + categorie voor MonthGrid rendering.
+
+    factuur_id en factuur_betaald_datum dragen door uit WerkdagMetStatus voor
+    Day-Inspector deep-links / "betaald op X"-display. overdue_days is een
+    pure derivation uit factuur_vervaldatum (zie compute_overdue_days).
+    """
     id: int
     klant_id: int
     klant_naam: str
@@ -371,8 +410,11 @@ class WerkdagPill:
     uren: float
     bedrag: float
     factuurnummer: str
+    factuur_id: int | None
     factuur_status: str
     factuur_vervaldatum: str
+    factuur_betaald_datum: str
+    overdue_days: int
     status_label: WerkdagStatusLabel
     category: WerkdagCategory
 
@@ -499,8 +541,11 @@ async def get_maand(db_path, jaar: int, maand: int,
             id=w.id, klant_id=w.klant_id, klant_naam=w.klant_naam,
             code=w.code, uren=w.uren, bedrag=bedrag,
             factuurnummer=w.factuurnummer,
+            factuur_id=w.factuur_id,
             factuur_status=w.factuur_status,
             factuur_vervaldatum=w.factuur_vervaldatum,
+            factuur_betaald_datum=w.factuur_betaald_datum,
+            overdue_days=compute_overdue_days(w, today),
             status_label=derive_werkdag_status_label(w, today),
             category=categorize_werkdag(w.code),
         )
@@ -745,6 +790,22 @@ async def get_urencriterium_projectie(db_path, jaar: int) -> UrencriteriumState:
 # confirm_expected — promote virtual rooster-entry → real werkdag
 # ---------------------------------------------------------------------------
 
+async def _get_km_tarief_for_year(db_path, jaar: int) -> float:
+    """Look up km_tarief from fiscale_params; fallback 0.23 only if no row exists.
+
+    NOT a fiscal calculation — just reusing existing fiscal-config for the
+    confirm_expected default. User can always override per werkdag in the form.
+
+    Uses `is not None` check (not truthiness) — codex review caught dat
+    `km_tarief=0.0` legitiem is (geen km-vergoeding configured) en niet mag
+    silent-default-en naar 0.23.
+    """
+    fp = await database.get_fiscale_params(db_path, jaar)
+    if fp is not None and getattr(fp, 'km_tarief', None) is not None:
+        return float(fp.km_tarief)
+    return 0.23  # last-resort default — only when no fiscale_params row exists
+
+
 async def confirm_expected(
     db_path,
     pattern_id: int,
@@ -765,6 +826,8 @@ async def confirm_expected(
     de gebruiker kan via /werkdagen handmatig wijzigen indien gewenst.
 
     Race-protected: pattern_id moet bestaan AND actief=1, anders ConflictError.
+    De idempotency-check + insert draaien onder BEGIN IMMEDIATE (write-lock) zodat
+    parallel asyncio.gather(N×confirm_expected(...)) niet N werkdagen creëert.
 
     Tijden: start/eind_minuten None = pattern-defaults. Beide moeten valid zijn
     (eind > start, in 0-1440 range) anders ValidationError.
@@ -772,11 +835,12 @@ async def confirm_expected(
     Klant-data (tarief, retour_km, adres) komt uit klanten-row op moment van
     bevestigen — NIET uit pattern (pattern is rooster-template).
     urennorm: 0 voor ACHTERWACHT/ZERO_UREN_CODES, 1 voor de rest.
+    km_tarief: uit fiscale_params voor het jaar; fallback 0.23 als geen rij bestaat.
 
     Raises:
         ConflictError: pattern niet bestaat / inactief, blocker bestaat al op datum,
                        of klant verwijderd
-        YearLockedError: datum in afgesloten jaar (via add_werkdag delegate)
+        YearLockedError: datum in afgesloten jaar (pre-flight check vóór BEGIN IMMEDIATE)
         ValidationError: invalid tijden
     """
     pattern = await database.db_get_pattern(db_path, pattern_id)
@@ -798,18 +862,11 @@ async def confirm_expected(
             f"verwijder de blocker eerst."
         )
 
-    # Idempotency check: bestaande werkdag op (klant, datum)?
-    async with database.get_db_ctx(db_path) as conn:
-        cur = await conn.execute(
-            "SELECT id FROM werkdagen WHERE datum = ? AND klant_id = ? "
-            "ORDER BY id LIMIT 1",
-            (datum_str, pattern.klant_id),
-        )
-        existing = await cur.fetchone()
-    if existing:
-        return existing[0]
+    # Year-lock pre-flight (no DB write here; YearLockedError is reproducible
+    # so racing this is harmless — both racers see the same lock state).
+    await database.assert_year_writable(db_path, datum_str)
 
-    # Resolve fields with optional overrides
+    # Resolve override fields BEFORE acquiring write-lock (validation can fast-fail).
     start = start_minuten if start_minuten is not None else pattern.start_minuten
     eind = eind_minuten if eind_minuten is not None else pattern.eind_minuten
     _validate_pattern_minuten(start, eind)
@@ -821,20 +878,38 @@ async def confirm_expected(
         raise ConflictError(f"Klant {pattern.klant_id} bestaat niet meer.")
 
     urennorm = 0 if pattern.code in _ZERO_UREN_CODES or pattern.code == 'ACHTERWACHT' else 1
+    km_tarief = await _get_km_tarief_for_year(db_path, datum.year)
 
-    # add_werkdag does year-lock validation + INSERT
-    return await database.add_werkdag(
-        db_path,
-        datum=datum_str,
-        klant_id=pattern.klant_id,
-        code=pattern.code,
-        activiteit=act,
-        locatie=klant.adres or '',
-        locatie_id=None,
-        uren=uren,
-        km=klant.retour_km or 0,
-        tarief=klant.tarief_uur,
-        km_tarief=0.23,
-        urennorm=urennorm,
-        opmerking='',
-    )
+    # Atomic check-and-insert via BEGIN IMMEDIATE (write-lock).
+    # Voorkomt race waarbij parallel asyncio.gather meerdere werkdagen aanmaakt:
+    # alle racers die de write-lock niet als eerste krijgen, zien de zojuist
+    # ingevoegde rij in hun SELECT en returnen het bestaande id. Year-lock is
+    # al pre-flight gecheckt — we duplicate die check niet binnen de transactie.
+    async with database.get_db_ctx(db_path) as conn:
+        await conn.execute("BEGIN IMMEDIATE")
+        try:
+            cur = await conn.execute(
+                "SELECT id FROM werkdagen WHERE datum = ? AND klant_id = ? "
+                "ORDER BY id LIMIT 1",
+                (datum_str, pattern.klant_id),
+            )
+            existing = await cur.fetchone()
+            if existing:
+                await conn.execute("ROLLBACK")
+                return existing[0]
+            cur = await conn.execute(
+                """INSERT INTO werkdagen
+                   (datum, klant_id, code, activiteit, locatie, uren, km,
+                    tarief, km_tarief, factuurnummer, opmerking, urennorm,
+                    locatie_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (datum_str, pattern.klant_id, pattern.code, act,
+                 klant.adres or '', uren, klant.retour_km or 0,
+                 klant.tarief_uur, km_tarief, '', '', urennorm, None),
+            )
+            werkdag_id = cur.lastrowid
+            await conn.execute("COMMIT")
+            return werkdag_id
+        except Exception:
+            await conn.execute("ROLLBACK")
+            raise

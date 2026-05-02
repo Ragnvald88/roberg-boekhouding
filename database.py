@@ -92,6 +92,10 @@ class WerkdagMetStatus:
     convention). Empty string if werkdag is ongefactureerd. The vervaldatum
     is not stored on the facturen-table — Task 2.2's
     derive_werkdag_status_label uses this computed value to flag verlopen.
+
+    factuur_id en factuur_betaald_datum dienen de Day-Inspector (Sessie 3.4):
+    factuur_id voor "navigeer naar factuur" deep-links, factuur_betaald_datum
+    voor "betaald op X"-display.
     """
     id: int
     datum: str
@@ -104,8 +108,10 @@ class WerkdagMetStatus:
     tarief: float
     km_tarief: float
     factuurnummer: str             # '' = ongefactureerd
+    factuur_id: int | None         # None if no factuur
     factuur_datum: str             # '' if no factuur, else YYYY-MM-DD
     factuur_status: str            # '' | 'concept' | 'verstuurd' | 'betaald'
+    factuur_betaald_datum: str     # '' if not paid, else YYYY-MM-DD
     factuur_vervaldatum: str = field(init=False, default='')  # derived; see __post_init__
 
     def __post_init__(self):
@@ -1367,8 +1373,10 @@ async def get_werkdagen_met_factuur_status(
             w.id, w.datum, w.klant_id, k.naam,
             w.code, w.activiteit, w.uren, w.km, w.tarief, w.km_tarief,
             COALESCE(w.factuurnummer, '') AS factuurnummer,
+            f.id AS factuur_id,
             COALESCE(f.datum, '') AS factuur_datum,
-            COALESCE(f.status, '') AS factuur_status
+            COALESCE(f.status, '') AS factuur_status,
+            COALESCE(f.betaald_datum, '') AS factuur_betaald_datum
         FROM werkdagen w
         JOIN klanten k ON k.id = w.klant_id
         LEFT JOIN facturen f
@@ -1393,8 +1401,10 @@ async def get_werkdagen_met_factuur_status(
             tarief=r[8] or 0.0,
             km_tarief=r[9] or 0.0,
             factuurnummer=r[10],
-            factuur_datum=r[11],
-            factuur_status=r[12],
+            factuur_id=r[11],
+            factuur_datum=r[12],
+            factuur_status=r[13],
+            factuur_betaald_datum=r[14],
         )
         for r in rows
     ]
@@ -1444,12 +1454,16 @@ async def db_list_patterns_for_klant(db_path: Path, klant_id: int,
     args: list = [klant_id]
     if not include_inactive:
         where += " AND actief = 1"
+    # SQL f-string is safe here: `where` is a literal string fragment built
+    # from a hardcoded boolean toggle — no user input ever flows into it.
+    # Keep noqa comment so future linters don't autofix this into a broken
+    # parameterised form (column-list / table-name can't be parameterised).
     async with get_db_ctx(db_path) as conn:
         cur = await conn.execute(
             f"""SELECT id, klant_id, weekdays, start_minuten, eind_minuten,
                        code, activiteit, valid_from, valid_until, actief
                 FROM klant_recurring_patterns {where}
-                ORDER BY id""",
+                ORDER BY id""",  # noqa: S608
             args,
         )
         rows = await cur.fetchall()
@@ -1496,11 +1510,15 @@ async def db_update_pattern(db_path: Path, pattern_id: int, **fields) -> None:
     bad = set(fields) - _PATTERN_UPDATE_FIELDS
     if bad:
         raise ValueError(f"Onbekende velden voor pattern update: {sorted(bad)}")
+    # SQL f-string is safe here: column names come from `_PATTERN_UPDATE_FIELDS`
+    # whitelist (loud-failing on unknown keys above) — fields-dict keys cannot
+    # contain attacker-controlled SQL. Keep noqa so future linters don't try
+    # to autofix this (column-names can't be SQL-parameterised).
     cols = ', '.join(f"{k} = ?" for k in fields)
     args = list(fields.values()) + [pattern_id]
     async with get_db_ctx(db_path) as conn:
         await conn.execute(
-            f"UPDATE klant_recurring_patterns SET {cols} WHERE id = ?",
+            f"UPDATE klant_recurring_patterns SET {cols} WHERE id = ?",  # noqa: S608
             args,
         )
         await conn.commit()

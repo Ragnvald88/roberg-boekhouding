@@ -181,7 +181,9 @@ def test_werkdag_met_status_replace_clears_vervaldatum():
     w1 = database.WerkdagMetStatus(
         id=1, datum='2026-05-04', klant_id=1, klant_naam='X',
         code='WERKDAG', activiteit='', uren=8, km=0, tarief=80, km_tarief=0.23,
-        factuurnummer='2026-001', factuur_datum='2026-05-01', factuur_status='concept',
+        factuurnummer='2026-001', factuur_id=42,
+        factuur_datum='2026-05-01', factuur_status='concept',
+        factuur_betaald_datum='',
     )
     assert w1.factuur_vervaldatum == '2026-05-15'
     w2 = dataclasses.replace(w1, factuur_datum='2026-06-10')

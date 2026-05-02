@@ -55,7 +55,7 @@ async def test_pattern_list_excludes_inactive_by_default(db_with_klant):
     )
     await svc.delete_pattern(db_with_klant, pid)  # soft-delete
     active = await svc.list_patterns_for_klant(db_with_klant, klant_id=1)
-    assert active == []
+    assert active == ()  # I2 fix: tuple-return for Swift-port-friendly value-types
     all_patterns = await svc.list_patterns_for_klant(
         db_with_klant, klant_id=1, include_inactive=True,
     )
@@ -1049,3 +1049,204 @@ async def test_urencriterium_includes_future_planned_werkdagen(db_with_klant, mo
     state = await svc.get_urencriterium_projectie(db_with_klant, jaar=2026)
     # Beide tellen — confirmed = 200 + 100 = 300
     assert state.confirmed_uren == pytest.approx(300.0)
+
+
+# ---- Codex audit foundation-fixes (Sprint A pre-Sessie 3) ----
+
+@pytest.mark.asyncio
+async def test_confirm_expected_atomic_under_parallel_calls(db_with_klant):
+    """Codex regression: parallel asyncio.gather(5x confirm) must NOT create 5 werkdagen.
+
+    BEGIN IMMEDIATE wraps SELECT-or-INSERT atomically; racers see the just-
+    inserted row and return its id instead of double-inserting.
+    """
+    import asyncio
+    pid = await _add_test_pattern(db_with_klant)
+    results = await asyncio.gather(
+        *[svc.confirm_expected(db_with_klant, pid, date(2026, 5, 4)) for _ in range(5)],
+        return_exceptions=True,
+    )
+    # Alle moeten succeed (geen exceptions) en zelfde werkdag.id returnen
+    assert all(isinstance(r, int) for r in results), f"Got exceptions: {results}"
+    assert len(set(results)) == 1, f"Expected single werkdag.id, got {set(results)}"
+    # En slechts 1 werkdag in DB
+    async with aiosqlite.connect(db_with_klant) as conn:
+        cur = await conn.execute("SELECT COUNT(*) FROM werkdagen")
+        count = (await cur.fetchone())[0]
+    assert count == 1
+
+
+@pytest.mark.asyncio
+async def test_confirm_expected_uses_fiscale_km_tarief(db_with_klant):
+    """km_tarief uit fiscale_params overrules hardcoded 0.23."""
+    async with aiosqlite.connect(db_with_klant) as conn:
+        await conn.execute(
+            "INSERT INTO fiscale_params (jaar, km_tarief) VALUES (2026, 0.30)"
+        )
+        await conn.commit()
+    pid = await _add_test_pattern(db_with_klant)
+    werkdag_id = await svc.confirm_expected(
+        db_with_klant, pattern_id=pid, datum=date(2026, 5, 4),
+    )
+    async with aiosqlite.connect(db_with_klant) as conn:
+        cur = await conn.execute(
+            "SELECT km_tarief FROM werkdagen WHERE id = ?", (werkdag_id,),
+        )
+        kmt = (await cur.fetchone())[0]
+    assert kmt == pytest.approx(0.30)
+
+
+@pytest.mark.asyncio
+async def test_confirm_expected_respects_explicit_zero_km_tarief(db_with_klant):
+    """Codex regression: fiscale_params.km_tarief=0.0 mag NIET silent fallback
+    naar 0.23 doen. Truthiness-bug → is-not-None-check."""
+    async with aiosqlite.connect(db_with_klant) as conn:
+        await conn.execute(
+            "INSERT INTO fiscale_params (jaar, km_tarief) VALUES (2026, 0.0)"
+        )
+        await conn.commit()
+    pid = await _add_test_pattern(db_with_klant)
+    werkdag_id = await svc.confirm_expected(
+        db_with_klant, pattern_id=pid, datum=date(2026, 5, 4),
+    )
+    async with aiosqlite.connect(db_with_klant) as conn:
+        cur = await conn.execute(
+            "SELECT km_tarief FROM werkdagen WHERE id = ?", (werkdag_id,),
+        )
+        kmt = (await cur.fetchone())[0]
+    assert kmt == 0.0  # explicitly 0, not 0.23 fallback
+
+
+@pytest.mark.asyncio
+async def test_confirm_expected_falls_back_to_023_when_no_fiscale_params(db_with_klant):
+    """Geen fiscale_params row → fallback 0.23."""
+    pid = await _add_test_pattern(db_with_klant)
+    werkdag_id = await svc.confirm_expected(
+        db_with_klant, pattern_id=pid, datum=date(2026, 5, 4),
+    )
+    async with aiosqlite.connect(db_with_klant) as conn:
+        cur = await conn.execute(
+            "SELECT km_tarief FROM werkdagen WHERE id = ?", (werkdag_id,),
+        )
+        kmt = (await cur.fetchone())[0]
+    assert kmt == pytest.approx(0.23)
+
+
+@pytest.mark.asyncio
+async def test_werkdag_pill_includes_factuur_id_and_betaald_datum(db_with_klant, monkeypatch):
+    """Day-Inspector needs factuur_id (deep-link) + betaald_datum (display)."""
+    monkeypatch.setattr(svc, '_today', lambda: date(2026, 5, 13))
+    async with aiosqlite.connect(db_with_klant) as conn:
+        await conn.execute(
+            "INSERT INTO facturen (id, nummer, klant_id, datum, totaal_bedrag, "
+            "betaald, status, betaald_datum) "
+            "VALUES (42, '2026-001', 1, '2026-05-04', 800, 1, 'betaald', '2026-05-15')"
+        )
+        await conn.execute(
+            "INSERT INTO werkdagen (datum, klant_id, code, uren, tarief, factuurnummer) "
+            "VALUES ('2026-05-04', 1, 'WERKDAG', 8, 80, '2026-001')"
+        )
+        await conn.commit()
+    view = await svc.get_maand(db_with_klant, jaar=2026, maand=5)
+    by_date = {d.datum: d for d in view.dagen}
+    pill = by_date[date(2026, 5, 4)].werkdagen[0]
+    assert pill.factuur_id == 42
+    assert pill.factuur_betaald_datum == '2026-05-15'
+    assert pill.overdue_days == 0  # betaald, niet overdue
+
+
+@pytest.mark.asyncio
+async def test_werkdag_pill_overdue_days_correct(db_with_klant, monkeypatch):
+    """Verlopen factuur surfaces (today - vervaldatum).days."""
+    monkeypatch.setattr(svc, '_today', lambda: date(2026, 5, 30))
+    async with aiosqlite.connect(db_with_klant) as conn:
+        await conn.execute(
+            "INSERT INTO facturen (nummer, klant_id, datum, totaal_bedrag, "
+            "betaald, status) "
+            "VALUES ('2026-001', 1, '2026-05-01', 800, 0, 'verstuurd')"
+        )
+        # Vervaldatum = 2026-05-01 + 14d = 2026-05-15. Today=2026-05-30 → 15 dagen te laat
+        await conn.execute(
+            "INSERT INTO werkdagen (datum, klant_id, code, uren, tarief, factuurnummer) "
+            "VALUES ('2026-05-04', 1, 'WERKDAG', 8, 80, '2026-001')"
+        )
+        await conn.commit()
+    view = await svc.get_maand(db_with_klant, jaar=2026, maand=5)
+    by_date = {d.datum: d for d in view.dagen}
+    pill = by_date[date(2026, 5, 4)].werkdagen[0]
+    assert pill.status_label == 'verlopen'
+    assert pill.overdue_days == 15
+
+
+@pytest.mark.asyncio
+async def test_werkdag_pill_factuur_id_none_for_ongefactureerd(db_with_klant, monkeypatch):
+    """Ongefactureerde werkdag → factuur_id is None (LEFT JOIN miss)."""
+    monkeypatch.setattr(svc, '_today', lambda: date(2026, 5, 13))
+    async with aiosqlite.connect(db_with_klant) as conn:
+        await conn.execute(
+            "INSERT INTO werkdagen (datum, klant_id, code, uren, tarief) "
+            "VALUES ('2026-05-04', 1, 'WERKDAG', 8, 80)"
+        )
+        await conn.commit()
+    view = await svc.get_maand(db_with_klant, jaar=2026, maand=5)
+    by_date = {d.datum: d for d in view.dagen}
+    pill = by_date[date(2026, 5, 4)].werkdagen[0]
+    assert pill.factuur_id is None
+    assert pill.factuur_betaald_datum == ''
+    assert pill.overdue_days == 0
+
+
+def test_compute_overdue_days_pure_helper():
+    """Pure-function unit tests — no DB."""
+    from types import SimpleNamespace
+    today = date(2026, 5, 30)
+    verstuurd = lambda v: SimpleNamespace(  # noqa: E731
+        factuur_status='verstuurd', factuur_vervaldatum=v,
+    )
+    # No vervaldatum → 0
+    assert svc.compute_overdue_days(verstuurd(''), today) == 0
+    # Vervaldatum in future → 0
+    assert svc.compute_overdue_days(verstuurd('2026-06-15'), today) == 0
+    # Vervaldatum exactly today → 0 (not yet overdue)
+    assert svc.compute_overdue_days(verstuurd('2026-05-30'), today) == 0
+    # Vervaldatum in past → days delta
+    assert svc.compute_overdue_days(verstuurd('2026-05-15'), today) == 15
+    # Invalid date string → 0 (defensive)
+    assert svc.compute_overdue_days(verstuurd('garbage'), today) == 0
+    # Codex-fix: status != 'verstuurd' → 0 ongeacht vervaldatum
+    assert svc.compute_overdue_days(
+        SimpleNamespace(factuur_status='betaald', factuur_vervaldatum='2026-05-15'),
+        today,
+    ) == 0
+    assert svc.compute_overdue_days(
+        SimpleNamespace(factuur_status='concept', factuur_vervaldatum='2026-05-15'),
+        today,
+    ) == 0
+    assert svc.compute_overdue_days(
+        SimpleNamespace(factuur_status='', factuur_vervaldatum=''),
+        today,
+    ) == 0
+
+
+@pytest.mark.asyncio
+async def test_list_patterns_for_klant_returns_tuple(db_with_klant):
+    """I2: list_patterns_for_klant returns immutable tuple (Swift-port-friendly)."""
+    await svc.add_pattern(
+        db_with_klant, klant_id=1, weekdays=[1],
+        start_minuten=480, eind_minuten=1020,
+    )
+    result = await svc.list_patterns_for_klant(db_with_klant, klant_id=1)
+    assert isinstance(result, tuple)
+    # Empty case is also tuple
+    empty = await svc.list_patterns_for_klant(db_with_klant, klant_id=999)
+    assert empty == ()
+    assert isinstance(empty, tuple)
+
+
+@pytest.mark.asyncio
+async def test_list_blockers_returns_tuple(db_with_klant):
+    """I2: list_blockers returns immutable tuple (Swift-port-friendly)."""
+    result = await svc.list_blockers(
+        db_with_klant, vanaf=date(2026, 5, 1), tot=date(2026, 5, 31),
+    )
+    assert isinstance(result, tuple)
