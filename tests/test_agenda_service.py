@@ -864,3 +864,162 @@ async def test_get_maand_expected_includes_km_vergoeding(db_with_klant, fake_tod
     expected = by_date[date(2026, 5, 4)].expected[0]
     # 9 * 80 + 40 * 0.23 = 720 + 9.20 = 729.20
     assert expected.bedrag == pytest.approx(9 * 80 + 40 * 0.23)
+
+
+# ---- 6-weken prognose ----
+
+@pytest.mark.asyncio
+async def test_zes_weken_prognose_returns_6_weeks(db_with_klant, fake_today_2026_05_01):
+    pid = await _add_test_pattern(db_with_klant)
+    weeks = await svc.get_zes_weken_prognose(
+        db_with_klant, vanaf=date(2026, 5, 13),
+    )
+    assert len(weeks) == 6
+    # Eerste week start op de Maandag van vanaf-week (11 mei)
+    assert weeks[0].week_start == date(2026, 5, 11)
+    assert weeks[0].week_nummer == 20  # ISO week 20
+    # Laatste week begint 6 weken later
+    assert weeks[5].week_start == date(2026, 6, 15)
+
+
+@pytest.mark.asyncio
+async def test_zes_weken_prognose_aggregates_expected(db_with_klant, fake_today_2026_05_01):
+    """Pattern Ma+Wo, 9u/dag, klant.tarief_uur=80 -> expected per week:
+    2 dagen x 9u x 80EUR = 1440EUR."""
+    pid = await _add_test_pattern(db_with_klant)
+    weeks = await svc.get_zes_weken_prognose(
+        db_with_klant, vanaf=date(2026, 5, 13),
+    )
+    # Week 20 (11-17 mei): Ma 11 mei + Wo 13 mei - beide toekomstig vanaf today=1 mei
+    w0 = weeks[0]
+    # confirmed = 0, planned irrelevant in deze app, expected = 2 dagen
+    assert w0.expected_dagen == 2
+    assert w0.expected_uren == pytest.approx(18.0)
+
+
+@pytest.mark.asyncio
+async def test_zes_weken_prognose_includes_confirmed_werkdagen(db_with_klant, fake_today_2026_05_01):
+    """Bevestigde werkdagen in toekomst tellen als confirmed."""
+    async with aiosqlite.connect(db_with_klant) as conn:
+        # Werkdag op 13 mei 2026 (week 20) - toekomstig
+        await conn.execute(
+            "INSERT INTO werkdagen (datum, klant_id, code, uren, tarief, urennorm) "
+            "VALUES ('2026-05-13', 1, 'WERKDAG', 9, 80, 1)"
+        )
+        await conn.commit()
+    weeks = await svc.get_zes_weken_prognose(
+        db_with_klant, vanaf=date(2026, 5, 13),
+    )
+    w0 = weeks[0]
+    assert w0.confirmed_uren == pytest.approx(9.0)
+    assert w0.confirmed_amt == pytest.approx(720.0)
+
+
+@pytest.mark.asyncio
+async def test_zes_weken_prognose_blocker_counted(db_with_klant, fake_today_2026_05_01):
+    """Blocker dagen in week-bereik tellen als blocked_dagen."""
+    await svc.add_blocker(
+        db_with_klant, datum=date(2026, 5, 14),
+        kind='vacation', label='Vakantie',
+    )
+    weeks = await svc.get_zes_weken_prognose(
+        db_with_klant, vanaf=date(2026, 5, 13),
+    )
+    # Week 20 (11-17 mei): 14 mei is blocker
+    w0 = weeks[0]
+    assert w0.blocked_dagen >= 1
+
+
+# ---- urencriterium-projectie ----
+
+@pytest.mark.asyncio
+async def test_urencriterium_projectie_basic(db_with_klant, monkeypatch):
+    """Bevestigde uren YTD + verwachte uren tot jaar-eind."""
+    # Pin today to 13 mei 2026 — patch via svc reference (same module object
+    # used by get_urencriterium_projectie via globals lookup).
+    monkeypatch.setattr(svc, '_today', lambda: date(2026, 5, 13))
+    async with aiosqlite.connect(db_with_klant) as conn:
+        await conn.execute(
+            "INSERT INTO werkdagen (datum, klant_id, code, uren, tarief, urennorm) "
+            "VALUES ('2026-04-15', 1, 'WERKDAG', 8, 80, 1)"
+        )
+        await conn.execute(
+            "INSERT INTO werkdagen (datum, klant_id, code, uren, tarief, urennorm) "
+            "VALUES ('2026-04-22', 1, 'WERKDAG', 9, 80, 1)"
+        )
+        await conn.commit()
+    state = await svc.get_urencriterium_projectie(db_with_klant, jaar=2026)
+    assert state.confirmed_uren == pytest.approx(17.0)
+    assert state.target == 1225.0
+    assert state.jaar == 2026
+
+
+@pytest.mark.asyncio
+async def test_urencriterium_excludes_urennorm_zero(db_with_klant, monkeypatch):
+    """ACHTERWACHT/CONGRES (urennorm=0) telt NIET mee voor 1225-eis."""
+    monkeypatch.setattr(svc, '_today', lambda: date(2026, 5, 13))
+    async with aiosqlite.connect(db_with_klant) as conn:
+        await conn.execute(
+            "INSERT INTO werkdagen (datum, klant_id, code, uren, tarief, urennorm) "
+            "VALUES ('2026-04-15', 1, 'ACHTERWACHT', 12, 0, 0)"
+        )
+        await conn.commit()
+    state = await svc.get_urencriterium_projectie(db_with_klant, jaar=2026)
+    assert state.confirmed_uren == 0.0
+
+
+@pytest.mark.asyncio
+async def test_urencriterium_uses_fiscale_params_target_if_present(db_with_klant, monkeypatch):
+    """Custom urencriterium uit fiscale_params overrules default 1225."""
+    monkeypatch.setattr(svc, '_today', lambda: date(2026, 5, 13))
+    async with aiosqlite.connect(db_with_klant) as conn:
+        await conn.execute(
+            "INSERT INTO fiscale_params (jaar, urencriterium) VALUES (2026, 1500)"
+        )
+        await conn.commit()
+    state = await svc.get_urencriterium_projectie(db_with_klant, jaar=2026)
+    assert state.target == 1500.0
+
+
+@pytest.mark.asyncio
+async def test_urencriterium_will_make_true_if_projected_above_target(db_with_klant, monkeypatch):
+    monkeypatch.setattr(svc, '_today', lambda: date(2026, 12, 30))
+    async with aiosqlite.connect(db_with_klant) as conn:
+        await conn.execute(
+            "INSERT INTO werkdagen (datum, klant_id, code, uren, tarief, urennorm) "
+            "VALUES ('2026-06-01', 1, 'WERKDAG', 1300, 80, 1)"
+        )
+        await conn.commit()
+    state = await svc.get_urencriterium_projectie(db_with_klant, jaar=2026)
+    assert state.confirmed_uren == 1300.0
+    assert state.will_make is True
+
+
+@pytest.mark.asyncio
+async def test_urencriterium_will_make_false_if_short(db_with_klant, monkeypatch):
+    monkeypatch.setattr(svc, '_today', lambda: date(2026, 12, 30))
+    async with aiosqlite.connect(db_with_klant) as conn:
+        await conn.execute(
+            "INSERT INTO werkdagen (datum, klant_id, code, uren, tarief, urennorm) "
+            "VALUES ('2026-06-01', 1, 'WERKDAG', 500, 80, 1)"
+        )
+        await conn.commit()
+    state = await svc.get_urencriterium_projectie(db_with_klant, jaar=2026)
+    assert state.confirmed_uren == 500.0
+    assert state.will_make is False
+
+
+@pytest.mark.asyncio
+async def test_urencriterium_pace_pct_at_year_start(db_with_klant, monkeypatch):
+    """Pace=day-of-year/365 * 100. Beginning of year ~= 0%."""
+    monkeypatch.setattr(svc, '_today', lambda: date(2026, 1, 1))
+    state = await svc.get_urencriterium_projectie(db_with_klant, jaar=2026)
+    assert state.pace_pct < 1.0  # day 1 / 365 ~= 0.27%
+
+
+@pytest.mark.asyncio
+async def test_urencriterium_pace_pct_at_year_end(db_with_klant, monkeypatch):
+    """End of year ~= 100%."""
+    monkeypatch.setattr(svc, '_today', lambda: date(2026, 12, 31))
+    state = await svc.get_urencriterium_projectie(db_with_klant, jaar=2026)
+    assert state.pace_pct == pytest.approx(100.0, abs=0.5)

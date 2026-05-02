@@ -565,6 +565,180 @@ async def get_dag(db_path, datum: _date,
 
 
 # ---------------------------------------------------------------------------
+# 6-weken prognose + urencriterium-projectie
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class WeekTotaal:
+    """Aggregate van een week voor 6-weken prognose UI."""
+    week_start: _date
+    week_nummer: int
+    confirmed_amt: float
+    expected_amt: float
+    confirmed_uren: float
+    expected_uren: float
+    confirmed_dagen: int
+    expected_dagen: int
+    blocked_dagen: int
+
+
+@dataclass(frozen=True)
+class UrencriteriumState:
+    """Projectie van urencriterium-naleving voor het jaar."""
+    jaar: int
+    confirmed_uren: float          # YTD (datum <= today, urennorm=1)
+    expected_uren_remainder: float  # patterns vanaf today+1 t/m jaar-eind, urennorm=1
+    target: float                  # 1225 default of fiscale_params.urencriterium
+    pace_pct: float                # day-of-year / yearlen * 100
+    will_make: bool                # confirmed + expected_remainder >= target
+
+
+def _start_of_iso_week(d: _date) -> _date:
+    """Maandag van de week waar `d` in valt."""
+    from datetime import timedelta
+    return d - timedelta(days=d.isoweekday() - 1)
+
+
+def _iso_week_number(d: _date) -> int:
+    return d.isocalendar()[1]
+
+
+async def _week_totaal(db_path, week_start: _date) -> WeekTotaal:
+    """Aggregate confirmed + expected for one ISO week (Mon-Sun).
+
+    Reuses get_dag for each of the 7 days. Acceptable for one user
+    (~7 calls x ~150 werkdagen total = trivial).
+    """
+    from datetime import timedelta
+    confirmed_amt = 0.0
+    expected_amt = 0.0
+    confirmed_uren = 0.0
+    expected_uren = 0.0
+    confirmed_dagen = 0
+    expected_dagen = 0
+    blocked_dagen = 0
+
+    for i in range(7):
+        d = week_start + timedelta(days=i)
+        view = await get_dag(db_path, d)
+        if view.blocker is not None:
+            blocked_dagen += 1
+        if view.werkdagen:
+            confirmed_dagen += 1
+            for w in view.werkdagen:
+                confirmed_amt += w.bedrag
+                confirmed_uren += w.uren
+        elif view.expected:
+            expected_dagen += 1
+            for e in view.expected:
+                expected_amt += e.bedrag
+                expected_uren += e.uren
+
+    return WeekTotaal(
+        week_start=week_start,
+        week_nummer=_iso_week_number(week_start),
+        confirmed_amt=confirmed_amt,
+        expected_amt=expected_amt,
+        confirmed_uren=confirmed_uren,
+        expected_uren=expected_uren,
+        confirmed_dagen=confirmed_dagen,
+        expected_dagen=expected_dagen,
+        blocked_dagen=blocked_dagen,
+    )
+
+
+async def get_zes_weken_prognose(db_path, vanaf: _date) -> tuple[WeekTotaal, ...]:
+    """Returns 6 consecutive ISO weeks starting at the Monday of vanaf-week.
+
+    Used by /agenda toolbar (Sprint A) en dashboard-card (Sprint C).
+    """
+    from datetime import timedelta
+    start = _start_of_iso_week(vanaf)
+    out = []
+    for i in range(6):
+        ws = start + timedelta(days=7 * i)
+        out.append(await _week_totaal(db_path, ws))
+    return tuple(out)
+
+
+async def get_urencriterium_projectie(db_path, jaar: int) -> UrencriteriumState:
+    """Confirmed YTD (urennorm=1, datum<=today) + expected remainder
+    (patterns vanaf today+1 tot jaareinde, exclude ZERO_UREN/ACHTERWACHT) +
+    target (fiscale_params.urencriterium of 1225 default).
+
+    pace_pct = day_of_year / year_length * 100. Voor jaren != today.year:
+    voorbij jaar = 100, toekomstig jaar = 0.
+    """
+    from datetime import timedelta
+    today = _today()
+
+    # Target uit fiscale_params indien aanwezig, anders default
+    target = 1225.0
+    fp = await database.get_fiscale_params(db_path, jaar)
+    if fp and getattr(fp, 'urencriterium', None):
+        target = float(fp.urencriterium)
+
+    # Confirmed YTD (urennorm=1 only, datum <= today)
+    async with database.get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            "SELECT COALESCE(SUM(uren), 0) FROM werkdagen "
+            "WHERE substr(datum, 1, 4) = ? AND urennorm = 1 AND datum <= ?",
+            (str(jaar), today.isoformat()),
+        )
+        row = await cur.fetchone()
+        confirmed = float(row[0] or 0)
+
+    # Expected remainder: patterns vanaf today+1 tot jaareinde
+    expected_remainder = 0.0
+    d = today + timedelta(days=1)
+    jaareinde = _date(jaar, 12, 31)
+
+    # Iterate per maand (aggregate uit get_maand) om duplicate calls te vermijden
+    if d <= jaareinde and d.year == jaar:
+        seen_maanden: set[tuple[int, int]] = set()
+        cur_d = d
+        while cur_d <= jaareinde:
+            key = (cur_d.year, cur_d.month)
+            if key not in seen_maanden:
+                seen_maanden.add(key)
+                view = await get_maand(db_path, cur_d.year, cur_d.month)
+                for dag in view.dagen:
+                    if dag.datum < d or dag.datum.year != jaar:
+                        continue
+                    for e in dag.expected:
+                        # Same urennorm-rule als werkdag.urennorm=1
+                        if e.code in _ZERO_UREN_CODES or e.code == 'ACHTERWACHT':
+                            continue
+                        expected_remainder += e.uren
+            # Advance to next month start
+            if cur_d.month == 12:
+                break
+            cur_d = _date(cur_d.year, cur_d.month + 1, 1)
+
+    projected = confirmed + expected_remainder
+
+    # Pace: day_of_year / year_length * 100 voor today.year == jaar
+    yearstart = _date(jaar, 1, 1)
+    yearlen = (_date(jaar + 1, 1, 1) - yearstart).days
+    if today.year == jaar:
+        pace_pct = ((today - yearstart).days + 1) / yearlen * 100
+    elif today.year > jaar:
+        pace_pct = 100.0
+    else:
+        pace_pct = 0.0
+
+    return UrencriteriumState(
+        jaar=jaar,
+        confirmed_uren=confirmed,
+        expected_uren_remainder=expected_remainder,
+        target=target,
+        pace_pct=pace_pct,
+        will_make=projected >= target,
+    )
+
+
+# ---------------------------------------------------------------------------
 # confirm_expected — promote virtual rooster-entry → real werkdag
 # ---------------------------------------------------------------------------
 
