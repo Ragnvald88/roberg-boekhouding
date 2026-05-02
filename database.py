@@ -616,6 +616,14 @@ MIGRATIONS = [
             actief INTEGER NOT NULL DEFAULT 1 CHECK (actief IN (0, 1)))""",
         "CREATE INDEX IF NOT EXISTS idx_klant_patterns_klant ON klant_recurring_patterns(klant_id, actief)",
     ]),
+    (36, "add_blockers", [
+        """CREATE TABLE IF NOT EXISTS blockers (
+            id INTEGER PRIMARY KEY,
+            datum TEXT NOT NULL UNIQUE,
+            kind TEXT NOT NULL CHECK (kind IN ('vacation', 'sick', 'training')),
+            label TEXT NOT NULL DEFAULT '')""",
+        "CREATE INDEX IF NOT EXISTS idx_blockers_datum ON blockers(datum)",
+    ]),
 ]
 
 
