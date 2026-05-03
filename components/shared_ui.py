@@ -14,6 +14,24 @@ from database import (
 from domain.codes import CODES
 
 
+# Sprint D: 8 rustige kleuren voor klant-agenda-coloring (+ "Geen kleur").
+# Hex #RRGGBB voor SQLite CHECK conformance. Gekozen op:
+# - Voldoende contrast tegen witte agenda-cell achtergrond
+# - Onderscheidbaarheid (verschillende hue + saturation niveaus)
+# - Apple-stijl rustig palette (geen neon)
+KLANT_KLEUR_OPTIES: list[tuple[str, str | None]] = [
+    ('Geen kleur', None),
+    ('Teal',        '#0F766E'),  # match --accent
+    ('Blauw',       '#2563EB'),
+    ('Paars',       '#7E22CE'),
+    ('Indigo',      '#4F46E5'),
+    ('Smaragd',     '#059669'),
+    ('Amber',       '#D97706'),
+    ('Roze',        '#DB2777'),
+    ('Grijsblauw',  '#475569'),
+]
+
+
 def year_options(include_next: bool = False, as_dict: bool = False,
                  descending: bool = True) -> list | dict:
     """Generate consistent year options for year selectors.
@@ -179,6 +197,22 @@ async def open_klant_dialog(klant: dict | None = None,
                                  min=0, step=0.50).classes('flex-grow')
             f_km = ui.number('Retour km', value=d.get('retour_km', 0),
                              min=0).classes('flex-grow')
+
+        # -- Visuele instellingen --
+        _section_label('Visuele instellingen', margin_top=True)
+        # Map label -> hex (None for 'Geen kleur'); preserve order from constant.
+        kleur_opties_map: dict[str, str | None] = {
+            label: hex_val for label, hex_val in KLANT_KLEUR_OPTIES
+        }
+        f_color = ui.select(
+            options=list(kleur_opties_map.keys()),
+            label='Agenda-kleur',
+            value=next(
+                (label for label, hex_val in KLANT_KLEUR_OPTIES
+                 if hex_val == d.get('color')),
+                'Geen kleur',
+            ),
+        ).classes('w-full')
 
         # -- Locaties (edit mode only) --
         if is_edit and klant.get('id'):
@@ -474,6 +508,8 @@ async def open_klant_dialog(klant: dict | None = None,
                     kvk=(f_kvk.value or '').strip(),
                     tarief_uur=f_tarief.value or 0,
                     retour_km=f_km.value or 0,
+                    # Sprint D: agenda-kleur ('Geen kleur' → None, anders #RRGGBB).
+                    color=kleur_opties_map.get(f_color.value),
                 )
 
                 if is_edit:

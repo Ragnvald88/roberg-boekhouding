@@ -73,6 +73,9 @@ async def klanten_page():
             'plaats': k.plaats,
             'actief': k.actief,
             'actief_txt': 'Ja' if k.actief else 'Nee',
+            # Sprint D: agenda-kleur — needed for edit-dialog round-trip,
+            # otherwise dropdown defaults to 'Geen kleur' and save wipes it.
+            'color': k.color,
         } for k in klanten]
         _tbl.rows = rows
         _tbl.update()
