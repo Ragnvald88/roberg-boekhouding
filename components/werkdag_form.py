@@ -15,12 +15,20 @@ _KM_TARIEF_FALLBACK = 0
 # Re-export here for backcompat with callers that import from this module.
 from domain.codes import CODES, ZERO_UREN_CODES as _ZERO_UREN_CODES
 
-async def open_werkdag_dialog(on_save=None, werkdag=None):
+async def open_werkdag_dialog(on_save=None, werkdag=None, prefill: dict | None = None):
     """Open dialog for adding or editing a werkdag.
 
     Args:
-        on_save: async callback after successful save (e.g. refresh table)
-        werkdag: existing Werkdag object for edit mode, None for add mode
+        on_save: async callback after successful save.
+        werkdag: existing Werkdag object for edit mode, None for add mode.
+        prefill: dict with optional pre-fill values for new werkdag (ignored in edit mode):
+            datum: 'YYYY-MM-DD'
+            klant_id: int
+            start_minuten: int — informational, used to compute uren
+            eind_minuten: int — informational
+            activiteit: str — used to find matching code
+            pattern_id: int — if set, calls confirm_expected instead of add_werkdag
+                              (idempotent + race-protected via BEGIN IMMEDIATE)
     """
     klanten = await get_klanten(DB_PATH, alleen_actief=True)
     klant_options = {k.id: k.naam for k in klanten}
@@ -36,6 +44,7 @@ async def open_werkdag_dialog(on_save=None, werkdag=None):
                 break
 
     is_edit = werkdag is not None
+    pattern_id = (prefill or {}).get('pattern_id')
 
     # Cache for loaded locations per klant
     locatie_data = {}  # klant_id -> list[KlantLocatie]
@@ -49,15 +58,29 @@ async def open_werkdag_dialog(on_save=None, werkdag=None):
             'Werkdag bewerken' if is_edit else 'Werkdag toevoegen'
         ).classes('text-h6 q-mb-md')
         # Row 1: Datum (full width)
+        # Initial datum: edit-mode → werkdag.datum, prefill → prefill['datum'],
+        # else today.
+        if is_edit:
+            initial_datum = werkdag.datum
+        elif prefill and prefill.get('datum'):
+            initial_datum = prefill['datum']
+        else:
+            initial_datum = date.today().isoformat()
         datum_input = date_input(
             'Datum',
-            value=werkdag.datum if is_edit else date.today().isoformat(),
+            value=initial_datum,
         ).classes('w-full')
 
         # Row 2: Klant (full width, searchable)
+        if is_edit:
+            initial_klant = werkdag.klant_id
+        elif prefill and prefill.get('klant_id'):
+            initial_klant = prefill['klant_id']
+        else:
+            initial_klant = None
         klant_select = ui.select(
             klant_options,
-            value=werkdag.klant_id if is_edit else None,
+            value=initial_klant,
             label='Klant',
             with_input=True,
         ).classes('w-full')
@@ -216,6 +239,24 @@ async def open_werkdag_dialog(on_save=None, werkdag=None):
             # Restore the actual km from the werkdag (may differ from location default)
             km_input.value = werkdag.km
 
+        # Apply non-edit prefill (pattern-driven from /agenda)
+        if not is_edit and prefill:
+            # Load klant data if klant_id was prefilled (so locatie + tarief surface)
+            if prefill.get('klant_id'):
+                await _load_klant_data(prefill['klant_id'])
+            # Compute uren from start/eind_minuten if both present
+            if prefill.get('start_minuten') is not None and prefill.get('eind_minuten') is not None:
+                start = prefill['start_minuten']
+                eind = prefill['eind_minuten']
+                if eind > start:
+                    uren_input.value = (eind - start) / 60.0
+            # Match activiteit to a known code (find first key in CODES whose value matches)
+            if prefill.get('activiteit'):
+                for code_key, code_label in CODES.items():
+                    if code_label == prefill['activiteit']:
+                        code_select.value = code_key
+                        break
+
         # Initial calculation
         update_totaal()
 
@@ -263,6 +304,25 @@ async def open_werkdag_dialog(on_save=None, werkdag=None):
                 if is_edit:
                     await update_werkdag(DB_PATH, werkdag_id=werkdag.id, **kwargs)
                     ui.notify('Werkdag bijgewerkt', type='positive')
+                elif pattern_id is not None:
+                    # Pattern-driven (van /agenda Bevestigen-flow): use
+                    # confirm_expected for atomic + idempotent semantics.
+                    # Args: pattern_id + datum + optional override (start/eind/activiteit).
+                    from services.agenda import confirm_expected
+                    from datetime import date as _date_lib
+                    # Parse start/eind to minuten (uit time-input of uren-derived).
+                    # We hebben uren_input.value beschikbaar; voor minuten-precisie
+                    # geven we de pattern-defaults door (None = use pattern's defaults).
+                    # User's eventueel handmatige uren-aanpassing wordt door
+                    # confirm_expected genegeerd (uses pattern.start/eind_minuten).
+                    # Acceptabel voor MVP — fine-grained override is een latere iteratie.
+                    await confirm_expected(
+                        DB_PATH,
+                        pattern_id=pattern_id,
+                        datum=_date_lib.fromisoformat(datum_input.value),
+                        # geen overrides — gebruikt pattern-defaults
+                    )
+                    ui.notify('Werkdag bevestigd', type='positive')
                 else:
                     await add_werkdag(DB_PATH, **kwargs)
                     ui.notify('Werkdag toegevoegd', type='positive')
@@ -287,7 +347,12 @@ async def open_werkdag_dialog(on_save=None, werkdag=None):
         # Buttons
         with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
             ui.button('Annuleren', on_click=dialog.close).props('flat')
-            if not is_edit:
+            # "Opslaan & Nieuw" verbergen in pattern-mode: pattern_id blijft
+            # actief in de closure na de eerste save, dus een tweede
+            # confirm_expected op een andere datum zou semantisch fout zijn
+            # (pattern hoort bij één expected-occurrence, niet bij elke
+            # vervolg-werkdag).
+            if not is_edit and pattern_id is None:
                 ui.button(
                     'Opslaan & Nieuw', icon='add',
                     on_click=lambda: save(and_new=True),

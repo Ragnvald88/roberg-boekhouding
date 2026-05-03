@@ -444,12 +444,25 @@ async def agenda_page():
         ui.timer(0, render, once=True)
 
     async def handle_add_werkdag(d, prefill_pattern=None):
-        """Stub: opens werkdag-dialog. Implementatie komt in Task 4.1
-        (werkdag_form prefill). For now: notify."""
-        ui.notify(
-            f'Werkdag toevoegen op {d.isoformat()} — komt in Task 4.1',
-            type='info',
-        )
+        """Open werkdag-dialog met prefill (datum + optionele pattern).
+
+        prefill_pattern is een ExpectedEntry uit /agenda Day-Inspector.
+        Bij Bevestigen-knop: prefill_pattern is gezet → save() roept
+        confirm_expected aan (atomic + idempotent).
+        Bij "Werkdag toevoegen"-knop op lege dag: prefill_pattern=None →
+        save() roept add_werkdag aan met user-input.
+        """
+        from components.werkdag_form import open_werkdag_dialog
+        prefill = {'datum': d.isoformat()}
+        if prefill_pattern is not None:
+            prefill.update({
+                'klant_id': prefill_pattern.klant_id,
+                'start_minuten': prefill_pattern.start_minuten,
+                'eind_minuten': prefill_pattern.eind_minuten,
+                'activiteit': prefill_pattern.activiteit,
+                'pattern_id': prefill_pattern.pattern_id,
+            })
+        await open_werkdag_dialog(on_save=render, prefill=prefill)
 
     async def handle_add_blocker(d, kind):
         try:
