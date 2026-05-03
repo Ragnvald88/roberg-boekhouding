@@ -276,12 +276,22 @@ ander werk.
 `#F59E0B`) is een aparte rol — `color=accent` in markup geeft amber,
 NIET teal. Voor teal-accent: `color=primary` of `style="color: var(--accent)"`.
 
-**Cascade-regel**: Quasar `.q-*` overrides ALTIJD buiten
-`@layer components` plaatsen — layered styles verliezen van Quasar's
-unlayered defaults, ongeacht specificity. App-only classes
-(`.app-card`, `.nav-item`, `.wd-pill`, etc.) horen wél binnen
+**Cascade-regel** (geënforceerd door `tests/test_visual_css.py`): Quasar
+`.q-*` overrides ALTIJD buiten `@layer components` plaatsen — layered
+styles verliezen van Quasar's unlayered defaults, ongeacht specificity.
+App-only classes (`.nav-item`, `.wd-pill`, etc.) horen wél binnen
 `@layer components`. Voor bewuste suppressie van `.q-card` defaults:
-chained selector `.q-card.your-class` buiten layer.
+chained selector `.q-card.your-class` buiten layer (zie
+`.q-card.builder-line-card` als precedent voor "card zonder shadow").
+
+**Variant-classes op `.agenda-cell`** (en vergelijkbare base-cell-classes
+met meerdere modifier-states): gebruik **chained selectors** zoals
+`.agenda-cell.holiday-marker { background: ... }` — NIET naked
+`.holiday-marker { background: ... }`. Reden: `.agenda-cell` zelf zet
+`background: white` en wint van een naked variant via source-order +
+gelijke specificity. Cascade-lint test (`test_holiday_blocker_use_chained_selectors`)
+vangt regressie. Patroon van toepassing op alle holiday/blocker/status-
+overlays die op `.agenda-cell`-achtige containers leven.
 
 **`.q-btn` overrides** moeten `:not()`-modifier-respect afdwingen:
 `.q-btn:not(.q-btn--round):not(.q-btn--rounded) { ... }` — anders
@@ -301,6 +311,12 @@ op werkdagen" zijn.
 `/bank` route bestaat NIET MEER (Sprint B T9 schrap — `ui.navigate.to`
 client-side redirect was ineffectief, server-side middleware overkill
 voor 1-user app).
+
+**`.card-hero` bestaat NIET MEER** (post-merge audit Fix #6) — was
+dead-code class die door unlayered `.q-card` werd overruled. Niet
+opnieuw introduceren; gebruik `ui.card()` direct (krijgt automatisch
+de `.q-card` token-styling) of een chained `.q-card.your-variant`
+buiten layer voor specifieke afwijkingen.
 
 ### YAGNI
 Geen: user auth, BTW-administratie, loon/voorraad, real-time bank-API, auto-matching, CI/CD, multi-language
