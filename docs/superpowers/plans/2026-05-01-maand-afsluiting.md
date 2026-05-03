@@ -3,6 +3,15 @@
 *Plan-datum: 2026-05-01 • Branch: `feature/maand-afsluiting`*
 *Author: Claude (Opus 4.7) + Codex CLI (2 review-rondes) consensus*
 
+> **⚠️ STALE PLAN — bijwerken vóór uitvoering.** Sprint A heeft sinds dit plan
+> **migratie 35 + 36** in beslag genomen (`klant_recurring_patterns` + `blockers`,
+> gemerged 2026-05-03 via `d70dbb3`). Dit plan claimt nog migratie **35** voor
+> `maand_afsluitingen` — vóór uitvoering opnieuw nummeren naar **migratie 37**.
+> Test-baselines in dit document (`~1054`, `~1086`) zijn pre-Sprint-A. Werkelijke
+> baseline op master is nu **1261**; nieuwe-test-counts moeten daarboven worden
+> toegevoegd, niet vanaf 1054. Verifieer ook dat geen referenties naar
+> `maand_afsluitingen` botsen met de nieuwe agenda-tabellen vóór schema-werk.
+
 > **Voor de uitvoerder:** dit plan implementeert één afgebakende feature met TDD per task. Stappen gebruiken `- [ ]`-checkboxes. Elke task eindigt met een commit en een groene module-test-run. Volledige suite draait alleen op Task 10. Codex-review (`codex-review` skill) draait éénmaal aan het einde, niet na elk commit.
 
 **Goal.** Geef de gebruiker per kalendermaand een sluitende status-pagina die data-issues (ongecategoriseerde bank-rijen, ongefactureerde werkdagen, verlopen facturen, ontbrekende bonnen) per maand toont, en laat hem een maand markeren als "afgesloten". Bij CSV-import die data bevat in een afgesloten maand toont de app een waarschuwing.

@@ -1,5 +1,15 @@
 # Agenda Sprint A — Implementation Plan
 
+> **🚫 SHIPPED — NIET (OPNIEUW) UITVOEREN.** Dit plan is volledig geïmplementeerd
+> en gemerged naar `master` via merge-commit `d70dbb3` (--no-ff) op 2026-05-03.
+> 1261 tests groen op master. Alle 22 tasks completed. Test-baselines in dit
+> document (1054, ~1104, ~1259) waren geschat tijdens planning; werkelijk eind:
+> **1261**. Houd dit document als historisch referentie + audit-trail van wat
+> Sprint A inhield, maar laat de checkboxes met rust.
+>
+> Sprint A status-detail: zie auto-memory `project_agenda_sprint_a.md`.
+> Code-conventies: zie `CLAUDE.md` § Database (14 tabellen) + § /agenda — Sprint A.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Werkende `/agenda`-pagina met kalender, recurring patterns, blocker-dagen, day-inspector, bevestigen-flow én directe factuur-status visualisatie per werkdag-cel.

@@ -3,8 +3,9 @@
 **Doel**: verifieer dat de factuur-status van een werkdag direct in `/agenda` zichtbaar
 is bij elke fase van de factuur-lifecycle (kern-feature van Sprint A).
 
-**Uitvoeren door**: gebruiker, op productie-DB, na merge van `feature/agenda-sprint-a`.
-Niet door een agent — dit vereist visuele verificatie in pywebview.
+**Uitvoeren door**: gebruiker, op productie-DB, na merge `d70dbb3` op master
+(Sprint A SHIPPED 2026-05-03). Niet door een agent — dit vereist visuele
+verificatie in pywebview.
 
 ## Setup
 

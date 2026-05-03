@@ -1,7 +1,15 @@
 # Sprint A — Agenda met factuur-koppeling
 
+> **🚫 SHIPPED — historische spec.** Volledig geïmplementeerd en gemerged naar
+> `master` via merge-commit `d70dbb3` (--no-ff) op 2026-05-03. Werkelijke
+> test-baseline op master is nu **1261** (test-verwachtingen in dit document
+> "1054 + ~50 ≈ 1104" waren planning-schattingen). Voor huidige conventies +
+> patterns: zie `CLAUDE.md` § /agenda — Sprint A. Voor implementation-trail:
+> zie `docs/superpowers/plans/2026-05-02-agenda-sprint-a.md` (ook met
+> SHIPPED-banner) en auto-memory `project_agenda_sprint_a.md`.
+
 **Datum**: 2026-05-02
-**Status**: Revisie 2 — gebruiker-feedback verwerkt
+**Status**: SHIPPED 2026-05-03 (was: Revisie 2 — gebruiker-feedback verwerkt)
 **Doel**: Werkende `/agenda`-pagina met kalender, recurring patterns,
 blocker-dagen, day-inspector, bevestigen-flow én **directe factuur-status
 visualisatie** per werkdag-cel. Geen architectuur-refactor van bestaande
