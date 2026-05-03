@@ -211,9 +211,18 @@ body {
 }
 .text-h1, .text-h2, .text-h3, .text-h4, .text-h5, .text-h6 {
     font-family: -apple-system, "SF Pro Display", system-ui, sans-serif;
-    color: var(--text);
+    /* Geen color hier — body's color: var(--text) erft via inheritance.
+       Een eigen color zou Quasar utility classes (.text-white in donkere
+       header, .text-primary elders) overrulen via gelijke specificity. */
 }
 ```
+
+> **Plan-amendment 2026-05-03 (na Codex T2 review)**: oorspronkelijke
+> Step 2 had `color: var(--text)` op `.text-h1..h6` — verwijderd in
+> commit `36d63d2`. Reden: zou Quasar utilities (`.text-white`,
+> `.text-primary`) overrulen via gelijke specificity. Body's color
+> erft naar headings via inheritance, en utility classes winnen via
+> directe element-class-selector. Niet herintroduceren bij re-run.
 
 - [ ] **Step 3: Verifieer pytest blijft groen**
 
