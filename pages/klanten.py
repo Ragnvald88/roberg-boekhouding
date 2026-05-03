@@ -111,7 +111,7 @@ async def klanten_page():
         ).classes('w-full')
 
         _tbl.add_slot('body-cell-tarief', '''
-            <q-td :props="props" style="text-align:right">{{ props.row.tarief_fmt }}</q-td>
+            <q-td :props="props" class="num" style="text-align:right">{{ props.row.tarief_fmt }}</q-td>
         ''')
         _tbl.add_slot('body-cell-actions', '''
             <q-td :props="props">

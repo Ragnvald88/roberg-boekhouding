@@ -19,5 +19,5 @@ def kpi_strip(omzet: float, winst: float,
                 with ui.row().classes('items-center gap-2'):
                     ui.icon(icon, size='1.2rem').style('color: #0F766E')
                     ui.label(label).classes('text-caption').style('color: #64748B')
-                ui.label(value).classes('text-h6 q-mt-xs') \
-                    .style('color: #0F172A; font-weight: 700; font-variant-numeric: tabular-nums')
+                ui.label(value).classes('text-h6 q-mt-xs num') \
+                    .style('color: #0F172A; font-weight: 700')

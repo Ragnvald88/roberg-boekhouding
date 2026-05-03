@@ -451,9 +451,7 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None,
                                 ui.label(
                                     format_euro(bedrag)
                                 ).classes(
-                                    'text-body2 text-weight-bold'
-                                ).style(
-                                    'font-variant-numeric: tabular-nums')
+                                    'text-body2 text-weight-bold num')
                                 ui.icon('arrow_forward', size='xs',
                                         color='grey-5')
 
@@ -542,9 +540,7 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None,
                             bedrag_label = ui.label(
                                 format_euro(uren_bedrag + km_bedrag),
                             ).classes(
-                                'text-body1 text-weight-bold text-right'
-                            ).style(
-                                'font-variant-numeric: tabular-nums'
+                                'text-body1 text-weight-bold text-right num'
                             )
 
                         def make_updater(i, d_ref, o_ref, a_ref, t_ref,
@@ -1126,8 +1122,8 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None,
                     subtotaal_container = ui.column().classes(
                         'w-full items-end gap-0')
                     totaal_label = ui.label('Totaal: \u20ac 0,00').classes(
-                        'text-h6 text-weight-bold text-right w-full',
-                    ).style('font-variant-numeric: tabular-nums')
+                        'text-h6 text-weight-bold text-right w-full num',
+                    )
 
                     with ui.row().classes(
                         'w-full items-center gap-2 q-mt-sm'
@@ -1188,12 +1184,10 @@ async def open_invoice_builder(on_save=None, pre_selected_werkdag_ids=None,
                 with subtotaal_container:
                     ui.label(
                         f'Waarnemingen: {format_euro(subtotaal_werk)}'
-                    ).classes('text-caption text-grey-7').style(
-                        'font-variant-numeric: tabular-nums')
+                    ).classes('text-caption text-grey-7 num')
                     ui.label(
                         f'Reiskosten: {format_euro(subtotaal_km)}'
-                    ).classes('text-caption text-grey-7').style(
-                        'font-variant-numeric: tabular-nums')
+                    ).classes('text-caption text-grey-7 num')
             totaal_label.text = f'Totaal: {format_euro(totaal)}'
 
             invoice_html = render_invoice_html(

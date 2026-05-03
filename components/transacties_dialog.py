@@ -127,7 +127,7 @@ async def _open_detail_dialog(row, refresh, default_tab: str = 'detail'):
             with ui.tab_panel(t_detail):
                 with ui.row().classes('items-baseline gap-3 q-mb-sm'):
                     ui.label(format_euro(row['bedrag'])) \
-                        .classes('text-h5 text-bold')
+                        .classes('text-h5 text-bold num')
                     ui.label(format_datum(row['datum'])) \
                         .classes('text-caption text-grey')
 
@@ -462,7 +462,7 @@ async def _render_historie_tab(container, row):
                     .classes('text-caption text-grey').style('width:100px')
                 ui.label(h.tegenpartij or h.omschrijving).classes('flex-1')
                 ui.label(format_euro(h.bedrag)) \
-                    .classes('text-bold').style('text-align:right')
+                    .classes('text-bold num').style('text-align:right')
 
         if len(hits) >= 3:
             # ``h.datum - row.datum`` is negative for past hits; "within
