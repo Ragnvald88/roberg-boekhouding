@@ -670,6 +670,15 @@ MIGRATIONS = [
             kind TEXT NOT NULL CHECK (kind IN ('vacation', 'sick', 'training')),
             label TEXT NOT NULL DEFAULT '')""",
     ]),
+    (37, "add_klanten_color", [
+        # Sprint D: klant-kleur in agenda. NULL = geen kleur (default,
+        # type-based fallback van .wd-dagpraktijk/.wd-anw/.wd-overig blijft).
+        # Hex #RRGGBB enforced via CHECK — voorkomt slordige inputs.
+        "ALTER TABLE klanten ADD COLUMN color TEXT NULL "
+        "CHECK (color IS NULL OR (length(color) = 7 AND "
+        "color GLOB '#[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]"
+        "[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]'))",
+    ]),
 ]
 
 
@@ -1199,6 +1208,7 @@ async def get_klanten(db_path: Path = DB_PATH, alleen_actief: bool = False) -> l
             contactpersoon=r['contactpersoon'] or '',
             postcode=r['postcode'] or '',
             plaats=r['plaats'] or '',
+            color=r['color'] if 'color' in r.keys() else None,
         ) for r in rows]
 
 
@@ -1219,6 +1229,7 @@ async def get_klant_by_id(db_path: Path = DB_PATH, klant_id: int = 0) -> 'Klant 
         contactpersoon=r['contactpersoon'] or '',
         postcode=r['postcode'] or '',
         plaats=r['plaats'] or '',
+        color=r['color'] if 'color' in r.keys() else None,
     )
 
 
@@ -1226,12 +1237,13 @@ async def add_klant(db_path: Path = DB_PATH, **kwargs) -> int:
     async with get_db_ctx(db_path) as conn:
         cursor = await conn.execute(
             "INSERT INTO klanten (naam, tarief_uur, retour_km, adres, kvk, actief, "
-            "email, contactpersoon, postcode, plaats) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "email, contactpersoon, postcode, plaats, color) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (kwargs['naam'], kwargs.get('tarief_uur', 0), kwargs.get('retour_km', 0),
              kwargs.get('adres', ''), kwargs.get('kvk', ''), kwargs.get('actief', 1),
              kwargs.get('email', ''), kwargs.get('contactpersoon', ''),
-             kwargs.get('postcode', ''), kwargs.get('plaats', ''))
+             kwargs.get('postcode', ''), kwargs.get('plaats', ''),
+             kwargs.get('color', None))
         )
         await conn.commit()
         return cursor.lastrowid
@@ -1242,7 +1254,7 @@ async def update_klant(db_path: Path = DB_PATH, klant_id: int = 0, **kwargs) -> 
         fields = []
         values = []
         for key in ('naam', 'tarief_uur', 'retour_km', 'adres', 'kvk', 'actief',
-                    'email', 'contactpersoon', 'postcode', 'plaats'):
+                    'email', 'contactpersoon', 'postcode', 'plaats', 'color'):
             if key in kwargs:
                 fields.append(f"{key} = ?")
                 values.append(kwargs[key])

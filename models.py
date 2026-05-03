@@ -32,6 +32,7 @@ class Klant:
     contactpersoon: str = ''
     postcode: str = ''
     plaats: str = ''
+    color: Optional[str] = None  # Sprint D: hex #RRGGBB or None (no color)
 
 
 @dataclass
