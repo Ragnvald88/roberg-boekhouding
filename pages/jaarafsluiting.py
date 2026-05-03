@@ -579,12 +579,12 @@ async def jaarafsluiting_page():
                     'Materiële vaste activa worden gewaardeerd tegen aanschafwaarde '
                     'verminderd met lineaire afschrijvingen (restwaarde 10%). '
                     'Vorderingen en schulden worden gewaardeerd tegen nominale waarde.'
-                ).classes('text-body2').style('color: #475569')
+                ).classes('text-body2').style('color: var(--muted)')
                 ui.label(
                     'De netto-omzet betreft gefactureerde honoraria voor medische '
                     'waarnemingen, vrijgesteld van BTW op grond van artikel 11 '
                     'Wet OB 1968.'
-                ).classes('text-body2 q-mt-sm').style('color: #475569')
+                ).classes('text-body2 q-mt-sm').style('color: var(--muted)')
 
             # Activastaat
             ui.label('Verloopoverzicht materiële vaste activa') \
@@ -632,7 +632,7 @@ async def jaarafsluiting_page():
             ratio_color = 'positive' if ratio <= 25 else 'warning' if ratio <= 30 else 'negative'
             with ui.card().classes('w-full q-pa-md q-mb-md'):
                 with ui.row().classes('items-center gap-3'):
-                    ui.icon('pie_chart', size='1.5rem').style('color: #0F766E')
+                    ui.icon('pie_chart', size='1.5rem').style('color: var(--accent)')
                     ui.label('Kosten/omzet ratio').classes('text-subtitle1')
                     ui.badge(f'{ratio}%', color=ratio_color).classes('text-sm')
                 if ratio > 30:
@@ -645,7 +645,7 @@ async def jaarafsluiting_page():
             uren_ok = uren >= norm
             with ui.card().classes('w-full q-pa-md q-mb-md'):
                 with ui.row().classes('items-center gap-3'):
-                    ui.icon('schedule', size='1.5rem').style('color: #0F766E')
+                    ui.icon('schedule', size='1.5rem').style('color: var(--accent)')
                     ui.label('Urencriterium').classes('text-subtitle1')
                     ui.badge(
                         f'{int(uren)} / {int(norm)} uur',
@@ -661,7 +661,7 @@ async def jaarafsluiting_page():
             balans_ok = abs(balans['totaal_activa'] - totaal_passiva) < 0.01
             with ui.card().classes('w-full q-pa-md q-mb-md'):
                 with ui.row().classes('items-center gap-3'):
-                    ui.icon('balance', size='1.5rem').style('color: #0F766E')
+                    ui.icon('balance', size='1.5rem').style('color: var(--accent)')
                     ui.label('Balans controle').classes('text-subtitle1')
                     ui.badge(
                         'Activa = Passiva' if balans_ok else 'VERSCHIL',
@@ -823,7 +823,7 @@ async def jaarafsluiting_page():
             html = _render_pdf_html(jaar, data, balans, winst, vorig_jaar_balans,
                                     bedrijfsnaam=bg_naam, kvk=bg_kvk)
             ui.html(html).classes('w-full').style(
-                'border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; '
+                'border: 1px solid var(--border); border-radius: 8px; padding: 16px; '
                 'background: white; max-height: 80vh; overflow-y: auto;'
             )
     async def toggle_edit():

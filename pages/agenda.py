@@ -192,7 +192,7 @@ def _render_blocker_section(dag, on_add_werkdag, on_delete_blocker):
     }.get(kind, kind.capitalize())
 
     with ui.row().classes('items-center gap-2 mt-3'):
-        ui.icon(icon_name).classes('text-2xl').style('color: #475569')
+        ui.icon(icon_name).classes('text-2xl').style('color: var(--muted)')
         with ui.column().classes('gap-0 flex-1'):
             ui.label(kind_label).classes('text-sm font-medium')
             if blocker.label:
@@ -249,7 +249,7 @@ def _render_confirmed_section(dag, on_open_factuur, on_create_factuur,
                 if w.status_label == 'verlopen' and w.overdue_days > 0:
                     ui.label(
                         f'{w.overdue_days} dgn te laat'
-                    ).classes('text-xs').style('color: #DC2626')
+                    ).classes('text-xs').style('color: var(--q-negative)')
                 if w.status_label == 'betaald' and w.factuur_betaald_datum:
                     ui.label(
                         f'op {_format_short_date(w.factuur_betaald_datum)}'
@@ -346,7 +346,7 @@ def _render_day_inspector(container, dag, on_add_werkdag, on_add_blocker,
         with ui.card().classes('w-full p-3'):
             ui.label(formatted_date).classes(
                 'text-base font-medium'
-            ).style('color: #0F172A')
+            ).style('color: var(--text)')
 
             # ====== BLOCKER (holiday or user) ======
             if dag.blocker:

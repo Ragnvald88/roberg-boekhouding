@@ -256,7 +256,7 @@ async def aangifte_page():
         with warnings_container:
             for color, icon, text, link in warnings:
                 with ui.card().classes('w-full q-pa-sm').style(
-                    f'border-left: 4px solid {"#F59E0B" if color == "warning" else "#3B82F6"}'
+                    f'border-left: 4px solid {"var(--q-warning)" if color == "warning" else "var(--q-info)"}'
                 ):
                     with ui.row().classes('items-center gap-2 w-full'):
                         ui.icon(icon, color=color).classes('text-lg')
