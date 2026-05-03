@@ -89,6 +89,10 @@ async def werkdagen_page():
             ui.space()
             with ui.row().classes('items-center gap-2'):
                 ui.button(
+                    'Kalenderweergave', icon='calendar_month',
+                    on_click=lambda: ui.navigate.to('/agenda'),
+                ).props('flat color=secondary')
+                ui.button(
                     'Nieuwe werkdag', icon='add',
                     on_click=lambda: open_werkdag_dialog(on_save=refresh_table),
                 ).props('color=primary')

@@ -11,20 +11,102 @@ ui.select.default_props('outlined dense')
 ui.table.default_props('flat bordered separator=horizontal')
 
 ui.add_css('''
-@layer components {
-    /* Table header styling */
-    .q-table th {
-        background-color: #F1F5F9;
-        font-weight: 600;
-        text-transform: uppercase;
-        font-size: 0.7rem;
-        letter-spacing: 0.05em;
-        color: #475569;
-    }
-    .q-table tbody tr:nth-child(even) {
-        background-color: #F8FAFC;
-    }
+/* === TOKENS (Sprint B) === */
+:root {
+    --bg: #F5F5F7;            /* page background — system gray */
+    --surface: #FFFFFF;        /* cards, dialogs, header */
+    --border: rgba(60,60,67,0.12);
+    --text: #1C1C1E;           /* primary ink */
+    --muted: #6E6E73;          /* secondary ink, labels, captions */
+    --accent: #0F766E;         /* teal brand — unchanged */
+    --accent-soft: rgba(15,118,110,0.10);
+    --shadow: 0 2px 8px rgba(0,0,0,0.06);
+    --radius: 12px;
+}
 
+/* === BASE === */
+body {
+    background: var(--bg);
+    font-family: -apple-system, "SF Pro Text", system-ui, sans-serif;
+    color: var(--text);
+}
+.q-page {
+    font-family: -apple-system, "SF Pro Text", system-ui, sans-serif;
+}
+.text-h1, .text-h2, .text-h3, .text-h4, .text-h5, .text-h6 {
+    font-family: -apple-system, "SF Pro Display", system-ui, sans-serif;
+    /* Geen color hier — body zet color: var(--text) en headings erven dat
+       via inheritance. Dit voorkomt dat we Quasar utilities overrulen
+       (bv. .text-h6.text-white in de huidige donkere header tijdens
+       Tier 1 progressie, of .text-primary elders). */
+}
+
+/* === QUASAR OVERRIDES (UNLAYERED — winnen van Quasar defaults) === */
+/* Sprint B Codex regel: Quasar's eigen CSS is unlayered; layered styles
+   verliezen ALTIJD van unlayered ongeacht specificity. Daarom alle .q-*
+   overrides hier buiten @layer components plaatsen. */
+
+/* Table header styling */
+.q-table th {
+    background-color: #F1F5F9;
+    font-weight: 600;
+    text-transform: uppercase;
+    font-size: 0.7rem;
+    letter-spacing: 0.05em;
+    color: #475569;
+}
+.q-table tbody tr:nth-child(even) {
+    background-color: #F8FAFC;
+}
+
+/* Page-toolbar Quasar overrides */
+.page-toolbar .q-field { min-height: unset; }
+
+/* White pill selects inside toolbar */
+.page-toolbar .q-field--outlined .q-field__control {
+    background: white !important;
+    border-color: transparent !important;
+    border-radius: 20px !important;
+    min-height: 36px !important;
+    transition: box-shadow 0.15s ease;
+}
+.page-toolbar .q-field--outlined .q-field__control:hover {
+    box-shadow: 0 2px 8px rgba(0,0,0,0.07);
+}
+.page-toolbar .q-field--outlined.q-field--focused .q-field__control {
+    border-color: var(--q-primary) !important;
+    box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.12);
+}
+.page-toolbar .q-field__label {
+    font-size: 11px !important;
+}
+
+/* Card defaults — Sprint B token-driven */
+.q-card {
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow);
+    background: var(--surface);
+}
+
+/* Invoice-builder line-cards: bewust géén shadow (visuele rhythm in line-stack).
+   Moet buiten @layer staan om de globale .q-card shadow hierboven te overrulen. */
+.q-card.builder-line-card {
+    box-shadow: none;
+    border: 1px solid var(--q-separator-color, #e2e8f0);
+}
+
+/* Button polish — Sprint B (NIET op round/rounded modifiers — die houden Quasar's cirkel-shape) */
+.q-btn:not(.q-btn--round):not(.q-btn--rounded) {
+    border-radius: 8px;
+}
+
+/* Field polish — Sprint B (alleen radius op outlined fields buiten toolbar) */
+.q-field--outlined .q-field__control {
+    border-radius: 8px;
+}
+
+@layer components {
     /* Page toolbar — tinted bar with pill-shaped filters */
     .page-toolbar {
         display: flex;
@@ -34,56 +116,48 @@ ui.add_css('''
         background: #EDF2F7;
         border-radius: 12px;
     }
-    .page-toolbar .q-field { min-height: unset; }
-
-    /* White pill selects inside toolbar */
-    .page-toolbar .q-field--outlined .q-field__control {
-        background: white !important;
-        border-color: transparent !important;
-        border-radius: 20px !important;
-        min-height: 36px !important;
-        transition: box-shadow 0.15s ease;
-    }
-    .page-toolbar .q-field--outlined .q-field__control:hover {
-        box-shadow: 0 2px 8px rgba(0,0,0,0.07);
-    }
-    .page-toolbar .q-field--outlined.q-field--focused .q-field__control {
-        border-color: var(--q-primary) !important;
-        box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.12);
-    }
-    .page-toolbar .q-field__label {
-        font-size: 11px !important;
-    }
 
     /* Invoice builder panel styling */
     .builder-panel-border { border-right: 1px solid var(--q-separator-color, #e2e8f0); }
-    .builder-line-card { border: 1px solid var(--q-separator-color, #e2e8f0); box-shadow: none; }
     .builder-preview-bg { background: var(--q-separator-color, #e2e8f0); }
 
-    /* Sidebar nav — clean minimal style */
+    /* Sidebar nav — Sprint B lichte variant */
     .nav-item {
         display: flex; align-items: center; gap: 10px;
         padding: 7px 14px; margin: 1px 8px;
-        border-radius: 6px; cursor: pointer;
-        color: #94A3B8; font-size: 13px; font-weight: 400;
-        transition: all 0.15s;
+        border-radius: 8px; cursor: pointer;
+        color: var(--muted); font-size: 13px; font-weight: 400;
+        transition: background 0.12s, color 0.12s;
         text-decoration: none; border: none; background: none;
         width: calc(100% - 16px);
+        position: relative;
     }
-    .nav-item:hover { background: rgba(255,255,255,0.06); color: #E2E8F0; }
-    .nav-item .nav-icon { font-size: 18px; width: 20px; text-align: center; }
+    .nav-item:hover {
+        background: rgba(60,60,67,0.05);
+        color: var(--text);
+    }
+    .nav-item .nav-icon {
+        font-size: 18px; width: 20px; text-align: center;
+        color: var(--muted);
+    }
+    .nav-item:hover .nav-icon { color: var(--text); }
 
     .nav-item.active {
-        color: #5EEAD4;
-        background: rgba(94,234,212,0.08);
-        font-weight: 500;
-        border-left: 3px solid #14B8A6;
-        margin-left: 5px;
-        padding-left: 11px;
+        color: var(--text);
+        background: var(--accent-soft);
+        font-weight: 600;
+    }
+    .nav-item.active .nav-icon { color: var(--accent); }
+    .nav-item.active::after {
+        content: '';
+        width: 6px; height: 6px; border-radius: 50%;
+        background: var(--accent);
+        position: absolute; right: 12px; top: 50%;
+        transform: translateY(-50%);
     }
 
     .nav-gap { height: 12px; }
-    .nav-divider { height: 1px; background: #1E293B; margin: 8px 16px; }
+    .nav-divider { height: 1px; background: var(--border); margin: 8px 16px; }
 
     /* Dashboard design tokens */
     .hero-label { font-size: 13px; color: #64748B; font-weight: 500; }
@@ -100,7 +174,16 @@ ui.add_css('''
     .chart-subtitle { font-size: 12px; color: #94A3B8; }
     .strip-value { font-size: 14px; font-weight: 600; color: #0F172A; }
     .strip-pct { font-size: 11px; color: #94A3B8; }
-    .card-hero { border-radius: 14px; border: 1px solid #E2E8F0; }
+    /* .card-hero — alle huidige callers gebruiken ui.card() (= .q-card),
+       en de unlayered .q-card rule (Sprint B T6) wint van deze layered
+       regel. Functioneel no-op vandaag — defensieve fallback voor
+       toekomstige non-q-card consumers. */
+    .card-hero {
+        border-radius: var(--radius);
+        border: 1px solid var(--border);
+        box-shadow: var(--shadow);
+        background: var(--surface);
+    }
 
     /* === REDESIGN PORT — design tokens & herbruikbare helpers ===
        Eerste introductie van het token-systeem uit
@@ -109,11 +192,11 @@ ui.add_css('''
        breiden per pagina. Bestaande hex-styling blijft onveranderd. */
 
     .num {
-        font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+        font-family: "SF Mono", ui-monospace, Menlo, monospace;
         font-variant-numeric: tabular-nums;
         letter-spacing: -0.02em;
     }
-    .mono { font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; }
+    .mono { font-family: "SF Mono", ui-monospace, Menlo, monospace; }
     .t-micro {
         font-size: 11px; font-weight: 500;
         letter-spacing: 0.08em; text-transform: uppercase;
@@ -126,7 +209,7 @@ ui.add_css('''
         padding: 2px 8px; border-radius: 6px;
         font-size: 11px; font-weight: 500; line-height: 1.4;
         background: #f5f4ef; color: #3a3d43;
-        font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+        font-family: "SF Mono", ui-monospace, Menlo, monospace;
     }
     .chip.pos { background: #e6f2f0; color: #0a524c; }
     .chip.info { background: #dbeafe; color: #1e3a8a; }
@@ -145,7 +228,7 @@ ui.add_css('''
         border-right: 1px solid #e8e6df;
         background: #ffffff; color: #3a3d43;
         font-size: 12px; cursor: pointer;
-        font-family: 'JetBrains Mono', ui-monospace, monospace;
+        font-family: "SF Mono", ui-monospace, Menlo, monospace;
         transition: background 0.1s;
     }
     .seg-btn:last-child { border-right: 0; }
@@ -162,17 +245,17 @@ ui.add_css('''
         box-shadow: 0 8px 24px -12px rgba(20,20,20,0.18);
     }
     .selection-bar .sb-count {
-        font-family: 'JetBrains Mono', monospace; font-size: 13px;
+        font-family: "SF Mono", ui-monospace, Menlo, monospace; font-size: 13px;
     }
     .selection-bar .sb-meta {
-        font-family: 'JetBrains Mono', monospace; font-size: 12px;
+        font-family: "SF Mono", ui-monospace, Menlo, monospace; font-size: 12px;
         opacity: 0.75;
     }
 
     /* Page subtitle (onder page_title) */
     .page-sub {
         font-size: 13px; color: #6b6f76;
-        margin-top: 2px; font-family: 'JetBrains Mono', monospace;
+        margin-top: 2px; font-family: "SF Mono", ui-monospace, Menlo, monospace;
     }
 
     /* Locatie-subline onder klant-naam in tabel */
@@ -281,19 +364,15 @@ ui.add_css('''
 }
 ''', shared=True)
 
-# JetBrains Mono via Google Fonts — pywebview cached na eerste load,
-# offline-fallback via ui-monospace stack in de helpers hierboven.
-ui.add_head_html(
-    '<link rel="stylesheet" '
-    'href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap">',
-    shared=True,
-)
+# Sprint B: Google Fonts CDN-link voor JetBrains Mono verwijderd —
+# alle .num/.mono/.chip/.seg-btn/.selection-bar/.page-sub classes
+# gebruiken nu SF Mono (system-font, OS-native vanaf macOS 10.11).
 
 
 def page_title(text: str):
     """Render a consistent page title label."""
     return ui.label(text).classes('text-h5') \
-        .style('color: #0F172A; font-weight: 700')
+        .style('color: var(--text); font-weight: 700')
 
 
 def create_layout(title: str, active_page: str = ''):
@@ -327,19 +406,27 @@ def create_layout(title: str, active_page: str = ''):
         warning='#D97706',
     )
 
-    # Off-white page background
-    ui.query('body').style('background-color: #F8FAFC')
+    # Background komt nu uit CSS-token --bg (zie ui.add_css blok bovenin).
+    # Inline-style hier zou CSS overrulen — daarom weggehaald in Sprint B.
 
-    with ui.header().classes('items-center shadow-sm') \
-            .style('background-color: #0F172A'):
+    with ui.header().classes('items-center') \
+            .style('background-color: var(--surface); '
+                   'border-bottom: 1px solid var(--border); '
+                   'box-shadow: none;'):
         ui.button(icon='menu', on_click=lambda: drawer.toggle()) \
-            .props('flat color=white round dense')
-        ui.label('Boekhouding').classes('text-h6 text-white q-ml-sm')
+            .props('flat round dense') \
+            .style('color: var(--text)')
+        ui.label('Boekhouding').classes('text-h6 q-ml-sm') \
+            .style('color: var(--text); font-weight: 600')
         ui.space()
-        ui.label(title).classes('text-subtitle1').style('color: #CBD5E1')
+        ui.label(title).classes('text-subtitle1').style('color: var(--muted)')
 
     drawer = ui.left_drawer(value=True, bordered=False) \
-        .style('background-color: #0F172A') \
+        .style('background: linear-gradient(180deg, '
+               '#FAFAFA 0%, '
+               'rgba(15,118,110,0.02) 30%, '
+               'var(--bg) 100%); '
+               'border-right: 1px solid var(--border);') \
         .props('width=180')
 
     def _nav_item(label, icon, target):

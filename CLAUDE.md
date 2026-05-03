@@ -255,6 +255,40 @@ controls that mutate data.
 - **Investeringen tab**: unchanged, `pages/kosten_investeringen.py:
   laad_activastaat`.
 
+### Visuele tokens (Sprint B, 2026-05-03)
+
+`components/layout.py` definieert 9 CSS custom properties als single
+source of truth voor visual styling: `--bg`, `--surface`, `--border`,
+`--text`, `--muted`, `--accent`, `--accent-soft`, `--shadow`,
+`--radius`. Nieuw werk gebruikt deze — geen hardcoded hex meer in
+`pages/`.
+
+**Cascade-regel**: Quasar `.q-*` overrides ALTIJD buiten
+`@layer components` plaatsen — layered styles verliezen van Quasar's
+unlayered defaults, ongeacht specificity. App-only classes
+(`.app-card`, `.nav-item`, `.wd-pill`, etc.) horen wél binnen
+`@layer components`. Voor bewuste suppressie van `.q-card` defaults:
+chained selector `.q-card.your-class` buiten layer.
+
+**`.q-btn` overrides** moeten `:not()`-modifier-respect afdwingen:
+`.q-btn:not(.q-btn--round):not(.q-btn--rounded) { ... }` — anders
+breken `props('round')` icon-buttons (cirkel → afgerond vierkant).
+
+**Font-stack**: body+headings = `-apple-system` system stack (laat
+macOS SF Pro Text/Display zelf kiezen, geen Rounded — financial app
+moet rustig voelen, niet speels). Numbers = SF Mono via `.num` class.
+Geen webfont-CDN meer.
+
+**View-switcher pattern**: tussen `/werkdagen` en `/agenda` cross-link
+buttons in beide page-toolbars (`Kalenderweergave` ↔ `Lijstweergave`).
+Geen tab-merge — `/agenda` heeft eigen concepten (recurring patterns,
+blockers, holidays, urencriterium-projectie) die niet "lijst-filters
+op werkdagen" zijn.
+
+`/bank` route bestaat NIET MEER (Sprint B T9 schrap — `ui.navigate.to`
+client-side redirect was ineffectief, server-side middleware overkill
+voor 1-user app).
+
 ### YAGNI
 Geen: user auth, BTW-administratie, loon/voorraad, real-time bank-API, auto-matching, CI/CD, multi-language
 

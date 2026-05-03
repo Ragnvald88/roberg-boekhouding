@@ -211,9 +211,18 @@ body {
 }
 .text-h1, .text-h2, .text-h3, .text-h4, .text-h5, .text-h6 {
     font-family: -apple-system, "SF Pro Display", system-ui, sans-serif;
-    color: var(--text);
+    /* Geen color hier — body's color: var(--text) erft via inheritance.
+       Een eigen color zou Quasar utility classes (.text-white in donkere
+       header, .text-primary elders) overrulen via gelijke specificity. */
 }
 ```
+
+> **Plan-amendment 2026-05-03 (na Codex T2 review)**: oorspronkelijke
+> Step 2 had `color: var(--text)` op `.text-h1..h6` — verwijderd in
+> commit `36d63d2`. Reden: zou Quasar utilities (`.text-white`,
+> `.text-primary`) overrulen via gelijke specificity. Body's color
+> erft naar headings via inheritance, en utility classes winnen via
+> directe element-class-selector. Niet herintroduceren bij re-run.
 
 - [ ] **Step 3: Verifieer pytest blijft groen**
 
@@ -656,8 +665,8 @@ Edit `components/layout.py`. Vóór de regel `@layer components {` (na alle best
     background: var(--surface);
 }
 
-/* Button polish — Sprint B */
-.q-btn {
+/* Button polish — Sprint B (NIET op round/rounded modifiers — die houden Quasar's cirkel-shape) */
+.q-btn:not(.q-btn--round):not(.q-btn--rounded) {
     border-radius: 8px;
 }
 
@@ -666,6 +675,19 @@ Edit `components/layout.py`. Vóór de regel `@layer components {` (na alle best
     border-radius: 8px;
 }
 ```
+
+> **Plan-amendment 2026-05-03 (na Codex T6 review)**: oorspronkelijke
+> `.q-btn { border-radius: 8px; }` overruled Quasar's `.q-btn--round`
+> en `.q-btn--rounded` modifiers via gelijke specificity + unlayered
+> cascade. Header menu-button (`props('round')`) werd afgerond vierkant
+> ipv cirkel. Fix in commit 7aa1696 — `:not()` selector toegevoegd.
+> Niet herintroduceren bij re-run.
+>
+> **Plan-amendment 2026-05-03 (na code-quality T6 review)**: extra
+> `.builder-line-card` cascade-fix in commit cead04c. Bewuste
+> `box-shadow: none` op invoice-builder line-cards verloor van T6's
+> unlayered `.q-card`. Verhuisd naar buiten @layer als chained
+> `.q-card.builder-line-card` selector.
 
 - [ ] **Step 3: Verifieer pytest blijft groen**
 

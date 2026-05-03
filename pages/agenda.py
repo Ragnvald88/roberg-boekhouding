@@ -434,6 +434,10 @@ async def agenda_page():
                 'text-xl font-medium ml-2'
             )
             ui.space()
+            refs['list_view_btn'] = ui.button(
+                'Lijstweergave', icon='list',
+                on_click=lambda: ui.navigate.to('/werkdagen'),
+            ).props('flat color=secondary')
             refs['refresh_btn'] = ui.button('Ververs', icon='refresh') \
                 .props('flat dense color=secondary')
             refs['new_btn'] = ui.button('Nieuwe werkdag', icon='add') \
