@@ -174,7 +174,12 @@ body {
     .chart-subtitle { font-size: 12px; color: #94A3B8; }
     .strip-value { font-size: 14px; font-weight: 600; color: #0F172A; }
     .strip-pct { font-size: 11px; color: #94A3B8; }
-    .card-hero { border-radius: 14px; border: 1px solid #E2E8F0; }
+    .card-hero {
+        border-radius: var(--radius);
+        border: 1px solid var(--border);
+        box-shadow: var(--shadow);
+        background: var(--surface);
+    }
 
     /* === REDESIGN PORT — design tokens & herbruikbare helpers ===
        Eerste introductie van het token-systeem uit
@@ -363,7 +368,7 @@ body {
 def page_title(text: str):
     """Render a consistent page title label."""
     return ui.label(text).classes('text-h5') \
-        .style('color: #0F172A; font-weight: 700')
+        .style('color: var(--text); font-weight: 700')
 
 
 def create_layout(title: str, active_page: str = ''):
