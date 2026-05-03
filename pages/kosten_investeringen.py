@@ -114,11 +114,21 @@ async def laad_activastaat(container, jaar: int, on_change) -> None:
         activa_tbl = ui.table(columns=columns, rows=activa_rows,
                               row_key="id") \
             .classes("w-full").props("dense flat")
+        activa_tbl.add_slot("body-cell-aanschaf", '''
+            <q-td :props="props" class="text-right num">
+                {{ props.row.aanschaf }}
+            </q-td>
+        ''')
         activa_tbl.add_slot("body-cell-afschr_dit_jaar", '''
-            <q-td :props="props">
+            <q-td :props="props" class="text-right num">
                 <span>{{ props.row.afschr_dit_jaar }}</span>
                 <q-icon v-if="props.row.has_override" name="edit"
                         size="xs" color="primary" class="q-ml-xs" />
+            </q-td>
+        ''')
+        activa_tbl.add_slot("body-cell-boekwaarde", '''
+            <q-td :props="props" class="text-right num">
+                {{ props.row.boekwaarde }}
             </q-td>
         ''')
         # L8/U4: when the displayed jaar is definitief, render the tune
@@ -236,13 +246,13 @@ async def open_afschrijving_dialog(row: dict, huidige_jaar: int,
                             lbl.classes("text-caption")
 
                         ui.label(format_euro(auto_val)) \
-                            .classes("text-caption text-grey text-right") \
+                            .classes("text-caption text-grey text-right num") \
                             .style("width: 90px")
 
                         if is_locked:
                             if has_ov:
                                 ui.label(format_euro(override_val)) \
-                                    .classes("text-caption text-bold") \
+                                    .classes("text-caption text-bold num") \
                                     .style("width: 120px")
                             else:
                                 ui.label("—") \
@@ -260,7 +270,7 @@ async def open_afschrijving_dialog(row: dict, huidige_jaar: int,
 
                         bw_label = ui.label(
                             format_euro(result_with["boekwaarde"])) \
-                            .classes("text-caption text-right") \
+                            .classes("text-caption text-right num") \
                             .style("width: 90px")
                         if has_ov:
                             bw_label.classes("text-bold")

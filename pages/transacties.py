@@ -711,6 +711,26 @@ async def transacties_page(jaar: int | None = None,
             # Pre-tick high-confidence; low-confidence needs explicit user click.
             preview_table.selected = [
                 r for r in rows if r['confidence'] == 'high']
+            preview_table.add_slot('body-cell-factuur_bedrag', '''
+                <q-td :props="props" class="text-right num">
+                    {{ props.row.factuur_bedrag }}
+                </q-td>
+            ''')
+            preview_table.add_slot('body-cell-bank_datum', '''
+                <q-td :props="props" class="num">
+                    {{ props.row.bank_datum }}
+                </q-td>
+            ''')
+            preview_table.add_slot('body-cell-bank_bedrag', '''
+                <q-td :props="props" class="text-right num">
+                    {{ props.row.bank_bedrag }}
+                </q-td>
+            ''')
+            preview_table.add_slot('body-cell-delta', '''
+                <q-td :props="props" class="text-right num">
+                    {{ props.row.delta }}
+                </q-td>
+            ''')
 
             async def apply_selected():
                 chosen_ids = {r['id'] for r in preview_table.selected}
@@ -1125,7 +1145,7 @@ async def transacties_page(jaar: int | None = None,
                     <q-td auto-width>
                         <q-checkbox v-model="props.selected" dense />
                     </q-td>
-                    <q-td key="datum" :props="props">{{ props.row.datum_fmt }}</q-td>
+                    <q-td key="datum" :props="props" class="num">{{ props.row.datum_fmt }}</q-td>
                     <q-td key="tegenpartij" :props="props">
                         <div class="row items-center q-gutter-sm"
                              style="width:100%;flex-wrap:nowrap;">
@@ -1178,11 +1198,9 @@ async def transacties_page(jaar: int | None = None,
                         </div>
                     </q-td>
                     <q-td key="bedrag" :props="props"
-                           :class="props.row.bedrag >= 0
-                                    ? 'text-teal-8 text-bold'
-                                    : 'text-red-8 text-bold'"
-                           style="text-align:right;
-                                  font-variant-numeric:tabular-nums">
+                           :class="'num text-right text-bold ' + (props.row.bedrag >= 0
+                                    ? 'text-teal-8'
+                                    : 'text-red-8')">
                         {{ props.row.bedrag_fmt }}
                     </q-td>
                     <q-td key="status_chip" :props="props">

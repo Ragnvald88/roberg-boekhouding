@@ -126,8 +126,7 @@ async def _laad_kpi(container, jaar):
                     ui.icon(icon, color=color).classes('text-lg')
                 ui.label(label).classes(
                     'text-caption text-uppercase text-grey')
-            ui.label(value).classes('text-h5 text-bold q-mt-xs') \
-                .style('font-variant-numeric: tabular-nums')
+            ui.label(value).classes('text-h5 text-bold q-mt-xs num')
             if sub:
                 ui.label(sub).classes('text-caption text-grey')
 
@@ -225,8 +224,7 @@ async def _laad_breakdown(container, jaar):
                         .classes('text-body2')
                     ui.space()
                     ui.label(format_euro(uncat_amount)) \
-                        .classes('text-body2 text-bold') \
-                        .style('font-variant-numeric:tabular-nums')
+                        .classes('text-body2 text-bold num')
                 ui.label(
                     'Klik om deze op /transacties te categoriseren.') \
                     .classes('text-caption text-grey')
@@ -254,8 +252,7 @@ async def _laad_breakdown(container, jaar):
                         ui.space()
                         ui.label(
                             f'{format_euro(amt)} · {pct:.1f}%') \
-                            .classes('text-body2 text-bold') \
-                            .style('font-variant-numeric:tabular-nums')
+                            .classes('text-body2 text-bold num')
                     ui.linear_progress(value=pct / 100) \
                         .props('color=primary size=6px')
                 row.on('click', lambda _=None, n=name:
@@ -297,9 +294,8 @@ async def _laad_terugkerend(container, jaar):
                         .classes('text-caption text-grey') \
                         .style('width:110px')
                     ui.label(format_euro(item['jaar_totaal'])) \
-                        .classes('text-body2 text-bold') \
-                        .style('font-variant-numeric:tabular-nums;'
-                                'width:110px;text-align:right')
+                        .classes('text-body2 text-bold num') \
+                        .style('width:110px;text-align:right')
                 row.on('click', lambda _=None, tp=item['tegenpartij']:
                         ui.navigate.to(
                             f'/transacties?jaar={jaar}'
