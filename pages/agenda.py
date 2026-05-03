@@ -11,7 +11,8 @@ from datetime import date, timedelta
 from nicegui import ui
 
 from components.layout import create_layout, page_title
-from database import DB_PATH
+from components.utils import contrast_text_color
+from database import DB_PATH, get_bedrijfsgegevens
 import services.agenda as agenda_svc
 
 
@@ -31,12 +32,40 @@ def _iso_week_number(d: date) -> int:
     return d.isocalendar()[1]
 
 
-def _render_month_grid(container, view, on_day_click, selected: date) -> None:
+def _pill_color_style(pill, gebruik_klant_kleur: bool) -> str:
+    """Return inline-style for pill background obv klant.color, of '' als
+    overlay niet van toepassing is.
+
+    Defensief (Codex risk #1): alleen overlay als (1) toggle aan staat,
+    (2) klant_color is non-None, (3) hex format klopt (#RRGGBB), (4)
+    contrast_text_color slaagt. Bij elke afwijking: lege string → pill
+    valt terug op type-based .wd-{category} styling. Holidays/blockers
+    renderen geen pills, dus dit raakt nooit niet-klant-gebonden cellen.
+    """
+    if not gebruik_klant_kleur:
+        return ''
+    color = getattr(pill, 'klant_color', None)
+    if not (isinstance(color, str)
+            and len(color) == 7
+            and color.startswith('#')):
+        return ''
+    try:
+        text_color = contrast_text_color(color)
+    except ValueError:
+        return ''  # malformed hex — skip overlay, type-based fallback
+    return f'background: {color}; color: {text_color};'
+
+
+def _render_month_grid(container, view, on_day_click, selected: date,
+                        gebruik_klant_kleur: bool = False) -> None:
     """Render 6×7 day grid + week-summary kolom rechts.
 
     view: MaandView from services.agenda.get_maand
     on_day_click: callback(date) → set state['selected'], rerender
     selected: currently selected date (for highlight)
+    gebruik_klant_kleur: Sprint D — bedrijfsgegevens-toggle. Als True en
+        pill.klant_color is een geldig #RRGGBB → render pill met klant-
+        kleur background; anders type-based .wd-{category} styling.
     """
     container.clear()
     first = date(view.jaar, view.maand, 1)
@@ -120,9 +149,16 @@ def _render_month_grid(container, view, on_day_click, selected: date) -> None:
                                 # does not — distinguish via attribute presence.
                                 if hasattr(pill, 'pattern_id'):
                                     pill_classes.append('expected')
+                                # Sprint D: defensieve klant-color overlay
+                                # (alleen op werkdag/expected pills, NIET op
+                                # blocker/holiday cellen — die renderen geen
+                                # pills via deze loop).
+                                pill_style = _pill_color_style(
+                                    pill, gebruik_klant_kleur,
+                                )
                                 with ui.element('div').classes(
                                     ' '.join(pill_classes)
-                                ):
+                                ).style(pill_style):
                                     klant_short = pill.klant_naam[:10]
                                     ui.label(
                                         f'{klant_short} {pill.uren:.1f}u'
@@ -528,6 +564,13 @@ async def agenda_page():
             DB_PATH, jaar=anchor.year, maand=anchor.month,
         )
 
+        # Sprint D: lees klant-kleur toggle uit bedrijfsgegevens. Best-effort —
+        # bij ontbrekende row of attribuut → False (= type-based fallback).
+        bg = await get_bedrijfsgegevens(DB_PATH)
+        gebruik_klant_kleur = bool(
+            getattr(bg, 'gebruik_klant_kleur_in_agenda', False)
+        ) if bg else False
+
         # Month label (e.g. "Mei 2026")
         refs['month_label'].text = (
             f"{NL_MONTHS[anchor.month - 1].capitalize()} {anchor.year}"
@@ -537,6 +580,7 @@ async def agenda_page():
             refs['grid_container'], view,
             on_day_click=select_day,
             selected=state['selected'],
+            gebruik_klant_kleur=gebruik_klant_kleur,
         )
 
         # Inspector

@@ -112,6 +112,7 @@ class WerkdagMetStatus:
     factuur_datum: str             # '' if no factuur, else YYYY-MM-DD
     factuur_status: str            # '' | 'concept' | 'verstuurd' | 'betaald'
     factuur_betaald_datum: str     # '' if not paid, else YYYY-MM-DD
+    klant_color: str | None = None  # Sprint D — klant.color (#RRGGBB or None)
     factuur_vervaldatum: str = field(init=False, default='')  # derived; see __post_init__
 
     def __post_init__(self):
@@ -1402,7 +1403,8 @@ async def get_werkdagen_met_factuur_status(
             f.id AS factuur_id,
             COALESCE(f.datum, '') AS factuur_datum,
             COALESCE(f.status, '') AS factuur_status,
-            COALESCE(f.betaald_datum, '') AS factuur_betaald_datum
+            COALESCE(f.betaald_datum, '') AS factuur_betaald_datum,
+            k.color AS klant_color
         FROM werkdagen w
         JOIN klanten k ON k.id = w.klant_id
         LEFT JOIN facturen f
@@ -1431,6 +1433,7 @@ async def get_werkdagen_met_factuur_status(
             factuur_datum=r[12],
             factuur_status=r[13],
             factuur_betaald_datum=r[14],
+            klant_color=r[15],  # Sprint D — k.color (None if NULL)
         )
         for r in rows
     ]

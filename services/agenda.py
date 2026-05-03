@@ -402,6 +402,11 @@ class WerkdagPill:
     factuur_id en factuur_betaald_datum dragen door uit WerkdagMetStatus voor
     Day-Inspector deep-links / "betaald op X"-display. overdue_days is een
     pure derivation uit factuur_vervaldatum (zie compute_overdue_days).
+
+    klant_color (Sprint D): optionele hex-kleur (#RRGGBB) van de klant. Wordt
+    door /agenda render gebruikt als pill-background mits
+    bedrijfsgegevens.gebruik_klant_kleur_in_agenda True is. Default None
+    (klant heeft geen kleur ingesteld → type-based fallback styling).
     """
     id: int
     klant_id: int
@@ -417,11 +422,16 @@ class WerkdagPill:
     overdue_days: int
     status_label: WerkdagStatusLabel
     category: WerkdagCategory
+    klant_color: str | None = None
 
 
 @dataclass(frozen=True)
 class ExpectedEntry:
-    """Verwachte werkdag uit recurring pattern (NOT in DB; computed on read)."""
+    """Verwachte werkdag uit recurring pattern (NOT in DB; computed on read).
+
+    klant_color (Sprint D): zie WerkdagPill — zelfde semantiek voor expected
+    entries (recurring patterns nemen de huidige klant-kleur over).
+    """
     pattern_id: int
     klant_id: int
     klant_naam: str
@@ -432,6 +442,7 @@ class ExpectedEntry:
     code: str
     activiteit: str
     category: WerkdagCategory
+    klant_color: str | None = None
 
 
 @dataclass(frozen=True)
@@ -513,6 +524,7 @@ def _expected_for_datum(datum: _date,
                 code=p.code,
                 activiteit=p.activiteit,
                 category=categorize_werkdag(p.code),
+                klant_color=getattr(klant, 'color', None),  # Sprint D
             ))
     return tuple(out)
 
@@ -553,6 +565,7 @@ async def get_maand(db_path, jaar: int, maand: int,
             overdue_days=compute_overdue_days(w, today),
             status_label=derive_werkdag_status_label(w, today),
             category=categorize_werkdag(w.code),
+            klant_color=getattr(w, 'klant_color', None),  # Sprint D
         )
         werkdagen_by_datum.setdefault(d, []).append(pill)
 
