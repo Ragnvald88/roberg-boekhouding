@@ -174,6 +174,10 @@ body {
     .chart-subtitle { font-size: 12px; color: #94A3B8; }
     .strip-value { font-size: 14px; font-weight: 600; color: #0F172A; }
     .strip-pct { font-size: 11px; color: #94A3B8; }
+    /* .card-hero — alle huidige callers gebruiken ui.card() (= .q-card),
+       en de unlayered .q-card rule (Sprint B T6) wint van deze layered
+       regel. Functioneel no-op vandaag — defensieve fallback voor
+       toekomstige non-q-card consumers. */
     .card-hero {
         border-radius: var(--radius);
         border: 1px solid var(--border);
