@@ -251,7 +251,7 @@ async def dashboard_page():
                     'gap: 20px; align-items: stretch'):
 
                 # Card 1: Bruto omzet
-                with ui.card().classes('q-pa-lg card-hero') \
+                with ui.card().classes('q-pa-lg') \
                         .style('cursor: pointer') \
                         .on('click', lambda: ui.navigate.to('/werkdagen')):
                     with ui.row().classes('w-full justify-between items-center'):
@@ -275,7 +275,7 @@ async def dashboard_page():
                     kpis['omzet'] - kpis['kosten'])
                 vorig_winst = vorig_ytd_omzet - vorig_ytd_kosten
 
-                with ui.card().classes('q-pa-lg card-hero') \
+                with ui.card().classes('q-pa-lg') \
                         .style('cursor: pointer') \
                         .on('click', lambda: ui.navigate.to('/aangifte')):
                     with ui.row().classes('w-full justify-between items-center'):
@@ -296,7 +296,7 @@ async def dashboard_page():
                         _render_sparkline(omzet_huidig, '#059669')
 
                 # Card 3: Belasting prognose
-                with ui.card().classes('q-pa-lg card-hero') \
+                with ui.card().classes('q-pa-lg') \
                         .style('cursor: pointer') \
                         .on('click', lambda: ui.navigate.to('/aangifte')):
 
@@ -492,7 +492,7 @@ async def dashboard_page():
                 cum_vorig.append(round(rv))
 
             # Chart 1: Revenue bar chart — FULL WIDTH
-            with ui.card().classes('w-full q-pa-lg card-hero'):
+            with ui.card().classes('w-full q-pa-lg'):
                 with ui.row().classes(
                         'w-full justify-between items-baseline'):
                     ui.label('Omzet per maand').classes('chart-title')
@@ -553,7 +553,7 @@ async def dashboard_page():
                 with ui.element('div').style(
                         'display: grid; grid-template-columns: 1fr 1fr;'
                         ' gap: 20px'):
-                    with ui.card().classes('q-pa-lg card-hero'):
+                    with ui.card().classes('q-pa-lg'):
                         with ui.row().classes(
                                 'w-full justify-between items-baseline'):
                             ui.label('Cumulatieve omzet').classes(
@@ -563,12 +563,12 @@ async def dashboard_page():
                         ui.echart(cum_chart_config).style(
                             'height: 300px; width: 100%')
 
-                    with ui.card().classes('q-pa-lg card-hero'):
+                    with ui.card().classes('q-pa-lg'):
                         ui.label('Kostenverdeling').classes('chart-title')
                         cost_donut_chart(kosten_per_cat)
             else:
                 # No costs — full-width cumulative
-                with ui.card().classes('w-full q-pa-lg card-hero'):
+                with ui.card().classes('w-full q-pa-lg'):
                     with ui.row().classes(
                             'w-full justify-between items-baseline'):
                         ui.label('Cumulatieve omzet').classes('chart-title')

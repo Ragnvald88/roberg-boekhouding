@@ -942,19 +942,19 @@ async def facturen_page(nieuw: str | None = None,
             kpi_strip_container.clear()
             with kpi_strip_container:
                 _kpi_style = 'font-variant-numeric: tabular-nums'
-                with ui.card().classes('flex-1 q-pa-sm card-hero'):
+                with ui.card().classes('flex-1 q-pa-sm'):
                     ui.label('Gefactureerd').classes('text-caption text-grey-7')
                     ui.label(format_euro(totaal)).classes(
                         'text-subtitle1 text-weight-bold').style(_kpi_style)
                 if openstaand > 0:
-                    with ui.card().classes('flex-1 q-pa-sm card-hero'):
+                    with ui.card().classes('flex-1 q-pa-sm'):
                         ui.label('Openstaand').classes(
                             'text-caption text-grey-7')
                         ui.label(format_euro(openstaand)) \
                             .style(f'color: var(--q-warning); {_kpi_style}') \
                             .classes('text-subtitle1 text-weight-bold')
                 if verlopen_bedrag > 0:
-                    with ui.card().classes('flex-1 q-pa-sm card-hero'):
+                    with ui.card().classes('flex-1 q-pa-sm'):
                         ui.label('Verlopen').classes(
                             'text-caption text-grey-7')
                         ui.label(format_euro(verlopen_bedrag)) \

@@ -174,17 +174,6 @@ body {
     .chart-subtitle { font-size: 12px; color: var(--muted); }
     .strip-value { font-size: 14px; font-weight: 600; color: var(--text); }
     .strip-pct { font-size: 11px; color: var(--muted); }
-    /* .card-hero — alle huidige callers gebruiken ui.card() (= .q-card),
-       en de unlayered .q-card rule (Sprint B T6) wint van deze layered
-       regel. Functioneel no-op vandaag — defensieve fallback voor
-       toekomstige non-q-card consumers. */
-    .card-hero {
-        border-radius: var(--radius);
-        border: 1px solid var(--border);
-        box-shadow: var(--shadow);
-        background: var(--surface);
-    }
-
     /* === REDESIGN PORT — design tokens & herbruikbare helpers ===
        Eerste introductie van het token-systeem uit
        redesign/design_handoff_boekhouding_redesign/source/styles.css.
