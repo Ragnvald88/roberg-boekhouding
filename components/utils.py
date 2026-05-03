@@ -106,3 +106,49 @@ def format_datum(iso_date: str) -> str:
         return f"{parts[2]}-{parts[1]}-{parts[0]}"
     # Already DD-MM-YYYY or unknown format — return as-is
     return iso_date
+
+
+def contrast_text_color(hex_color: str) -> str:
+    """Return 'white' or 'black' as readable text-color on hex_color background.
+
+    Uses WCAG relative-luminance formula. Threshold ~0.179 (sqrt(1.05*0.05) - 0.05),
+    above which black text reads better, below which white. This is the
+    decision-boundary that maximizes contrast ratio against white-or-black.
+
+    Args:
+        hex_color: hex string in #RRGGBB format (case-insensitive). Other
+            formats raise ValueError.
+
+    Returns:
+        'white' or 'black' (lowercase, suitable for inline CSS).
+
+    Examples:
+        >>> contrast_text_color('#FFFFFF')  # white bg → black text
+        'black'
+        >>> contrast_text_color('#000000')  # black bg → white text
+        'white'
+        >>> contrast_text_color('#0F766E')  # teal-700 (donker) → white text
+        'white'
+    """
+    if not (isinstance(hex_color, str)
+            and len(hex_color) == 7
+            and hex_color.startswith('#')):
+        raise ValueError(
+            f'hex_color must be #RRGGBB format, got: {hex_color!r}'
+        )
+    try:
+        r = int(hex_color[1:3], 16) / 255
+        g = int(hex_color[3:5], 16) / 255
+        b = int(hex_color[5:7], 16) / 255
+    except ValueError as exc:
+        raise ValueError(
+            f'hex_color contains non-hex chars: {hex_color!r}'
+        ) from exc
+
+    # WCAG relative luminance (sRGB → linear)
+    def _channel(c: float) -> float:
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+
+    luminance = 0.2126 * _channel(r) + 0.7152 * _channel(g) + 0.0722 * _channel(b)
+    # Threshold: midpoint where contrast against white == contrast against black
+    return 'black' if luminance > 0.179 else 'white'
