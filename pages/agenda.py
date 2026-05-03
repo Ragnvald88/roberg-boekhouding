@@ -3,7 +3,8 @@
 Sprint A spec: docs/superpowers/specs/2026-05-02-agenda-sprint-a-design.md
 
 Task 3.3: MonthGrid renderer met factuur-status-bars + week-summary kolom.
-Day-Inspector + bevestigen-flow komen in Task 3.4.
+Task 3.4: Day-Inspector met states (empty/blocker/holiday/expected/confirmed).
+Werkdag-dialog hookup komt in Task 4.1.
 """
 from datetime import date, timedelta
 
@@ -158,6 +159,238 @@ def _render_month_grid(container, view, on_day_click, selected: date) -> None:
                         ).classes('week-summary-meta')
 
 
+def _format_short_date(iso_str):
+    """Format YYYY-MM-DD as 'D MMM' (e.g. '15 mei')."""
+    try:
+        d = date.fromisoformat(iso_str)
+    except (ValueError, TypeError):
+        return iso_str
+    return f'{d.day} {NL_MONTHS[d.month - 1][:3]}'
+
+
+def _render_blocker_section(dag, on_add_werkdag, on_delete_blocker):
+    blocker = dag.blocker
+    kind = blocker.kind
+    icon_name = {
+        'holiday': 'celebration',
+        'vacation': 'beach_access',
+        'sick': 'sick',
+        'training': 'school',
+    }.get(kind, 'event_busy')
+    kind_label = {
+        'holiday': 'Feestdag',
+        'vacation': 'Vakantie',
+        'sick': 'Ziek',
+        'training': 'Nascholing',
+    }.get(kind, kind.capitalize())
+
+    with ui.row().classes('items-center gap-2 mt-3'):
+        ui.icon(icon_name).classes('text-2xl').style('color: #475569')
+        with ui.column().classes('gap-0 flex-1'):
+            ui.label(kind_label).classes('text-sm font-medium')
+            if blocker.label:
+                ui.label(blocker.label).classes('text-xs text-slate-500')
+
+    if kind == 'holiday':
+        with ui.row().classes('mt-3'):
+            ui.button(
+                'Werkdag plannen', icon='add',
+                on_click=lambda: on_add_werkdag(dag.datum),
+            ).props('flat color=primary dense')
+    else:
+        with ui.row().classes('mt-3'):
+            ui.button(
+                'Verwijderen', icon='delete',
+                on_click=lambda: on_delete_blocker(blocker.id),
+            ).props('flat color=negative dense')
+
+
+def _render_confirmed_section(dag, on_open_factuur, on_create_factuur,
+                              on_add_werkdag):
+    """Render bevestigde werkdagen op deze datum."""
+    nog_te_factureren_ids = []
+
+    for w in dag.werkdagen:
+        with ui.card().classes('w-full p-2 mt-2 q-mt-sm'):
+            with ui.row().classes('items-baseline justify-between'):
+                ui.label(w.klant_naam).classes('text-sm font-medium')
+                ui.label(f'{w.uren:.1f}u').classes(
+                    'text-xs text-slate-500'
+                )
+            ui.label(
+                f'€ {w.bedrag:,.2f}'.replace(',', 'X').replace('.', ',').replace('X', '.')
+            ).classes('text-xs text-slate-600 mt-1')
+
+            # Status-chip
+            chip_color = {
+                'ongefactureerd': 'grey-7',
+                'concept': 'grey',
+                'verstuurd': 'blue',
+                'verlopen': 'red',
+                'betaald': 'green',
+            }.get(w.status_label, 'grey')
+            chip_label = {
+                'ongefactureerd': 'Ongefactureerd',
+                'concept': 'Concept',
+                'verstuurd': 'Verstuurd',
+                'verlopen': 'Verlopen',
+                'betaald': 'Betaald',
+            }.get(w.status_label, w.status_label)
+
+            with ui.row().classes('items-center gap-2 mt-2'):
+                ui.badge(chip_label, color=chip_color)
+                if w.status_label == 'verlopen' and w.overdue_days > 0:
+                    ui.label(
+                        f'{w.overdue_days} dgn te laat'
+                    ).classes('text-xs').style('color: #DC2626')
+                if w.status_label == 'betaald' and w.factuur_betaald_datum:
+                    ui.label(
+                        f'op {_format_short_date(w.factuur_betaald_datum)}'
+                    ).classes('text-xs text-slate-500')
+
+            # Factuur-link
+            if w.factuurnummer and w.factuur_id:
+                with ui.row().classes('mt-2'):
+                    ui.button(
+                        f'Factuur {w.factuurnummer}', icon='receipt',
+                        on_click=lambda _e=None, fid=w.factuur_id:
+                            on_open_factuur(fid),
+                    ).props('flat dense color=primary').classes('text-xs')
+
+            if not w.factuurnummer:
+                nog_te_factureren_ids.append(w.id)
+
+    # Footer: Maak factuur knop bij ongefactureerde werkdagen
+    if nog_te_factureren_ids:
+        with ui.row().classes('mt-3'):
+            ui.button(
+                'Maak factuur', icon='receipt_long',
+                on_click=lambda: on_create_factuur(nog_te_factureren_ids),
+            ).props('color=primary outline')
+
+    # Extra werkdag toevoegen op zelfde datum (multi-shifts)
+    with ui.row().classes('mt-3'):
+        ui.button(
+            'Extra werkdag', icon='add',
+            on_click=lambda: on_add_werkdag(dag.datum),
+        ).props('flat color=secondary dense')
+
+
+def _render_expected_section(dag, on_confirm_expected, on_add_werkdag):
+    """Render verwachte werkdag-entries (uit recurring patterns)."""
+    ui.label(
+        f'{len(dag.expected)} verwachte werkdag'
+        f"{'en' if len(dag.expected) > 1 else ''}"
+        ' uit vast rooster'
+    ).classes('text-xs text-slate-500 mt-2')
+
+    for e in dag.expected:
+        with ui.card().classes('w-full p-2 mt-2 bg-slate-50'):
+            ui.label('Verwacht via vast rooster').classes(
+                'text-[10px] uppercase text-slate-400 tracking-wider'
+            )
+            with ui.row().classes('items-baseline justify-between mt-1'):
+                ui.label(e.klant_naam).classes('text-sm font-medium')
+                ui.label(f'{e.uren:.1f}u').classes(
+                    'text-xs text-slate-500'
+                )
+            tijd = (
+                f'{e.start_minuten // 60:02d}:'
+                f'{e.start_minuten % 60:02d}'
+                f'–'
+                f'{e.eind_minuten // 60:02d}:'
+                f'{e.eind_minuten % 60:02d}'
+            )
+            ui.label(
+                f'{tijd} · € {e.bedrag:,.2f}'.replace(',', 'X')
+                .replace('.', ',').replace('X', '.')
+            ).classes('text-xs text-slate-600 mt-1')
+
+            with ui.row().classes('mt-2 gap-1'):
+                ui.button(
+                    'Bevestigen', icon='check',
+                    on_click=lambda _e=None, ent=e: on_confirm_expected(ent),
+                ).props('color=primary dense')
+                ui.button(
+                    'Aanpassen', icon='edit',
+                    on_click=lambda _e=None, ent=e: on_add_werkdag(
+                        dag.datum, prefill_pattern=ent,
+                    ),
+                ).props('flat dense')
+
+
+def _render_day_inspector(container, dag, on_add_werkdag, on_add_blocker,
+                          on_delete_blocker, on_confirm_expected,
+                          on_open_factuur, on_create_factuur):
+    """Render day-inspector card based on DagView state."""
+    container.clear()
+    today = date.today()
+    is_past = dag.datum < today
+
+    nl_dag_names = ['maandag', 'dinsdag', 'woensdag', 'donderdag',
+                    'vrijdag', 'zaterdag', 'zondag']
+    weekday_label = nl_dag_names[dag.datum.isoweekday() - 1].capitalize()
+    formatted_date = (
+        f"{weekday_label} {dag.datum.day} "
+        f"{NL_MONTHS[dag.datum.month - 1]} {dag.datum.year}"
+    )
+
+    with container:
+        with ui.card().classes('w-full p-3'):
+            ui.label(formatted_date).classes(
+                'text-base font-medium'
+            ).style('color: #0F172A')
+
+            # ====== BLOCKER (holiday or user) ======
+            if dag.blocker:
+                _render_blocker_section(
+                    dag, on_add_werkdag, on_delete_blocker,
+                )
+                return
+
+            # ====== CONFIRMED WERKDAGEN ======
+            if dag.werkdagen:
+                _render_confirmed_section(
+                    dag, on_open_factuur, on_create_factuur,
+                    on_add_werkdag,
+                )
+                return
+
+            # ====== EXPECTED (recurring, future only) ======
+            if dag.expected:
+                _render_expected_section(
+                    dag, on_confirm_expected, on_add_werkdag,
+                )
+                return
+
+            # ====== EMPTY ======
+            if is_past:
+                ui.label('Geen registratie op deze dag').classes(
+                    'text-slate-500 mt-2'
+                )
+            else:
+                ui.label('Geen registratie').classes(
+                    'text-slate-500 mt-2'
+                )
+                with ui.row().classes('gap-2 mt-2 flex-wrap'):
+                    ui.button(
+                        'Werkdag', icon='add',
+                        on_click=lambda: on_add_werkdag(dag.datum),
+                    ).props('color=primary outline dense')
+                    ui.button(
+                        'Vakantie', icon='beach_access',
+                        on_click=lambda: on_add_blocker(dag.datum, 'vacation'),
+                    ).props('outline dense color=info')
+                    ui.button(
+                        'Ziek', icon='sick',
+                        on_click=lambda: on_add_blocker(dag.datum, 'sick'),
+                    ).props('outline dense color=warning')
+                    ui.button(
+                        'Nascholing', icon='school',
+                        on_click=lambda: on_add_blocker(dag.datum, 'training'),
+                    ).props('outline dense color=accent')
+
+
 @ui.page('/agenda')
 async def agenda_page():
     create_layout('Agenda', '/agenda')
@@ -210,6 +443,50 @@ async def agenda_page():
             state['anchor'] = date(d.year, d.month, 1)
         ui.timer(0, render, once=True)
 
+    async def handle_add_werkdag(d, prefill_pattern=None):
+        """Stub: opens werkdag-dialog. Implementatie komt in Task 4.1
+        (werkdag_form prefill). For now: notify."""
+        ui.notify(
+            f'Werkdag toevoegen op {d.isoformat()} — komt in Task 4.1',
+            type='info',
+        )
+
+    async def handle_add_blocker(d, kind):
+        try:
+            await agenda_svc.add_blocker(
+                DB_PATH, datum=d, kind=kind, label=kind.capitalize(),
+            )
+            ui.notify('Blocker toegevoegd', type='positive')
+            await render()
+        except Exception as exc:
+            ui.notify(str(exc), type='warning')
+
+    async def handle_delete_blocker(blocker_id):
+        try:
+            await agenda_svc.delete_blocker(DB_PATH, blocker_id)
+            ui.notify('Blocker verwijderd', type='positive')
+            await render()
+        except Exception as exc:
+            ui.notify(str(exc), type='warning')
+
+    async def handle_confirm_expected(entry):
+        try:
+            await agenda_svc.confirm_expected(
+                DB_PATH, pattern_id=entry.pattern_id,
+                datum=state['selected'],
+            )
+            ui.notify('Werkdag bevestigd', type='positive')
+            await render()
+        except Exception as exc:
+            ui.notify(str(exc), type='warning')
+
+    def handle_open_factuur(factuur_id):
+        ui.navigate.to(f'/facturen?factuur_id={factuur_id}')
+
+    def handle_create_factuur(werkdag_ids):
+        ids_csv = ','.join(str(i) for i in werkdag_ids)
+        ui.navigate.to(f'/facturen?nieuw=1&werkdagen={ids_csv}')
+
     async def render():
         """Refetch data + re-render grid + inspector + urencriterium-strip."""
         anchor = state['anchor']
@@ -228,16 +505,21 @@ async def agenda_page():
             selected=state['selected'],
         )
 
-        # Inspector placeholder (Task 3.4 vervangt door Day-Inspector)
-        refs['inspector_container'].clear()
-        with refs['inspector_container']:
-            with ui.card().classes('w-full p-3'):
-                ui.label(state['selected'].isoformat()).classes(
-                    'text-sm font-medium'
-                )
-                ui.label(
-                    '[Placeholder — Day-Inspector komt in Task 3.4]'
-                ).classes('text-slate-400 italic text-xs')
+        # Inspector
+        sel_dag = await agenda_svc.get_dag(DB_PATH, state['selected'])
+        _render_day_inspector(
+            refs['inspector_container'], sel_dag,
+            on_add_werkdag=lambda d, prefill_pattern=None:
+                ui.timer(0, lambda: handle_add_werkdag(d, prefill_pattern), once=True),
+            on_add_blocker=lambda d, kind:
+                ui.timer(0, lambda: handle_add_blocker(d, kind), once=True),
+            on_delete_blocker=lambda bid:
+                ui.timer(0, lambda: handle_delete_blocker(bid), once=True),
+            on_confirm_expected=lambda ent:
+                ui.timer(0, lambda: handle_confirm_expected(ent), once=True),
+            on_open_factuur=handle_open_factuur,
+            on_create_factuur=handle_create_factuur,
+        )
 
         # Urencriterium-projectie strip
         try:
