@@ -179,6 +179,105 @@ ui.add_css('''
     .cell-sub {
         font-size: 11px; color: #9a9ea5; margin-top: 1px;
     }
+
+    /* === Agenda — werkdag-categorie kleuren (type-based, not per-klant) === */
+    .wd-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 1px 6px;
+        border-radius: 4px;
+        font-size: 10px;
+        font-weight: 500;
+        line-height: 1.4;
+        margin: 1px 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        max-width: 100%;
+    }
+    .wd-dagpraktijk { background: rgba(15,118,110,0.12); color: #0F766E; }
+    .wd-anw         { background: rgba(126,34,206,0.12); color: #7E22CE; }
+    .wd-overig      { background: rgba(100,116,139,0.12); color: #475569; }
+
+    /* Verwachte entries (recurring) — dashed border + soft fill */
+    .wd-pill.expected {
+        border: 1px dashed currentColor;
+        opacity: 0.7;
+    }
+
+    /* Status-bars onder werkdag-pills — per factuur-status */
+    .wd-status-bar {
+        display: flex;
+        height: 3px;
+        gap: 1px;
+        margin-top: 2px;
+    }
+    .wd-status-bar > span {
+        flex: 1;
+        border-radius: 1px;
+    }
+    .status-ongefactureerd { background: #94A3B8; }
+    .status-concept        { background: #94A3B8; opacity: 0.6; }
+    .status-verstuurd      { background: #2563EB; }
+    .status-verlopen       { background: #DC2626; }
+    .status-betaald        { background: #16A34A; }
+
+    /* Holiday marker (computed dutch_holidays) — top-band, niet full-fill */
+    .holiday-marker {
+        background: linear-gradient(180deg, rgba(220,38,38,0.08), transparent);
+        border-top: 2px solid #DC2626;
+    }
+    .holiday-label {
+        font-size: 10px;
+        color: #DC2626;
+        font-weight: 500;
+    }
+
+    /* Blocker overlays — per kind */
+    .blocker-vacation { background: rgba(90,200,250,0.10); }
+    .blocker-sick     { background: rgba(255,149,0,0.10); }
+    .blocker-training { background: rgba(175,82,222,0.10); }
+
+    /* Maandgrid cell-states */
+    .agenda-cell {
+        border: 1px solid #E2E8F0;
+        border-radius: 4px;
+        padding: 4px;
+        min-height: 80px;
+        cursor: pointer;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        background: white;
+        transition: background 0.1s;
+    }
+    .agenda-cell:hover { background: #F1F5F9; }
+    .agenda-cell.other-month { opacity: 0.4; }
+    .agenda-cell.weekend { background: #F8FAFC; }
+    .agenda-cell.today { box-shadow: inset 0 0 0 1px #14B8A6; }
+    .agenda-cell.selected { box-shadow: inset 0 0 0 2px #0F766E; background: rgba(15,118,110,0.05); }
+    .agenda-cell-day { font-size: 11px; font-weight: 500; color: #475569; }
+    .agenda-cell-overflow { font-size: 9px; color: #94A3B8; }
+
+    /* Week-summary kolom rechts van de 7 dagen */
+    .week-summary {
+        border: 1px solid #E2E8F0;
+        border-radius: 4px;
+        padding: 6px 8px;
+        background: #F8FAFC;
+        font-size: 11px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        gap: 1px;
+    }
+    .week-summary.current {
+        background: linear-gradient(180deg, rgba(15,118,110,0.08), rgba(15,118,110,0.02));
+    }
+    .week-summary-num { font-weight: 600; color: #475569; }
+    .week-summary-amt { font-weight: 600; color: #0F172A; font-variant-numeric: tabular-nums; }
+    .week-summary-meta { font-size: 9px; color: #94A3B8; }
 }
 ''', shared=True)
 
@@ -203,6 +302,7 @@ def create_layout(title: str, active_page: str = ''):
     # Navigation groups (separated by whitespace, no headers)
     NAV_GROUPS = [
         [('Dashboard', 'space_dashboard', '/'),
+         ('Agenda', 'calendar_month', '/agenda'),
          ('Werkdagen', 'event_note', '/werkdagen')],
         [('Facturen', 'receipt_long', '/facturen'),
          ('Transacties', 'account_balance_wallet', '/transacties'),
