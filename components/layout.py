@@ -35,7 +35,10 @@ body {
 }
 .text-h1, .text-h2, .text-h3, .text-h4, .text-h5, .text-h6 {
     font-family: -apple-system, "SF Pro Display", system-ui, sans-serif;
-    color: var(--text);
+    /* Geen color hier — body zet color: var(--text) en headings erven dat
+       via inheritance. Dit voorkomt dat we Quasar utilities overrulen
+       (bv. .text-h6.text-white in de huidige donkere header tijdens
+       Tier 1 progressie, of .text-primary elders). */
 }
 
 @layer components {
