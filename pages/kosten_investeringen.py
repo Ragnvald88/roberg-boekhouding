@@ -228,7 +228,7 @@ async def open_afschrijving_dialog(row: dict, huidige_jaar: int,
 
                     with ui.row().classes(
                             "w-full items-center gap-2 q-py-xs") \
-                            .style("border-bottom: 1px solid #F1F5F9"):
+                            .style("border-bottom: 1px solid var(--border)"):
                         lbl = ui.label(str(y)).style("width: 60px")
                         if y == huidige_jaar:
                             lbl.classes("text-bold text-primary")

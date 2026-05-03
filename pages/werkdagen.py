@@ -235,7 +235,7 @@ async def werkdagen_page():
                       class="mono" style="font-size:11px;color:var(--muted)">
                     {{ props.row.factuurnummer }}
                 </span>
-                <span v-else class="mono" style="font-size:11px;color:#b45309">—</span>
+                <span v-else class="mono" style="font-size:11px;color:var(--q-warning)">—</span>
             </q-td>
         ''')
 

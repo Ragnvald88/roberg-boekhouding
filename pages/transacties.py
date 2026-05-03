@@ -854,10 +854,10 @@ async def transacties_page(jaar: int | None = None,
             'update:model-value',
             lambda _=None: on_filter_change())
 
-        # Bulk bar — appears when 1+ rows selected
-        bulk_bar = ui.row().classes('w-full items-center gap-2 q-py-sm') \
-            .style('background:#0f172a;color:white;border-radius:8px;'
-                    'padding:8px 16px')
+        # Bulk bar — appears when 1+ rows selected. Uses .selection-bar
+        # class voor UX consistency met /werkdagen bulk-bar.
+        bulk_bar = ui.row().classes(
+            'w-full items-center gap-2 selection-bar')
         bulk_bar.set_visibility(False)
         bulk_bar_ref['ref'] = bulk_bar
         with bulk_bar:

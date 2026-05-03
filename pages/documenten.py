@@ -513,7 +513,7 @@ def _render_uploaded_rows(spec, existing, jaar, show_preview_fn, refresh_fn):
 def _render_missing_row(spec, jaar, refresh_fn):
     """Render a row for a missing (not yet uploaded) document."""
     with ui.row().classes('w-full items-center q-py-sm gap-3').style(
-            'border: 1px dashed #CBD5E1; border-radius: 8px; '
+            'border: 1px dashed var(--border); border-radius: 8px; '
             'padding: 8px 12px'):
         ui.icon('upload_file', color='grey-5').classes('text-lg')
         with ui.column().classes('flex-grow gap-0'):
