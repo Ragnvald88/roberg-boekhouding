@@ -306,21 +306,11 @@ body {
     .status-verlopen       { background: #DC2626; }
     .status-betaald        { background: #16A34A; }
 
-    /* Holiday marker (computed dutch_holidays) — top-band, niet full-fill */
-    .holiday-marker {
-        background: linear-gradient(180deg, rgba(220,38,38,0.08), transparent);
-        border-top: 2px solid #DC2626;
-    }
     .holiday-label {
         font-size: 10px;
         color: #DC2626;
         font-weight: 500;
     }
-
-    /* Blocker overlays — per kind */
-    .blocker-vacation { background: rgba(90,200,250,0.10); }
-    .blocker-sick     { background: rgba(255,149,0,0.10); }
-    .blocker-training { background: rgba(175,82,222,0.10); }
 
     /* Maandgrid cell-states */
     .agenda-cell {
@@ -340,6 +330,18 @@ body {
     .agenda-cell.weekend { background: #F8FAFC; }
     .agenda-cell.today { box-shadow: inset 0 0 0 1px #14B8A6; }
     .agenda-cell.selected { box-shadow: inset 0 0 0 2px #0F766E; background: rgba(15,118,110,0.05); }
+
+    /* Holiday + blocker fills — chained selectors zodat ze .agenda-cell base
+       background overrulen via hogere specificity (Sprint B post-merge fix —
+       was dood door cascade-volgorde sinds Sprint A). */
+    .agenda-cell.holiday-marker {
+        background: linear-gradient(180deg, rgba(220,38,38,0.08), transparent);
+        border-top: 2px solid #DC2626;
+    }
+    .agenda-cell.blocker-vacation { background: rgba(90,200,250,0.10); }
+    .agenda-cell.blocker-sick     { background: rgba(255,149,0,0.10); }
+    .agenda-cell.blocker-training { background: rgba(175,82,222,0.10); }
+
     .agenda-cell-day { font-size: 11px; font-weight: 500; color: #475569; }
     .agenda-cell-overflow { font-size: 9px; color: #94A3B8; }
 
