@@ -81,6 +81,24 @@ body {
     font-size: 11px !important;
 }
 
+/* Card defaults — Sprint B token-driven */
+.q-card {
+    border-radius: var(--radius);
+    border: 1px solid var(--border);
+    box-shadow: var(--shadow);
+    background: var(--surface);
+}
+
+/* Button polish — Sprint B */
+.q-btn {
+    border-radius: 8px;
+}
+
+/* Field polish — Sprint B (alleen radius op outlined fields buiten toolbar) */
+.q-field--outlined .q-field__control {
+    border-radius: 8px;
+}
+
 @layer components {
     /* Page toolbar — tinted bar with pill-shaped filters */
     .page-toolbar {
