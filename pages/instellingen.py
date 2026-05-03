@@ -300,8 +300,32 @@ async def instellingen_page():
                                     label, value=val or ''
                                 ).classes('w-full')
 
+                            ui.separator().classes('q-my-md')
+                            ui.label('Visuele instellingen').classes(
+                                'text-subtitle2'
+                            ).style('color: var(--muted)')
+                            fields['gebruik_klant_kleur_in_agenda'] = (
+                                ui.checkbox(
+                                    'Klant-kleuren tonen in agenda',
+                                    value=bool(getattr(
+                                        bg, 'gebruik_klant_kleur_in_agenda',
+                                        False)) if bg else False,
+                                ).tooltip(
+                                    'Als aan: agenda-cellen krijgen de kleur '
+                                    'die per klant is ingesteld (via Klanten-'
+                                    'dialog). Klanten zonder kleur en blockers'
+                                    '/holidays blijven type-based gestyled.'
+                                )
+                            )
+
                             async def save_bedrijf():
-                                kwargs = {k: v.value or '' for k, v in fields.items()}
+                                kwargs = {}
+                                for k, v in fields.items():
+                                    val = v.value
+                                    if isinstance(val, bool):
+                                        kwargs[k] = int(val)
+                                    else:
+                                        kwargs[k] = val or ''
                                 if not (kwargs.get('iban') or '').strip():
                                     ui.notify(
                                         'IBAN mag niet leeg zijn — QR-betaallink zou '

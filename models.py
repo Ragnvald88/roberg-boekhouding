@@ -17,6 +17,9 @@ class Bedrijfsgegevens:
     thuisplaats: str = ''
     telefoon: str = ''
     email: str = ''
+    # Sprint D: opt-in toggle voor klant-kleuren in /agenda. Default False
+    # — type-based coloring (.wd-dagpraktijk/.wd-anw/.wd-overig) blijft.
+    gebruik_klant_kleur_in_agenda: bool = False
 
 
 @dataclass

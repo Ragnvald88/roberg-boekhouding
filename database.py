@@ -679,6 +679,13 @@ MIGRATIONS = [
         "color GLOB '#[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]"
         "[0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]'))",
     ]),
+    (38, "add_bedrijf_klant_kleur_toggle", [
+        # Sprint D: opt-in toggle voor klant-kleuren in /agenda. Default 0
+        # (uit) — type-based agenda-styling blijft zoals voor migratie.
+        "ALTER TABLE bedrijfsgegevens ADD COLUMN "
+        "gebruik_klant_kleur_in_agenda INTEGER NOT NULL DEFAULT 0 "
+        "CHECK (gebruik_klant_kleur_in_agenda IN (0, 1))",
+    ]),
 ]
 
 
@@ -1164,13 +1171,18 @@ async def get_bedrijfsgegevens(db_path: Path = DB_PATH) -> Bedrijfsgegevens | No
         r = await cursor.fetchone()
         if not r:
             return None
+        keys = r.keys()
         return Bedrijfsgegevens(
             id=1, bedrijfsnaam=r['bedrijfsnaam'], naam=r['naam'],
             functie=r['functie'], adres=r['adres'],
             postcode_plaats=r['postcode_plaats'], kvk=r['kvk'],
             iban=r['iban'], thuisplaats=r['thuisplaats'],
-            telefoon=r['telefoon'] if 'telefoon' in r.keys() else '',
-            email=r['email'] if 'email' in r.keys() else '',
+            telefoon=r['telefoon'] if 'telefoon' in keys else '',
+            email=r['email'] if 'email' in keys else '',
+            gebruik_klant_kleur_in_agenda=(
+                bool(r['gebruik_klant_kleur_in_agenda'])
+                if 'gebruik_klant_kleur_in_agenda' in keys else False
+            ),
         )
 
 
@@ -1179,13 +1191,15 @@ async def upsert_bedrijfsgegevens(db_path: Path = DB_PATH, **kwargs) -> None:
         await conn.execute(
             """INSERT OR REPLACE INTO bedrijfsgegevens
                (id, bedrijfsnaam, naam, functie, adres, postcode_plaats,
-                kvk, iban, thuisplaats, telefoon, email)
-               VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                kvk, iban, thuisplaats, telefoon, email,
+                gebruik_klant_kleur_in_agenda)
+               VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (kwargs.get('bedrijfsnaam', ''), kwargs.get('naam', ''),
              kwargs.get('functie', ''), kwargs.get('adres', ''),
              kwargs.get('postcode_plaats', ''), kwargs.get('kvk', ''),
              kwargs.get('iban', ''), kwargs.get('thuisplaats', ''),
-             kwargs.get('telefoon', ''), kwargs.get('email', ''))
+             kwargs.get('telefoon', ''), kwargs.get('email', ''),
+             int(bool(kwargs.get('gebruik_klant_kleur_in_agenda', False))))
         )
         await conn.commit()
 
