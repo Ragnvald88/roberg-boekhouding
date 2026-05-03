@@ -97,30 +97,43 @@ body {
     .builder-line-card { border: 1px solid var(--q-separator-color, #e2e8f0); box-shadow: none; }
     .builder-preview-bg { background: var(--q-separator-color, #e2e8f0); }
 
-    /* Sidebar nav — clean minimal style */
+    /* Sidebar nav — Sprint B lichte variant */
     .nav-item {
         display: flex; align-items: center; gap: 10px;
         padding: 7px 14px; margin: 1px 8px;
-        border-radius: 6px; cursor: pointer;
-        color: #94A3B8; font-size: 13px; font-weight: 400;
-        transition: all 0.15s;
+        border-radius: 8px; cursor: pointer;
+        color: var(--muted); font-size: 13px; font-weight: 400;
+        transition: background 0.12s, color 0.12s;
         text-decoration: none; border: none; background: none;
         width: calc(100% - 16px);
+        position: relative;
     }
-    .nav-item:hover { background: rgba(255,255,255,0.06); color: #E2E8F0; }
-    .nav-item .nav-icon { font-size: 18px; width: 20px; text-align: center; }
+    .nav-item:hover {
+        background: rgba(60,60,67,0.05);
+        color: var(--text);
+    }
+    .nav-item .nav-icon {
+        font-size: 18px; width: 20px; text-align: center;
+        color: var(--muted);
+    }
+    .nav-item:hover .nav-icon { color: var(--text); }
 
     .nav-item.active {
-        color: #5EEAD4;
-        background: rgba(94,234,212,0.08);
-        font-weight: 500;
-        border-left: 3px solid #14B8A6;
-        margin-left: 5px;
-        padding-left: 11px;
+        color: var(--text);
+        background: var(--accent-soft);
+        font-weight: 600;
+    }
+    .nav-item.active .nav-icon { color: var(--accent); }
+    .nav-item.active::after {
+        content: '';
+        width: 6px; height: 6px; border-radius: 50%;
+        background: var(--accent);
+        position: absolute; right: 12px; top: 50%;
+        transform: translateY(-50%);
     }
 
     .nav-gap { height: 12px; }
-    .nav-divider { height: 1px; background: #1E293B; margin: 8px 16px; }
+    .nav-divider { height: 1px; background: var(--border); margin: 8px 16px; }
 
     /* Dashboard design tokens */
     .hero-label { font-size: 13px; color: #64748B; font-weight: 500; }
@@ -380,7 +393,11 @@ def create_layout(title: str, active_page: str = ''):
         ui.label(title).classes('text-subtitle1').style('color: var(--muted)')
 
     drawer = ui.left_drawer(value=True, bordered=False) \
-        .style('background-color: #0F172A') \
+        .style('background: linear-gradient(180deg, '
+               '#FAFAFA 0%, '
+               'rgba(15,118,110,0.02) 30%, '
+               'var(--bg) 100%); '
+               'border-right: 1px solid var(--border);') \
         .props('width=180')
 
     def _nav_item(label, icon, target):
