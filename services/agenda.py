@@ -471,11 +471,15 @@ def _is_in_pattern_validity(pattern, datum: _date) -> bool:
 def _expected_for_datum(datum: _date,
                          today: _date,
                          patterns_by_klant: dict,
-                         klanten_by_id: dict) -> tuple:
+                         klanten_by_id: dict,
+                         km_tarief: float) -> tuple:
     """Compute expected entries for a future date. Pure function — no DB.
 
     Returns tuple[ExpectedEntry, ...]. Empty tuple for past/today, blocked,
     or no matching pattern.
+
+    km_tarief is looked up ONCE per year by the caller (get_maand) — passed
+    in to avoid per-day fiscale_params lookups in the hot loop.
     """
     if datum <= today:
         return ()
@@ -494,9 +498,10 @@ def _expected_for_datum(datum: _date,
                 continue
             uren = (p.eind_minuten - p.start_minuten) / 60.0
             # Bedrag-formule moet matchen met confirm_expected → add_werkdag:
-            # uren*tarief + retour_km*0.23. Anders onderschat de prognose
-            # dagen met km-vergoeding (codex review B2).
-            bedrag = uren * (klant.tarief_uur or 0) + (klant.retour_km or 0) * 0.23
+            # uren*tarief + retour_km*km_tarief. km_tarief uit fiscale_params
+            # (NIET hardcoded 0.23) zodat /agenda-bedrag overeenkomt met de
+            # waarde die confirm_expected later opslaat (codex eindreview).
+            bedrag = uren * (klant.tarief_uur or 0) + (klant.retour_km or 0) * km_tarief
             out.append(ExpectedEntry(
                 pattern_id=p.id,
                 klant_id=klant_id,
@@ -570,6 +575,7 @@ async def get_maand(db_path, jaar: int, maand: int,
     # 3. Patterns + klanten for expected (only if needed)
     patterns_by_klant: dict[int, tuple[Pattern, ...]] = {}
     klanten_by_id: dict[int, object] = {}
+    km_tarief_year = 0.23  # default — only used when include_expected
     if include_expected:
         # alleen_actief=True: gedeactiveerde klanten mogen geen expected
         # entries genereren (en daarna via confirm_expected echte werkdagen
@@ -580,6 +586,9 @@ async def get_maand(db_path, jaar: int, maand: int,
             patterns_by_klant[k.id] = await list_patterns_for_klant(
                 db_path, k.id, include_inactive=False,
             )
+        # Look up km_tarief once for the year (NOT per-day in
+        # _expected_for_datum loop). Match met confirm_expected default.
+        km_tarief_year = await _get_km_tarief_for_year(db_path, jaar)
 
     # 4. Build DagView per day
     dagen: list[DagView] = []
@@ -589,7 +598,9 @@ async def get_maand(db_path, jaar: int, maand: int,
         block = blockers_by_datum.get(d)
         # Expected only when no werkdag, no blocker, and include_expected
         if include_expected and not wd_list and block is None:
-            expected = _expected_for_datum(d, today, patterns_by_klant, klanten_by_id)
+            expected = _expected_for_datum(
+                d, today, patterns_by_klant, klanten_by_id, km_tarief_year,
+            )
         else:
             expected = ()
         dagen.append(DagView(

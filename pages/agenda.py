@@ -104,9 +104,16 @@ def _render_month_grid(container, view, on_day_click, selected: date) -> None:
                                 dag.blocker.label or dag.blocker.kind.capitalize()
                             ).classes('text-[10px] text-slate-600')
 
-                        if dag and not dag.blocker:
-                            # Combine werkdagen + expected (max 3 visible)
-                            all_pills = list(dag.werkdagen) + list(dag.expected)
+                        if dag:
+                            # Holiday/blocker: alleen bevestigde werkdagen tonen
+                            # (expected entries zijn al onderdrukt door get_maand
+                            # wanneer dag.blocker is gezet). User-blocker met
+                            # bevestigde werkdag = vakantie + extra dienst:
+                            # tonen beide.
+                            if dag.blocker:
+                                all_pills = list(dag.werkdagen)  # geen expected
+                            else:
+                                all_pills = list(dag.werkdagen) + list(dag.expected)
                             for pill in all_pills[:3]:
                                 pill_classes = ['wd-pill', f'wd-{pill.category}']
                                 # ExpectedEntry has pattern_id; WerkdagPill
@@ -346,7 +353,10 @@ def _render_day_inspector(container, dag, on_add_werkdag, on_add_blocker,
                 _render_blocker_section(
                     dag, on_add_werkdag, on_delete_blocker,
                 )
-                return
+                # Geen early return: user kan bevestigde werkdag op
+                # holiday/blocker hebben (bv. extra dienst op vrije dag).
+                if dag.werkdagen:
+                    ui.separator().classes('q-my-md')
 
             # ====== CONFIRMED WERKDAGEN ======
             if dag.werkdagen:
@@ -356,7 +366,11 @@ def _render_day_inspector(container, dag, on_add_werkdag, on_add_blocker,
                 )
                 return
 
-            # ====== EXPECTED (recurring, future only) ======
+            # ====== EXPECTED (recurring, future only) — onderdrukt door blocker ======
+            if dag.blocker:
+                # We've already shown the blocker. No expected entries here.
+                return
+
             if dag.expected:
                 _render_expected_section(
                     dag, on_confirm_expected, on_add_werkdag,
@@ -494,7 +508,10 @@ async def agenda_page():
             ui.notify(str(exc), type='warning')
 
     def handle_open_factuur(factuur_id):
-        ui.navigate.to(f'/facturen?factuur_id={factuur_id}')
+        """Navigate to /facturen list. Sprint A: geen deep-link naar specifieke
+        factuur-rij — de gebruiker scrollt/zoekt zelf in de tabel. Latere sprint
+        kan ?factuur_id=X support toevoegen (scrollIntoView + highlight)."""
+        ui.navigate.to('/facturen')
 
     def handle_create_factuur(werkdag_ids):
         ids_csv = ','.join(str(i) for i in werkdag_ids)

@@ -1250,3 +1250,49 @@ async def test_list_blockers_returns_tuple(db_with_klant):
         db_with_klant, vanaf=date(2026, 5, 1), tot=date(2026, 5, 31),
     )
     assert isinstance(result, tuple)
+
+
+# ---- Codex eindreview Sprint A merge-blockers ----
+
+@pytest.mark.asyncio
+async def test_get_maand_werkdag_op_holiday_blijft_zichtbaar(db_with_klant, monkeypatch):
+    """Spec: bevestigde werkdag op holiday-datum blijft zichtbaar."""
+    monkeypatch.setattr(svc, '_today', lambda: date(2026, 4, 1))
+    # Werkdag op Koningsdag 2026 (27 april = maandag)
+    async with aiosqlite.connect(db_with_klant) as conn:
+        await conn.execute(
+            "INSERT INTO werkdagen (datum, klant_id, code, uren, tarief) "
+            "VALUES ('2026-04-27', 1, 'WERKDAG', 8, 80)"
+        )
+        await conn.commit()
+    view = await svc.get_maand(db_with_klant, jaar=2026, maand=4)
+    by_date = {d.datum: d for d in view.dagen}
+    koningsdag = by_date[date(2026, 4, 27)]
+    # Holiday-blocker is aanwezig...
+    assert koningsdag.blocker is not None
+    assert koningsdag.blocker.kind == 'holiday'
+    # ...maar werkdag is OOK aanwezig
+    assert len(koningsdag.werkdagen) == 1
+    assert koningsdag.werkdagen[0].uren == 8
+
+
+@pytest.mark.asyncio
+async def test_expected_entry_uses_fiscale_km_tarief(db_with_klant, monkeypatch):
+    """ExpectedEntry.bedrag gebruikt fiscale_params.km_tarief, niet hardcoded 0.23."""
+    monkeypatch.setattr(svc, '_today', lambda: date(2026, 5, 1))
+    async with aiosqlite.connect(db_with_klant) as conn:
+        await conn.execute(
+            "INSERT INTO fiscale_params (jaar, km_tarief) VALUES (2026, 0.30)"
+        )
+        # Klant met km
+        await conn.execute(
+            "UPDATE klanten SET retour_km = 20 WHERE id = 1"
+        )
+        await conn.commit()
+    pid = await _add_test_pattern(db_with_klant)  # WERKDAG, 8 uur (480→1020 = 9u)
+    view = await svc.get_maand(db_with_klant, jaar=2026, maand=5)
+    by_date = {d.datum: d for d in view.dagen}
+    e = by_date[date(2026, 5, 4)].expected[0]
+    # uren=9, klant.tarief_uur=80, retour_km=20, km_tarief=0.30
+    expected_bedrag = 9 * 80 + 20 * 0.30
+    assert e.bedrag == pytest.approx(expected_bedrag)
