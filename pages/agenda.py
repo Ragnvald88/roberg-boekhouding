@@ -32,28 +32,33 @@ def _iso_week_number(d: date) -> int:
     return d.isocalendar()[1]
 
 
-def _pill_color_style(pill, gebruik_klant_kleur: bool) -> str:
-    """Return inline-style for pill background obv klant.color, of '' als
-    overlay niet van toepassing is.
+def _pill_color_style(klant_color: str | None,
+                       gebruik_klant_kleur: bool) -> str:
+    """Pure helper: returns inline-style string voor klant-color overlay
+    op .wd-pill, of '' als geen overlay van toepassing is.
 
     Defensief (Codex risk #1): alleen overlay als (1) toggle aan staat,
     (2) klant_color is non-None, (3) hex format klopt (#RRGGBB), (4)
     contrast_text_color slaagt. Bij elke afwijking: lege string → pill
     valt terug op type-based .wd-{category} styling. Holidays/blockers
     renderen geen pills, dus dit raakt nooit niet-klant-gebonden cellen.
+
+    Pure signature (Sprint D S4): accepteert losse `klant_color` ipv
+    een pill-object → mock-vrij testbaar.
     """
     if not gebruik_klant_kleur:
         return ''
-    color = getattr(pill, 'klant_color', None)
-    if not (isinstance(color, str)
-            and len(color) == 7
-            and color.startswith('#')):
+    if klant_color is None:
+        return ''
+    if not isinstance(klant_color, str):
+        return ''
+    if len(klant_color) != 7 or not klant_color.startswith('#'):
         return ''
     try:
-        text_color = contrast_text_color(color)
+        text_color = contrast_text_color(klant_color)
     except ValueError:
         return ''  # malformed hex — skip overlay, type-based fallback
-    return f'background: {color}; color: {text_color};'
+    return f'background: {klant_color}; color: {text_color};'
 
 
 def _render_month_grid(container, view, on_day_click, selected: date,
@@ -154,7 +159,8 @@ def _render_month_grid(container, view, on_day_click, selected: date,
                                 # blocker/holiday cellen — die renderen geen
                                 # pills via deze loop).
                                 pill_style = _pill_color_style(
-                                    pill, gebruik_klant_kleur,
+                                    getattr(pill, 'klant_color', None),
+                                    gebruik_klant_kleur,
                                 )
                                 with ui.element('div').classes(
                                     ' '.join(pill_classes)
