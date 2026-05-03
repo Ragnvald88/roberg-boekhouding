@@ -367,13 +367,17 @@ def create_layout(title: str, active_page: str = ''):
     # Background komt nu uit CSS-token --bg (zie ui.add_css blok bovenin).
     # Inline-style hier zou CSS overrulen — daarom weggehaald in Sprint B.
 
-    with ui.header().classes('items-center shadow-sm') \
-            .style('background-color: #0F172A'):
+    with ui.header().classes('items-center') \
+            .style('background-color: var(--surface); '
+                   'border-bottom: 1px solid var(--border); '
+                   'box-shadow: none;'):
         ui.button(icon='menu', on_click=lambda: drawer.toggle()) \
-            .props('flat color=white round dense')
-        ui.label('Boekhouding').classes('text-h6 text-white q-ml-sm')
+            .props('flat round dense') \
+            .style('color: var(--text)')
+        ui.label('Boekhouding').classes('text-h6 q-ml-sm') \
+            .style('color: var(--text); font-weight: 600')
         ui.space()
-        ui.label(title).classes('text-subtitle1').style('color: #CBD5E1')
+        ui.label(title).classes('text-subtitle1').style('color: var(--muted)')
 
     drawer = ui.left_drawer(value=True, bordered=False) \
         .style('background-color: #0F172A') \
