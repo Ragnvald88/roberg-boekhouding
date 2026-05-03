@@ -165,7 +165,7 @@ async def dashboard_page():
 
     def _render_delta_badge(delta_pct: float):
         """Render YoY delta pill badge."""
-        color = '#059669' if delta_pct >= 0 else '#DC2626'
+        color = 'var(--q-positive)' if delta_pct >= 0 else 'var(--q-negative)'
         bg = '#ECFDF5' if delta_pct >= 0 else '#FEF2F2'
         arrow = '\u2191' if delta_pct >= 0 else '\u2193'
         sign = '+' if delta_pct > 0 else ''
@@ -350,7 +350,7 @@ async def dashboard_page():
 
                             with ui.row().classes(
                                     'w-full justify-between').style(
-                                    'font-size: 11px; color: #64748B; '
+                                    'font-size: 11px; color: var(--muted); '
                                     'margin-bottom: 8px'):
                                 ui.label(
                                     f'Berekend '
@@ -366,7 +366,7 @@ async def dashboard_page():
                                 f'<div style="height:6px;background:#F1F5F9;'
                                 f'border-radius:3px;overflow:hidden;width:100%">'
                                 f'<div style="height:100%;width:{min(pct, 100)}%;'
-                                f'background:#059669;border-radius:3px">'
+                                f'background:var(--q-positive);border-radius:3px">'
                                 f'</div></div>'
                             )
 
@@ -386,7 +386,7 @@ async def dashboard_page():
                                 else:
                                     termijn_text = 'geen termijnen'
                                 ui.label(termijn_text).style(
-                                    'font-size: 10px; color: #94A3B8; '
+                                    'font-size: 10px; color: var(--muted); '
                                     'margin-top: 6px; text-align: right')
                         else:
                             # No VA data — show estimated tax total
@@ -397,7 +397,7 @@ async def dashboard_page():
                             ui.label('Geschatte belasting').classes(
                                 'context-text')
                             ui.label('VA invoeren \u2192').style(
-                                'font-size: 12px; color: #0F766E; '
+                                'font-size: 12px; color: var(--accent); '
                                 'cursor: pointer; margin-top: 8px')
                     else:
                         # No fiscal data at all
@@ -409,11 +409,11 @@ async def dashboard_page():
                 # Uren
                 uren = kpis.get('uren', 0)
                 with ui.card().classes('flex-1 q-pa-sm').style(
-                        'border-radius: 10px; border: 1px solid #E2E8F0; '
+                        'border-radius: 10px; border: 1px solid var(--border); '
                         'display: flex; align-items: center; gap: 10px; '
                         'flex-direction: row; cursor: pointer').on(
                         'click', lambda: ui.navigate.to('/werkdagen')):
-                    ui.icon('schedule', size='20px').style('color: #0F766E')
+                    ui.icon('schedule', size='20px').style('color: var(--accent)')
                     with ui.row().classes('items-baseline gap-1'):
                         ui.label(
                             f'{uren:,.0f} / {uren_criterium:,} uur'.replace(',', '.')
@@ -431,11 +431,11 @@ async def dashboard_page():
                 km_bedrag = km_data.get('vergoeding', 0) if km_data else 0
                 if km > 0:
                     with ui.card().classes('flex-1 q-pa-sm').style(
-                            'border-radius: 10px; border: 1px solid #E2E8F0; '
+                            'border-radius: 10px; border: 1px solid var(--border); '
                             'display: flex; align-items: center; gap: 10px; '
                             'flex-direction: row'):
                         ui.icon('directions_car', size='20px').style(
-                            'color: #0F766E')
+                            'color: var(--accent)')
                         with ui.row().classes('items-baseline gap-1'):
                             ui.label(f'{km:,.0f} km'.replace(',', '.')).classes(
                                 'strip-value')
@@ -449,11 +449,11 @@ async def dashboard_page():
                 docs_pct = round(
                     docs_done / docs_total * 100) if docs_total else 0
                 with ui.card().classes('flex-1 q-pa-sm').style(
-                        'border-radius: 10px; border: 1px solid #E2E8F0; '
+                        'border-radius: 10px; border: 1px solid var(--border); '
                         'display: flex; align-items: center; gap: 10px; '
                         'flex-direction: row'):
                     ui.icon('folder_open', size='20px').style(
-                        f'color: {"#059669" if docs_pct >= 100 else "#D97706"}')
+                        f'color: {"var(--q-positive)" if docs_pct >= 100 else "var(--q-warning)"}')
                     with ui.column().classes('flex-1 gap-0'):
                         with ui.row().classes(
                                 'w-full justify-between items-baseline'):
