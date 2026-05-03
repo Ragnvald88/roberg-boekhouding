@@ -11,6 +11,7 @@ from database import (
     get_klant_aliases, add_klant_alias, delete_klant_alias,
     DB_PATH,
 )
+from domain.codes import CODES
 
 
 def year_options(include_next: bool = False, as_dict: bool = False,
@@ -307,6 +308,151 @@ async def open_klant_dialog(klant: dict | None = None,
                             'flat dense round color=primary')
 
             await refresh_aliases()
+
+        # -- Vast rooster (edit mode only) — Sprint A agenda-feature --
+        if is_edit and klant.get('id'):
+            klant_id_pat = klant['id']
+            ui.separator().classes('q-my-md')
+            _section_label('Vast rooster (verwachte werkdagen)')
+            ui.label(
+                'Patroon voor verwachte werkdagen op /agenda. Wordt elke week '
+                'automatisch ingepland. Bevestigen via /agenda maakt er een '
+                'echte werkdag van. Wijzigingen hier zijn projectie-data, geen '
+                'fiscale feiten — niet year-locked.'
+            ).classes('text-caption text-grey-5')
+
+            patterns_container = ui.column().classes('w-full gap-1 q-mt-xs')
+
+            DAY_LABELS = ['Ma', 'Di', 'Wo', 'Do', 'Vr', 'Za', 'Zo']
+
+            def _format_minutes(m: int) -> str:
+                return f'{m // 60:02d}:{m % 60:02d}'
+
+            async def refresh_patterns():
+                from services.agenda import list_patterns_for_klant
+                patterns_container.clear()
+                patterns = await list_patterns_for_klant(DB_PATH, klant_id_pat)
+                with patterns_container:
+                    if not patterns:
+                        ui.label('(nog geen rooster ingesteld)').classes(
+                            'text-italic text-grey')
+                    for p in patterns:
+                        with ui.row().classes('w-full items-center gap-2'):
+                            days_str = ' '.join(
+                                DAY_LABELS[w - 1] for w in p.weekdays
+                            )
+                            time_str = (
+                                f'{_format_minutes(p.start_minuten)}'
+                                f'–{_format_minutes(p.eind_minuten)}'
+                            )
+                            code_label = CODES.get(p.code, p.code)
+                            ui.label(days_str).classes(
+                                'mono text-weight-medium'
+                            ).style('min-width: 120px')
+                            ui.label(time_str).classes('mono').style(
+                                'min-width: 100px'
+                            )
+                            ui.label(code_label).classes(
+                                'flex-grow text-grey-7'
+                            )
+
+                            async def del_pattern(pid=p.id):
+                                from services.agenda import delete_pattern
+                                await delete_pattern(DB_PATH, pid)
+                                ui.notify('Patroon verwijderd', type='info')
+                                await refresh_patterns()
+
+                            ui.button(
+                                icon='close', on_click=del_pattern,
+                            ).props('flat dense round size=sm color=negative')
+
+                    # Add-form (compact, in 1 row of expandable)
+                    with ui.expansion(
+                        'Patroon toevoegen', icon='add',
+                    ).classes('w-full q-mt-sm').props('dense'):
+                        with ui.column().classes('w-full gap-2 q-pa-sm'):
+                            # Weekdagen-checkboxes
+                            ui.label('Dagen').classes('text-caption text-grey-7')
+                            day_state: dict[int, object] = {}
+                            with ui.row().classes('gap-1'):
+                                for i, label in enumerate(DAY_LABELS, start=1):
+                                    cb = ui.checkbox(label).props('dense')
+                                    day_state[i] = cb
+
+                            # Tijden + code
+                            with ui.row().classes('w-full items-end gap-2'):
+                                start_in = ui.input(
+                                    'Start', value='08:00',
+                                ).classes('w-24').props('dense')
+                                eind_in = ui.input(
+                                    'Eind', value='17:00',
+                                ).classes('w-24').props('dense')
+                                code_sel = ui.select(
+                                    list(CODES.keys()),
+                                    value='WERKDAG', label='Code',
+                                ).classes('flex-grow').props('dense')
+
+                            async def add_new_pattern():
+                                from services.agenda import add_pattern
+                                from database import ValidationError
+                                weekdays = [
+                                    i for i, cb in day_state.items()
+                                    if cb.value
+                                ]
+                                if not weekdays:
+                                    ui.notify(
+                                        'Selecteer minimaal 1 dag',
+                                        type='warning',
+                                    )
+                                    return
+                                try:
+                                    sh, sm = map(int, start_in.value.split(':'))
+                                    eh, em = map(int, eind_in.value.split(':'))
+                                    start_min = sh * 60 + sm
+                                    eind_min = eh * 60 + em
+                                except (ValueError, AttributeError):
+                                    ui.notify(
+                                        'Ongeldige tijd (gebruik HH:MM)',
+                                        type='warning',
+                                    )
+                                    return
+                                code_value = code_sel.value or 'WERKDAG'
+                                try:
+                                    await add_pattern(
+                                        DB_PATH, klant_id=klant_id_pat,
+                                        weekdays=weekdays,
+                                        start_minuten=start_min,
+                                        eind_minuten=eind_min,
+                                        code=code_value,
+                                        activiteit=CODES.get(
+                                            code_value,
+                                            'Waarneming dagpraktijk',
+                                        ),
+                                    )
+                                except ValidationError as exc:
+                                    ui.notify(str(exc), type='warning')
+                                    return
+                                except Exception as exc:
+                                    ui.notify(
+                                        f'Kon niet toevoegen: {exc}',
+                                        type='negative',
+                                    )
+                                    return
+                                # Reset form
+                                for cb in day_state.values():
+                                    cb.value = False
+                                start_in.value = '08:00'
+                                eind_in.value = '17:00'
+                                code_sel.value = 'WERKDAG'
+                                ui.notify('Patroon toegevoegd', type='positive')
+                                await refresh_patterns()
+
+                            ui.button(
+                                'Toevoegen', icon='add',
+                                on_click=add_new_pattern,
+                            ).props('color=primary dense')
+
+            await refresh_patterns()
 
         # -- Actions --
         with ui.row().classes('w-full justify-end gap-2 q-mt-lg'):

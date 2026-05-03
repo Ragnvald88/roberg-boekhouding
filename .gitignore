@@ -14,5 +14,7 @@ Boekhouding.app/
 # Codex review snapshots — generated on demand, not maintained
 codex.md
 .claude/.codex-review-state
+.claude/scheduled_tasks.lock
+.claude/worktrees/
 
 .git-scrub-*

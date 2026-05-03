@@ -514,13 +514,25 @@ def _filter_facturen_by_status(facturen, status_val: str):
 
 
 @ui.page('/facturen')
-async def facturen_page():
+async def facturen_page(nieuw: str | None = None,
+                          werkdagen: str | None = None):
     create_layout('Facturen', '/facturen')
 
     current_year = date.today().year
     table_ref = {'ref': None}
     bulk_bar_ref = {'ref': None}
     filter_klant = {'value': None}  # None = alle klanten
+
+    # Deep-link from /agenda: ?nieuw=1&werkdagen=1,2,3 → auto-open
+    # invoice-builder met die werkdagen pre-selected. Tolerant t.o.v.
+    # lege strings, whitespace en niet-numerieke tokens.
+    auto_nieuw = (nieuw == '1')
+    pre_werkdag_ids: list[int] = []
+    if werkdagen:
+        for token in werkdagen.split(','):
+            token = token.strip()
+            if token.isdigit():
+                pre_werkdag_ids.append(int(token))
 
     with ui.column().classes('w-full p-6 max-w-7xl mx-auto gap-6'):
         # Header row: title + primary action
@@ -2045,3 +2057,12 @@ async def facturen_page():
             await open_invoice_builder(
                 on_save=refresh_table,
                 pre_selected_werkdag_ids=pre_selected)
+
+        # Auto-open invoice builder via deep-link uit /agenda Day-Inspector
+        # ("Maak factuur"-knop). Mutually exclusive met de storage-flow
+        # hierboven, die alleen vanuit een legacy /werkdagen-pad triggert.
+        if auto_nieuw and not pre_selected:
+            await open_invoice_builder(
+                on_save=refresh_table,
+                pre_selected_werkdag_ids=pre_werkdag_ids or None,
+            )

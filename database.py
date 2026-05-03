@@ -84,6 +84,51 @@ class TransactieRow:
     is_manual: bool                # True only for source == 'manual'
 
 
+@dataclass(frozen=True)
+class WerkdagMetStatus:
+    """Werkdag with joined factuur status info — used by /agenda MonthGrid.
+
+    factuur_vervaldatum is COMPUTED as factuur_datum + 14 days (Dutch
+    convention). Empty string if werkdag is ongefactureerd. The vervaldatum
+    is not stored on the facturen-table — Task 2.2's
+    derive_werkdag_status_label uses this computed value to flag verlopen.
+
+    factuur_id en factuur_betaald_datum dienen de Day-Inspector (Sessie 3.4):
+    factuur_id voor "navigeer naar factuur" deep-links, factuur_betaald_datum
+    voor "betaald op X"-display.
+    """
+    id: int
+    datum: str
+    klant_id: int
+    klant_naam: str
+    code: str
+    activiteit: str
+    uren: float
+    km: float
+    tarief: float
+    km_tarief: float
+    factuurnummer: str             # '' = ongefactureerd
+    factuur_id: int | None         # None if no factuur
+    factuur_datum: str             # '' if no factuur, else YYYY-MM-DD
+    factuur_status: str            # '' | 'concept' | 'verstuurd' | 'betaald'
+    factuur_betaald_datum: str     # '' if not paid, else YYYY-MM-DD
+    factuur_vervaldatum: str = field(init=False, default='')  # derived; see __post_init__
+
+    def __post_init__(self):
+        # Always reset first so dataclasses.replace(factuur_datum='') correctly clears
+        # the stale vervaldatum that __init__ propagated from the source instance.
+        object.__setattr__(self, 'factuur_vervaldatum', '')
+        # Compute vervaldatum from factuur_datum + 14 days.
+        if self.factuur_datum:
+            try:
+                d = _date.fromisoformat(self.factuur_datum) + _timedelta(days=14)
+                # frozen dataclass: bypass via object.__setattr__
+                object.__setattr__(self, 'factuur_vervaldatum', d.isoformat())
+            except ValueError:
+                # invalid datum string — leave vervaldatum as ''
+                pass
+
+
 _DEFAULT_DB_DIR = Path.home() / "Library" / "Application Support" / "Boekhouding" / "data"
 _ENV_OVERRIDE = os.environ.get("BOEKHOUDING_DB_DIR")
 _DB_DIR = Path(_ENV_OVERRIDE).expanduser() if _ENV_OVERRIDE else _DEFAULT_DB_DIR
@@ -602,6 +647,29 @@ MIGRATIONS = [
         "CREATE INDEX IF NOT EXISTS idx_klant_aliases_lookup ON klant_aliases(type, pattern)",
     ]),
     (34, "seed_klant_aliases_from_local_if_present", None),
+    (35, "add_klant_recurring_patterns", [
+        """CREATE TABLE IF NOT EXISTS klant_recurring_patterns (
+            id INTEGER PRIMARY KEY,
+            klant_id INTEGER NOT NULL REFERENCES klanten(id) ON DELETE CASCADE,
+            weekdays TEXT NOT NULL,
+            start_minuten INTEGER NOT NULL CHECK (start_minuten >= 0 AND start_minuten < 1440),
+            eind_minuten INTEGER NOT NULL CHECK (eind_minuten > start_minuten AND eind_minuten <= 1440),
+            code TEXT NOT NULL DEFAULT 'WERKDAG',
+            activiteit TEXT DEFAULT 'Waarneming dagpraktijk',
+            valid_from TEXT DEFAULT '',
+            valid_until TEXT DEFAULT '',
+            actief INTEGER NOT NULL DEFAULT 1 CHECK (actief IN (0, 1)))""",
+        "CREATE INDEX IF NOT EXISTS idx_klant_patterns_klant ON klant_recurring_patterns(klant_id, actief)",
+    ]),
+    (36, "add_blockers", [
+        # datum UNIQUE auto-creates sqlite_autoindex_blockers_1 — geen extra
+        # explicit index nodig (zou dubbele dead-weight index op zelfde kolom geven).
+        """CREATE TABLE IF NOT EXISTS blockers (
+            id INTEGER PRIMARY KEY,
+            datum TEXT NOT NULL UNIQUE,
+            kind TEXT NOT NULL CHECK (kind IN ('vacation', 'sick', 'training')),
+            label TEXT NOT NULL DEFAULT '')""",
+    ]),
 ]
 
 
@@ -1011,6 +1079,27 @@ class YearLockedError(ValueError):
     """
 
 
+class ConflictError(ValueError):
+    """Raised when an operation conflicts with current state.
+
+    e.g. confirm_expected on deleted pattern, blocker on existing werkdag,
+    UNIQUE-constraint violation surfaced as user-friendly conflict.
+
+    Subclasses ValueError for backward-compat with existing
+    `except ValueError` catch-sites.
+    """
+
+
+class ValidationError(ValueError):
+    """Raised when user-provided input fails validation rules.
+
+    e.g. invalid weekdays in pattern, eind_minuten <= start_minuten,
+    invalid code value.
+
+    Subclasses ValueError for backward-compat.
+    """
+
+
 async def assert_year_writable(db_path, jaar_or_datum) -> None:
     """Raise YearLockedError if the year is marked 'definitief'.
 
@@ -1111,6 +1200,26 @@ async def get_klanten(db_path: Path = DB_PATH, alleen_actief: bool = False) -> l
             postcode=r['postcode'] or '',
             plaats=r['plaats'] or '',
         ) for r in rows]
+
+
+async def get_klant_by_id(db_path: Path = DB_PATH, klant_id: int = 0) -> 'Klant | None':
+    """Single klant by id — None if not found."""
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            "SELECT * FROM klanten WHERE id = ?", (klant_id,),
+        )
+        r = await cur.fetchone()
+    if not r:
+        return None
+    return Klant(
+        id=r['id'], naam=r['naam'], tarief_uur=r['tarief_uur'],
+        retour_km=r['retour_km'], adres=r['adres'] or '',
+        kvk=r['kvk'] or '', actief=bool(r['actief']),
+        email=r['email'] or '',
+        contactpersoon=r['contactpersoon'] or '',
+        postcode=r['postcode'] or '',
+        plaats=r['plaats'] or '',
+    )
 
 
 async def add_klant(db_path: Path = DB_PATH, **kwargs) -> int:
@@ -1246,6 +1355,241 @@ async def get_werkdagen(db_path: Path = DB_PATH, jaar: int = None,
         cursor = await conn.execute(sql, params)
         rows = await cursor.fetchall()
         return [_row_to_werkdag(r) for r in rows]
+
+
+async def get_werkdagen_met_factuur_status(
+    db_path: Path = DB_PATH, jaar: int = 0, maand: int = 0
+) -> list[WerkdagMetStatus]:
+    """Werkdagen voor (jaar, maand) met factuur-status JOIN.
+
+    LEFT JOIN op facturen via werkdagen.factuurnummer = facturen.nummer.
+    factuur_status='' bij ongefactureerde werkdagen. factuur_vervaldatum
+    is computed in WerkdagMetStatus.__post_init__ als factuur_datum + 14
+    dagen (Dutch convention; geen kolom op facturen-tabel).
+    """
+    maand_str = f"{jaar:04d}-{maand:02d}"
+    query = """
+        SELECT
+            w.id, w.datum, w.klant_id, k.naam,
+            w.code, w.activiteit, w.uren, w.km, w.tarief, w.km_tarief,
+            COALESCE(w.factuurnummer, '') AS factuurnummer,
+            f.id AS factuur_id,
+            COALESCE(f.datum, '') AS factuur_datum,
+            COALESCE(f.status, '') AS factuur_status,
+            COALESCE(f.betaald_datum, '') AS factuur_betaald_datum
+        FROM werkdagen w
+        JOIN klanten k ON k.id = w.klant_id
+        LEFT JOIN facturen f
+            ON f.nummer = w.factuurnummer
+           AND w.factuurnummer != ''
+        WHERE substr(w.datum, 1, 7) = ?
+        ORDER BY w.datum, w.id
+    """
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(query, (maand_str,))
+        rows = await cur.fetchall()
+    return [
+        WerkdagMetStatus(
+            id=r[0],
+            datum=r[1],
+            klant_id=r[2],
+            klant_naam=r[3],
+            code=r[4] or '',
+            activiteit=r[5] or '',
+            uren=r[6] or 0.0,
+            km=r[7] or 0.0,
+            tarief=r[8] or 0.0,
+            km_tarief=r[9] or 0.0,
+            factuurnummer=r[10],
+            factuur_id=r[11],
+            factuur_datum=r[12],
+            factuur_status=r[13],
+            factuur_betaald_datum=r[14],
+        )
+        for r in rows
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Recurring patterns (klant_recurring_patterns) — projectie-data, niet year-locked
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class RecurringPattern:
+    id: int
+    klant_id: int
+    weekdays: str          # CSV "1,3,5"
+    start_minuten: int
+    eind_minuten: int
+    code: str
+    activiteit: str
+    valid_from: str
+    valid_until: str
+    actief: bool
+
+
+async def db_add_pattern(db_path: Path, klant_id: int, weekdays: str,
+                          start_minuten: int, eind_minuten: int,
+                          code: str = 'WERKDAG',
+                          activiteit: str = 'Waarneming dagpraktijk',
+                          valid_from: str = '', valid_until: str = '') -> int:
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            """INSERT INTO klant_recurring_patterns
+               (klant_id, weekdays, start_minuten, eind_minuten,
+                code, activiteit, valid_from, valid_until)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id""",
+            (klant_id, weekdays, start_minuten, eind_minuten,
+             code, activiteit, valid_from, valid_until),
+        )
+        row = await cur.fetchone()
+        await conn.commit()
+    return row[0]
+
+
+async def db_list_patterns_for_klant(db_path: Path, klant_id: int,
+                                      include_inactive: bool = False) -> list[RecurringPattern]:
+    where = "WHERE klant_id = ?"
+    args: list = [klant_id]
+    if not include_inactive:
+        where += " AND actief = 1"
+    # SQL f-string is safe here: `where` is a literal string fragment built
+    # from a hardcoded boolean toggle — no user input ever flows into it.
+    # Keep noqa comment so future linters don't autofix this into a broken
+    # parameterised form (column-list / table-name can't be parameterised).
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            f"""SELECT id, klant_id, weekdays, start_minuten, eind_minuten,
+                       code, activiteit, valid_from, valid_until, actief
+                FROM klant_recurring_patterns {where}
+                ORDER BY id""",  # noqa: S608
+            args,
+        )
+        rows = await cur.fetchall()
+    return [
+        RecurringPattern(
+            id=r[0], klant_id=r[1], weekdays=r[2],
+            start_minuten=r[3], eind_minuten=r[4],
+            code=r[5], activiteit=r[6],
+            valid_from=r[7], valid_until=r[8],
+            actief=bool(r[9]),
+        ) for r in rows
+    ]
+
+
+async def db_get_pattern(db_path: Path, pattern_id: int) -> 'RecurringPattern | None':
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            """SELECT id, klant_id, weekdays, start_minuten, eind_minuten,
+                       code, activiteit, valid_from, valid_until, actief
+                FROM klant_recurring_patterns WHERE id = ?""",
+            (pattern_id,),
+        )
+        r = await cur.fetchone()
+    if not r:
+        return None
+    return RecurringPattern(
+        id=r[0], klant_id=r[1], weekdays=r[2],
+        start_minuten=r[3], eind_minuten=r[4],
+        code=r[5], activiteit=r[6],
+        valid_from=r[7], valid_until=r[8],
+        actief=bool(r[9]),
+    )
+
+
+_PATTERN_UPDATE_FIELDS = frozenset({
+    'weekdays', 'start_minuten', 'eind_minuten', 'code',
+    'activiteit', 'valid_from', 'valid_until', 'actief',
+})
+
+
+async def db_update_pattern(db_path: Path, pattern_id: int, **fields) -> None:
+    if not fields:
+        return
+    bad = set(fields) - _PATTERN_UPDATE_FIELDS
+    if bad:
+        raise ValueError(f"Onbekende velden voor pattern update: {sorted(bad)}")
+    # SQL f-string is safe here: column names come from `_PATTERN_UPDATE_FIELDS`
+    # whitelist (loud-failing on unknown keys above) — fields-dict keys cannot
+    # contain attacker-controlled SQL. Keep noqa so future linters don't try
+    # to autofix this (column-names can't be SQL-parameterised).
+    cols = ', '.join(f"{k} = ?" for k in fields)
+    args = list(fields.values()) + [pattern_id]
+    async with get_db_ctx(db_path) as conn:
+        await conn.execute(
+            f"UPDATE klant_recurring_patterns SET {cols} WHERE id = ?",  # noqa: S608
+            args,
+        )
+        await conn.commit()
+
+
+async def db_delete_pattern_soft(db_path: Path, pattern_id: int) -> None:
+    async with get_db_ctx(db_path) as conn:
+        await conn.execute(
+            "UPDATE klant_recurring_patterns SET actief = 0 WHERE id = ?",
+            (pattern_id,),
+        )
+        await conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Blocker CRUD (table: blockers — see migratie 36)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class BlockerRow:
+    id: int
+    datum: str
+    kind: str
+    label: str
+
+
+async def db_add_blocker(db_path: Path, datum: str, kind: str, label: str = '') -> int:
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            "INSERT INTO blockers (datum, kind, label) VALUES (?, ?, ?) RETURNING id",
+            (datum, kind, label),
+        )
+        row = await cur.fetchone()
+        await conn.commit()
+    return row[0]
+
+
+async def db_get_blocker(db_path: Path, blocker_id: int) -> 'BlockerRow | None':
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            "SELECT id, datum, kind, label FROM blockers WHERE id = ?",
+            (blocker_id,),
+        )
+        r = await cur.fetchone()
+    return BlockerRow(id=r[0], datum=r[1], kind=r[2], label=r[3]) if r else None
+
+
+async def db_delete_blocker(db_path: Path, blocker_id: int) -> None:
+    async with get_db_ctx(db_path) as conn:
+        await conn.execute("DELETE FROM blockers WHERE id = ?", (blocker_id,))
+        await conn.commit()
+
+
+async def db_list_blockers(db_path: Path, vanaf: str, tot: str) -> list[BlockerRow]:
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            "SELECT id, datum, kind, label FROM blockers "
+            "WHERE datum >= ? AND datum <= ? ORDER BY datum",
+            (vanaf, tot),
+        )
+        rows = await cur.fetchall()
+    return [BlockerRow(id=r[0], datum=r[1], kind=r[2], label=r[3]) for r in rows]
+
+
+async def db_count_werkdagen_op_datum(db_path: Path, datum: str) -> int:
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            "SELECT COUNT(*) FROM werkdagen WHERE datum = ?", (datum,),
+        )
+        row = await cur.fetchone()
+    return row[0]
 
 
 async def add_werkdag(db_path: Path = DB_PATH, **kwargs) -> int:
