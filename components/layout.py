@@ -27,6 +27,15 @@ ui.add_css('''
 /* === BASE === */
 body {
     background: var(--bg);
+    font-family: -apple-system, "SF Pro Text", system-ui, sans-serif;
+    color: var(--text);
+}
+.q-page {
+    font-family: -apple-system, "SF Pro Text", system-ui, sans-serif;
+}
+.text-h1, .text-h2, .text-h3, .text-h4, .text-h5, .text-h6 {
+    font-family: -apple-system, "SF Pro Display", system-ui, sans-serif;
+    color: var(--text);
 }
 
 @layer components {
