@@ -43,7 +43,7 @@ DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib .venv/bin/python -m pytest tests/ -
 ```
 
 ## Database
-12 tabellen: `klanten`, `klant_locaties`, `klant_aliases`, `werkdagen`, `facturen`, `uitgaven`, `banktransacties`, `fiscale_params`, `bedrijfsgegevens`, `aangifte_documenten`, `afschrijving_overrides`, `jaarafsluiting_snapshots`
+14 tabellen: `klanten`, `klant_locaties`, `klant_aliases`, `werkdagen`, `facturen`, `uitgaven`, `banktransacties`, `fiscale_params`, `bedrijfsgegevens`, `aangifte_documenten`, `afschrijving_overrides`, `jaarafsluiting_snapshots`, `klant_recurring_patterns` (mig 35), `blockers` (mig 36)
 
 - Raw SQL, `?` placeholders — GEEN f-strings in SQL
 - Bedragen REAL, datums TEXT (YYYY-MM-DD)
@@ -56,6 +56,8 @@ DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib .venv/bin/python -m pytest tests/ -
 - Migratie 28: `UNIQUE INDEX idx_uitgaven_bank_tx_unique ON uitgaven(bank_tx_id) WHERE bank_tx_id IS NOT NULL` — enforces at-most-one uitgave per bank_tx at DB level (closes Importeer duplicate-link race). Partial index; NULL cash uitgaven remain unconstrained.
 - `banktransacties.genegeerd` INTEGER NOT NULL DEFAULT 0 CHECK (0|1) — `1` = niet-zakelijk (privé-storting, ATM, overboeking), verborgen uit Kosten-overzicht. Alleen toggle via `mark_banktx_genegeerd()` (year-locked). Weigert óók `genegeerd=1` op factuur-gekoppelde rijen (`koppeling_type='factuur'`) — dat zou de factuur stil desync'en met een onzichtbaar geworden bank-tx. `genegeerd=0` blijft onvoorwaardelijk zodat een eerder ontstaan inconsistente staat repareerbaar is.
 - `klant_aliases` (migratie 33): FK naar `klanten` met `ON DELETE CASCADE`. Schema: `(klant_id, type, pattern)` waarbij `type` IN `('suffix', 'pdf_text', 'anw_filename')`, `pattern COLLATE NOCASE` met `CHECK length(trim) >= 3` en `UNIQUE(type, pattern)`. Bevat de PDF-import naam-resolutie aliassen (gisteren `import_/klant_mapping_local.py`, nu DB-driven). Alle `resolve_klant` / `resolve_anw_klant` queries draaien hierop. Migratie 34 seedt eenmalig vanuit `klant_mapping_local.py` (als die nog bestaat) of uit `~/Library/Application Support/Boekhouding/config/klant_aliases_backup.json` als JSON-fallback. Migratie 34 blijft permanent in de list als idempotente no-op via `INSERT OR IGNORE`.
+- `klant_recurring_patterns` (migratie 35, Sprint A): FK naar `klanten` met `ON DELETE CASCADE`. Schema: `(klant_id, weekdays TEXT csv "1,3,5", start_minuten INTEGER 0-1439, eind_minuten INTEGER 1-1440 met CHECK eind > start, code TEXT default 'WERKDAG', activiteit TEXT, valid_from/valid_until TEXT '' = altijd, actief INTEGER 0/1 default 1)`. Recurring werkdag-templates voor `/agenda` verwachte entries. **NIET year-locked** — projectie-data, geen fiscale feiten. Soft-delete via `actief=0` voor history-behoud. CRUD via `database.db_*_pattern` + `services.agenda.{add,list,update,delete}_pattern`. Service-laag valideert weekdays (1-7, no dups, non-empty), minuten-range, code via `domain.codes.CODES` whitelist.
+- `blockers` (migratie 36, Sprint A): `(datum TEXT NOT NULL UNIQUE, kind TEXT CHECK IN ('vacation','sick','training'), label TEXT NOT NULL DEFAULT '')`. User-blockers (vakantie/ziek/nascholing) voor `/agenda`. **`UNIQUE(datum)` — één blocker per dag.** `kind='holiday'` is geweigerd: holidays zijn computed via `services.holidays.dutch_holidays(year)`, niet stored. CRUD via `database.db_*_blocker` + `services.agenda.{add,delete,list}_blockers`. `add_blocker` is **year-locked** (datum), checkt op werkdag-conflict (raise `ConflictError`). `list_blockers(vanaf, tot)` MERGES user-blockers + computed holidays in één tuple-result; holidays krijgen `id=None`.
 - SQLite op lokaal filesystem (`~/Library/Application Support/Boekhouding/data/`), NIET op cloud-sync (WAL+SynologyDrive/iCloud = silent corruption). Override via `BOEKHOUDING_DB_DIR` env var voor tests.
 - **Backup**: `VACUUM INTO` (atomair), NOOIT live-file copy van `.sqlite3`
 - **PDF archivering**: factuur-PDFs worden automatisch gekopieerd naar SynologyDrive financieel archief (`Inkomen en Uitgaven/{jaar}/Inkomsten/{Dagpraktijk|ANW_Diensten}/` voor types `factuur`/`anw`; `Inkomsten/` flat voor type `vergoeding`). Best-effort, niet-blokkerend. **Drie trigger-paden** (alle via `archive_factuur_pdf`): (1) builder-finalize (`invoice_builder.py:genereer_factuur`), (2) PDF-regeneratie via `_ensure_factuur_pdf` self-healing, (3) factuur-upload-import in `pages/facturen.py:handle_import_loop` (round-2 fix — was hier missing). Imports gebruiken het optionele `archive_filename` arg om de oorspronkelijke upload-naam (bv `0224_HAP_Drenthe.pdf`) te bewaren ipv de lokale `{nummer}.pdf` conventie. Pad-traversal en NUL-byte injection worden via `_safe_archive_basename` afgevangen; collisions met andere content krijgen `_2.pdf`, `_3.pdf` suffix; identieke content (idempotent re-import) skipt de copy.
@@ -68,6 +70,12 @@ DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib .venv/bin/python -m pytest tests/ -
 - Shared layout via `components/layout.py`
 - Elke pagina is `@ui.page('/route')` in eigen bestand
 - `format_euro(value, decimals=2)`/`format_datum` ALLEEN uit `components/utils.py`
+- **Layered architectuur (Sprint A en later)**: nieuwe code volgt 4-laags structuur, oude code blijft als-is.
+  - `domain/` — UI-vrije + DB-vrije constants/value-objects (stdlib only). Sprint A: `domain/codes.py` met `CODES` (werkdag-types) + `ZERO_UREN_CODES`. Single source of truth voor codes — `components/werkdag_form.py` re-exporteert hieruit (was bron, nu wrapper).
+  - `services/` — UI-vrije business operations. **Géén `from nicegui ...` import** (boundary-test in `tests/test_agenda_service.py:test_services_agenda_no_nicegui_import` enforced). Mag `database.py`, `domain/`, `fiscal/` importeren. Sprint A: `services/holidays.py`, `services/agenda.py`. Returns frozen dataclasses + tuples (Swift-port-vriendelijke value-types).
+  - `database.py` — SQL queries + schema + raw aiosqlite. UI-vrij (al lang).
+  - `pages/` + `components/` — NiceGUI-coupled UI. Importeert van services/domain/database.
+- **Atomic check-and-insert pattern** voor idempotente DB-mutaties die race-protected moeten zijn (Sprint A `confirm_expected`): wrap SELECT-existing + INSERT in `BEGIN IMMEDIATE` write-lock binnen één `get_db_ctx` connectie. Voorbeeld in `services/agenda.confirm_expected`. **NIET** SELECT in één connectie + INSERT in andere — dat racet onder `asyncio.gather`. Test dit altijd met `asyncio.gather(*[fn() for _ in range(5)])` om idempotency-claim te valideren.
 
 ### NiceGUI Patronen
 - `ui.table` (NIET AG Grid), `ui.echart` voor charts
@@ -139,6 +147,36 @@ Concept (grey) → Verstuurd (blue/info) → Betaald (green/positive)
 - **Atomic PDF write** (K2): `components/utils.write_pdf_atomic(html, output_path, base_url=None)` rendert via WeasyPrint naar een unieke `tempfile.mkstemp`-tmpfile in dezelfde directory en doet `os.replace`. Bij crash wordt de tmp opgeruimd via `contextlib.suppress(OSError)` (zodat de original render-error niet door een unlink-fail wordt gemaskeerd) en blijft de bestaande PDF intact. Toegepast in `pages/jaarafsluiting.py:export_pdf` voor jaarcijfers; `components/invoice_generator.py:generate_invoice` heeft hetzelfde patroon inline (heeft een `doc` object i.p.v. html string — helper niet 1-op-1 toepasbaar).
 - **Documenten upload safety** (K1): `pages/documenten.py` heeft 2 helpers — `_safe_documenten_basename` loud-fails (ValueError) op path components, NUL bytes, leading dots, of niet-toegestane extensies (.pdf/.jpg/.jpeg/.png); `_safe_atomic_write(dest_dir, name, content)` is idempotent (returns `(path, is_new=False)` bij identieke content), kiest `_2.pdf`/`_3.pdf` collision-suffix, schrijft via `tempfile.mkstemp` + `os.replace`, en cleanup in `contextlib.suppress(OSError)`. Alle 3 upload-handlers in `/documenten` plus `pages/aangifte.py:handle_upload` (subdir-conventie `AANGIFTE_DIR/jaar/categorie/` behouden) volgen de 4-staps-volgorde: year-lock preflight → sanitize → atomic write → DB-row → cleanup-on-fail (alleen als `is_new=True`). Delete-handler wrapt `delete_aangifte_document` met try/except YearLockedError.
 - **`villataks_pct` als named constant** (B3): `fiscal/constants.VILLATAKS_PCT_DEFAULT = 2.35` met expliciete bron-comment (Belastingdienst Wet IB 2001 art. 3.112 lid 2). `bereken_eigenwoningforfait` parameter default + `bereken_volledig` fallback gebruiken de constante. Eerder leefde dit als magic-fallback `params.get('villataks_pct', 2.35)`. Triggert alleen voor WOZ > €1.35M; als de BD het percentage ooit jaar-afhankelijk maakt → migreer naar fiscale_params.
+
+### Agenda-pagina (`/agenda`) — Sprint A
+
+Calendar-driven planning + factuur-status visualisatie naast bestaande tabel-driven `/werkdagen`. Spec: `docs/superpowers/specs/2026-05-02-agenda-sprint-a-design.md`. Plan: `docs/superpowers/plans/2026-05-02-agenda-sprint-a.md`.
+
+**Service-layer**: `services.agenda` (UI-vrij, ~840 LoC). Read-API: `get_maand(jaar, maand) → MaandView`, `get_dag(datum) → DagView`, `get_zes_weken_prognose(vanaf) → tuple[WeekTotaal, ...]`, `get_urencriterium_projectie(jaar) → UrencriteriumState`, `list_blockers(vanaf, tot) → tuple[Blocker, ...]` (merged user-blockers + computed holidays), `list_patterns_for_klant(klant_id) → tuple[Pattern, ...]`. Mutate-API: `confirm_expected(pattern_id, datum, ...) → werkdag.id` (atomic via BEGIN IMMEDIATE), `add_blocker/delete_blocker`, `add_pattern/update_pattern/delete_pattern` (NIET year-locked — patterns zijn projectie-data).
+
+**Pure helpers**: `categorize_werkdag(code) → 'dagpraktijk'|'anw'|'overig'` (type-based coloring), `derive_werkdag_status_label(werkdag, today) → 'ongefactureerd'|'concept'|'verstuurd'|'verlopen'|'betaald'` (verlopen = pure function op `factuur_vervaldatum < today`, geen DB-update nodig), `compute_overdue_days(werkdag, today)` (alleen voor `verstuurd`-status), `parse_weekdays(csv) → list[int]` (1-7, no dups, whitespace-tolerant).
+
+**`get_werkdagen_met_factuur_status(jaar, maand)`** (in `database.py`): LEFT JOIN `werkdagen` × `facturen` via `factuurnummer`. Returns `WerkdagMetStatus` frozen dataclass met velden: `id, datum, klant_id, klant_naam, code, activiteit, uren, km, tarief, km_tarief, factuurnummer, factuur_id, factuur_datum, factuur_status, factuur_betaald_datum, factuur_vervaldatum (computed +14d in __post_init__)`. Orphan factuurnummer (factuur_status='' maar factuurnummer != '') wordt door `derive_werkdag_status_label` als `ongefactureerd` behandeld — UI mag apart `factuurnummer != '' AND factuur_status == ''` checken voor warning-indicator.
+
+**Bron-van-waarheid**: bevestigde werkdagen = DB-rij in `werkdagen`, verwachte entries = computed at-query-time uit patterns minus werkdagen minus blockers minus holidays, **alleen voor `datum > today`**. Holiday-blocker (`kind='holiday'`) wint over user-blocker bij display-conflict. Holiday-blocker onderdrukt verwachte entries (user kan handmatig werkdag toevoegen via "Werkdag plannen" override).
+
+**confirm_expected invariants**:
+- **Atomic**: `BEGIN IMMEDIATE` write-lock wrap rond SELECT-existing + INSERT (race-protectie tegen `asyncio.gather(5×)`). Test `tests/test_agenda_service.py:test_confirm_expected_atomic_under_parallel_calls` bewijst single werkdag.
+- **Idempotent**: bestaande werkdag op `(klant_id, datum)` — ongeacht of door dit pattern gemaakt — return existing.id. Documented contract.
+- **Race-protected**: pattern_id moet bestaan + `actief=1`, anders `ConflictError("Patroon X is verwijderd of inactief — refresh agenda")`.
+- **Blocker-check**: weigert als blocker op datum bestaat (defense-in-depth, asymmetrie met `add_blocker` opgelost).
+- **Klant-data uit klant** op moment van bevestigen (tarief, retour_km, adres) — NIET uit pattern. Pattern is rooster-template, geen tarief-snapshot.
+- **km_tarief**: uit `fiscale_params.km_tarief` per jaar via `_get_km_tarief_for_year` helper, fallback 0.23 als geen fiscale_params row bestaat. **Niet** hardcoded in confirm_expected.
+- **urennorm**: 0 voor `ACHTERWACHT` of `ZERO_UREN_CODES (CONGRES/OPLEIDING/OVERIG_ZAK)`, anders 1.
+
+**Type-based coloring (Sprint A keuze, geen klant-kleuren)**: dagpraktijk = teal (#0F766E), anw = paars (#7E22CE), overig = grijs. CSS classes `.wd-dagpraktijk/.wd-anw/.wd-overig` in `components/layout.py`. Verwachte entries (recurring) krijgen `.wd-pill.expected` (dashed border + soft fill). Klant-specifieke kleuren als optionele toekomstige feature (toggle in Instellingen + `klanten.color` kolom).
+
+**Factuur-status-bars per cel**: `.wd-status-bar` met `.status-{label}` per werkdag onderaan de cel. Kleur-mapping: ongefactureerd grijs (#94A3B8), concept grijs-dimmed, verstuurd blauw (#2563EB), verlopen rood (#DC2626), betaald groen (#16A34A). UI auto-update bij elke /agenda-render via verse DB-query — geen pubsub.
+
+**Year-lock policy**:
+- Werkdag-mutaties via `confirm_expected` → year-locked (delegate naar `add_werkdag` invariant).
+- Blocker-mutaties (`add/delete_blocker`) → year-locked op blocker.datum.
+- Pattern-mutaties (`add/update/delete_pattern`) → **NIET** year-locked. Patterns zijn projectie-data, geen fiscale feiten. Wijziging beïnvloedt alleen verwachte entries (virtueel). Werkelijke werkdagen in dat jaar blijven onaangeraakt.
 
 ### Transacties-pagina (`/transacties`)
 
