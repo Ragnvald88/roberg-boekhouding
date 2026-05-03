@@ -183,11 +183,11 @@ body {
        breiden per pagina. Bestaande hex-styling blijft onveranderd. */
 
     .num {
-        font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+        font-family: "SF Mono", ui-monospace, Menlo, monospace;
         font-variant-numeric: tabular-nums;
         letter-spacing: -0.02em;
     }
-    .mono { font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; }
+    .mono { font-family: "SF Mono", ui-monospace, Menlo, monospace; }
     .t-micro {
         font-size: 11px; font-weight: 500;
         letter-spacing: 0.08em; text-transform: uppercase;
@@ -200,7 +200,7 @@ body {
         padding: 2px 8px; border-radius: 6px;
         font-size: 11px; font-weight: 500; line-height: 1.4;
         background: #f5f4ef; color: #3a3d43;
-        font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+        font-family: "SF Mono", ui-monospace, Menlo, monospace;
     }
     .chip.pos { background: #e6f2f0; color: #0a524c; }
     .chip.info { background: #dbeafe; color: #1e3a8a; }
@@ -219,7 +219,7 @@ body {
         border-right: 1px solid #e8e6df;
         background: #ffffff; color: #3a3d43;
         font-size: 12px; cursor: pointer;
-        font-family: 'JetBrains Mono', ui-monospace, monospace;
+        font-family: "SF Mono", ui-monospace, Menlo, monospace;
         transition: background 0.1s;
     }
     .seg-btn:last-child { border-right: 0; }
@@ -236,17 +236,17 @@ body {
         box-shadow: 0 8px 24px -12px rgba(20,20,20,0.18);
     }
     .selection-bar .sb-count {
-        font-family: 'JetBrains Mono', monospace; font-size: 13px;
+        font-family: "SF Mono", ui-monospace, Menlo, monospace; font-size: 13px;
     }
     .selection-bar .sb-meta {
-        font-family: 'JetBrains Mono', monospace; font-size: 12px;
+        font-family: "SF Mono", ui-monospace, Menlo, monospace; font-size: 12px;
         opacity: 0.75;
     }
 
     /* Page subtitle (onder page_title) */
     .page-sub {
         font-size: 13px; color: #6b6f76;
-        margin-top: 2px; font-family: 'JetBrains Mono', monospace;
+        margin-top: 2px; font-family: "SF Mono", ui-monospace, Menlo, monospace;
     }
 
     /* Locatie-subline onder klant-naam in tabel */
@@ -355,13 +355,9 @@ body {
 }
 ''', shared=True)
 
-# JetBrains Mono via Google Fonts — pywebview cached na eerste load,
-# offline-fallback via ui-monospace stack in de helpers hierboven.
-ui.add_head_html(
-    '<link rel="stylesheet" '
-    'href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap">',
-    shared=True,
-)
+# Sprint B: Google Fonts CDN-link voor JetBrains Mono verwijderd —
+# alle .num/.mono/.chip/.seg-btn/.selection-bar/.page-sub classes
+# gebruiken nu SF Mono (system-font, OS-native vanaf macOS 10.11).
 
 
 def page_title(text: str):
