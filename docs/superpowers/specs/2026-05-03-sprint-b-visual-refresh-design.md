@@ -1,7 +1,15 @@
 # Sprint B — Visual refresh (Apple-stijl, YAGNI-versie)
 
+> **🚫 SHIPPED — historische spec.** Volledig geïmplementeerd en gemerged
+> naar `master` via merge-commit `7d1d14e` (--no-ff) op 2026-05-03. Tier 2
+> per-page user-smoke (T11-T17) en Tier 3 fiscale spot-check (T18) zijn
+> deferred — uitvoeren tijdens normaal app-gebruik. Voor huidige
+> conventies: zie `CLAUDE.md` § Visuele tokens. Voor implementation-trail:
+> zie `docs/superpowers/plans/2026-05-03-sprint-b-visual-refresh.md`
+> (ook met SHIPPED-banner) en auto-memory `project_visual_refresh.md`.
+
 **Datum**: 2026-05-03
-**Status**: Spec — wachten op user-review vóór implementatie-plan
+**Status**: SHIPPED 2026-05-03
 **Doel**: De bestaande Boekhouding-UI rustiger, scherper en consistenter
 maken in een lichte Apple-stijl, zonder layout-rewrites en zonder business-
 logic te raken. Sprint A heeft de Apple-stijl al naar `/agenda` gebracht;

@@ -1,5 +1,13 @@
 # Sprint B — Visual Refresh Implementation Plan
 
+> **🚫 SHIPPED — historisch plan.** Volledig uitgevoerd en gemerged naar
+> `master` via merge-commit `7d1d14e` op 2026-05-03. Subagent-driven met
+> 4-layer review (implementer→spec→codex→code-quality) per task. Codex
+> catched 2 echte bugs onderweg (T2 heading-color, T6 q-btn--round) —
+> beide gefixt + plan back-annotated. T11-T17/T18 user-smoke deferred.
+> Voor lessons learned: zie auto-memory `project_visual_refresh.md` en
+> CLAUDE.md § Visuele tokens.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Apple-stijl visual refresh consistent doortrekken over de Boekhouding-app conform `docs/superpowers/specs/2026-05-03-sprint-b-visual-refresh-design.md`.
