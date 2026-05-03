@@ -400,7 +400,7 @@ def _render_uploaded_rows(spec, existing, jaar, show_preview_fn, refresh_fn):
                      else 'description')
 
         with ui.row().classes('w-full items-center q-py-sm gap-3').style(
-                'background: #F8FAFC; border-radius: 8px; '
+                'background: var(--bg); border-radius: 8px; '
                 'padding: 8px 12px'):
             ui.icon(icon_name, color='primary').classes('text-lg')
             with ui.column().classes('flex-grow gap-0'):

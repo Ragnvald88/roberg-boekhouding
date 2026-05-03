@@ -232,7 +232,7 @@ async def werkdagen_page():
         table.add_slot('body-cell-factuur', '''
             <q-td :props="props">
                 <span v-if="props.row.factuurnummer"
-                      class="mono" style="font-size:11px;color:#6b6f76">
+                      class="mono" style="font-size:11px;color:var(--muted)">
                     {{ props.row.factuurnummer }}
                 </span>
                 <span v-else class="mono" style="font-size:11px;color:#b45309">—</span>

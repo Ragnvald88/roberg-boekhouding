@@ -187,7 +187,7 @@ async def open_afschrijving_dialog(row: dict, huidige_jaar: int,
 
             with schedule_container:
                 with ui.row().classes("w-full items-center gap-2 q-pb-xs") \
-                        .style("border-bottom: 1px solid #E2E8F0"):
+                        .style("border-bottom: 1px solid var(--border)"):
                     ui.label("Jaar") \
                         .classes("text-caption text-bold") \
                         .style("width: 60px")

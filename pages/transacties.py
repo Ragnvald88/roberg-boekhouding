@@ -130,7 +130,7 @@ async def open_add_uitgave_dialog(
         # PDF upload / prefilled PDF
         ui.separator().classes('q-my-sm')
         ui.label('Bon/factuur (optioneel)').classes(
-            'text-caption').style('color: #64748B')
+            'text-caption').style('color: var(--muted)')
         add_upload = None
         if prefill and prefill.get('pdf_path'):
             pdf_source = Path(prefill['pdf_path'])

@@ -216,8 +216,8 @@ async def _laad_breakdown(container, jaar):
         if uncat_amount > 0:
             uncat_card = ui.card().classes(
                 'w-full q-pa-md cursor-pointer') \
-                .style('background:#f8fafc;'
-                        'border-left:4px solid #f59e0b')
+                .style('background:var(--bg);'
+                        'border-left:4px solid var(--q-warning)')
             with uncat_card:
                 with ui.row().classes('w-full items-center'):
                     ui.icon('warning', color='warning').classes('text-lg')
