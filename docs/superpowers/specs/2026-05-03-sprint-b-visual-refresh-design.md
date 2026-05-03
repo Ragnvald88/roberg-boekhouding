@@ -21,9 +21,44 @@ token-explosie).
 - `/agenda` (Sprint A) is in scope als referentie van "hoe Apple-stijl
   voelt in deze app", niet om opnieuw aangeraakt te worden.
 - 12 routes totaal: `/`, `/agenda`, `/werkdagen`, `/facturen`,
-  `/transacties`, `/kosten`, `/bank` (legacy stub, 12 LoC),
+  `/transacties`, `/kosten`, `/bank` (legacy stub, 12 LoC, **wordt
+  geschrapt** in Sprint B),
   `/documenten`, `/jaarafsluiting`, `/aangifte`, `/klanten`,
   `/instellingen`.
+
+## Aanvullende design-checks (na review-ronde 2)
+
+Tweede review-ronde (Codex onafhankelijk + eigen audit) heeft 10 punten
+opgeleverd, allemaal verwerkt in deze spec. Belangrijkste impact:
+
+1. `/bank` is een client-side ineffectieve redirect — wordt **verwijderd**
+   (file weg, import uit `main.py` weg). Geen server-side redirect nodig
+   voor 1-user app.
+2. Body-background wordt nu via inline `ui.query('body').style(...)`
+   gezet (`layout.py:331`) — die regel **moet expliciet mee** in de
+   token-blok-commit, anders wint inline van CSS-token.
+3. Quasar `.q-*` overrides die NU binnen `@layer components` zitten
+   (6 regels): `.q-table th`, `.q-table tbody tr:nth-child(even)`,
+   `.page-toolbar .q-field`, 3× `.page-toolbar .q-field--outlined .q-field__control`
+   varianten, `.page-toolbar .q-field__label` — **allemaal**
+   verhuizen naar buiten layer (Codex' algemene regel; geen
+   YAGNI-uitzondering voor scoped overrides).
+4. Tier 3 is **eerlijker** geformuleerd: `/aangifte` + `/jaarafsluiting`
+   + `/instellingen` krijgen **wél** de globale `.q-card` (radius/shadow)
+   en `.q-table` (zebra) wijzigingen. Wat behouden blijft: rij-hoogte,
+   kolom-breedtes, getal-precisie, layout-structuur.
+5. Numeric-alignment-pass (89 `format_euro` callers in pages/) is
+   **uit scope** — `.num` is nu nergens in `pages/*.py` gebruikt en een
+   pass over 89 plekken is geen "kleine pickup". Sprint B raakt alleen
+   de `.num`-class-definitie zelf (font-family). Bestaande pages krijgen
+   SF Mono pas wanneer ze in een latere sprint `.num` adopteren.
+6. JetBrains Mono staat in 5 extra classes (`.chip`, `.seg-btn`,
+   `.selection-bar .sb-count`, `.selection-bar .sb-meta`, `.page-sub`) —
+   font-family in al deze classes wijzigen naar SF Mono in dezelfde
+   commit als CDN-link removal (anders silent fallback naar Menlo).
+7. Smoke-tests uitgebreid met gevaarlijke subflows (zie § Testing).
+8. Test-baseline wordt eerst gemeten in writable env vóór Tier 1 begint
+   (geen hardcoded count meer).
 
 ## Vier scope-keuzes (vastgelegd na brainstorm + Codex-pushback)
 
@@ -49,7 +84,11 @@ token-explosie).
      uit Tier 1 mag wél doorwerken (lichte sidebar, system font, body-
      background). Smoke-check op /agenda = "calendar-grid pixel-identiek
      aan vóór Sprint B; sidebar/header zijn lichter, dat is OK".
-   - **`/bank`**: redirect naar `/transacties`.
+   - **`/bank`**: route + bestand wordt **verwijderd** (`pages/bank.py`
+     weg, `import pages.bank` uit `main.py` weg). Geen redirect — voor
+     1-user lokale app is een 404 op een nooit-bezochte legacy-URL
+     acceptabel; `ui.navigate.to` is client-side ineffectief en
+     server-side redirect-middleware is overkill.
 4. **Typography**: pure `-apple-system` system stack voor body+headings
    + SF Mono voor numbers. **Geen** SF Pro Rounded (Codex-cut: Rounded
    is voor casual apps zoals Calendar/Find My; financial app moet rustig
@@ -70,22 +109,33 @@ token-explosie).
    - App-only classes (`.app-card`, `.kpi-strip`, `.sb-item`, etc.)
      **binnen** `@layer components`.
 2. Verwijderen van Google Fonts CDN-link (`<link>` in
-   `layout.py:286-290`).
-3. Tabel-leesbaarheid: row-height ≥ 36px, zebra-stripes
-   (`.q-table tbody tr:nth-child(even)`), header-contrast (al gedaan
-   in Sprint A — checken), numeric alignment via `.num` op
-   bedrag-kolommen die het nog niet hebben.
+   `layout.py:286-290`) **plus** font-family rewrite naar
+   `"SF Mono", ui-monospace, Menlo, monospace` op alle 7 classes die
+   nu JetBrains Mono noemen: `.num`, `.mono`, `.chip`, `.seg-btn`,
+   `.selection-bar .sb-count`, `.selection-bar .sb-meta`, `.page-sub`.
+   Atomaire commit — anders fallback naar Menlo zodra CDN weg is.
+3. Tabel-leesbaarheid: row-height ≥ 36px (Quasar `dense` blijft),
+   zebra-stripes (`.q-table tbody tr:nth-child(even)` — bestaande regel
+   migreert mee naar buiten layer), header-contrast (Sprint A regel
+   `.q-table th` migreert mee naar buiten layer met identieke styling).
+   **Geen numeric-alignment-pass over `format_euro` callers** — `.num`
+   is nu nergens in `pages/*.py` gebruikt; een 89-edits pass is geen
+   "small pickup". Sprint B raakt alleen de `.num`-class-definitie zelf
+   (font-family wijziging).
 4. KPI-cards subtieler: consistente radius (`var(--radius)`), zachte
    shadow (`var(--shadow)`), border-color via `var(--border)`. Vervangt
    ad-hoc `border: 1px solid #E2E8F0` op `.card-hero` etc.
 5. Forms/dialogs consistent: input border-radius, label-typography,
    button-spacing — via Quasar overrides.
-6. `/bank` route → redirect naar `/transacties` (`pages/bank.py` wordt
-   2-regel redirect-handler).
+6. `/bank` route — `pages/bank.py` **verwijderd**, `import pages.bank`
+   uit `main.py:33` weg.
 7. Smoke-test elke Tier 2 + Tier 3 pagina na `.q-*`-wijzigingen
    (handmatig in pywebview — zie § Testing).
-8. Volledige pytest-suite groen houden (1261 tests baseline na merge
-   van Sprint A).
+8. Volledige pytest-suite groen houden — baseline = uitkomst van
+   `pytest --collect-only -q | tail -1` in writable dev env vóór
+   Tier 1 begint (waarschijnlijk 1261, maar wordt herijkt per
+   implementatie-start zodat eventuele master-merges sindsdien
+   meegenomen worden).
 
 ## Out of scope (bewust)
 
@@ -232,36 +282,53 @@ Per pagina:
 - Tabel-kolommen herordenen of toevoegen
 - Dialog-flows wijzigen
 
-### Tier 3 — chrome-only polish
+### Tier 3 — chrome + globale token-pickup (eerlijke versie)
 
 **Pagina's**: `/aangifte`, `/jaarafsluiting`, `/instellingen`.
 
-Krijgen via `layout.py`-changes automatisch:
+**Krijgen automatisch via `layout.py`-changes** (eerlijk: dit is meer
+dan "chrome-only" — deze pagina's hebben veel `ui.card` en `ui.table`
+en die schuiven mee):
 - Lichte sidebar/header
 - System font-stack op body
-- SF Mono op `.num` cells (waar al toegepast)
-- Token-driven `.q-card` border/shadow/radius
+- SF Mono op `.num` cells (alleen waar al toegepast — werkdagen-template,
+  shared_ui mono-class)
+- **`.q-card` radius (12px) + soft shadow + token-border** — dus alle
+  fiscale cards in `/aangifte` (Box 1, Box 3 totalen) en
+  `/jaarafsluiting` (snapshot/checklist cards) krijgen subtiel
+  rondere hoeken en zachtere shadow. Geen layout-shift, wel visueel
+  verschil.
+- **`.q-table` zebra + header-contrast** — fiscale tabellen in
+  `/jaarafsluiting` (`pages/jaarafsluiting.py:430,567`) krijgen ook
+  zebra-rows en de mee-verhuisde header-styling.
 
 Wat **niet**:
-- Geen aanraking van fiscale tabel-density (rij-hoogte, kolom-breedtes,
-  number-precisie).
-- Geen herstructurering van Box-1/Box-3 tab-layout in /aangifte.
-- Geen wijziging van Jaarafsluiting checklist-rendering.
+- Geen aanraking van fiscale rij-hoogte (Quasar `dense` blijft).
+- Geen kolom-breedte aanpassingen.
+- Geen number-precisie wijzigingen (decimals, format_euro blijft).
+- Geen herstructurering van Box-1/Box-3 tab-layout in `/aangifte`.
+- Geen wijziging van Jaarafsluiting checklist-rendering-logic.
+- Geen `.num`-class toevoegingen aan fiscale labels (zie In-scope #3:
+  Sprint B doet geen numeric-pass).
 
-### `/bank` redirect
+**Verifieer met user na Tier 1-PR**: visuele check op `/aangifte` —
+zijn de cards-met-radius nog goed leesbaar? Als rondere hoeken visueel
+storen voor fiscale dichtheid: corrigeer in Tier 1 commit (kleinere
+`--radius` bv. 8px ipv 12px), niet via Tier 3-rewrite.
 
-`pages/bank.py` (nu 12 regels stub) wordt:
+### `/bank` schrappen
 
-```python
-from nicegui import ui
+Codex heeft geverifieerd in de geïnstalleerde NiceGUI source dat
+`ui.navigate.to(...)` puur client-side is (frontend `window.open(url,
+"_self")` zonder history-replace) en dat `app.router.add_redirect` niet
+bestaat in de NiceGUI/FastAPI versie die we gebruiken. Een server-side
+redirect via FastAPI middleware is overkill voor één route die niemand
+bookmarkt in een 1-user lokale app.
 
-@ui.page('/bank')
-def bank_page():
-    ui.navigate.to('/transacties', new_tab=False)
-```
-
-(of equivalent via `app.router.add_redirect` als NiceGUI dat netter
-ondersteunt — implementatie-detail voor implementatie-plan.)
+**Concrete actie:**
+1. `git rm pages/bank.py` (12 regels stub).
+2. Verwijder `import pages.bank` uit `main.py:33`.
+3. Geen vervanging — een 404 op `/bank` is acceptabel.
 
 ## Testing
 
@@ -292,10 +359,21 @@ loop deze checklist door per pagina in de native pywebview-app.
 - `/` (dashboard): KPI-cards renderen + click op "Te verwerken" navigeert
   naar `/transacties?status=ongecategoriseerd`.
 - `/werkdagen`: tabel + filter-toolbar + werkdag-dialog (add) opent en
-  bewaart.
-- `/facturen`: tabel + rij-menu opent **én** "Bewerken"-actie binnen
-  het menu landt → invoice builder opent. Import-flow (PDF-upload)
-  test pij vóór commit. PDF-preview iframe rendert.
+  bewaart. **Plus**: rij-menu (`q-menu` teleport, `pages/werkdagen.py:244`)
+  opent én Bewerken/Verwijderen/Ontkoppel binnen het menu landt event
+  → portal-event-check.
+- `/facturen`: tabel + rij-menu opent **én** "Bewerken"-actie landt
+  → invoice builder opent. **Plus** (Codex-toevoegingen):
+  - "Verstuur via mail" op een **concept**-factuur → status flipt naar
+    `verstuurd` (`pages/facturen.py:1362` flow), Mail.app opent.
+  - "Markeer als concept" op een **betaalde** factuur → twee-staps
+    transitie (betaald→verstuurd→concept), waarschuwingsdialog opent
+    (`pages/facturen.py:1215` flow).
+  - "PDF preview" op een factuur waarvan de stored `pdf_pad` niet
+    bestaat → `_ensure_factuur_pdf` self-healing genereert PDF opnieuw
+    en preview opent (`pages/facturen.py:1133`).
+  - Import-flow (PDF-upload) tester vóór commit. PDF-preview iframe
+    rendert.
 - `/transacties`: q-select voor categorie werkt **per rij** (event landt,
   cat wordt geschreven). "Matches controleren"-header-knop opent dialog.
   Bulk-acties bevestigingsdialog opent en sluit netjes.
@@ -306,9 +384,10 @@ loop deze checklist door per pagina in de native pywebview-app.
 - `/documenten`: upload-veld werkt (file selectie + opslaan), filter-
   toolbar werkt.
 - `/aangifte` (Tier 3): tabs (Box 1 / Box 3 / etc.) wisselen, fiscale
-  cijfers leesbaar (geen layout-druk door nieuwe spacing).
+  cijfers leesbaar **ondanks `.q-card` radius/shadow wijziging**.
 - `/jaarafsluiting` (Tier 3): tabs (Controles / Snapshot / Heropenen) +
-  "Definitief maken"-flow opent dialog.
+  "Definitief maken"-flow opent dialog. Tabellen krijgen zebra — checken
+  of dat niet visueel druk wordt op fiscale dichtheid.
 - `/instellingen` (Tier 3): jaar-selector werkt + Arbeidskorting-brackets
   editor laadt + opslaan-knop landt.
 - `/agenda` (Sprint A regression): kalender-grid pixel-vergelijkbaar met
@@ -328,20 +407,37 @@ de skill moet ook op `.css`-diffs draaien (skill ondersteunt al `.css`).
 | Sprint A `.wd-pill` / `.agenda-cell` styling verandert ongewenst door nieuwe globale tokens | `/agenda` smoke-test elke ronde. `.wd-*` classes blijven exact zoals nu. |
 | SF Mono renders inconsistent op pre-Big Sur macOS (onwaarschijnlijk: app draait op user's huidige macOS, nieuw genoeg) | `font-family` fallback-stack: `"SF Mono", ui-monospace, Menlo, monospace` — Menlo is gegarandeerd aanwezig. |
 | Nav-active state minder leesbaar op lichte sidebar dan op donkere | Dot-marker rechts van active item + soft-accent gradient + dark-text bold. Als visueel niet sterk genoeg na Tier 1-PR: extra `border-left-accent` zoals huidige donkere variant. |
-| `pages/bank.py` redirect breekt ergens een hardcoded link | Grep `/bank` in pages/+components/ vóór de redirect — verwacht: 0 hits buiten `pages/bank.py` zelf. |
+| `pages/bank.py` schrappen breekt ergens een hardcoded link | Grep `/bank` in pages/+components/+main.py vóór de schrap — geverifieerd 2026-05-03: 0 hits buiten `pages/bank.py:10` zelf. Veilig om te verwijderen. |
+| Body-token wint niet van inline style op `layout.py:331` (`ui.query('body').style(...)`) | DoD-item dat expliciet beide regels in dezelfde commit moet aanpakken. Smoke-test verifieert achtergrond-kleur in pywebview. |
+| Tier 3 visuele wijziging op `.q-card` blijkt te storend voor fiscale density (radius te rond, shadow te zwaar) | User-acceptatie-check na Tier 1 PR voordat we Tier 2 starten. Mitigatie: `--radius` lager (8px ipv 12px) of `--shadow` lichter. Single-token-tweak, niet rewrite. |
 | pytest faalt op een UI-string-check die we niet kenden | Eerst Tier 1-PR draaien als dry-run en pytest checken vóór commit. |
 | Quasar `q-menu` / `q-btn-dropdown` / `q-select` events landen niet door portal-teleport (CLAUDE.md genoemd, eerder rootcause van Kosten-categorie-bug) — een radius/padding override op `.q-menu` of nested classes kan dit subtiel re-introduceren | Smoke-test mag NIET stoppen bij "menu opent visueel". Verplichte check: klik **binnen** het menu/dropdown en valideer dat de event-handler effect heeft (categorie wordt opgeslagen, factuur opent, etc.). Per route in subflow-checklist hierboven uitgewerkt. |
 
 ## Implementatie-volgorde (high-level — exacte tasks komen in plan)
 
-1. Tier 1 chrome (één commit, raakt alles) → smoke-test + pytest.
-2. `/bank` redirect (kleine commit).
-3. Tier 2 per pagina (kleine commits, één pagina per commit voor
-   reviewability) → smoke-test per pagina + pytest na elke commit.
-4. Tier 3 spot-check (verifieer dat Tier 1 chrome zonder issues
-   doorwerkt op `/aangifte`, `/jaarafsluiting`, `/instellingen`).
-5. End-to-end smoke over alle 11 actieve routes.
-6. Auto-memory update + CLAUDE.md mini-sectie over de visual-tokens.
+1. **Pre-flight**: meet test-baseline (`pytest --collect-only -q | tail -1`),
+   commit nummer als kennis-anker in implementatie-plan.
+2. **Tier 1 chrome** (één commit, raakt alles): tokens + body-token
+   (incl. layout.py:331 fix) + lichte sidebar/header + alle 6 Quasar
+   `.q-*` migratie naar buiten layer + font-family rewrite (7 classes)
+   + Google Fonts CDN-link verwijderen → smoke-test alle 11 routes
+   + pytest baseline.
+3. **`/bank` schrappen** (kleine atomic commit): `git rm pages/bank.py`
+   + `import pages.bank` weg uit `main.py:33` → pytest groen.
+4. **User-acceptatie-checkpoint**: na Tier 1 PR, gebruiker doet
+   visuele check op `/aangifte` (en willekeurige andere route) of
+   `.q-card` radius/shadow leesbaar blijft. Bij issue: token-tweak
+   in Tier 1 commit (geen Tier 2 starten met klacht over Tier 1).
+5. **Tier 2 per pagina** (kleine commits, één pagina per commit voor
+   reviewability): `/`, `/werkdagen`, `/facturen`, `/transacties`,
+   `/kosten`, `/klanten`, `/documenten` → smoke-test per pagina
+   (incl. subflow-checks) + pytest na elke commit.
+6. **Tier 3 spot-check**: verifieer `/aangifte`, `/jaarafsluiting`,
+   `/instellingen` met subflow-checks; geen code-changes verwacht.
+7. **End-to-end walk-through**: user loopt alle 11 actieve routes door
+   in pywebview voor visuele acceptatie.
+8. **Auto-memory update**: `project_visual_refresh.md` met de 9
+   tokens + Tier-aanpak + lessons.
 
 Implementatie-plan komt in `docs/superpowers/plans/` na user-review
 van deze spec.
@@ -350,27 +446,38 @@ van deze spec.
 
 - [ ] Tokens-blok aanwezig in `layout.py`, sub-secties met visuele
       headers (`/* === ... === */`).
-- [ ] Quasar `.q-*` overrides expliciet **buiten** `@layer components`
-      (incl. de Sprint A `.q-table th`-regel die mee-verhuist met
-      identieke styling).
+- [ ] Alle 6 huidige Quasar overrides expliciet **buiten**
+      `@layer components` met identieke of bewust gewijzigde styling:
+      `.q-table th`, `.q-table tbody tr:nth-child(even)`,
+      `.page-toolbar .q-field`, 3× `.page-toolbar .q-field--outlined
+      .q-field__control` varianten, `.page-toolbar .q-field__label`.
+- [ ] Body-background komt uit `var(--bg)` en de inline
+      `ui.query('body').style('background-color: ...')` op `layout.py:331`
+      is aangepast naar token-referentie of weggehaald (anders wint inline).
 - [ ] Header opaque white, sidebar licht-gradient, beide 180px breed.
 - [ ] System font-stack live (`-apple-system, ...`) op body+headings.
 - [ ] Google Fonts `<link>` voor JetBrains Mono verwijderd uit
-      `layout.py`.
-- [ ] SF Mono toegepast op `.num` en `.mono` (font-family wijziging).
-- [ ] **Numeric alignment-pass uitgevoerd**: bedrag-, uren-, en
-      km-kolommen op `/dashboard`, `/werkdagen`, `/facturen`,
-      `/transacties`, `/kosten` hebben `.num` class waar nog niet
-      aanwezig. Verifieerbaar via grep op de page-files.
-- [ ] `/bank` redirect actief; geen hardcoded `/bank`-links elders
-      in pages/+components/.
-- [ ] Volledige pytest-suite groen (1261 baseline).
+      `layout.py` **én** font-family rewrite naar
+      `"SF Mono", ui-monospace, Menlo, monospace` op alle 7 classes
+      (`.num`, `.mono`, `.chip`, `.seg-btn`, `.selection-bar .sb-count`,
+      `.selection-bar .sb-meta`, `.page-sub`) **in dezelfde commit**.
+- [ ] `/bank` route + bestand `pages/bank.py` verwijderd; `import
+      pages.bank` uit `main.py:33` verwijderd; pytest blijft groen.
+- [ ] pytest-baseline gemeten (`pytest --collect-only -q | tail -1`)
+      vóór Tier 1 implementatie + alle baseline-tests blijven groen
+      na elke commit.
 - [ ] Smoke-test alle 11 actieve routes uitgevoerd in pywebview met
       **subflow-checks** (zie § Testing); `/agenda`-grid pixel-
       regressie-vrij.
 - [ ] Portal-event-check expliciet uitgevoerd voor minimaal:
       `/transacties` q-select, `/facturen` rij-menu Bewerken,
-      `/jaarafsluiting` Heropenen-flow.
+      `/werkdagen` rij-menu Bewerken, `/jaarafsluiting`
+      Heropenen-flow.
+- [ ] Factuur-status-flow check: concept→verstuurd via mail-knop +
+      betaald→verstuurd→concept via "Markeer als concept" + PDF
+      self-healing (alle 3 paden in `/facturen` één keer geklikt).
+- [ ] User doet eind-acceptatie walk-through over alle 11 routes en
+      bevestigt visuele consistentie (gevoels-check, geen pixel-test).
 - [ ] Codex-review op finale `layout.py`-diff: GEEN BEVINDINGEN of
       bewust geaccepteerde nuance.
 - [ ] Auto-memory `project_visual_refresh.md` (of vergelijkbaar)
