@@ -66,7 +66,10 @@ def _segment_matches(w, segment: str) -> bool:
 
 @ui.page('/werkdagen')
 async def werkdagen_page():
-    create_layout('Werkdagen', '/werkdagen')
+    # active_page='/agenda' is bewust: sidebar-nav 'Werkdagen' wijst nu naar
+    # /agenda (calendar default-view). /werkdagen is nu de Lijstweergave —
+    # via toolbar-knop bereikbaar, maar onder hetzelfde nav-item.
+    create_layout('Werkdagen', '/agenda')
 
     current_year = date.today().year
     klanten = await get_klanten(DB_PATH)

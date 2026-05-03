@@ -407,7 +407,7 @@ def _render_day_inspector(container, dag, on_add_werkdag, on_add_blocker,
 
 @ui.page('/agenda')
 async def agenda_page():
-    create_layout('Agenda', '/agenda')
+    create_layout('Werkdagen', '/agenda')
 
     # Page state — mutable refs (Python closures capture, not copy)
     today = date.today()
@@ -421,7 +421,7 @@ async def agenda_page():
 
     with ui.column().classes('w-full p-6 max-w-7xl mx-auto gap-4'):
         with ui.row().classes('w-full items-center'):
-            page_title('Agenda')
+            page_title('Werkdagen')
 
         # Top toolbar
         with ui.row().classes('w-full items-center gap-2'):
