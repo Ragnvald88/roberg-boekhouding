@@ -568,7 +568,7 @@ async def get_maand(db_path, jaar: int, maand: int,
             blockers_by_datum[b.datum] = b
 
     # 3. Patterns + klanten for expected (only if needed)
-    patterns_by_klant: dict[int, list] = {}
+    patterns_by_klant: dict[int, tuple[Pattern, ...]] = {}
     klanten_by_id: dict[int, object] = {}
     if include_expected:
         # alleen_actief=True: gedeactiveerde klanten mogen geen expected
