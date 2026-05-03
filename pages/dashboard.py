@@ -440,7 +440,7 @@ async def dashboard_page():
                             ui.label(f'{km:,.0f} km'.replace(',', '.')).classes(
                                 'strip-value')
                             ui.label(format_euro(km_bedrag)).classes(
-                                'context-text')
+                                'context-text num')
 
                 # Documenten
                 docs = aangifte_docs

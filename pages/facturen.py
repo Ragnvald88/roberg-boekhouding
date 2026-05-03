@@ -708,7 +708,7 @@ async def facturen_page(nieuw: str | None = None,
         ''')
 
         table.add_slot('body-cell-datum', '''
-            <q-td :props="props">
+            <q-td :props="props" class="num">
                 {{ props.row.datum_fmt }}
             </q-td>
         ''')
@@ -723,7 +723,7 @@ async def facturen_page(nieuw: str | None = None,
         ''')
 
         table.add_slot('body-cell-bedrag', '''
-            <q-td :props="props" class="text-right">
+            <q-td :props="props" class="text-right num">
                 {{ props.row.bedrag_fmt }}
             </q-td>
         ''')
@@ -941,25 +941,24 @@ async def facturen_page(nieuw: str | None = None,
                                   if r.get('verlopen') and r.get('status') == 'verstuurd')
             kpi_strip_container.clear()
             with kpi_strip_container:
-                _kpi_style = 'font-variant-numeric: tabular-nums'
                 with ui.card().classes('flex-1 q-pa-sm'):
                     ui.label('Gefactureerd').classes('text-caption text-grey-7')
                     ui.label(format_euro(totaal)).classes(
-                        'text-subtitle1 text-weight-bold').style(_kpi_style)
+                        'text-subtitle1 text-weight-bold num')
                 if openstaand > 0:
                     with ui.card().classes('flex-1 q-pa-sm'):
                         ui.label('Openstaand').classes(
                             'text-caption text-grey-7')
                         ui.label(format_euro(openstaand)) \
-                            .style(f'color: var(--q-warning); {_kpi_style}') \
-                            .classes('text-subtitle1 text-weight-bold')
+                            .style('color: var(--q-warning)') \
+                            .classes('text-subtitle1 text-weight-bold num')
                 if verlopen_bedrag > 0:
                     with ui.card().classes('flex-1 q-pa-sm'):
                         ui.label('Verlopen').classes(
                             'text-caption text-grey-7')
                         ui.label(format_euro(verlopen_bedrag)) \
-                            .style(f'color: var(--q-negative); {_kpi_style}') \
-                            .classes('text-subtitle1 text-weight-bold')
+                            .style('color: var(--q-negative)') \
+                            .classes('text-subtitle1 text-weight-bold num')
 
             summary_row.clear()
             with summary_row:
@@ -1669,7 +1668,7 @@ async def facturen_page(nieuw: str | None = None,
                                     if bedrag:
                                         ui.label(
                                             format_euro(bedrag)
-                                        ).classes('text-weight-bold')
+                                        ).classes('text-weight-bold num')
 
                                     n_items = len(
                                         item.get('line_items', []))
@@ -1690,7 +1689,7 @@ async def facturen_page(nieuw: str | None = None,
                                         ui.label(
                                             format_datum(datum)
                                         ).classes(
-                                            'text-caption text-grey-7')
+                                            'text-caption text-grey-7 num')
 
                                     klant_naam = item.get(
                                         '_klant_naam')
