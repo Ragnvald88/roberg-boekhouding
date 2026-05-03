@@ -372,8 +372,7 @@ def create_layout(title: str, active_page: str = ''):
     # Navigation groups (separated by whitespace, no headers)
     NAV_GROUPS = [
         [('Dashboard', 'space_dashboard', '/'),
-         ('Agenda', 'calendar_month', '/agenda'),
-         ('Werkdagen', 'event_note', '/werkdagen')],
+         ('Werkdagen', 'calendar_month', '/agenda')],
         [('Facturen', 'receipt_long', '/facturen'),
          ('Transacties', 'account_balance_wallet', '/transacties'),
          ('Kosten', 'shopping_bag', '/kosten')],
