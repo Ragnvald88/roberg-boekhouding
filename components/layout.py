@@ -89,8 +89,8 @@ body {
     background: var(--surface);
 }
 
-/* Button polish — Sprint B */
-.q-btn {
+/* Button polish — Sprint B (NIET op round/rounded modifiers — die houden Quasar's cirkel-shape) */
+.q-btn:not(.q-btn--round):not(.q-btn--rounded) {
     border-radius: 8px;
 }
 
