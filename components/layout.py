@@ -41,20 +41,47 @@ body {
        Tier 1 progressie, of .text-primary elders). */
 }
 
-@layer components {
-    /* Table header styling */
-    .q-table th {
-        background-color: #F1F5F9;
-        font-weight: 600;
-        text-transform: uppercase;
-        font-size: 0.7rem;
-        letter-spacing: 0.05em;
-        color: #475569;
-    }
-    .q-table tbody tr:nth-child(even) {
-        background-color: #F8FAFC;
-    }
+/* === QUASAR OVERRIDES (UNLAYERED — winnen van Quasar defaults) === */
+/* Sprint B Codex regel: Quasar's eigen CSS is unlayered; layered styles
+   verliezen ALTIJD van unlayered ongeacht specificity. Daarom alle .q-*
+   overrides hier buiten @layer components plaatsen. */
 
+/* Table header styling */
+.q-table th {
+    background-color: #F1F5F9;
+    font-weight: 600;
+    text-transform: uppercase;
+    font-size: 0.7rem;
+    letter-spacing: 0.05em;
+    color: #475569;
+}
+.q-table tbody tr:nth-child(even) {
+    background-color: #F8FAFC;
+}
+
+/* Page-toolbar Quasar overrides */
+.page-toolbar .q-field { min-height: unset; }
+
+/* White pill selects inside toolbar */
+.page-toolbar .q-field--outlined .q-field__control {
+    background: white !important;
+    border-color: transparent !important;
+    border-radius: 20px !important;
+    min-height: 36px !important;
+    transition: box-shadow 0.15s ease;
+}
+.page-toolbar .q-field--outlined .q-field__control:hover {
+    box-shadow: 0 2px 8px rgba(0,0,0,0.07);
+}
+.page-toolbar .q-field--outlined.q-field--focused .q-field__control {
+    border-color: var(--q-primary) !important;
+    box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.12);
+}
+.page-toolbar .q-field__label {
+    font-size: 11px !important;
+}
+
+@layer components {
     /* Page toolbar — tinted bar with pill-shaped filters */
     .page-toolbar {
         display: flex;
@@ -63,26 +90,6 @@ body {
         padding: 8px 14px;
         background: #EDF2F7;
         border-radius: 12px;
-    }
-    .page-toolbar .q-field { min-height: unset; }
-
-    /* White pill selects inside toolbar */
-    .page-toolbar .q-field--outlined .q-field__control {
-        background: white !important;
-        border-color: transparent !important;
-        border-radius: 20px !important;
-        min-height: 36px !important;
-        transition: box-shadow 0.15s ease;
-    }
-    .page-toolbar .q-field--outlined .q-field__control:hover {
-        box-shadow: 0 2px 8px rgba(0,0,0,0.07);
-    }
-    .page-toolbar .q-field--outlined.q-field--focused .q-field__control {
-        border-color: var(--q-primary) !important;
-        box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.12);
-    }
-    .page-toolbar .q-field__label {
-        font-size: 11px !important;
     }
 
     /* Invoice builder panel styling */
