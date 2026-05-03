@@ -11,6 +11,24 @@ ui.select.default_props('outlined dense')
 ui.table.default_props('flat bordered separator=horizontal')
 
 ui.add_css('''
+/* === TOKENS (Sprint B) === */
+:root {
+    --bg: #F5F5F7;            /* page background — system gray */
+    --surface: #FFFFFF;        /* cards, dialogs, header */
+    --border: rgba(60,60,67,0.12);
+    --text: #1C1C1E;           /* primary ink */
+    --muted: #6E6E73;          /* secondary ink, labels, captions */
+    --accent: #0F766E;         /* teal brand — unchanged */
+    --accent-soft: rgba(15,118,110,0.10);
+    --shadow: 0 2px 8px rgba(0,0,0,0.06);
+    --radius: 12px;
+}
+
+/* === BASE === */
+body {
+    background: var(--bg);
+}
+
 @layer components {
     /* Table header styling */
     .q-table th {
@@ -327,8 +345,8 @@ def create_layout(title: str, active_page: str = ''):
         warning='#D97706',
     )
 
-    # Off-white page background
-    ui.query('body').style('background-color: #F8FAFC')
+    # Background komt nu uit CSS-token --bg (zie ui.add_css blok bovenin).
+    # Inline-style hier zou CSS overrulen — daarom weggehaald in Sprint B.
 
     with ui.header().classes('items-center shadow-sm') \
             .style('background-color: #0F172A'):
