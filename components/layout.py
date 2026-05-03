@@ -89,6 +89,13 @@ body {
     background: var(--surface);
 }
 
+/* Invoice-builder line-cards: bewust géén shadow (visuele rhythm in line-stack).
+   Moet buiten @layer staan om de globale .q-card shadow hierboven te overrulen. */
+.q-card.builder-line-card {
+    box-shadow: none;
+    border: 1px solid var(--q-separator-color, #e2e8f0);
+}
+
 /* Button polish — Sprint B (NIET op round/rounded modifiers — die houden Quasar's cirkel-shape) */
 .q-btn:not(.q-btn--round):not(.q-btn--rounded) {
     border-radius: 8px;
@@ -112,7 +119,6 @@ body {
 
     /* Invoice builder panel styling */
     .builder-panel-border { border-right: 1px solid var(--q-separator-color, #e2e8f0); }
-    .builder-line-card { border: 1px solid var(--q-separator-color, #e2e8f0); box-shadow: none; }
     .builder-preview-bg { background: var(--q-separator-color, #e2e8f0); }
 
     /* Sidebar nav — Sprint B lichte variant */
