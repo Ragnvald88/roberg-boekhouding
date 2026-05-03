@@ -18,7 +18,7 @@ ui.add_css('''
     --border: rgba(60,60,67,0.12);
     --text: #1C1C1E;           /* primary ink */
     --muted: #6E6E73;          /* secondary ink, labels, captions */
-    --accent: #0F766E;         /* teal brand — unchanged */
+    --accent: #0F766E;         /* teal brand — MOET gelijk zijn aan ui.colors(primary=) onderaan */
     --accent-soft: rgba(15,118,110,0.10);
     --shadow: 0 2px 8px rgba(0,0,0,0.06);
     --radius: 12px;
@@ -160,20 +160,20 @@ body {
     .nav-divider { height: 1px; background: var(--border); margin: 8px 16px; }
 
     /* Dashboard design tokens */
-    .hero-label { font-size: 13px; color: #64748B; font-weight: 500; }
-    .hero-value { font-size: 30px; font-weight: 700; color: #0F172A;
+    .hero-label { font-size: 13px; color: var(--muted); font-weight: 500; }
+    .hero-value { font-size: 30px; font-weight: 700; color: var(--text);
                   font-variant-numeric: tabular-nums; margin: 6px 0 2px; }
     .hero-value-positive { font-size: 30px; font-weight: 700; color: var(--q-positive);
                            font-variant-numeric: tabular-nums; margin: 6px 0 2px; }
     .hero-value-negative { font-size: 30px; font-weight: 700; color: var(--q-negative);
                            font-variant-numeric: tabular-nums; margin: 6px 0 2px; }
-    .context-text { font-size: 12px; color: #94A3B8; }
-    .section-label { font-size: 13px; font-weight: 600; color: #64748B;
+    .context-text { font-size: 12px; color: var(--muted); }
+    .section-label { font-size: 13px; font-weight: 600; color: var(--muted);
                      text-transform: uppercase; letter-spacing: 0.05em; }
-    .chart-title { font-size: 15px; font-weight: 600; color: #0F172A; }
-    .chart-subtitle { font-size: 12px; color: #94A3B8; }
-    .strip-value { font-size: 14px; font-weight: 600; color: #0F172A; }
-    .strip-pct { font-size: 11px; color: #94A3B8; }
+    .chart-title { font-size: 15px; font-weight: 600; color: var(--text); }
+    .chart-subtitle { font-size: 12px; color: var(--muted); }
+    .strip-value { font-size: 14px; font-weight: 600; color: var(--text); }
+    .strip-pct { font-size: 11px; color: var(--muted); }
     /* .card-hero — alle huidige callers gebruiken ui.card() (= .q-card),
        en de unlayered .q-card rule (Sprint B T6) wint van deze layered
        regel. Functioneel no-op vandaag — defensieve fallback voor
@@ -397,11 +397,15 @@ def create_layout(title: str, active_page: str = ''):
         ('Instellingen', 'tune', '/instellingen'),
     ]
 
-    # Brand colors
+    # Brand colors — let op COUPLING met CSS-tokens bovenin (`:root`):
+    #   `primary` HIER moet gelijk blijven aan `--accent` DAAR (beide teal #0F766E).
+    #   `accent` HIER (Quasar amber #F59E0B) is GEEN hetzelfde als `--accent` (CSS).
+    #     `color=accent` in NiceGUI/Quasar markup geeft dus AMBER, niet teal.
+    #     Wil je teal-accent? Gebruik `color=primary` of `style="color: var(--accent)"`.
     ui.colors(
-        primary='#0F766E',
+        primary='#0F766E',  # ↔ --accent in CSS :root (zelfde waarde)
         secondary='#475569',
-        accent='#F59E0B',
+        accent='#F59E0B',  # Quasar amber — NIET hetzelfde als CSS --accent
         positive='#059669',
         negative='#DC2626',
         info='#2563EB',

@@ -260,8 +260,21 @@ controls that mutate data.
 `components/layout.py` definieert 9 CSS custom properties als single
 source of truth voor visual styling: `--bg`, `--surface`, `--border`,
 `--text`, `--muted`, `--accent`, `--accent-soft`, `--shadow`,
-`--radius`. Nieuw werk gebruikt deze — geen hardcoded hex meer in
-`pages/`.
+`--radius`. **Nieuw werk gebruikt deze**.
+
+**Realistic state**: Sprint B Tier 1 heeft chrome (header/sidebar/body)
++ shared dashboard-helpers (`.hero-value`/`.chart-title`/etc.) op
+tokens gezet. Maar `pages/dashboard.py`, `pages/agenda.py`,
+`pages/documenten.py` hebben nog 30+ inline `style='color: #0F172A'`
+e.d. die token-equivalenten omzeilen. Tier 2 per-page token-pickup is
+deferred — doen wanneer een pagina sowieso wordt aangeraakt voor
+ander werk.
+
+**Brand-coupling let op**: `--accent` (CSS) en `ui.colors(primary=...)`
+(NiceGUI/Quasar Python-side) zijn HANDMATIG gekoppeld op zelfde teal
+(`#0F766E`). Wijzig je één, wijzig de ander. Quasar's `accent` (amber
+`#F59E0B`) is een aparte rol — `color=accent` in markup geeft amber,
+NIET teal. Voor teal-accent: `color=primary` of `style="color: var(--accent)"`.
 
 **Cascade-regel**: Quasar `.q-*` overrides ALTIJD buiten
 `@layer components` plaatsen — layered styles verliezen van Quasar's
