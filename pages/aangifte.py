@@ -162,7 +162,7 @@ async def aangifte_page():
                 if bd_veld:
                     ui.label(bd_veld).classes('text-caption text-grey-6').style('font-size: 0.75rem')
             with ui.row().classes('items-center gap-1'):
-                ui.label(format_euro(amount)).classes(f'{css} text-right whitespace-nowrap')
+                ui.label(format_euro(amount)).classes(f'{css} text-right whitespace-nowrap num')
                 if show_copy and amount != 0:
                     ui.button(icon='content_copy', on_click=lambda a=amount, l=label: _copy_value(a, l)) \
                         .props('flat dense round size=xs color=primary')
@@ -172,7 +172,7 @@ async def aangifte_page():
         css = 'text-bold' if bold else ''
         with ui.row().classes('w-full justify-between items-center q-py-xs'):
             ui.label(label).classes(css)
-            ui.label(format_euro(amount)).classes(f'{css} text-right')
+            ui.label(format_euro(amount)).classes(f'{css} text-right num')
     with ui.column().classes('w-full p-6 max-w-7xl mx-auto gap-4'):
         # Header row
         with ui.row().classes('w-full items-end'):
@@ -451,7 +451,7 @@ async def aangifte_page():
                         ui.label('Belastbare winst uit onderneming').classes('text-bold text-h6')
                         ui.label(BD['belastbare_winst']).classes('text-caption text-grey-6')
                     with ui.row().classes('items-center gap-2'):
-                        ui.label(format_euro(f.belastbare_winst)).classes('text-bold text-h6')
+                        ui.label(format_euro(f.belastbare_winst)).classes('text-bold text-h6 num')
                         ui.button(icon='content_copy',
                                   on_click=lambda: _copy_value(f.belastbare_winst, 'Belastbare winst')) \
                             .props('round color=primary size=sm')
@@ -575,13 +575,13 @@ async def aangifte_page():
                             ui.label('Betaald via bank').classes(
                                 'text-caption text-grey-7')
                             ui.label(format_euro(bd_betaald)).classes(
-                                'text-body1 text-weight-bold text-positive')
+                                'text-body1 text-weight-bold text-positive num')
                         if va_totaal > 0:
                             with ui.column().classes('gap-0'):
                                 ui.label('Beschikking totaal').classes(
                                     'text-caption text-grey-7')
                                 ui.label(format_euro(va_totaal)).classes(
-                                    'text-body1 text-weight-bold')
+                                    'text-body1 text-weight-bold num')
                             with ui.column().classes('gap-0'):
                                 verschil = va_totaal - bd_betaald
                                 ui.label(
@@ -591,7 +591,7 @@ async def aangifte_page():
                                 color = ('text-warning' if verschil > 0
                                          else 'text-positive')
                                 ui.label(format_euro(abs(verschil))) \
-                                    .classes(f'text-body1 text-weight-bold {color}')
+                                    .classes(f'text-body1 text-weight-bold {color} num')
                     ui.label(
                         'Banktotaal = alle betalingen aan Belastingdienst '
                         '(IB + ZVW + evt. definitieve aanslagen)'
@@ -622,7 +622,7 @@ async def aangifte_page():
                     ui.separator().classes('my-1')
                     with ui.row().classes('w-full justify-between items-center q-py-xs'):
                         ui.label('Berekende AHK partner').classes('text-caption text-grey-7')
-                        ui.label(format_euro(f.partner_ahk)).classes('text-bold')
+                        ui.label(format_euro(f.partner_ahk)).classes('text-bold num')
 
             # Auto-save on blur/change for all inputs
             async def save_prive():
@@ -969,7 +969,7 @@ async def aangifte_page():
                             'text-bold text-h6')
                         with ui.row().classes('items-center gap-2'):
                             ui.label(format_euro(abs(totaal))).classes(
-                                'text-bold text-h6 text-positive')
+                                'text-bold text-h6 text-positive num')
                             ui.button(
                                 icon='content_copy',
                                 on_click=lambda: _copy_value(
@@ -982,7 +982,7 @@ async def aangifte_page():
                             'text-bold text-h6')
                         with ui.row().classes('items-center gap-2'):
                             ui.label(format_euro(totaal)).classes(
-                                'text-bold text-h6 text-negative')
+                                'text-bold text-h6 text-negative num')
                             ui.button(
                                 icon='content_copy',
                                 on_click=lambda: _copy_value(
@@ -992,7 +992,7 @@ async def aangifte_page():
                     with ui.row().classes(
                             'w-full justify-between items-center'):
                         ui.label('Resultaat').classes('text-bold text-h6')
-                        ui.label(format_euro(0)).classes('text-bold text-h6')
+                        ui.label(format_euro(0)).classes('text-bold text-h6 num')
 
     async def render_progress(docs):
         progress_container.clear()

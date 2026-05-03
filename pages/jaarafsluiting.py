@@ -32,8 +32,8 @@ def _balans_line(label: str, value: float, bold: bool = False, indent: bool = Fa
     ml = 'q-ml-md' if indent else ''
     with ui.row().classes(f'w-full justify-between {ml}'):
         ui.label(label).classes(css)
-        ui.label(format_euro(value)).classes(f'{css} text-right') \
-            .style('min-width: 120px; font-variant-numeric: tabular-nums')
+        ui.label(format_euro(value)).classes(f'{css} text-right num') \
+            .style('min-width: 120px')
 
 async def _load_year_data(jaar: int):
     """Load all business data for a year. Returns (data, balans, winst,
@@ -481,24 +481,23 @@ async def jaarafsluiting_page():
                 """W&V line with optional prior-year column and delta."""
                 css = 'text-bold' if bold else ''
                 ml = 'q-ml-md' if indent else ''
-                num_style = ('text-align: right; '
-                             'font-variant-numeric: tabular-nums')
+                num_style = 'text-align: right'
                 with ui.row().classes(
                         f'w-full items-center {ml}').style('min-height: 28px'):
                     ui.label(label).classes(f'{css} flex-grow')
-                    ui.label(format_euro(bedrag)).classes(css) \
+                    ui.label(format_euro(bedrag)).classes(f'{css} num') \
                         .style(f'width: 110px; {num_style}')
                     if has_vorig:
                         vb = vorig_bedrag if vorig_bedrag is not None else 0
                         ui.label(format_euro(vb)) \
-                            .classes('text-grey-6') \
+                            .classes('text-grey-6 num') \
                             .style(f'width: 110px; {num_style}')
                         if vb and bedrag:
                             delta = (bedrag - vb) / abs(vb) * 100
                             color = ('text-positive' if delta >= 0
                                      else 'text-negative')
                             ui.label(f'{delta:+.1f}%') \
-                                .classes(f'text-caption {color}') \
+                                .classes(f'text-caption {color} num') \
                                 .style(f'width: 60px; {num_style}')
 
             # W&V
