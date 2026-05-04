@@ -385,10 +385,23 @@ EOF
 
 ### Task 1.4 — `.dashboard-hero-tile` + `.is-tekort` modifier CSS + Belasting-reservering hero-tile rebuild
 
+> **Plan-amendment 2026-05-04 (na T1.1 code-quality review)**:
+> 1. T1.4 MUST also drop `.hero-value-positive` and `.hero-value-negative`
+>    from `components/layout.py:169-171`. After T1.4 rebuilds the Belasting-
+>    reservering card, the IB-prognose card (currently the only remaining
+>    caller of these classes at `pages/dashboard.py:340-342`) is gone or
+>    restructured — making the classes orphan. Drop them in same commit.
+> 2. The IB-prognose card uses **inverted color logic**: `resultaat >= 0`
+>    (= "Bij" = je betaalt extra) renders `hero-value-negative` (red),
+>    NOT positive. When T1.4 rebuilds the Belasting-reservering tile,
+>    either preserve this inversion via inline color-by-sign with explicit
+>    WHY-comment, OR use semantic class names like `.hero-value-tax-bij/
+>    -terug` that make intent obvious. Don't drop the inversion silently.
+
 **Files:**
-- Modify: `components/layout.py` (add CSS classes BUITEN `@layer components`)
+- Modify: `components/layout.py` (add CSS classes BUITEN `@layer components`; ALSO drop dead `.hero-value-positive/-negative` per amendment)
 - Modify: `tests/test_visual_css.py:190` (add `'dashboard-hero-tile'` to allow-list)
-- Modify: `pages/dashboard.py` (Belasting-reservering card section, regel ~299-410)
+- Modify: `pages/dashboard.py` (Belasting-reservering card section, regel ~299-410; ALSO update IB-card if present om hero-value-pos/-neg te vermijden per amendment)
 
 - [ ] **Step 1.4.1: Add cascade-lint test for `.dashboard-hero-tile.is-tekort`**
 
