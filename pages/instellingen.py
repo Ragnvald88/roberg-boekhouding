@@ -485,7 +485,7 @@ async def instellingen_page():
                                 ui.notify(
                                     'IBAN mag niet leeg zijn — QR-betaallink zou stuk gaan '
                                     'op alle volgende facturen',
-                                    type='negative', timeout=8)
+                                    type='negative', timeout=8000)
                                 return
                             if not (kwargs.get('naam') or '').strip():
                                 ui.notify('Naam mag niet leeg zijn', type='negative')
@@ -1105,7 +1105,7 @@ async def instellingen_page():
                                     ui.notify(
                                         'Kopiëren mislukt — selecteer en kopieer'
                                         ' het pad handmatig',
-                                        type='warning', timeout=6)
+                                        type='warning', timeout=6000)
 
                             ui.button(
                                 icon='content_copy', on_click=copy_path,
