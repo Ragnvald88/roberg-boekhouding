@@ -457,12 +457,13 @@ async def dashboard_page():
                 docs_total = len(AANGIFTE_DOCS)
                 docs_pct = round(
                     docs_done / docs_total * 100) if docs_total else 0
-                # Click → /aangifte (documenten-detail leeft daar — niet /werkdagen)
+                # Click → /documenten (standalone page, niet /aangifte tab — die
+                # initialiseert op tab_winst en mist tab-query-param-handling).
                 with ui.card().classes('flex-1 q-pa-sm').style(
                         'border-radius: 10px; border: 1px solid var(--border); '
                         'display: flex; align-items: center; gap: 10px; '
                         'flex-direction: row; cursor: pointer') \
-                        .on('click', lambda: ui.navigate.to('/aangifte')):
+                        .on('click', lambda: ui.navigate.to('/documenten')):
                     ui.icon('folder_open', size='20px').style(
                         f'color: {"var(--q-positive)" if docs_pct >= 100 else "var(--q-warning)"}')
                     with ui.column().classes('flex-1 gap-0'):
