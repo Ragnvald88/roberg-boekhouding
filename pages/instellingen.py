@@ -992,51 +992,98 @@ async def instellingen_page():
                 await refresh_fiscaal()
 
             with ui.tab_panel(tab_backup):
-                ui.label('Database backup').classes('text-subtitle1 text-bold q-mb-md')
-                ui.label(
-                    'Download een atomaire snapshot van de database en alle bijbehorende bestanden. '
-                    'Bewaar backups buiten deze machine (externe schijf, NAS, of cloudmap). '
-                    'NB: deze snapshot is veilig tijdens gebruik — geen WAL races.'
-                ).classes('text-body2 text-grey q-mb-md')
+                with ui.column().classes('w-full gap-4'):
 
-                async def download_backup():
-                    if not DB_PATH.exists():
-                        ui.notify('Database niet gevonden', type='warning')
-                        return
+                    # ─── Card 1: Backup downloaden ───────────────────
+                    with ui.card().classes('settings-card'):
+                        ui.label('Database backup').classes('settings-card-title')
+                        ui.label(
+                            'Download een atomaire snapshot van de database en alle '
+                            'bijbehorende bestanden. Bewaar backups buiten deze machine '
+                            '(externe schijf, NAS, of cloudmap). NB: deze snapshot is '
+                            'veilig tijdens gebruik — geen WAL races.'
+                        ).classes('settings-card-subtitle')
 
-                    stem = f"boekhouding_backup_{date.today().isoformat()}"
-                    tmp_dir = Path(tempfile.mkdtemp(prefix='boekhouding_backup_'))
-                    dump_path = tmp_dir / f"{stem}.sqlite3"
-                    zip_path = tmp_dir / f"{stem}.zip"
+                        async def download_backup():
+                            if not DB_PATH.exists():
+                                ui.notify('Database niet gevonden', type='warning')
+                                return
 
-                    # VACUUM INTO produces an atomic, consistent snapshot — no WAL races.
-                    # Escape single quotes in the path for SQL safety (VACUUM INTO can't use bound params)
-                    safe_dump_path = str(dump_path).replace("'", "''")
-                    async with get_db_ctx(DB_PATH) as conn:
-                        await conn.execute(f"VACUUM INTO '{safe_dump_path}'")
+                            stem = f"boekhouding_backup_{date.today().isoformat()}"
+                            tmp_dir = Path(tempfile.mkdtemp(prefix='boekhouding_backup_'))
+                            dump_path = tmp_dir / f"{stem}.sqlite3"
+                            zip_path = tmp_dir / f"{stem}.zip"
 
-                    def _create_zip():
-                        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
-                            zf.write(dump_path, 'boekhouding.sqlite3')
-                            for subdir in ['facturen', 'uitgaven', 'jaarafsluiting', 'bank_csv', 'aangifte', 'logo']:
-                                dir_path = DB_PATH.parent / subdir
-                                if dir_path.exists():
-                                    for f in dir_path.rglob('*'):
-                                        if f.is_file():
-                                            zf.write(f, f"{subdir}/{f.relative_to(dir_path)}")
+                            safe_dump_path = str(dump_path).replace("'", "''")
+                            async with get_db_ctx(DB_PATH) as conn:
+                                await conn.execute(f"VACUUM INTO '{safe_dump_path}'")
 
-                    await asyncio.to_thread(_create_zip)
-                    ui.download(str(zip_path))
-                    ui.notify(f'Backup {zip_path.name} aangemaakt', type='positive')
+                            def _create_zip():
+                                with zipfile.ZipFile(
+                                    zip_path, 'w', zipfile.ZIP_DEFLATED
+                                ) as zf:
+                                    zf.write(dump_path, 'boekhouding.sqlite3')
+                                    for subdir in [
+                                        'facturen', 'uitgaven', 'jaarafsluiting',
+                                        'bank_csv', 'aangifte', 'logo',
+                                    ]:
+                                        dir_path = DB_PATH.parent / subdir
+                                        if dir_path.exists():
+                                            for f in dir_path.rglob('*'):
+                                                if f.is_file():
+                                                    zf.write(
+                                                        f,
+                                                        f"{subdir}/"
+                                                        f"{f.relative_to(dir_path)}")
 
-                    async def _cleanup():
-                        await asyncio.sleep(300)
-                        shutil.rmtree(tmp_dir, ignore_errors=True)
-                    asyncio.create_task(_cleanup())
+                            await asyncio.to_thread(_create_zip)
+                            ui.download(str(zip_path))
+                            ui.notify(
+                                f'Backup {zip_path.name} aangemaakt',
+                                type='positive')
 
-                ui.button('Download backup', icon='download',
-                          on_click=download_backup).props('color=primary')
+                            async def _cleanup():
+                                await asyncio.sleep(300)
+                                shutil.rmtree(tmp_dir, ignore_errors=True)
+                            asyncio.create_task(_cleanup())
 
-                ui.separator().classes('q-my-lg')
-                ui.label('Database locatie').classes('text-subtitle2')
-                ui.label(str(DB_PATH.resolve())).classes('text-caption text-grey')
+                        ui.button(
+                            'Download backup', icon='download',
+                            on_click=download_backup,
+                        ).props('color=primary')
+
+                    # ─── Card 2: Database-locatie + copy-to-clipboard ─
+                    with ui.card().classes('settings-card'):
+                        ui.label('Database-locatie').classes('settings-card-title')
+                        ui.label(
+                            'Locatie van de SQLite-database op deze machine. '
+                            'Bewaar backups (zie boven) buiten deze locatie.'
+                        ).classes('settings-card-subtitle')
+
+                        db_path_str = str(DB_PATH.resolve())
+
+                        with ui.row().classes(
+                            'w-full items-center q-gutter-sm'
+                        ):
+                            ui.label(db_path_str).style(
+                                'font-family: "SF Mono", Menlo, monospace;'
+                                ' font-size: 13px;'
+                                ' background: var(--bg);'
+                                ' padding: 8px 12px;'
+                                ' border-radius: 6px;'
+                                ' border: 1px solid var(--border);'
+                                ' user-select: text;'
+                                ' flex: 1;'
+                                ' overflow-x: auto;')
+
+                            def copy_path():
+                                # Pywebview WebKit ondersteunt navigator.clipboard
+                                ui.run_javascript(
+                                    f'navigator.clipboard.writeText('
+                                    f'{json.dumps(db_path_str)})')
+                                ui.notify('Pad gekopieerd naar klembord',
+                                          type='positive')
+
+                            ui.button(
+                                icon='content_copy', on_click=copy_path,
+                            ).props('flat dense round').tooltip('Kopieer pad')
