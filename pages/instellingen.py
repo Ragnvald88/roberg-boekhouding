@@ -354,7 +354,11 @@ async def instellingen_page():
                             logo_dir = DB_PATH.parent / 'logo'
                             logo_dir.mkdir(parents=True, exist_ok=True)
 
-                            # Hidden ui.upload — created once, persists across local refreshes
+                            # Upload-handler bound once: ui.upload (and dus
+                            # zijn registered on_upload callback) wordt eenmaal
+                            # gemaakt. render_logo_row() rebuilds alleen het
+                            # zichtbare row-container, dus de upload + handler
+                            # blijven leven over local refreshes.
                             async def handle_logo_upload(e):
                                 content = await e.file.read()
                                 ext = e.file.name.rsplit('.', 1)[-1].lower()
@@ -393,8 +397,11 @@ async def instellingen_page():
                                 current_logo = logo_files[0] if logo_files else None
 
                                 async def delete_logo():
-                                    if current_logo is None:
-                                        return
+                                    # Verwijderen-knop wordt alleen gerenderd
+                                    # als current_logo bestaat (zie below);
+                                    # geen None-guard nodig per CLAUDE.md
+                                    # "geen validation voor scenario's die
+                                    # niet kunnen voorkomen".
                                     try:
                                         await asyncio.to_thread(current_logo.unlink)
                                     except OSError as ex:
