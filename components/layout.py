@@ -456,7 +456,10 @@ body {
     border: 1px solid var(--border);
     border-radius: var(--radius);
     padding: 24px;
-    box-shadow: var(--shadow);
+    /* No box-shadow: ui.card.default_props('flat bordered') (layout.py:5)
+       adds Quasar's no-shadow class with !important — any shadow here
+       would be overruled. Apple-rustig settings-pages have no shadow
+       anyway, so we keep it consistent. */
     margin-bottom: 16px;
 }
 .q-card.settings-card .q-card__section {
