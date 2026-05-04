@@ -298,7 +298,7 @@ async def instellingen_page():
                                 value=getattr(bg, 'bedrijfsnaam', '') or '',
                                 on_change=_mark_dirty(card_identiteit),
                             ).classes('w-full')
-                            with ui.grid(columns=2).classes('w-full gap-4'):
+                            with ui.grid(columns=2).classes('w-full gap-3'):
                                 fields['naam'] = ui.input(
                                     'Naam', value=getattr(bg, 'naam', '') or '',
                                     on_change=_mark_dirty(card_identiteit))
@@ -314,7 +314,7 @@ async def instellingen_page():
                                 'Adres', value=getattr(bg, 'adres', '') or '',
                                 on_change=_mark_dirty(card_contact),
                             ).classes('w-full')
-                            with ui.grid(columns=2).classes('w-full gap-4'):
+                            with ui.grid(columns=2).classes('w-full gap-3'):
                                 fields['postcode_plaats'] = ui.input(
                                     'Postcode + Plaats',
                                     value=getattr(bg, 'postcode_plaats', '') or '',
@@ -332,7 +332,7 @@ async def instellingen_page():
                         with ui.card().classes('settings-card') as card_fiscaal:
                             cards.append(card_fiscaal)
                             ui.label('Fiscaal & financieel').classes('settings-card-title')
-                            with ui.grid(columns=2).classes('w-full gap-4'):
+                            with ui.grid(columns=2).classes('w-full gap-3'):
                                 fields['kvk'] = ui.input(
                                     'KvK-nummer', value=getattr(bg, 'kvk', '') or '',
                                     on_change=_mark_dirty(card_fiscaal))
