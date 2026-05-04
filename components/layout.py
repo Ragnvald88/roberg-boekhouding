@@ -22,6 +22,12 @@ ui.add_css('''
     --accent-soft: rgba(15,118,110,0.10);
     --shadow: 0 2px 8px rgba(0,0,0,0.06);
     --radius: 12px;
+
+    /* Soft backgrounds voor confidence/delta-badges (Sprint F) */
+    --bg-success-soft: #ECFDF5;       /* positive delta bg, IB-high confidence */
+    --bg-warning-soft: #FEF3C7;       /* IB-low confidence bg */
+    --bg-info-soft: #F0F9FF;          /* IB-medium confidence bg */
+    --bg-negative-soft: #FEF2F2;      /* negative delta bg */
 }
 
 /* === BASE === */
@@ -352,7 +358,82 @@ body {
     .week-summary-num { font-weight: 600; color: #475569; }
     .week-summary-amt { font-weight: 600; color: #0F172A; font-variant-numeric: tabular-nums; }
     .week-summary-meta { font-size: 9px; color: #94A3B8; }
+
+    /* === ALERT CARDS (Sprint F — dashboard AANDACHTSPUNTEN) ===
+       Shared structure + lokale CSS-vars per modifier ipv 12 globale tokens.
+       Voorkomt token-explosion (Sprint B YAGNI-cut). */
+    .alert-card {
+        background: var(--alert-bg);
+        border: 1px solid var(--alert-border);
+        border-radius: 10px;
+        padding: 12px 14px;
+        display: flex;
+        align-items: flex-start;
+        gap: 10px;
+    }
+    .alert-card--warning {
+        --alert-bg: #FFFBEB;
+        --alert-border: #FDE68A;
+        --alert-icon: #D97706;
+        --alert-title: #92400E;
+        --alert-body: #A16207;
+        --alert-link: #D97706;
+    }
+    .alert-card--attention {
+        --alert-bg: #FFF7ED;
+        --alert-border: #FED7AA;
+        --alert-icon: #EA580C;
+        --alert-title: #9A3412;
+        --alert-body: #C2410C;
+        --alert-link: #EA580C;
+    }
+    /* .alert-icon (op q-icon) en .alert-link (op q-btn) verhuizen naar
+       buiten @layer — zie blok onder de @layer-sluiter. */
+    .alert-card .alert-title { color: var(--alert-title); font-weight: 600; }
+    .alert-card .alert-body { color: var(--alert-body); }
+
+    /* === SEVERITY CARDS (Sprint F — dashboard health-alerts) === */
+    .severity-card {
+        background: var(--severity-bg);
+        border: 1px solid var(--severity-border);
+        border-radius: 10px;
+        padding: 12px 14px;
+    }
+    .severity-card--danger-deep {
+        --severity-bg: #FEE2E2;
+        --severity-border: #FCA5A5;
+        --severity-fg: #B91C1C;
+        --severity-dark: #7F1D1D;
+    }
+    .severity-card--danger {
+        --severity-bg: #FEF2F2;
+        --severity-border: #FECACA;
+        --severity-fg: #DC2626;
+        --severity-dark: #991B1B;
+    }
+    .severity-card--info {
+        --severity-bg: #EFF6FF;
+        --severity-border: #BFDBFE;
+        --severity-fg: #2563EB;
+        --severity-dark: #1E40AF;
+    }
+    /* .severity-fg (op q-icon en q-btn) verhuist naar buiten @layer — zie
+       blok onder de @layer-sluiter. */
+    .severity-card .severity-dark { color: var(--severity-dark); }
 }
+
+/* === SPRINT F — Quasar overrides BUITEN @layer voor cascade-veiligheid ===
+   .alert-icon (op q-icon), .alert-link (op q-btn), .severity-fg (op q-icon
+   + q-btn). Quasar's unlayered defaults (q-btn { color: inherit; border: 0 }
+   en q-icon { color: inherit }) winnen anders van layered classes — zie
+   Sprint B cascade-regel + Codex Sprint F review. */
+.alert-card .alert-icon { color: var(--alert-icon); }
+.alert-card .alert-link {
+    color: var(--alert-link);
+    border: 1px solid var(--alert-link);
+    font-size: 12px;
+}
+.severity-card .severity-fg { color: var(--severity-fg); }
 ''', shared=True)
 
 # Sprint B: Google Fonts CDN-link voor JetBrains Mono verwijderd —

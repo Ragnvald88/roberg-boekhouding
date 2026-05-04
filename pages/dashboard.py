@@ -166,7 +166,8 @@ async def dashboard_page():
     def _render_delta_badge(delta_pct: float):
         """Render YoY delta pill badge."""
         color = 'var(--q-positive)' if delta_pct >= 0 else 'var(--q-negative)'
-        bg = '#ECFDF5' if delta_pct >= 0 else '#FEF2F2'
+        bg = ('var(--bg-success-soft)' if delta_pct >= 0
+              else 'var(--bg-negative-soft)')
         arrow = '\u2191' if delta_pct >= 0 else '\u2193'
         sign = '+' if delta_pct > 0 else ''
         ui.label(f'{arrow} {sign}{delta_pct:.0f}%').style(
@@ -311,9 +312,12 @@ async def dashboard_page():
                             ui.label('Belasting prognose').classes(
                                 'hero-label')
                             conf_map = {
-                                'low': ('Schatting', '#D97706', '#FEF3C7'),
-                                'medium': ('Prognose', '#0369A1', '#F0F9FF'),
-                                'high': ('Betrouwbaar', '#059669', '#ECFDF5'),
+                                'low': ('Schatting', '#D97706',
+                                        'var(--bg-warning-soft)'),
+                                'medium': ('Prognose', '#0369A1',
+                                           'var(--bg-info-soft)'),
+                                'high': ('Betrouwbaar', '#059669',
+                                         'var(--bg-success-soft)'),
                             }
                             c_label, c_color, c_bg = conf_map.get(
                                 confidence, conf_map['low'])
@@ -583,30 +587,25 @@ async def dashboard_page():
                 ui.label('AANDACHTSPUNTEN').classes('section-label')
 
                 if has_ongefact:
-                    with ui.element('div').style(
-                            'background: #FFFBEB; border-radius: 10px; '
-                            'padding: 14px 18px; '
-                            'border: 1px solid #FDE68A; display: flex; '
-                            'align-items: center; '
-                            'justify-content: space-between'):
+                    with ui.element('div').classes(
+                            'alert-card alert-card--warning') \
+                            .style('justify-content: space-between'):
                         with ui.row().classes('items-center gap-2'):
-                            ui.icon('pending_actions', size='20px').style(
-                                'color: #D97706')
+                            ui.icon('pending_actions', size='20px') \
+                                .classes('alert-icon')
                             ui.html(
-                                f'<span style="font-size:13px;font-weight:600;'
-                                f'color:#92400E">'
+                                f'<span class="alert-title" '
+                                f'style="font-size:13px">'
                                 f'{ongefact["aantal"]} werkdagen '
                                 f'ongefactureerd</span>'
-                                f'<span style="font-size:12px;color:#A16207;'
-                                f'margin-left:8px">'
+                                f'<span class="alert-body" '
+                                f'style="font-size:12px;margin-left:8px">'
                                 f'{format_euro(ongefact["bedrag"])}</span>')
                         ui.button(
                             'Bekijk',
                             on_click=lambda: ui.navigate.to('/werkdagen'),
                         ).props('flat dense size=sm') \
-                            .style('border: 1px solid #D97706; '
-                                   'border-radius: 6px; '
-                                   'color: #D97706; font-size: 12px')
+                            .classes('alert-link')
 
                 if has_openstaand:
                     totaal = sum(f.totaal_bedrag for f in openstaande)
@@ -618,31 +617,26 @@ async def dashboard_page():
                             for f in openstaande)
                     except (ValueError, TypeError):
                         oudste = 0
-                    with ui.element('div').style(
-                            'background: #FFF7ED; border-radius: 10px; '
-                            'padding: 14px 18px; '
-                            'border: 1px solid #FED7AA; display: flex; '
-                            'align-items: center; '
-                            'justify-content: space-between'):
+                    with ui.element('div').classes(
+                            'alert-card alert-card--attention') \
+                            .style('justify-content: space-between'):
                         with ui.row().classes('items-center gap-2'):
-                            ui.icon('receipt_long', size='20px').style(
-                                'color: #EA580C')
+                            ui.icon('receipt_long', size='20px') \
+                                .classes('alert-icon')
                             ui.html(
-                                f'<span style="font-size:13px;font-weight:600;'
-                                f'color:#9A3412">'
+                                f'<span class="alert-title" '
+                                f'style="font-size:13px">'
                                 f'{len(openstaande)} facturen openstaand'
                                 f'</span>'
-                                f'<span style="font-size:12px;color:#C2410C;'
-                                f'margin-left:8px">'
+                                f'<span class="alert-body" '
+                                f'style="font-size:12px;margin-left:8px">'
                                 f'{format_euro(totaal)} \u00b7 oudste '
                                 f'{oudste} dagen</span>')
                         ui.button(
                             'Bekijk',
                             on_click=lambda: ui.navigate.to('/facturen'),
                         ).props('flat dense size=sm') \
-                            .style('border: 1px solid #EA580C; '
-                                   'border-radius: 6px; '
-                                   'color: #EA580C; font-size: 12px')
+                            .classes('alert-link')
 
             # Health alerts — additional signals beyond ongefact/openstaand
             if health_alerts:
@@ -650,19 +644,10 @@ async def dashboard_page():
                     # Only show header if AANDACHTSPUNTEN wasn't already rendered
                     ui.label('AANDACHTSPUNTEN').classes('section-label')
 
-                _severity_style = {
-                    'critical': (
-                        'background: #FEE2E2; border: 1px solid #FCA5A5;',
-                        '#B91C1C', '#7F1D1D',
-                    ),
-                    'warning': (
-                        'background: #FEF2F2; border: 1px solid #FECACA;',
-                        '#DC2626', '#991B1B',
-                    ),
-                    'info': (
-                        'background: #EFF6FF; border: 1px solid #BFDBFE;',
-                        '#2563EB', '#1E40AF',
-                    ),
+                _severity_class = {
+                    'critical': 'severity-card--danger-deep',
+                    'warning': 'severity-card--danger',
+                    'info': 'severity-card--info',
                 }
                 _icon_for = {
                     'critical': 'error',
@@ -670,30 +655,29 @@ async def dashboard_page():
                     'info': 'info_outline',
                 }
                 for alert in health_alerts:
-                    bg_style, icon_color, text_color = _severity_style.get(
-                        alert['severity'], _severity_style['info'])
-                    with ui.element('div').style(
-                            f'{bg_style} border-radius: 10px; '
-                            f'padding: 14px 18px; display: flex; '
-                            f'align-items: center; '
-                            f'justify-content: space-between'):
+                    sev_modifier = _severity_class.get(
+                        alert['severity'], 'severity-card--info')
+                    with ui.element('div').classes(
+                            f'severity-card {sev_modifier}') \
+                            .style('display: flex; align-items: center; '
+                                   'justify-content: space-between'):
                         with ui.row().classes('items-center gap-2'):
                             icon = _icon_for.get(
                                 alert['severity'], 'info_outline')
-                            ui.icon(icon, size='20px').style(
-                                f'color: {icon_color}')
+                            ui.icon(icon, size='20px').classes('severity-fg')
                             ui.html(
-                                f'<span style="font-size:13px;font-weight:600;'
-                                f'color:{text_color}">'
+                                f'<span class="severity-dark" '
+                                f'style="font-size:13px;font-weight:600">'
                                 f'{alert["message"]}</span>')
                         if alert.get('link'):
                             ui.button(
                                 'Bekijk',
                                 on_click=lambda l=alert['link']: ui.navigate.to(l),
                             ).props('flat dense size=sm') \
-                                .style(f'border: 1px solid {icon_color}; '
-                                       f'border-radius: 6px; '
-                                       f'color: {icon_color}; font-size: 12px')
+                                .classes('severity-fg') \
+                                .style('border: 1px solid currentColor; '
+                                       'border-radius: 6px; '
+                                       'font-size: 12px')
 
     jaar_select.on_value_change(lambda _: refresh_dashboard())
     await refresh_dashboard()
