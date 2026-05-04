@@ -326,6 +326,20 @@ modifiers; `.severity-card` met `--severity-bg/-border/-fg/-dark`
 modifiers. **Nieuw werk gebruikt globale tokens voor structure, en
 component-scope vars voor variant-families.**
 
+**Sprint G (2026-05-04) — `.settings-card` + `.settings-section` precedent**:
+voor /instellingen redesign. `.q-card.settings-card` (chained selector
+verplicht — wint van Quasar's unlayered `.q-card` defaults via
+specificity + source order; getest via `tests/test_visual_css.py`
+`test_sprint_g_settings_card_chained_selector`) met `.is-dirty` modifier
+voor unsaved-state-cue (3px linker accent-border). `.settings-section`
+(op `ui.column`, géén chained selector nodig) voor sub-section-blokken
+binnen cards/expansions — lichter ritme dan `.settings-card`. Beide
+BUITEN `@layer components`. `settings-card` zit in
+`QUASAR_APPLIED_APP_CLASSES` allow-list. Geen schaduw (Quasar's `flat`
+default-prop overruled box-shadow met `!important` — getest in T1
+fix-commit `f2fff34`). Gebruik dit pattern voor andere
+"settings-style"-pages indien nodig.
+
 **Realistic state na Sprint A→F**: Sprint B/C/E/F hebben chrome +
 dashboard-helpers + ~75 page-callers + alert/severity cards op tokens
 gezet. Resterende hex (~13 in dashboard.py, kleinere in andere pages)
