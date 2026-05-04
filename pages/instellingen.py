@@ -350,10 +350,94 @@ async def instellingen_page():
                             cards.append(card_visueel)
                             ui.label('Logo & visueel').classes('settings-card-title')
 
-                            # PLACEHOLDER — Task 3 vult dit met de logo media-row.
-                            # Voor Task 2 alleen een column-marker zodat de structuur
-                            # rendert en latere tasks de container kunnen vinden.
-                            logo_slot = ui.column().classes('w-full q-mb-md')
+                            # ─── Logo media-row (hidden upload + JS pickFiles trigger) ─
+                            logo_dir = DB_PATH.parent / 'logo'
+                            logo_dir.mkdir(parents=True, exist_ok=True)
+                            logo_files = list(logo_dir.glob('logo.*'))
+                            current_logo = logo_files[0] if logo_files else None
+
+                            # Hidden ui.upload — wordt JS-side getriggerd via pickFiles()
+                            async def handle_logo_upload(e):
+                                content = await e.file.read()
+                                ext = e.file.name.rsplit('.', 1)[-1].lower()
+                                target = logo_dir / f'logo.{ext}'
+                                tmp = logo_dir / f'.logo.new.{ext}'
+                                await asyncio.to_thread(tmp.write_bytes, content)
+                                for old in logo_dir.glob('logo.*'):
+                                    if old != tmp:
+                                        try:
+                                            await asyncio.to_thread(old.unlink)
+                                        except OSError:
+                                            pass
+                                await asyncio.to_thread(tmp.rename, target)
+                                ui.notify('Logo opgeslagen', type='positive')
+                                await refresh_bedrijf()  # Re-render om preview te updaten
+
+                            _logo_upload = ui.upload(
+                                label='', auto_upload=True,
+                                on_upload=handle_logo_upload,
+                                max_file_size=5_000_000,
+                            ).props('flat accept=".png,.jpg,.jpeg,.svg"')
+                            _logo_upload.style(
+                                'visibility: hidden; height: 0; overflow: hidden;'
+                                ' position: absolute;')
+
+                            _pick_logo_js = (
+                                f'() => getElement({_logo_upload.id})'
+                                f'.$refs.qRef.pickFiles()')
+
+                            # Media-row: preview links | knop + info + verwijder rechts
+                            with ui.row().classes(
+                                'w-full items-center q-gutter-md q-mb-md'
+                            ):
+                                # Framed preview (klikbaar — opent ook file-picker)
+                                preview_box = ui.element('div').style(
+                                    'width: 96px; height: 96px; border-radius: 8px;'
+                                    ' border: 1px solid var(--border);'
+                                    ' background: var(--bg);'
+                                    ' display: flex; align-items: center;'
+                                    ' justify-content: center; overflow: hidden;'
+                                    ' cursor: pointer;')
+                                with preview_box:
+                                    if current_logo:
+                                        ui.image(f'/logo-files/{current_logo.name}').style(
+                                            'max-width: 96px; max-height: 96px;'
+                                            ' object-fit: contain;')
+                                    else:
+                                        ui.icon('image_not_supported').classes(
+                                            'text-grey').style('font-size: 32px;')
+                                preview_box.on('click', js_handler=_pick_logo_js)
+
+                                # Right: button + file-info + delete-link
+                                with ui.column().classes('items-start gap-1'):
+                                    ui.button(
+                                        'Logo vervangen', icon='upload',
+                                    ).on(
+                                        'click', js_handler=_pick_logo_js,
+                                    ).props('flat color=primary')
+                                    if current_logo:
+                                        size_kb = current_logo.stat().st_size // 1024
+                                        ui.label(
+                                            f'{current_logo.name} · {size_kb} KB'
+                                        ).classes('text-caption text-grey')
+
+                                        async def delete_logo():
+                                            try:
+                                                await asyncio.to_thread(current_logo.unlink)
+                                            except OSError as ex:
+                                                ui.notify(
+                                                    f'Kon logo niet verwijderen: {ex}',
+                                                    type='negative')
+                                                return
+                                            ui.notify('Logo verwijderd', type='positive')
+                                            await refresh_bedrijf()
+
+                                        ui.button(
+                                            'Verwijderen', on_click=delete_logo,
+                                        ).props('flat dense color=negative size=sm')
+                                    else:
+                                        ui.label('Geen logo geüpload').classes(
+                                            'text-caption text-grey')
 
                             # Klant-kleur-toggle (verhuisd uit eigen "Visuele instellingen"
                             # subtitle — semantisch onderdeel van branding).
@@ -398,55 +482,6 @@ async def instellingen_page():
                         ui.button(
                             'Wijzigingen opslaan', icon='save', on_click=save_bedrijf
                         ).props('color=primary').classes('q-mt-md')
-
-                        # Logo upload section (Task 3 vervangt deze placeholder)
-                        # NOTE: Task 3 verwijdert dit hele blok en bouwt de echte
-                        # media-row binnen `logo_slot` van card_visueel hierboven.
-                        with ui.card().classes('w-full q-mt-md'):
-                            ui.label('Bedrijfslogo').classes(
-                                'text-subtitle2 text-grey-8')
-                            ui.label(
-                                'Upload een logo dat op facturen wordt getoond.'
-                            ).classes('text-caption text-grey')
-
-                            logo_dir = DB_PATH.parent / 'logo'
-                            logo_dir.mkdir(parents=True, exist_ok=True)
-                            logo_files = list(logo_dir.glob('logo.*'))
-
-                            logo_preview = ui.column().classes('q-mt-sm')
-                            if logo_files:
-                                with logo_preview:
-                                    ui.image(
-                                        f'/logo-files/{logo_files[0].name}'
-                                    ).classes('w-48')
-
-                            async def handle_logo_upload(e):
-                                content = await e.file.read()
-                                ext = e.file.name.rsplit('.', 1)[-1].lower()
-                                target = logo_dir / f'logo.{ext}'
-                                tmp = logo_dir / f'.logo.new.{ext}'
-                                await asyncio.to_thread(tmp.write_bytes, content)
-                                for old in logo_dir.glob('logo.*'):
-                                    if old != tmp:
-                                        try:
-                                            await asyncio.to_thread(old.unlink)
-                                        except OSError:
-                                            pass
-                                await asyncio.to_thread(tmp.rename, target)
-                                logo_preview.clear()
-                                with logo_preview:
-                                    ui.image(
-                                        f'/logo-files/logo.{ext}'
-                                    ).classes('w-48')
-                                ui.notify('Logo opgeslagen', type='positive')
-
-                            ui.upload(
-                                label='Upload logo', auto_upload=True,
-                                on_upload=handle_logo_upload,
-                                max_file_size=5_000_000,
-                            ).props(
-                                'flat bordered accept=".png,.jpg,.jpeg,.svg"'
-                            ).classes('w-full q-mt-sm')
 
                 await refresh_bedrijf()
 
