@@ -204,14 +204,25 @@ async def open_klant_dialog(klant: dict | None = None,
         kleur_opties_map: dict[str, str | None] = {
             label: hex_val for label, hex_val in KLANT_KLEUR_OPTIES
         }
+        existing_color = d.get('color')
+        existing_label = next(
+            (label for label, hex_val in KLANT_KLEUR_OPTIES
+             if hex_val == existing_color),
+            None,
+        )
+        # Codex post-Sprint-F audit: als bestaande klant-hex niet in palette
+        # staat (bv. door directe DB-edit, of palette-wijziging in toekomst),
+        # voeg ad-hoc optie toe zodat re-save de waarde NIET wist.
+        if existing_color and existing_label is None:
+            custom_label = f'Aangepast ({existing_color})'
+            kleur_opties_map[custom_label] = existing_color
+            init_label = custom_label
+        else:
+            init_label = existing_label or 'Geen kleur'
         f_color = ui.select(
             options=list(kleur_opties_map.keys()),
             label='Agenda-kleur',
-            value=next(
-                (label for label, hex_val in KLANT_KLEUR_OPTIES
-                 if hex_val == d.get('color')),
-                'Geen kleur',
-            ),
+            value=init_label,
         ).classes('w-full')
 
         # -- Locaties (edit mode only) --

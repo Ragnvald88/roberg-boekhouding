@@ -144,16 +144,16 @@ body {
     }
     .nav-item .nav-icon {
         font-size: 18px; width: 20px; text-align: center;
-        color: var(--muted);
+        /* color verhuisd naar unlayered blok onder @layer-sluiter
+           (zelfde patroon als .alert-icon: app-class op q-icon moet
+           buiten layer staan om Quasar default te beat'en). */
     }
-    .nav-item:hover .nav-icon { color: var(--text); }
 
     .nav-item.active {
         color: var(--text);
         background: var(--accent-soft);
         font-weight: 600;
     }
-    .nav-item.active .nav-icon { color: var(--accent); }
     .nav-item.active::after {
         content: '';
         width: 6px; height: 6px; border-radius: 50%;
@@ -422,17 +422,27 @@ body {
     .severity-card .severity-dark { color: var(--severity-dark); }
 }
 
-/* === SPRINT F — Quasar overrides BUITEN @layer voor cascade-veiligheid ===
-   .alert-icon (op q-icon), .alert-link (op q-btn), .severity-fg (op q-icon
-   + q-btn). Quasar's unlayered defaults (q-btn { color: inherit; border: 0 }
-   en q-icon { color: inherit }) winnen anders van layered classes — zie
-   Sprint B cascade-regel + Codex Sprint F review. */
+/* === Quasar-overrules BUITEN @layer voor cascade-veiligheid ===
+   App-classes die op q-icon, q-btn of andere Quasar-elementen worden
+   toegepast moeten unlayered staan. Quasar's unlayered defaults
+   (q-btn { color: inherit; border: 0 }, q-icon { color: inherit })
+   winnen anders van layered classes — zie Sprint B cascade-regel +
+   Codex Sprint F review. */
+
+/* Sprint B/post-merge — sidebar nav-icon (Codex post-Sprint-F audit) */
+.nav-item .nav-icon { color: var(--muted); }
+.nav-item:hover .nav-icon { color: var(--text); }
+.nav-item.active .nav-icon { color: var(--accent); }
+
+/* Sprint F — alert-card */
 .alert-card .alert-icon { color: var(--alert-icon); }
 .alert-card .alert-link {
     color: var(--alert-link);
     border: 1px solid var(--alert-link);
     font-size: 12px;
 }
+
+/* Sprint F — severity-card */
 .severity-card .severity-fg { color: var(--severity-fg); }
 ''', shared=True)
 
