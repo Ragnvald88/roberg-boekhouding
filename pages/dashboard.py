@@ -354,12 +354,25 @@ async def dashboard_page():
                         ui.label(
                             format_euro(nu_te_reserveren, decimals=0)
                         ).classes('hero-value')
-                        ui.label(
-                            f'Berekend {format_euro(berekend_jaarbelasting, decimals=0)}'
-                            f' \u00b7 betaald {format_euro(va_betaald, decimals=0)}'
-                        ).classes('context-text')
+                        # Context-line: berekend + betaald + status-suffix.
+                        # Codex T1.4-review flagde dat overreservering-status
+                        # weggegooid werd; nu zichtbaar als "overgereserveerd".
+                        context_parts = [
+                            f'Berekend {format_euro(berekend_jaarbelasting, decimals=0)}',
+                            f'betaald {format_euro(va_betaald, decimals=0)}',
+                        ]
+                        if status == 'overreservering':
+                            context_parts.append(
+                                f'overgereserveerd {format_euro(abs(diff), decimals=0)}'
+                            )
+                        ui.label(' \u00b7 '.join(context_parts)).classes(
+                            'context-text')
                 else:
-                    with ui.card().classes('dashboard-hero-tile'):
+                    # Geen-gegevens fallback ook clickable naar /aangifte
+                    # (Codex T1.4-review flagde dat else-branch handler miste).
+                    with ui.card().classes('dashboard-hero-tile') \
+                            .style('cursor: pointer') \
+                            .on('click', lambda: ui.navigate.to('/aangifte')):
                         ui.label('Belasting-reservering').classes('hero-label')
                         ui.label('Geen gegevens').classes(
                             'context-text').style('margin-top: 8px')
