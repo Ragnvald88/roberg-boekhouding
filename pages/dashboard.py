@@ -297,9 +297,6 @@ async def dashboard_page():
                         ui.label(
                             f'vs {format_euro(vorig_winst, decimals=0)} vorig jaar'
                         ).classes('context-text')
-                    # Sparkline (revenue as proxy for profit trend)
-                    if any(v > 0 for v in omzet_huidig):
-                        _render_sparkline(omzet_huidig, '#059669')
 
                 # Card 3: Belasting prognose
                 with ui.card().classes('q-pa-lg') \
