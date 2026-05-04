@@ -1014,6 +1014,10 @@ async def instellingen_page():
                             dump_path = tmp_dir / f"{stem}.sqlite3"
                             zip_path = tmp_dir / f"{stem}.zip"
 
+                            # VACUUM INTO neemt een atomaire snapshot zonder
+                            # WAL-races. Single-quotes in het pad escapen
+                            # via SQL-string-literal-conventie ("''") omdat
+                            # VACUUM INTO geen ? placeholders accepteert.
                             safe_dump_path = str(dump_path).replace("'", "''")
                             async with get_db_ctx(DB_PATH) as conn:
                                 await conn.execute(f"VACUUM INTO '{safe_dump_path}'")
@@ -1065,9 +1069,12 @@ async def instellingen_page():
                         with ui.row().classes(
                             'w-full items-center q-gutter-sm'
                         ):
-                            ui.label(db_path_str).style(
-                                'font-family: "SF Mono", Menlo, monospace;'
-                                ' font-size: 13px;'
+                            # Font-family komt uit de bestaande .mono class
+                                # (`components/layout.py:191` — incl. ui-monospace
+                                # systeem-fallback); rest van de styling is
+                                # layout-specifiek en blijft inline.
+                            ui.label(db_path_str).classes('mono').style(
+                                'font-size: 13px;'
                                 ' background: var(--bg);'
                                 ' padding: 8px 12px;'
                                 ' border-radius: 6px;'
