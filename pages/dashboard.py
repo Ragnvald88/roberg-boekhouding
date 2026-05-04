@@ -24,6 +24,7 @@ from components.fiscal_utils import fetch_fiscal_data, extrapoleer_jaaromzet
 from components.shared_ui import year_options
 from fiscal.berekeningen import bereken_volledig
 from fiscal.constants import URENCRITERIUM_DEFAULT
+from services.dashboard import compute_belasting_reservering_progress
 
 
 def _has_va_data(fp, va_data) -> bool:
@@ -253,7 +254,7 @@ async def dashboard_page():
                     'gap: 20px; align-items: stretch'):
 
                 # Card 1: Bruto omzet
-                with ui.card().classes('q-pa-lg') \
+                with ui.card().classes('dashboard-hero-tile') \
                         .style('cursor: pointer') \
                         .on('click', lambda: ui.navigate.to('/werkdagen')):
                     with ui.row().classes('w-full justify-between items-center'):
@@ -277,7 +278,7 @@ async def dashboard_page():
                     kpis['omzet'] - kpis['kosten'])
                 vorig_winst = vorig_ytd_omzet - vorig_ytd_kosten
 
-                with ui.card().classes('q-pa-lg') \
+                with ui.card().classes('dashboard-hero-tile') \
                         .style('cursor: pointer') \
                         .on('click', lambda: ui.navigate.to('/aangifte')):
                     with ui.row().classes('w-full justify-between items-center'):
@@ -298,116 +299,68 @@ async def dashboard_page():
                             f'vs {format_euro(vorig_winst, decimals=0)} vorig jaar'
                         ).classes('context-text')
 
-                # Card 3: Belasting prognose
-                with ui.card().classes('q-pa-lg') \
-                        .style('cursor: pointer') \
-                        .on('click', lambda: ui.navigate.to('/aangifte')):
+                # Card 3: Belasting-reservering (Sprint H — replaces verbose
+                # Belasting-prognose). Uses engine-exact day-precision
+                # proration via services.dashboard helper. Verbose
+                # progress-bar + VA-termijn-info verhuizen naar /aangifte
+                # per spec C.2 (hero-card moet scannable in 2 sec).
+                if ib_resultaat is not None:
+                    berekend_jaarbelasting = (ib_resultaat['netto_ib']
+                                              + ib_resultaat['zvw'])
+                    if va_data['has_bank_data']:
+                        va_betaald = va_data['totaal_betaald']
+                    else:
+                        va_betaald = (ib_resultaat['va_ib_betaald']
+                                      + ib_resultaat['va_zvw_betaald'])
 
-                    if ib_resultaat is not None:
-                        has_va = _has_va_data(fp, va_data)
-                        resultaat = ib_resultaat['resultaat']
-                        confidence = ib_resultaat.get('confidence', 'low')
+                    # Codex T1.4-review fix: helper expects `today.year` ==
+                    # `jaar`. Voor afgesloten jaren (jaar < huidig) clamp
+                    # naar 31-dec van dat jaar zodat days_elapsed = full
+                    # year (proratie 100%). Voor toekomstige jaren (zou
+                    # niet mogen — dashboard toont 2023..nu) idem 31-dec.
+                    today_for_proration = min(
+                        date.today(), date(jaar, 12, 31))
+                    status, diff = compute_belasting_reservering_progress(
+                        berekend_jaarbelasting=berekend_jaarbelasting,
+                        va_betaald_ytd=va_betaald,
+                        today=today_for_proration,
+                    )
+                    is_tekort = (status == 'tekort')
+                    # diff > 0 = tekort = bedrag dat nog moet worden
+                    # gereserveerd. Helper rekent day-precision proration —
+                    # reuse i.p.v. lokale formule om drift te voorkomen.
+                    nu_te_reserveren = max(0.0, diff)
 
-                        # Header with confidence badge
+                    card_classes = 'dashboard-hero-tile'
+                    if is_tekort:
+                        card_classes += ' is-tekort'
+
+                    with ui.card().classes(card_classes) \
+                            .style('cursor: pointer') \
+                            .on('click', lambda: ui.navigate.to('/aangifte')):
                         with ui.row().classes(
                                 'w-full justify-between items-center'):
-                            ui.label('Belasting prognose').classes(
+                            ui.label('Belasting-reservering').classes(
                                 'hero-label')
-                            conf_map = {
-                                'low': ('Schatting', '#D97706',
-                                        'var(--bg-warning-soft)'),
-                                'medium': ('Prognose', '#0369A1',
-                                           'var(--bg-info-soft)'),
-                                'high': ('Betrouwbaar', '#059669',
-                                         'var(--bg-success-soft)'),
-                            }
-                            c_label, c_color, c_bg = conf_map.get(
-                                confidence, conf_map['low'])
-                            ui.label(c_label).style(
-                                f'font-size: 11px; font-weight: 500; '
-                                f'color: {c_color}; background: {c_bg}; '
-                                f'padding: 2px 8px; border-radius: 10px')
-
-                        if has_va:
-                            # Bij/terug display
-                            if resultaat >= 0:
-                                val_text = f'Bij: {format_euro(resultaat, decimals=0)}'
-                            else:
-                                val_text = f'Terug: {format_euro(abs(resultaat), decimals=0)}'
-                            ui.label(val_text).classes(
-                                'hero-value-negative' if resultaat >= 0
-                                else 'hero-value-positive')
-                            ui.label(
-                                f'o.b.v. {ib_resultaat["basis_maanden"]} '
-                                f'maanden'
-                            ).classes('context-text').style(
-                                    'margin-bottom: 16px')
-
-                            # Progress bar: berekend vs VA betaald
-                            berekend = (ib_resultaat['netto_ib']
-                                        + ib_resultaat['zvw'])
-                            if va_data['has_bank_data']:
-                                va_betaald = va_data['totaal_betaald']
-                                va_label_text = 'VA betaald'
-                            else:
-                                va_betaald = (ib_resultaat['va_ib_betaald']
-                                              + ib_resultaat['va_zvw_betaald'])
-                                va_label_text = 'VA geschat'
-
-                            with ui.row().classes(
-                                    'w-full justify-between').style(
-                                    'font-size: 11px; color: var(--muted); '
-                                    'margin-bottom: 8px'):
-                                ui.label(
-                                    f'Berekend '
-                                    f'{format_euro(berekend, decimals=0)}')
-                                ui.label(
-                                    f'{va_label_text} '
-                                    f'{format_euro(va_betaald, decimals=0)}')
-
-                            # Simple HTML progress bar (avoids Quasar rendering quirks)
-                            pct = round(va_betaald / berekend * 100) \
-                                if berekend > 0 else 0
-                            ui.html(
-                                f'<div style="height:6px;background:var(--border);'
-                                f'border-radius:3px;overflow:hidden;width:100%">'
-                                f'<div style="height:100%;width:{min(pct, 100)}%;'
-                                f'background:var(--q-positive);border-radius:3px">'
-                                f'</div></div>'
-                            )
-
-                            # Termijn info from real bank data
-                            if va_data['has_bank_data']:
-                                if (va_data['ib_termijnen'] > 0
-                                        or va_data['zvw_termijnen'] > 0):
-                                    parts = []
-                                    if va_data['ib_termijnen'] > 0:
-                                        parts.append(
-                                            f'{va_data["ib_termijnen"]} IB')
-                                    if va_data['zvw_termijnen'] > 0:
-                                        parts.append(
-                                            f'{va_data["zvw_termijnen"]} ZVW')
-                                    termijn_text = (
-                                        ' \u00b7 '.join(parts) + ' termijnen')
-                                else:
-                                    termijn_text = 'geen termijnen'
-                                ui.label(termijn_text).style(
-                                    'font-size: 10px; color: var(--muted); '
-                                    'margin-top: 6px; text-align: right')
-                        else:
-                            # No VA data — show estimated tax total
-                            total_tax = (ib_resultaat['netto_ib']
-                                         + ib_resultaat['zvw'])
-                            ui.label(format_euro(total_tax, decimals=0)).classes(
-                                'hero-value')
-                            ui.label('Geschatte belasting').classes(
-                                'context-text')
-                            ui.label('VA invoeren \u2192').style(
-                                'font-size: 12px; color: var(--accent); '
-                                'cursor: pointer; margin-top: 8px')
-                    else:
-                        # No fiscal data at all
-                        ui.label('Belasting prognose').classes('hero-label')
+                            if is_tekort:
+                                ui.icon('warning', size='18px').style(
+                                    'color: var(--q-negative)') \
+                                    .tooltip(
+                                        f'Tekort: '
+                                        f'{format_euro(diff, decimals=0)}')
+                        # Engine-exact bedrag — toon wat NU op spaarrekening
+                        # moet staan (max 0 zodat overreservering niet
+                        # negatief weergeeft).
+                        ui.label(
+                            format_euro(nu_te_reserveren, decimals=0)
+                        ).classes('hero-value')
+                        ui.label(
+                            f'Berekend {format_euro(berekend_jaarbelasting, decimals=0)}'
+                            f' \u00b7 betaald {format_euro(va_betaald, decimals=0)}'
+                        ).classes('context-text')
+                else:
+                    with ui.card().classes('dashboard-hero-tile'):
+                        ui.label('Belasting-reservering').classes('hero-label')
                         ui.label('Geen gegevens').classes(
                             'context-text').style('margin-top: 8px')
 

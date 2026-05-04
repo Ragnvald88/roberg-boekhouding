@@ -166,10 +166,9 @@ body {
     .hero-label { font-size: 13px; color: var(--muted); font-weight: 500; }
     .hero-value { font-size: 30px; font-weight: 700; color: var(--text);
                   font-variant-numeric: tabular-nums; margin: 6px 0 2px; }
-    .hero-value-positive { font-size: 30px; font-weight: 700; color: var(--q-positive);
-                           font-variant-numeric: tabular-nums; margin: 6px 0 2px; }
-    .hero-value-negative { font-size: 30px; font-weight: 700; color: var(--q-negative);
-                           font-variant-numeric: tabular-nums; margin: 6px 0 2px; }
+    /* Sprint H plan-amendment: .hero-value-positive/-negative dropped —
+       only call-site used invert-logic; replaced by inline color in
+       pages/dashboard.py with WHY-comment that preserves the inversion. */
     .context-text { font-size: 12px; color: var(--muted); }
     .section-label { font-size: 13px; font-weight: 600; color: var(--muted);
                      text-transform: uppercase; letter-spacing: 0.05em; }
@@ -493,6 +492,23 @@ body {
     color: var(--text);
     margin-bottom: 12px;
     font-size: 0.95rem;
+}
+
+/* === Sprint H — dashboard hero-tile + .is-tekort modifier
+   Defined OUTSIDE @layer components (chained selector for cascade-safety).
+   .is-tekort = visual cue when belasting-reservering shortfall > €1k.
+   Same modifier-pattern as Sprint G's .settings-card.is-dirty. */
+.q-card.dashboard-hero-tile {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 24px;
+    margin: 0;
+    /* No box-shadow: Quasar `flat` default-prop overrules with !important.
+       Same lesson as Sprint G .settings-card. */
+}
+.q-card.dashboard-hero-tile.is-tekort {
+    border-left: 3px solid var(--q-negative);
 }
 ''', shared=True)
 

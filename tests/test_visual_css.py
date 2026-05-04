@@ -193,6 +193,7 @@ QUASAR_APPLIED_APP_CLASSES = [
     'alert-link',       # used on `ui.button(...)` in pages/dashboard.py
     'severity-fg',      # used on `ui.icon(...)` + `ui.button(...)` in pages/dashboard.py
     'settings-card',    # Sprint G — applied to ui.card (= .q-card) in pages/instellingen.py
+    'dashboard-hero-tile',  # Sprint H — applied to ui.card (= .q-card) in pages/dashboard.py
 ]
 
 
@@ -317,3 +318,38 @@ def test_sprint_g_settings_section_defined():
     pattern = r"\.settings-section\s*\{"
     matches = re.findall(pattern, css)
     assert matches, ".settings-section selector missing in components/layout.py"
+
+
+def test_sprint_h_dashboard_hero_tile_chained_selector():
+    """Sprint H cascade-rule: .dashboard-hero-tile MUST be defined as
+    chained selector .q-card.dashboard-hero-tile (not naked) to win
+    from Quasar's unlayered .q-card defaults.
+
+    Same lesson as agenda-cell.holiday-marker (Sprint A) and
+    .alert-link (Sprint F) and .settings-card (Sprint G).
+    """
+    css = _strip_comments(_extract_css())
+
+    naked_pattern = r"(?<![.\w-])\.dashboard-hero-tile\s*\{"
+    naked_matches = re.findall(naked_pattern, css)
+
+    chained_pattern = r"\.q-card\.dashboard-hero-tile\s*\{"
+    chained_matches = re.findall(chained_pattern, css)
+
+    assert chained_matches, (
+        "Sprint H: .dashboard-hero-tile MUST be defined as chained "
+        ".q-card.dashboard-hero-tile { ... } in components/layout.py."
+    )
+    assert not naked_matches, (
+        f"Sprint H: found naked .dashboard-hero-tile definition. "
+        f"Use chained selector instead. Hits: {naked_matches}"
+    )
+
+
+def test_sprint_h_is_tekort_modifier_defined():
+    """Sprint H: .is-tekort modifier MUST exist as chained selector
+    .q-card.dashboard-hero-tile.is-tekort with at least border-left."""
+    css = _strip_comments(_extract_css())
+    pattern = r"\.q-card\.dashboard-hero-tile\.is-tekort\s*\{"
+    matches = re.findall(pattern, css)
+    assert matches, ".is-tekort modifier missing"
