@@ -15,6 +15,44 @@ Gebruiker is huisartswaarnemer, geen coding-expert. Optimaliseer voor begrijpeli
 - **Bij niet-triviaal werk: toon de afweging kort** (2-3 aanpakken overwogen, welke gekozen, waarom). Triviaal werk hoeft dit niet — globale CLAUDE.md regelt de rest.
 - **Codex auto-review (verplicht na code-changes)**: na Edit/Write op `.py`/`.html`/`.sql`-files in deze repo, vóór "klaar"-rapportage: invoke de `codex-review` skill. Die runt OpenAI Codex CLI als second opinion. Bevindingen zelf evalueren (`superpowers:receiving-code-review` principes), niet blind overnemen. Skip voor pure docs/comment changes. Kill switch: `SKIP_CODEX_REVIEW=1`.
 
+## Codex-samenwerking als kwaliteitsstandaard (Sprint A→F bewezen)
+
+**De gouden regel**: voor elke niet-triviale wijziging — Codex is een
+zelfstandige second opinion, GEEN rubber stamp. Sprint A→F (50+ commits)
+heeft Codex ingezet als reviewer en daarmee **6 echte bugs gevangen** die
+de single-agent pipeline gemist had:
+
+| # | Bug | Waar gevangen |
+|---|---|---|
+| 1 | T2 `.text-h1..h6 color: var(--text)` overruled `.text-white` in donkere header | Codex T2 review |
+| 2 | T6 `.q-btn { 8px }` overruled `q-btn--round` modifier (icon-button werd vierkant) | Codex T6 review |
+| 3 | T6 `.builder-line-card` cascade-shadow regression | Code-quality reviewer T6 |
+| 4 | Sprint A holiday/blocker-marker fills waren visueel dood door cascade-volgorde | Codex post-merge audit |
+| 5 | D3 `klant.color` round-trip bug (refresh_klanten miste color veld) | Codex D3 review |
+| 6 | F `.alert-link/.severity-fg` cascade — Quasar defaults wonnen | Codex Sprint F review |
+
+**De 4-layer review pattern** (verplicht voor non-trivial werk):
+
+```
+implementer subagent (opus) ─→ spec reviewer (opus) ─→ Codex CLI ─→ code-quality reviewer (opus)
+        │                              │                    │                │
+        └─ doet werk + zelf-codex     ├─ "matcht spec?"    ├─ second-opinion ├─ "is het mooi?"
+                                      │                    │                  │
+                                      └─ catched scope-creep ├─ catched cascade ├─ catched architecture
+                                                              ├─ catched bugs    │  + maintainability
+                                                              └─ catched typos   │
+```
+
+**Concrete praktijk-richtlijnen**:
+
+1. **Per sprint-task subagent-driven**: gebruik `superpowers:subagent-driven-development`. Per task: implementer + spec reviewer + Codex + code-quality. Geen task "klaar" zonder alle 4.
+2. **Codex CLI direct via Bash voor architectuur-vragen**: als je een design-keuze maakt (token-keuze, schema-design, scope-decisie), invoke Codex via `env -u OPENAI_API_KEY codex exec --sandbox read-only "..."` met je voorstel + jouw advies. Codex denkt zelfstandig — neemt soms je voorkeur over, soms niet.
+3. **Bevindingen evalueren, niet blind overnemen**: Codex hallucineert soms. Apply `superpowers:receiving-code-review` — verifieer in code voor je het accepteert.
+4. **Plan-amendments bij real bugs**: als Codex een bug catched die in een eerdere stap al was gepland, **back-annotate de plan-doc** met `> Plan-amendment YYYY-MM-DD (na Codex review): ... niet herintroduceren bij re-run.` — voorkomt dat re-runs dezelfde bug terugbrengen.
+5. **Post-merge audit ronde**: na een grote sprint (10+ commits), draai een **combined post-merge audit**: code-reviewer agent + Codex CLI parallel op de volledige diff. Het Sprint B post-merge audit ving 6 bevindingen die de per-task pipeline gemist had. Sprint A→F post-audit ving er nog 7. Dit patroon vindt cumulative inconsistencies die per-task niet zien.
+6. **Atomic-paren bij gekoppelde changes**: voorbeeld T1 (token-blok + body inline-style fix samen) en T7 (font-family rewrite alle 7 classes + CDN-link removal samen). Tussentijdse half-state = silent regression. Documenteer deze paren in commit-message als `ATOMIC: ...`.
+7. **Cascade-discipline test enforced**: `tests/test_visual_css.py` + 4 specifieke regels in `components/layout.py` § Visuele tokens. ALTIJD `.q-*` overrides + app-classes-op-Quasar-elementen BUITEN `@layer components`.
+
 ## Tech Stack
 - **UI**: NiceGUI >=3.0 (Quasar/Vue), **native mode** via pywebview: `ui.run(native=True, window_size=(1400, 900))`. Één proces, één venster, eigen dock-icon. `Boekhouding.app` is een thin AppleScript-launcher die enkel `main.py` spawnt of — als de app al draait — de pywebview-window naar voren brengt; zie `Boekhouding.applescript`.
 - **Database**: SQLite via aiosqlite, raw SQL met `?` placeholders, GEEN ORM
@@ -37,13 +75,31 @@ python main.py   # opent native venster (NiceGUI `native=True`)
 # Rebuild van Boekhouding.app na wijziging in Boekhouding.applescript of build-app.sh
 bash build-app.sh
 
-# Tests
+# Tests — baseline 1298 (Sprint A→F + post-audit, 2026-05-04)
 DYLD_FALLBACK_LIBRARY_PATH=/opt/homebrew/lib .venv/bin/python -m pytest tests/ -v
 # MANDATORY: run after every code change, confirm 0 failures before reporting done
 ```
 
+## Session-continuity — voor nieuwe Claude-sessies
+
+Als je een nieuwe sessie begint, lees in deze volgorde:
+1. **`CLAUDE.md`** (deze file) — project-instructies + ontwikkelregels
+2. **`~/.claude/projects/.../memory/MEMORY.md`** + verwante memory-files — sprint-historie + lessons learned
+3. **`docs/superpowers/specs/`** + **`plans/`** — recente design-decisions met SHIPPED-banners
+4. **`tests/test_visual_css.py`** — 5 cascade-lint tests die de structurele CSS-invariants enforced
+
+**Recente sprint-state** (2026-05-04, na Sprint A→F + 2 post-merge audits):
+- Pytest baseline **1298** (was 1054 vóór Sprint A)
+- Master is HEAD na 50+ commits sinds Sprint A
+- `feature/sprint-b-visual-refresh` branch is gemerged + opgeruimd
+- `klant.color` kolom (mig 37) + `bedrijfsgegevens.gebruik_klant_kleur_in_agenda` (mig 38)
+- `pages/bank.py` bestaat NIET MEER, sidebar heeft één "Werkdagen" entry → /agenda
+- `.alert-card`, `.severity-card` componenten met scope-vars i.p.v. globale tokens
+
+**Bij twijfel over recente staat**: `git log --oneline | head -30` geeft de laatste 30 commits — sprint-tag in commit-message (sprint-b/c/d/e/f) markeert origine.
+
 ## Database
-14 tabellen: `klanten`, `klant_locaties`, `klant_aliases`, `werkdagen`, `facturen`, `uitgaven`, `banktransacties`, `fiscale_params`, `bedrijfsgegevens`, `aangifte_documenten`, `afschrijving_overrides`, `jaarafsluiting_snapshots`, `klant_recurring_patterns` (mig 35), `blockers` (mig 36)
+15 tabellen: `klanten` (mig 37 + color), `klant_locaties`, `klant_aliases`, `werkdagen`, `facturen`, `uitgaven`, `banktransacties`, `fiscale_params`, `bedrijfsgegevens` (mig 38 + gebruik_klant_kleur_in_agenda), `aangifte_documenten`, `afschrijving_overrides`, `jaarafsluiting_snapshots`, `klant_recurring_patterns` (mig 35), `blockers` (mig 36)
 
 - Raw SQL, `?` placeholders — GEEN f-strings in SQL
 - Bedragen REAL, datums TEXT (YYYY-MM-DD)

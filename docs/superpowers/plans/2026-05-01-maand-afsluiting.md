@@ -1,6 +1,10 @@
 # Maandafsluiting + bank-import-status — Implementation Plan
 
-*Plan-datum: 2026-05-01 • Branch: `feature/maand-afsluiting`*
+> **🅿️ PARKED** — niet uitgevoerd. Sprint A→F + post-audits hebben
+> voorrang gekregen. Plan blijft staan als reference voor toekomstig
+> werk (geen `feature/maand-afsluiting` branch meer in repo).
+
+*Plan-datum: 2026-05-01 • Branch: `feature/maand-afsluiting` (parked)*
 *Author: Claude (Opus 4.7) + Codex CLI (2 review-rondes) consensus*
 
 > **⚠️ STALE PLAN — bijwerken vóór uitvoering.** Sprint A heeft sinds dit plan
