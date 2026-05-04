@@ -367,7 +367,7 @@ async def dashboard_page():
                             pct = round(va_betaald / berekend * 100) \
                                 if berekend > 0 else 0
                             ui.html(
-                                f'<div style="height:6px;background:#F1F5F9;'
+                                f'<div style="height:6px;background:var(--border);'
                                 f'border-radius:3px;overflow:hidden;width:100%">'
                                 f'<div style="height:100%;width:{min(pct, 100)}%;'
                                 f'background:var(--q-positive);border-radius:3px">'

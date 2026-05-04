@@ -113,6 +113,9 @@ async def klanten_page():
         _tbl.add_slot('body-cell-tarief', '''
             <q-td :props="props" class="num" style="text-align:right">{{ props.row.tarief_fmt }}</q-td>
         ''')
+        _tbl.add_slot('body-cell-km', '''
+            <q-td :props="props" class="num" style="text-align:right">{{ props.row.retour_km }}</q-td>
+        ''')
         _tbl.add_slot('body-cell-actions', '''
             <q-td :props="props">
                 <q-btn icon="edit" flat dense round size="sm"

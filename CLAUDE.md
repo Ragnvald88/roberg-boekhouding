@@ -255,20 +255,37 @@ controls that mutate data.
 - **Investeringen tab**: unchanged, `pages/kosten_investeringen.py:
   laad_activastaat`.
 
-### Visuele tokens (Sprint B, 2026-05-03)
+### Visuele tokens (Sprint B+, 2026-05-04)
 
-`components/layout.py` definieert 9 CSS custom properties als single
-source of truth voor visual styling: `--bg`, `--surface`, `--border`,
-`--text`, `--muted`, `--accent`, `--accent-soft`, `--shadow`,
-`--radius`. **Nieuw werk gebruikt deze**.
+`components/layout.py` definieert 13 globale CSS custom properties
+in `:root`:
+- 9 chrome/structure: `--bg`, `--surface`, `--border`, `--text`,
+  `--muted`, `--accent`, `--accent-soft`, `--shadow`, `--radius`
+- 4 soft-bg (Sprint F): `--bg-success-soft`, `--bg-warning-soft`,
+  `--bg-info-soft`, `--bg-negative-soft` (delta-badges + IB-confidence)
 
-**Realistic state**: Sprint B Tier 1 heeft chrome (header/sidebar/body)
-+ shared dashboard-helpers (`.hero-value`/`.chart-title`/etc.) op
-tokens gezet. Maar `pages/dashboard.py`, `pages/agenda.py`,
-`pages/documenten.py` hebben nog 30+ inline `style='color: #0F172A'`
-e.d. die token-equivalenten omzeilen. Tier 2 per-page token-pickup is
-deferred — doen wanneer een pagina sowieso wordt aangeraakt voor
-ander werk.
+Plus **component-scope CSS-vars** (Codex-aanpak om token-explosion te
+voorkomen): `.alert-card` met `--alert-bg/-border/-icon/-title/-body/-link`
+modifiers; `.severity-card` met `--severity-bg/-border/-fg/-dark`
+modifiers. **Nieuw werk gebruikt globale tokens voor structure, en
+component-scope vars voor variant-families.**
+
+**Realistic state na Sprint A→F**: Sprint B/C/E/F hebben chrome +
+dashboard-helpers + ~75 page-callers + alert/severity cards op tokens
+gezet. Resterende hex (~13 in dashboard.py, kleinere in andere pages)
+is bewust: ECharts (geen CSS-vars), sky-700 #0369A1 (geen token), PDF
+render context, multi-shade design palettes. Tier-2 page-tokens-pickup
+is "opportunistic" — doen wanneer een pagina sowieso wordt aangeraakt.
+
+**Klant-color feature (Sprint D, migratie 37+38)**: optionele kleur per
+klant via 8-paletje + "Geen kleur" dropdown in klant-dialog. Toggle
+in Bedrijfsgegevens (`gebruik_klant_kleur_in_agenda`). Render in
+`/agenda` als `.wd-pill` background + WCAG `contrast_text_color()`
+voor leesbare text-color. Defensieve guards (`pages/agenda.py
+:_pill_color_style`) — alleen op werkdag/expected pills, niet op
+blockers/holidays. Edge case (Codex post-Sprint-F audit): bestaande
+hex buiten `KLANT_KLEUR_OPTIES` krijgt ad-hoc "Aangepast (#hex)"
+optie zodat re-save NIET wist.
 
 **Brand-coupling let op**: `--accent` (CSS) en `ui.colors(primary=...)`
 (NiceGUI/Quasar Python-side) zijn HANDMATIG gekoppeld op zelfde teal
@@ -276,13 +293,22 @@ ander werk.
 `#F59E0B`) is een aparte rol — `color=accent` in markup geeft amber,
 NIET teal. Voor teal-accent: `color=primary` of `style="color: var(--accent)"`.
 
-**Cascade-regel** (geënforceerd door `tests/test_visual_css.py`): Quasar
-`.q-*` overrides ALTIJD buiten `@layer components` plaatsen — layered
-styles verliezen van Quasar's unlayered defaults, ongeacht specificity.
-App-only classes (`.nav-item`, `.wd-pill`, etc.) horen wél binnen
-`@layer components`. Voor bewuste suppressie van `.q-card` defaults:
-chained selector `.q-card.your-class` buiten layer (zie
-`.q-card.builder-line-card` als precedent voor "card zonder shadow").
+**Cascade-regel** (deels geënforceerd door `tests/test_visual_css.py`):
+Quasar `.q-*` overrides + **app-classes die op Quasar-elementen worden
+toegepast** ALTIJD buiten `@layer components` plaatsen. Layered styles
+verliezen van Quasar's unlayered defaults, ongeacht specificity.
+
+- **Strict niet `.q-*` maar wel buiten layer**: `.alert-icon` op `q-icon`,
+  `.alert-link` op `q-btn`, `.severity-fg` op `q-icon`+`q-btn`,
+  `.nav-icon` op `q-icon`. De `.q-*`-naam is niet de regel — het
+  toepassings-element is. **Test dekt alleen `.q-*`-selectors**, dus
+  voor app-classes-op-quasar moet je dit zelf herinneren.
+- **App-only classes binnen `@layer components` mogen**: `.nav-item`
+  (op `<div>`), `.wd-pill` (op `<div>`), `.alert-title` (op `<span>`)
+  — geen Quasar concurrent.
+- **Bewuste suppressie van Quasar defaults**: chained selector
+  `.q-card.your-class` buiten layer (zie `.q-card.builder-line-card`
+  als precedent voor "card zonder shadow").
 
 **Variant-classes op `.agenda-cell`** (en vergelijkbare base-cell-classes
 met meerdere modifier-states): gebruik **chained selectors** zoals
