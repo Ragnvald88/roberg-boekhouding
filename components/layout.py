@@ -142,12 +142,9 @@ body {
         background: rgba(60,60,67,0.05);
         color: var(--text);
     }
-    .nav-item .nav-icon {
-        font-size: 18px; width: 20px; text-align: center;
-        /* color verhuisd naar unlayered blok onder @layer-sluiter
-           (zelfde patroon als .alert-icon: app-class op q-icon moet
-           buiten layer staan om Quasar default te beat'en). */
-    }
+    /* .nav-item .nav-icon volledig verhuisd naar unlayered blok onder
+       @layer-sluiter — app-class op q-icon hoort buiten layer staan
+       (zelfde patroon als .alert-icon). */
 
     .nav-item.active {
         color: var(--text);
@@ -430,7 +427,10 @@ body {
    Codex Sprint F review. */
 
 /* Sprint B/post-merge — sidebar nav-icon (Codex post-Sprint-F audit) */
-.nav-item .nav-icon { color: var(--muted); }
+.nav-item .nav-icon {
+    font-size: 18px; width: 20px; text-align: center;
+    color: var(--muted);
+}
 .nav-item:hover .nav-icon { color: var(--text); }
 .nav-item.active .nav-icon { color: var(--accent); }
 

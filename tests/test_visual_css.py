@@ -66,15 +66,21 @@ def _strip_comments(css: str) -> str:
 
 
 def test_no_q_star_selectors_inside_layer_components():
-    """Sprint B cascade-rule: Quasar `.q-*` overrides MUST be unlayered.
+    """Sprint B cascade-rule (NARROW scope): selectors literally starting
+    with `.q-` MUST NOT be inside @layer components.
 
-    Layered styles always lose to Quasar's unlayered defaults regardless
-    of specificity. If you put `.q-card` or `.q-table th` inside
-    @layer components, your override silently won't apply.
+    **Caveat (Codex post-Sprint-F audit)**: this test catches only
+    selectors that begin with `.q-` (e.g. `.q-card`, `.q-table th`).
+    The actual cascade rule is broader — ANY app-class that gets
+    APPLIED to a Quasar element via NiceGUI `.classes(...)` (e.g.
+    `.alert-icon` on `q-icon`, `.alert-link` on `q-btn`, `.nav-icon`
+    on `q-icon`) loses to Quasar's unlayered defaults if it lives
+    inside @layer. See `test_known_quasar_applied_classes_unlayered`
+    below for an explicit allow-list of those.
 
-    Allowed exceptions: `.q-*` references inside `var(--q-...)` are
-    Quasar's own custom-property names (e.g. var(--q-primary)) and don't
-    count as selectors.
+    Allowed exception in this test: `.q-*` references inside
+    `var(--q-...)` are Quasar's own CSS custom properties (e.g.
+    `var(--q-primary)`) and don't count as selectors.
     """
     css = _extract_css()
     layer_content = _extract_layer_components(css)
@@ -172,4 +178,96 @@ def test_holiday_blocker_use_chained_selectors():
         assert chained, (
             f"Required `.agenda-cell.blocker-{kind} {{ background: ... }}` "
             f"chained selector missing — {kind}-blockers will not show overlay."
+        )
+
+
+# Classes-applied-to-Quasar-elements registry (Codex post-Sprint-F audit).
+# These app-only classes are documented as targeting `q-icon` / `q-btn` via
+# NiceGUI `.classes(...)`. They MUST be defined OUTSIDE @layer components
+# because Quasar's unlayered defaults (e.g. `q-icon { color: inherit }`,
+# `q-btn { color: inherit; border: 0 }`) win over layered styles.
+# Add to this list whenever you create a new such class.
+QUASAR_APPLIED_APP_CLASSES = [
+    'nav-icon',         # used on `ui.icon(...)` in components/layout.py:_nav_item
+    'alert-icon',       # used on `ui.icon(...)` in pages/dashboard.py
+    'alert-link',       # used on `ui.button(...)` in pages/dashboard.py
+    'severity-fg',      # used on `ui.icon(...)` + `ui.button(...)` in pages/dashboard.py
+]
+
+
+def test_known_quasar_applied_classes_unlayered():
+    """Sprint B/F cascade-rule (BROAD): app-classes applied to Quasar
+    elements MUST be defined outside @layer components.
+
+    Catches the regression that bit Sprint F (commit 25cc442 → 5618c15
+    fix): `.alert-link`/`.alert-icon`/`.severity-fg` were placed inside
+    @layer and silently lost color/border to Quasar defaults. Same for
+    `.nav-icon` (Codex post-Sprint-F audit catch).
+
+    See QUASAR_APPLIED_APP_CLASSES list — add entries when introducing
+    a new class that gets attached to ui.icon / ui.button / ui.q_td etc.
+    """
+    css = _strip_comments(_extract_css())
+    layer_content = _strip_comments(_extract_layer_components(css))
+
+    leaked = []
+    for cls in QUASAR_APPLIED_APP_CLASSES:
+        # Look for `.cls` selector appearing as part of any rule (handles
+        # both `.cls { ... }` and `.parent .cls { ... }` etc.) inside
+        # @layer. We accept the class anywhere in a selector.
+        # Match `.cls` followed by whitespace, `{`, `,`, `:`, or `>`
+        # (ie. CSS-selector boundary), but NOT `.cls-something` (longer name).
+        pattern = rf"\.{re.escape(cls)}(?=[\s{{,:>]|$)"
+        if re.search(pattern, layer_content, re.MULTILINE):
+            leaked.append(cls)
+
+    assert not leaked, (
+        f"App-classes applied to Quasar elements found INSIDE "
+        f"@layer components: {leaked}. These will lose color/border to "
+        f"Quasar's unlayered defaults. Move them to the unlayered "
+        f"`/* === Quasar-overrules BUITEN @layer === */` block in "
+        f"components/layout.py."
+    )
+
+
+def test_sprint_f_alert_severity_modifiers_complete():
+    """Sprint F cascade-vars contract: each .alert-card-- and
+    .severity-card-- modifier MUST define ALL its expected CSS-vars.
+
+    Catches typos (e.g. --alert-bg vs --alert-background) that would
+    silently leave a card transparent.
+    """
+    css = _strip_comments(_extract_css())
+
+    alert_required = {'--alert-bg', '--alert-border', '--alert-icon',
+                      '--alert-title', '--alert-body', '--alert-link'}
+    severity_required = {'--severity-bg', '--severity-border',
+                         '--severity-fg', '--severity-dark'}
+
+    for variant in ('--warning', '--attention'):
+        block_match = re.search(
+            rf"\.alert-card{re.escape(variant)}\s*\{{(.*?)\}}",
+            css, re.DOTALL,
+        )
+        assert block_match, f".alert-card{variant} block missing in CSS"
+        block = block_match.group(1)
+        defined = set(re.findall(r"--alert-[a-z-]+", block))
+        missing = alert_required - defined
+        assert not missing, (
+            f".alert-card{variant} missing vars: {missing}. "
+            f"Defined: {defined}. Required: {alert_required}."
+        )
+
+    for variant in ('--danger-deep', '--danger', '--info'):
+        block_match = re.search(
+            rf"\.severity-card{re.escape(variant)}\s*\{{(.*?)\}}",
+            css, re.DOTALL,
+        )
+        assert block_match, f".severity-card{variant} block missing in CSS"
+        block = block_match.group(1)
+        defined = set(re.findall(r"--severity-[a-z-]+", block))
+        missing = severity_required - defined
+        assert not missing, (
+            f".severity-card{variant} missing vars: {missing}. "
+            f"Defined: {defined}. Required: {severity_required}."
         )
