@@ -276,83 +276,135 @@ async def instellingen_page():
                     bedrijf_container.clear()
                     bg = await get_bedrijfsgegevens(DB_PATH)
 
+                    fields: dict = {}
+                    cards: list = []
+
+                    def _mark_dirty(card):
+                        """Returns a closure that marks the given card dirty on input change."""
+                        def _h():
+                            card.classes(add='is-dirty')
+                        return _h
+
                     with bedrijf_container:
-                        ui.label(
-                            'Deze gegevens worden gebruikt op facturen.'
-                        ).classes('text-body2 text-grey q-mb-md')
+                        ui.label('Deze gegevens worden gebruikt op facturen.').classes(
+                            'text-body2 text-grey q-mb-md')
 
-                        with ui.card().classes('w-full'):
-                            fields = {}
-                            for label, key in [
-                                ('Bedrijfsnaam', 'bedrijfsnaam'),
-                                ('Naam', 'naam'),
-                                ('Functie', 'functie'),
-                                ('Adres', 'adres'),
-                                ('Postcode + Plaats', 'postcode_plaats'),
-                                ('Telefoon', 'telefoon'),
-                                ('E-mail', 'email'),
-                                ('KvK-nummer', 'kvk'),
-                                ('IBAN', 'iban'),
-                                ('Thuisplaats (voor reiskosten)', 'thuisplaats'),
-                            ]:
-                                val = getattr(bg, key, '') if bg else ''
-                                fields[key] = ui.input(
-                                    label, value=val or ''
-                                ).classes('w-full')
+                        # Card 1: Identiteit
+                        with ui.card().classes('settings-card') as card_identiteit:
+                            cards.append(card_identiteit)
+                            ui.label('Identiteit').classes('settings-card-title')
+                            fields['bedrijfsnaam'] = ui.input(
+                                'Bedrijfsnaam',
+                                value=getattr(bg, 'bedrijfsnaam', '') or '',
+                                on_change=_mark_dirty(card_identiteit),
+                            ).classes('w-full')
+                            with ui.grid(columns=2).classes('w-full gap-4'):
+                                fields['naam'] = ui.input(
+                                    'Naam', value=getattr(bg, 'naam', '') or '',
+                                    on_change=_mark_dirty(card_identiteit))
+                                fields['functie'] = ui.input(
+                                    'Functie', value=getattr(bg, 'functie', '') or '',
+                                    on_change=_mark_dirty(card_identiteit))
 
-                            ui.separator().classes('q-my-md')
-                            ui.label('Visuele instellingen').classes(
-                                'text-subtitle2'
-                            ).style('color: var(--muted)')
-                            fields['gebruik_klant_kleur_in_agenda'] = (
-                                ui.checkbox(
-                                    'Klant-kleuren tonen in agenda',
-                                    value=bool(getattr(
-                                        bg, 'gebruik_klant_kleur_in_agenda',
-                                        False)) if bg else False,
-                                ).tooltip(
-                                    'Als aan: agenda-cellen krijgen de kleur '
-                                    'die per klant is ingesteld (via Klanten-'
-                                    'dialog). Klanten zonder kleur en blockers'
-                                    '/holidays blijven type-based gestyled.'
-                                )
+                        # Card 2: Contact
+                        with ui.card().classes('settings-card') as card_contact:
+                            cards.append(card_contact)
+                            ui.label('Contact').classes('settings-card-title')
+                            fields['adres'] = ui.input(
+                                'Adres', value=getattr(bg, 'adres', '') or '',
+                                on_change=_mark_dirty(card_contact),
+                            ).classes('w-full')
+                            with ui.grid(columns=2).classes('w-full gap-4'):
+                                fields['postcode_plaats'] = ui.input(
+                                    'Postcode + Plaats',
+                                    value=getattr(bg, 'postcode_plaats', '') or '',
+                                    on_change=_mark_dirty(card_contact))
+                                fields['telefoon'] = ui.input(
+                                    'Telefoon',
+                                    value=getattr(bg, 'telefoon', '') or '',
+                                    on_change=_mark_dirty(card_contact))
+                            fields['email'] = ui.input(
+                                'E-mail', value=getattr(bg, 'email', '') or '',
+                                on_change=_mark_dirty(card_contact),
+                            ).classes('w-full')
+
+                        # Card 3: Fiscaal & financieel
+                        with ui.card().classes('settings-card') as card_fiscaal:
+                            cards.append(card_fiscaal)
+                            ui.label('Fiscaal & financieel').classes('settings-card-title')
+                            with ui.grid(columns=2).classes('w-full gap-4'):
+                                fields['kvk'] = ui.input(
+                                    'KvK-nummer', value=getattr(bg, 'kvk', '') or '',
+                                    on_change=_mark_dirty(card_fiscaal))
+                                fields['iban'] = ui.input(
+                                    'IBAN', value=getattr(bg, 'iban', '') or '',
+                                    on_change=_mark_dirty(card_fiscaal))
+                            fields['thuisplaats'] = ui.input(
+                                'Thuisplaats (voor reiskosten)',
+                                value=getattr(bg, 'thuisplaats', '') or '',
+                                on_change=_mark_dirty(card_fiscaal),
+                            ).classes('w-full')
+
+                        # Card 4: Logo & visueel
+                        with ui.card().classes('settings-card') as card_visueel:
+                            cards.append(card_visueel)
+                            ui.label('Logo & visueel').classes('settings-card-title')
+
+                            # PLACEHOLDER — Task 3 vult dit met de logo media-row.
+                            # Voor Task 2 alleen een column-marker zodat de structuur
+                            # rendert en latere tasks de container kunnen vinden.
+                            logo_slot = ui.column().classes('w-full q-mb-md')
+
+                            # Klant-kleur-toggle (verhuisd uit eigen "Visuele instellingen"
+                            # subtitle — semantisch onderdeel van branding).
+                            fields['gebruik_klant_kleur_in_agenda'] = ui.checkbox(
+                                'Klant-kleuren tonen in agenda',
+                                value=bool(getattr(
+                                    bg, 'gebruik_klant_kleur_in_agenda', False)) if bg else False,
+                                on_change=_mark_dirty(card_visueel),
                             )
+                            ui.label(
+                                'Als aan: agenda-cellen krijgen de kleur die per klant '
+                                'is ingesteld (via Klanten-dialog). Klanten zonder kleur '
+                                'en blockers/holidays blijven type-based gestyled.'
+                            ).classes('text-caption text-grey')
 
-                            async def save_bedrijf():
-                                kwargs = {}
-                                for k, v in fields.items():
-                                    val = v.value
-                                    if isinstance(val, bool):
-                                        kwargs[k] = int(val)
-                                    else:
-                                        kwargs[k] = val or ''
-                                if not (kwargs.get('iban') or '').strip():
-                                    ui.notify(
-                                        'IBAN mag niet leeg zijn — QR-betaallink zou '
-                                        'stuk gaan op alle volgende facturen',
-                                        type='negative', timeout=8)
-                                    return
-                                if not (kwargs.get('naam') or '').strip():
-                                    ui.notify(
-                                        'Naam mag niet leeg zijn',
-                                        type='negative')
-                                    return
-                                if not (kwargs.get('kvk') or '').strip():
-                                    ui.notify(
-                                        'KvK-nummer mag niet leeg zijn',
-                                        type='negative')
-                                    return
-                                await upsert_bedrijfsgegevens(DB_PATH, **kwargs)
-                                ui.notify('Bedrijfsgegevens opgeslagen', type='positive')
+                        # Save handler — één Opslaan voor alle 4 cards
+                        async def save_bedrijf():
+                            kwargs = {}
+                            for k, v in fields.items():
+                                val = v.value
+                                if isinstance(val, bool):
+                                    kwargs[k] = int(val)
+                                else:
+                                    kwargs[k] = val or ''
+                            if not (kwargs.get('iban') or '').strip():
+                                ui.notify(
+                                    'IBAN mag niet leeg zijn — QR-betaallink zou stuk gaan '
+                                    'op alle volgende facturen',
+                                    type='negative', timeout=8)
+                                return
+                            if not (kwargs.get('naam') or '').strip():
+                                ui.notify('Naam mag niet leeg zijn', type='negative')
+                                return
+                            if not (kwargs.get('kvk') or '').strip():
+                                ui.notify('KvK-nummer mag niet leeg zijn', type='negative')
+                                return
+                            await upsert_bedrijfsgegevens(DB_PATH, **kwargs)
+                            for c in cards:
+                                c.classes(remove='is-dirty')
+                            ui.notify('Bedrijfsgegevens opgeslagen', type='positive')
 
-                            ui.button(
-                                'Opslaan', icon='save', on_click=save_bedrijf
-                            ).props('color=primary').classes('q-mt-md')
+                        ui.button(
+                            'Wijzigingen opslaan', icon='save', on_click=save_bedrijf
+                        ).props('color=primary').classes('q-mt-md')
 
-                        # Logo upload section
+                        # Logo upload section (Task 3 vervangt deze placeholder)
+                        # NOTE: Task 3 verwijdert dit hele blok en bouwt de echte
+                        # media-row binnen `logo_slot` van card_visueel hierboven.
                         with ui.card().classes('w-full q-mt-md'):
-                            ui.label('Bedrijfslogo').classes(
-                                'text-subtitle2 text-grey-8')
+                            ui.label('Bedrijfslogo (verhuist in Task 3 naar Logo & visueel-card)') \
+                                .classes('text-subtitle2 text-grey-8')
                             ui.label(
                                 'Upload een logo dat op facturen wordt getoond.'
                             ).classes('text-caption text-grey')
@@ -371,10 +423,6 @@ async def instellingen_page():
                             async def handle_logo_upload(e):
                                 content = await e.file.read()
                                 ext = e.file.name.rsplit('.', 1)[-1].lower()
-                                # Write-then-replace: only delete old logo files
-                                # after the new one is safely on disk. Previous
-                                # version deleted old first → if write failed,
-                                # user lost their logo.
                                 target = logo_dir / f'logo.{ext}'
                                 tmp = logo_dir / f'.logo.new.{ext}'
                                 await asyncio.to_thread(tmp.write_bytes, content)
