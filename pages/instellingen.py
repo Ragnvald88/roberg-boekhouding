@@ -618,154 +618,172 @@ async def instellingen_page():
                                     params.jaarafsluiting_status
                                     == 'definitief')
                                 if is_locked:
-                                    ui.label(
-                                        f'Jaar {params.jaar} is definitief'
-                                        ' afgesloten. Heropen via'
-                                        ' /jaarafsluiting om te wijzigen.'
-                                    ).classes(
-                                        'text-warning text-weight-medium'
-                                        ' q-mb-sm')
-                                with ui.grid(columns=2).classes('gap-2 w-full'):
-                                    # Per-field metadata: label, key, format, step.
-                                    grouped_fields = [
-                                        ('IB Schijven', [
-                                            ('Schijf 1 grens €', 'schijf1_grens', '%.0f', 1),
-                                            ('Schijf 1 %', 'schijf1_pct', '%.2f', 0.01),
-                                            ('Schijf 2 grens €', 'schijf2_grens', '%.0f', 1),
-                                            ('Schijf 2 %', 'schijf2_pct', '%.2f', 0.01),
-                                            ('Schijf 3 %', 'schijf3_pct', '%.2f', 0.01),
-                                            ('PVV premiegrondslag €', 'pvv_premiegrondslag', '%.0f', 1),
-                                        ]),
-                                        ('Ondernemersaftrek', [
-                                            ('Zelfstandigenaftrek €', 'zelfstandigenaftrek', '%.0f', 1),
-                                            ('Startersaftrek €', 'startersaftrek', '%.0f', 1),
-                                            ('MKB-vrijstelling %', 'mkb_vrijstelling_pct', '%.2f', 0.01),
-                                        ]),
-                                        ('Investeringsaftrek (KIA)', [
-                                            ('KIA % (binnen onder/boven)', 'kia_pct', '%.2f', 0.1),
-                                            ('KIA ondergrens €', 'kia_ondergrens', '%.0f', 1),
-                                            ('KIA bovengrens €', 'kia_bovengrens', '%.0f', 1),
-                                            ('KIA drempel per item €', 'kia_drempel_per_item', '%.0f', 1),
-                                            ('KIA plateau bedrag € (boven bovengrens)', 'kia_plateau_bedrag', '%.0f', 1),
-                                            ('KIA plateau eind € (einde plateau)', 'kia_plateau_eind', '%.0f', 1),
-                                            ('KIA afbouw eind € (waarop KIA = 0)', 'kia_afbouw_eind', '%.0f', 1),
-                                            ('KIA afbouw % per €', 'kia_afbouw_pct', '%.4f', 0.01),
-                                        ]),
-                                        ('Heffingskortingen', [
-                                            ('AHK max €', 'ahk_max', '%.0f', 1),
-                                            ('AHK afbouw %', 'ahk_afbouw_pct', '%.3f', 0.01),
-                                            ('AHK drempel €', 'ahk_drempel', '%.0f', 1),
-                                            ('AK max €', 'ak_max', '%.0f', 1),
-                                        ]),
-                                        ('ZVW', [
-                                            ('ZVW %', 'zvw_pct', '%.2f', 0.01),
-                                            ('ZVW max grondslag €', 'zvw_max_grondslag', '%.0f', 1),
-                                        ]),
-                                        ('Eigen woning', [
-                                            ('EW forfait %', 'ew_forfait_pct', '%.3f', 0.01),
-                                            ('Villataks grens €', 'villataks_grens', '%.0f', 1000),
-                                            ('Wet Hillen %', 'wet_hillen_pct', '%.3f', 0.01),
-                                        ]),
-                                        ('Overig per jaar', [
-                                            ('Km-tarief €', 'km_tarief', '%.3f', 0.001),
-                                            ('Representatie aftrek %', 'repr_aftrek_pct', '%.2f', 0.5),
-                                            ('Urencriterium (uren)', 'urencriterium', '%.0f', 1),
-                                        ]),
+                                    with ui.row().classes(
+                                        'alert-card alert-card--warning'
+                                        ' items-center q-gutter-sm q-mb-md'
+                                    ):
+                                        ui.icon('warning').classes('alert-icon')
+                                        with ui.column().classes('gap-0'):
+                                            ui.label(
+                                                f'Jaar {params.jaar} is'
+                                                ' definitief afgesloten'
+                                            ).classes('alert-title')
+                                            ui.label(
+                                                'Heropen via /jaarafsluiting'
+                                                ' om te wijzigen.'
+                                            ).classes('alert-body')
+                                # Per-field metadata: label, key, format, step.
+                                grouped_fields = [
+                                    ('IB Schijven', [
+                                        ('Schijf 1 grens €', 'schijf1_grens', '%.0f', 1),
+                                        ('Schijf 1 %', 'schijf1_pct', '%.2f', 0.01),
+                                        ('Schijf 2 grens €', 'schijf2_grens', '%.0f', 1),
+                                        ('Schijf 2 %', 'schijf2_pct', '%.2f', 0.01),
+                                        ('Schijf 3 %', 'schijf3_pct', '%.2f', 0.01),
+                                        ('PVV premiegrondslag €', 'pvv_premiegrondslag', '%.0f', 1),
+                                    ]),
+                                    ('Ondernemersaftrek', [
+                                        ('Zelfstandigenaftrek €', 'zelfstandigenaftrek', '%.0f', 1),
+                                        ('Startersaftrek €', 'startersaftrek', '%.0f', 1),
+                                        ('MKB-vrijstelling %', 'mkb_vrijstelling_pct', '%.2f', 0.01),
+                                    ]),
+                                    ('Investeringsaftrek (KIA)', [
+                                        ('KIA % (binnen onder/boven)', 'kia_pct', '%.2f', 0.1),
+                                        ('KIA ondergrens €', 'kia_ondergrens', '%.0f', 1),
+                                        ('KIA bovengrens €', 'kia_bovengrens', '%.0f', 1),
+                                        ('KIA drempel per item €', 'kia_drempel_per_item', '%.0f', 1),
+                                        ('KIA plateau bedrag € (boven bovengrens)', 'kia_plateau_bedrag', '%.0f', 1),
+                                        ('KIA plateau eind € (einde plateau)', 'kia_plateau_eind', '%.0f', 1),
+                                        ('KIA afbouw eind € (waarop KIA = 0)', 'kia_afbouw_eind', '%.0f', 1),
+                                        ('KIA afbouw % per €', 'kia_afbouw_pct', '%.4f', 0.01),
+                                    ]),
+                                    ('Heffingskortingen', [
+                                        ('AHK max €', 'ahk_max', '%.0f', 1),
+                                        ('AHK afbouw %', 'ahk_afbouw_pct', '%.3f', 0.01),
+                                        ('AHK drempel €', 'ahk_drempel', '%.0f', 1),
+                                        ('AK max €', 'ak_max', '%.0f', 1),
+                                    ]),
+                                    ('ZVW', [
+                                        ('ZVW %', 'zvw_pct', '%.2f', 0.01),
+                                        ('ZVW max grondslag €', 'zvw_max_grondslag', '%.0f', 1),
+                                    ]),
+                                    ('Eigen woning', [
+                                        ('EW forfait %', 'ew_forfait_pct', '%.3f', 0.01),
+                                        ('Villataks grens €', 'villataks_grens', '%.0f', 1000),
+                                        ('Wet Hillen %', 'wet_hillen_pct', '%.3f', 0.01),
+                                    ]),
+                                    ('Overig per jaar', [
+                                        ('Km-tarief €', 'km_tarief', '%.3f', 0.001),
+                                        ('Representatie aftrek %', 'repr_aftrek_pct', '%.2f', 0.5),
+                                        ('Urencriterium (uren)', 'urencriterium', '%.0f', 1),
+                                    ]),
+                                ]
+                                # Flat list for save logic
+                                fields = []
+                                inputs = {}
+                                for section_label, section_fields in grouped_fields:
+                                    with ui.column().classes('settings-section w-full'):
+                                        ui.label(section_label).classes(
+                                            'settings-section-title')
+                                        with ui.grid(columns=2).classes(
+                                            'w-full gap-3'
+                                        ):
+                                            for label, key, fmt, step in section_fields:
+                                                fields.append((label, key))
+                                                val = getattr(params, key)
+                                                inp = ui.number(
+                                                    label,
+                                                    value=val if val is not None else 0,
+                                                    format=fmt, step=step,
+                                                ).classes('w-full')
+                                                if is_locked:
+                                                    inp.props('readonly')
+                                                inputs[key] = inp
+                                with ui.column().classes('settings-section w-full'):
+                                    ui.label('Toggles & partner').classes(
+                                        'settings-section-title')
+                                    with ui.column().classes('w-full gap-2'):
+                                        za_cb = ui.checkbox(
+                                            'Zelfstandigenaftrek (ZA) actief',
+                                            value=bool(params.za_actief),
+                                        )
+                                        if is_locked:
+                                            za_cb.props('disable')
+                                        inputs['za_actief'] = za_cb
+
+                                        sa_cb = ui.checkbox(
+                                            'Startersaftrek (SA) actief —'
+                                            ' max 3× in eerste 5 jaar',
+                                            value=bool(params.sa_actief),
+                                        )
+                                        if is_locked:
+                                            sa_cb.props('disable')
+                                        inputs['sa_actief'] = sa_cb
+
+                                        ew_partner_cb = ui.checkbox(
+                                            'Eigen woning saldo aan partner'
+                                            ' toerekenen',
+                                            value=bool(params.ew_naar_partner),
+                                        )
+                                        if is_locked:
+                                            ew_partner_cb.props('disable')
+                                        inputs['ew_naar_partner'] = ew_partner_cb
+
+                                        box3_partner_cb = ui.checkbox(
+                                            'Box 3 fiscaal partner'
+                                            ' (verdeling 50/50 mogelijk)',
+                                            value=bool(params.box3_fiscaal_partner),
+                                        )
+                                        if is_locked:
+                                            box3_partner_cb.props('disable')
+                                        inputs['box3_fiscaal_partner'] = box3_partner_cb
+                                with ui.column().classes('settings-section w-full'):
+                                    ui.label('PVV premies').classes(
+                                        'settings-section-title')
+                                    pvv_fields = [
+                                        ('AOW premie %', 'pvv_aow_pct'),
+                                        ('Anw premie %', 'pvv_anw_pct'),
+                                        ('Wlz premie %', 'pvv_wlz_pct'),
                                     ]
-                                    # Flat list for save logic
-                                    fields = []
-                                    inputs = {}
-                                    for section, section_fields in grouped_fields:
-                                        ui.label(section).classes(
-                                            'text-subtitle2 text-weight-bold '
-                                            'text-grey-7 col-span-2 q-mt-md')
-                                        for label, key, fmt, step in section_fields:
-                                            fields.append((label, key))
+                                    with ui.grid(columns=2).classes('w-full gap-3'):
+                                        for label, key in pvv_fields:
                                             val = getattr(params, key)
                                             inp = ui.number(
-                                                label, value=val if val is not None else 0,
+                                                label,
+                                                value=val if val is not None else 0,
+                                                format='%.2f', step=0.01,
+                                            ).classes('w-full')
+                                            if is_locked:
+                                                inp.props('readonly')
+                                            inputs[key] = inp
+                                with ui.column().classes('settings-section w-full'):
+                                    ui.label('Box 3 parameters').classes(
+                                        'settings-section-title')
+                                    box3_fields = [
+                                        ('Heffingsvrij vermogen p.p. \u20ac',
+                                         'box3_heffingsvrij_vermogen', '%.0f', 1),
+                                        ('Rendement bank %',
+                                         'box3_rendement_bank_pct', '%.2f', 0.01),
+                                        ('Rendement overig %',
+                                         'box3_rendement_overig_pct', '%.2f', 0.01),
+                                        ('Rendement schuld %',
+                                         'box3_rendement_schuld_pct', '%.2f', 0.01),
+                                        ('Box 3 tarief %',
+                                         'box3_tarief_pct', '%.0f', 1),
+                                        ('Box 3 drempel schulden p.p. \u20ac',
+                                         'box3_drempel_schulden', '%.0f', 100),
+                                    ]
+                                    with ui.grid(columns=2).classes('w-full gap-3'):
+                                        for label, key, fmt, step in box3_fields:
+                                            val = getattr(params, key)
+                                            inp = ui.number(
+                                                label,
+                                                value=val if val is not None else 0,
                                                 format=fmt, step=step,
                                             ).classes('w-full')
                                             if is_locked:
                                                 inp.props('readonly')
                                             inputs[key] = inp
-                                ui.label('Ondernemersaftrek toggles').classes(
-                                    'text-subtitle2 mt-4')
-                                za_cb = ui.checkbox(
-                                    'ZA actief',
-                                    value=bool(params.za_actief),
-                                )
-                                if is_locked:
-                                    za_cb.props('disable')
-                                inputs['za_actief'] = za_cb
-                                sa_cb = ui.checkbox(
-                                    'SA actief (max 3x in eerste 5 jaar)',
-                                    value=bool(params.sa_actief),
-                                )
-                                if is_locked:
-                                    sa_cb.props('disable')
-                                inputs['sa_actief'] = sa_cb
-                                ui.label('Partner toedeling').classes(
-                                    'text-subtitle2 mt-4')
-                                ew_partner_cb = ui.checkbox(
-                                    'Eigen woning saldo aan partner toerekenen',
-                                    value=bool(params.ew_naar_partner),
-                                )
-                                if is_locked:
-                                    ew_partner_cb.props('disable')
-                                inputs['ew_naar_partner'] = ew_partner_cb
-                                box3_partner_cb = ui.checkbox(
-                                    'Box 3 fiscaal partner (verdeling 50/50 mogelijk)',
-                                    value=bool(params.box3_fiscaal_partner),
-                                )
-                                if is_locked:
-                                    box3_partner_cb.props('disable')
-                                inputs['box3_fiscaal_partner'] = box3_partner_cb
-                                ui.label('PVV premies').classes(
-                                    'text-subtitle2 mt-4')
-                                pvv_fields = [
-                                    ('AOW premie %', 'pvv_aow_pct'),
-                                    ('Anw premie %', 'pvv_anw_pct'),
-                                    ('Wlz premie %', 'pvv_wlz_pct'),
-                                ]
-                                with ui.row().classes('gap-4'):
-                                    for label, key in pvv_fields:
-                                        val = getattr(params, key)
-                                        inp = ui.number(
-                                            label,
-                                            value=val if val is not None else 0,
-                                            format='%.2f', step=0.01,
-                                        )
-                                        if is_locked:
-                                            inp.props('readonly')
-                                        inputs[key] = inp
-                                ui.label('Box 3 parameters').classes(
-                                    'text-subtitle2 mt-4')
-                                box3_fields = [
-                                    ('Heffingsvrij vermogen p.p. \u20ac',
-                                     'box3_heffingsvrij_vermogen', '%.0f', 1),
-                                    ('Rendement bank %',
-                                     'box3_rendement_bank_pct', '%.2f', 0.01),
-                                    ('Rendement overig %',
-                                     'box3_rendement_overig_pct', '%.2f', 0.01),
-                                    ('Rendement schuld %',
-                                     'box3_rendement_schuld_pct', '%.2f', 0.01),
-                                    ('Box 3 tarief %',
-                                     'box3_tarief_pct', '%.0f', 1),
-                                    ('Box 3 drempel schulden p.p. \u20ac',
-                                     'box3_drempel_schulden', '%.0f', 100),
-                                ]
-                                with ui.row().classes('gap-4 flex-wrap'):
-                                    for label, key, fmt, step in box3_fields:
-                                        val = getattr(params, key)
-                                        inp = ui.number(
-                                            label,
-                                            value=val if val is not None else 0,
-                                            format=fmt, step=step,
-                                        )
-                                        if is_locked:
-                                            inp.props('readonly')
-                                        inputs[key] = inp
 
                                 # Editable arbeidskorting brackets \u2014 list of
                                 # ui.row() per schijf with delete button +
@@ -773,129 +791,130 @@ async def instellingen_page():
                                 # (list of dicts) and re-rendered into
                                 # `ak_container`. On save we json.dumps the
                                 # state and pass through upsert_fiscale_params.
-                                ui.label('Arbeidskorting schijven').classes(
-                                    'text-subtitle2 mt-4')
-                                ui.label(
-                                    'Schijven moeten oplopend en aaneensluitend '
-                                    'zijn. Laatste schijf mag een open '
-                                    'bovengrens (\u221e) hebben \u2014 laat het '
-                                    'veld leeg om dat aan te geven. Tarief '
-                                    'als fractie (bijv. 0.31433 voor 31,433%).'
-                                ).classes('text-caption text-grey')
+                                with ui.column().classes('settings-section w-full'):
+                                    ui.label('Arbeidskorting schijven').classes(
+                                        'settings-section-title')
+                                    ui.label(
+                                        'Schijven moeten oplopend en aaneensluitend '
+                                        'zijn. Laatste schijf mag een open '
+                                        'bovengrens (\u221e) hebben \u2014 laat het '
+                                        'veld leeg om dat aan te geven. Tarief '
+                                        'als fractie (bijv. 0.31433 voor 31,433%).'
+                                    ).classes('text-caption text-grey')
 
-                                bracket_state: list[dict] = []
-                                if params.arbeidskorting_brackets:
-                                    try:
-                                        loaded = json.loads(
-                                            params.arbeidskorting_brackets)
-                                    except json.JSONDecodeError:
-                                        loaded = None
-                                    # Defensive: only accept a list of dicts.
-                                    # Non-list JSON (e.g. {"x": 1}) would
-                                    # crash render_brackets() before the
-                                    # validator can show a Dutch error.
-                                    if isinstance(loaded, list) and all(
-                                        isinstance(b, dict) for b in loaded
-                                    ):
-                                        bracket_state = list(loaded)
-
-                                ak_container = ui.column().classes('w-full gap-1')
-
-                                def render_brackets():
-                                    ak_container.clear()
-                                    with ak_container:
-                                        if not bracket_state:
-                                            ui.label(
-                                                'Geen schijven \u2014 voeg '
-                                                'minstens 1 schijf toe.'
-                                            ).classes('text-grey')
-                                            return
-                                        with ui.row().classes(
-                                            'w-full gap-2 text-caption '
-                                            'text-grey-7'
+                                    bracket_state: list[dict] = []
+                                    if params.arbeidskorting_brackets:
+                                        try:
+                                            loaded = json.loads(
+                                                params.arbeidskorting_brackets)
+                                        except json.JSONDecodeError:
+                                            loaded = None
+                                        # Defensive: only accept a list of dicts.
+                                        # Non-list JSON (e.g. {"x": 1}) would
+                                        # crash render_brackets() before the
+                                        # validator can show a Dutch error.
+                                        if isinstance(loaded, list) and all(
+                                            isinstance(b, dict) for b in loaded
                                         ):
-                                            ui.label('Ondergrens \u20ac').classes('w-32')
-                                            ui.label('Bovengrens \u20ac (leeg = \u221e)').classes('w-44')
-                                            ui.label('Tarief (fractie)').classes('w-32')
-                                            ui.label('Basisbedrag \u20ac').classes('w-32')
-                                            ui.label('').classes('w-12')
-                                        for idx, b in enumerate(bracket_state):
+                                            bracket_state = list(loaded)
+
+                                    ak_container = ui.column().classes('w-full gap-1')
+
+                                    def render_brackets():
+                                        ak_container.clear()
+                                        with ak_container:
+                                            if not bracket_state:
+                                                ui.label(
+                                                    'Geen schijven \u2014 voeg '
+                                                    'minstens 1 schijf toe.'
+                                                ).classes('text-grey')
+                                                return
                                             with ui.row().classes(
-                                                'w-full gap-2 items-center'
+                                                'w-full gap-2 text-caption '
+                                                'text-grey-7'
                                             ):
-                                                lo = ui.number(
-                                                    value=b.get('lower') or 0,
-                                                    format='%.0f', step=1,
-                                                ).classes('w-32').props('dense')
-                                                up_val = b.get('upper')
-                                                up = ui.number(
-                                                    value=up_val if up_val is not None else None,
-                                                    format='%.0f', step=1,
-                                                    placeholder='\u221e (leeg)',
-                                                ).classes('w-44').props('dense clearable')
-                                                rt = ui.number(
-                                                    value=b.get('rate') or 0,
-                                                    format='%.5f', step=0.0001,
-                                                ).classes('w-32').props('dense')
-                                                ba = ui.number(
-                                                    value=b.get('base') or 0,
-                                                    format='%.0f', step=1,
-                                                ).classes('w-32').props('dense')
+                                                ui.label('Ondergrens \u20ac').classes('w-32')
+                                                ui.label('Bovengrens \u20ac (leeg = \u221e)').classes('w-44')
+                                                ui.label('Tarief (fractie)').classes('w-32')
+                                                ui.label('Basisbedrag \u20ac').classes('w-32')
+                                                ui.label('').classes('w-12')
+                                            for idx, b in enumerate(bracket_state):
+                                                with ui.row().classes(
+                                                    'w-full gap-2 items-center'
+                                                ):
+                                                    lo = ui.number(
+                                                        value=b.get('lower') or 0,
+                                                        format='%.0f', step=1,
+                                                    ).classes('w-32').props('dense')
+                                                    up_val = b.get('upper')
+                                                    up = ui.number(
+                                                        value=up_val if up_val is not None else None,
+                                                        format='%.0f', step=1,
+                                                        placeholder='\u221e (leeg)',
+                                                    ).classes('w-44').props('dense clearable')
+                                                    rt = ui.number(
+                                                        value=b.get('rate') or 0,
+                                                        format='%.5f', step=0.0001,
+                                                    ).classes('w-32').props('dense')
+                                                    ba = ui.number(
+                                                        value=b.get('base') or 0,
+                                                        format='%.0f', step=1,
+                                                    ).classes('w-32').props('dense')
 
-                                                def make_writer(i, field, comp,
-                                                                allow_none=False):
-                                                    def _w():
-                                                        v = comp.value
-                                                        if allow_none and (v is None or v == ''):
-                                                            bracket_state[i][field] = None
-                                                        elif v is None or v == '':
-                                                            bracket_state[i][field] = 0
-                                                        else:
-                                                            bracket_state[i][field] = v
-                                                    return _w
-                                                lo.on('update:model-value', make_writer(idx, 'lower', lo))
-                                                up.on('update:model-value', make_writer(idx, 'upper', up, allow_none=True))
-                                                rt.on('update:model-value', make_writer(idx, 'rate', rt))
-                                                ba.on('update:model-value', make_writer(idx, 'base', ba))
+                                                    def make_writer(i, field, comp,
+                                                                    allow_none=False):
+                                                        def _w():
+                                                            v = comp.value
+                                                            if allow_none and (v is None or v == ''):
+                                                                bracket_state[i][field] = None
+                                                            elif v is None or v == '':
+                                                                bracket_state[i][field] = 0
+                                                            else:
+                                                                bracket_state[i][field] = v
+                                                        return _w
+                                                    lo.on('update:model-value', make_writer(idx, 'lower', lo))
+                                                    up.on('update:model-value', make_writer(idx, 'upper', up, allow_none=True))
+                                                    rt.on('update:model-value', make_writer(idx, 'rate', rt))
+                                                    ba.on('update:model-value', make_writer(idx, 'base', ba))
 
-                                                def make_remove(i):
-                                                    def _r():
-                                                        if 0 <= i < len(bracket_state):
-                                                            bracket_state.pop(i)
-                                                            render_brackets()
-                                                    return _r
-                                                rm_btn = ui.button(
-                                                    icon='delete',
-                                                    on_click=make_remove(idx),
-                                                ).props('flat dense round color=negative')
-                                                if is_locked:
-                                                    lo.props('readonly')
-                                                    up.props('readonly')
-                                                    rt.props('readonly')
-                                                    ba.props('readonly')
-                                                    rm_btn.props('disable')
+                                                    def make_remove(i):
+                                                        def _r():
+                                                            if 0 <= i < len(bracket_state):
+                                                                bracket_state.pop(i)
+                                                                render_brackets()
+                                                        return _r
+                                                    rm_btn = ui.button(
+                                                        icon='delete',
+                                                        on_click=make_remove(idx),
+                                                    ).props('flat dense round color=negative')
+                                                    if is_locked:
+                                                        lo.props('readonly')
+                                                        up.props('readonly')
+                                                        rt.props('readonly')
+                                                        ba.props('readonly')
+                                                        rm_btn.props('disable')
 
-                                render_brackets()
-
-                                def add_bracket():
-                                    last_upper = 0
-                                    if bracket_state:
-                                        prev_up = bracket_state[-1].get('upper')
-                                        if prev_up is not None:
-                                            last_upper = prev_up
-                                    bracket_state.append({
-                                        'lower': last_upper,
-                                        'upper': None,
-                                        'rate': 0.0,
-                                        'base': 0,
-                                    })
                                     render_brackets()
-                                add_bracket_btn = ui.button(
-                                    'Schijf toevoegen', icon='add',
-                                    on_click=add_bracket,
-                                ).props('flat color=primary').classes('q-mt-xs')
-                                if is_locked:
-                                    add_bracket_btn.props('disable')
+
+                                    def add_bracket():
+                                        last_upper = 0
+                                        if bracket_state:
+                                            prev_up = bracket_state[-1].get('upper')
+                                            if prev_up is not None:
+                                                last_upper = prev_up
+                                        bracket_state.append({
+                                            'lower': last_upper,
+                                            'upper': None,
+                                            'rate': 0.0,
+                                            'base': 0,
+                                        })
+                                        render_brackets()
+                                    add_bracket_btn = ui.button(
+                                        'Schijf toevoegen', icon='add',
+                                        on_click=add_bracket,
+                                    ).props('flat color=primary').classes('q-mt-xs')
+                                    if is_locked:
+                                        add_bracket_btn.props('disable')
 
                                 # Capture all_fields for save closure
                                 all_fields = (
