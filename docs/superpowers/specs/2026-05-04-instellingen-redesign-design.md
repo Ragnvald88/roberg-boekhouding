@@ -4,7 +4,7 @@
 **Date**: 2026-05-04
 **Trigger**: user feedback "afthans lelijke pagina" + "upload vlak heel lelijk" tijdens Sprint D klant-color visuele validatie.
 **Scope**: visual polish + small structural improvements (no feature additions, no fiscal/data changes).
-**Baseline**: pytest 1298 groen, master HEAD `6d0017a`, Sprint A→F + 2 post-merge audits afgerond.
+**Baseline**: pytest 1298 groen, master HEAD `f12c3a2` (deze spec-commit zelf), Sprint A→F + 2 post-merge audits afgerond.
 
 ## Problem statement
 
@@ -118,8 +118,9 @@ Bestaande `ui.tabs` styling blijft (al token-based via Sprint B). Geen wijziging
 #### B4. Card "Logo & visueel"
 - **Logo-tile (media-row pattern)**:
   - Links: framed 96×96 preview met `border-radius: 8px`, hairline border. Bij geen logo: SVG-placeholder icon (Quasar `image_not_supported` of vergelijkbaar) met "Geen logo geüpload" caption.
-  - Rechts: primaire knop "Logo vervangen" (echte file-input via NiceGUI's `ui.upload` met custom styling — `flat dense color=primary`, eventueel verberg de Quasar drop-zone via `display:none` op `.q-uploader__list` als de styling nog steeds intrudes). Bestandsinfo eronder ("logo.png · 87 KB") als label. Tertiair: "Verwijderen" tekst-knop met Quasar `color=negative` (niet via CSS-var — we hebben geen `--negative` token), alleen renderen als logo bestaat.
-  - Klik op preview opent ook file-picker (a11y win — preview is dan ook actionable).
+  - Rechts: primaire knop "Logo vervangen" + onder de knop bestandsinfo ("logo.png · 87 KB") als label. Tertiair: "Verwijderen" tekst-knop met Quasar `color=negative`, alleen renderen als logo bestaat.
+  - **Upload-pattern (verplicht reuse van bestaand pattern in `components/invoice_builder.py:691-701`)**: hidden `ui.upload(label='', auto_upload=True, on_upload=handler).props('flat accept=".png,.jpg,.jpeg,.svg"')` + `style('visibility: hidden; height: 0; overflow: hidden')`. De zichtbare "Logo vervangen" knop (en klik op preview) triggert `getElement({_logo_upload.id}).$refs.qRef.pickFiles()` via `ui.run_javascript` of `on_click` met JS-string. NIET proberen `ui.upload` zelf als knop te stylen (NiceGUI ui.upload is Quasar-coupled — de drop-zone, lijst, en file-list zijn niet betrouwbaar weg te krijgen via CSS). Handler: `await e.file.read()` + `e.file.name`.
+  - Klik op preview opent ook file-picker via dezelfde JS-trigger (a11y win — preview is dan ook actionable).
 - **Klant-kleur-toggle** onder logo-tile, met label "Klant-kleuren tonen in agenda" + helper-tekst (huidige tooltip wordt zichtbare caption).
 
 #### B5. Save-knop
@@ -134,7 +135,7 @@ Bestaande `ui.tabs` styling blijft (al token-based via Sprint B). Geen wijziging
 
 #### C2. Per jaar-expansion
 - `ui.expansion(jaar, icon='calendar_month')` blijft.
-- Locked-banner voor definitieve jaren behouden — krijgt `.alert-card --warning` styling (al bestaande Sprint F class).
+- Locked-banner voor definitieve jaren behouden — krijgt `alert-card alert-card--warning` styling (BEM-naming, beide classes samen op één `ui.element`; al bestaande Sprint F classes in `components/layout.py`).
 - **Binnen de expansion**: alle subgroepen krijgen `.settings-section`-class (subtiel, niet zwaar):
   - IB Schijven
   - Ondernemersaftrek
@@ -205,9 +206,9 @@ Na elke tab afgerond — user valideert in pywebview:
 
 | # | Risico | Kans | Impact | Mitigatie |
 |---|---|---|---|---|
-| R1 | Cascade-bug: `.settings-card` of `.settings-section` overruled door Quasar default | M | M | Beide BUITEN `@layer components`, getest via uitbreiding `tests/test_visual_css.py` allow-list als nodig |
+| R1 | Cascade-bug: `.settings-card` of `.settings-section` overruled door Quasar default (`.q-card { ... }`) | M | H | "Buiten `@layer`" alleen is NIET genoeg wanneer `.settings-card` op een `ui.card` (= `.q-card`) zit. Twee mitigaties verplicht: (a) gebruik **chained selector** `.q-card.settings-card { ... }` — wint van `.q-card` op gelijke specificity via source-order, of plaats de regel ná de Quasar-defaults in CSS-source. (b) voeg `settings-card` toe aan `QUASAR_APPLIED_APP_CLASSES` in `tests/test_visual_css.py:190` — dit is de project-discipline die in Sprint B+F is vastgelegd. Beide samen = belt-and-suspenders. Voor `.settings-section` op een `ui.column` (geen `.q-*`-element) is dit niet nodig. |
 | R2 | Save-validatie breekt bij gecombineerde-save Bedrijfsgegevens | L | M | Behoud bestaande validatie-functies, alleen call-site verandert |
-| R3 | Logo-upload custom styling werkt niet (NiceGUI `ui.upload` is Quasar-coupled) | M | L | Fall-back: behoud `ui.upload` maar style 'm minimaal + verberg behind eigen knop met `display:none` truc indien nodig |
+| R3 | Logo-upload media-row gedrag (preview + button + JS pickFiles trigger) is fragile | L | L | Sterk gemitigeerd door verplicht reuse van `invoice_builder.py:691-701` pattern (zie B4). Bewezen werkend in productie sinds Sprint A. Risico is nu vooral: wire-up vergeten (ui.run_javascript timing) of preview niet bijgewerkt na upload. Verifieer manueel in pywebview na upload + na app-restart. |
 | R4 | Dirty-state indicator wordt niet correct gewist na save | L | L | Test op end-of-save-handler, gebruik `card.classes(remove='is-dirty')` consequent |
 | R5 | Fiscaal-tab sections worden té druk visueel | M | M | Hairline border + lichte bg + geen schaduw (Codex spec). Indien nog te druk: degradeer naar enkel title + spacing zonder border |
 
