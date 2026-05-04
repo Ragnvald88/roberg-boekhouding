@@ -1076,13 +1076,29 @@ async def instellingen_page():
                                 ' flex: 1;'
                                 ' overflow-x: auto;')
 
-                            def copy_path():
-                                # Pywebview WebKit ondersteunt navigator.clipboard
-                                ui.run_javascript(
-                                    f'navigator.clipboard.writeText('
-                                    f'{json.dumps(db_path_str)})')
-                                ui.notify('Pad gekopieerd naar klembord',
-                                          type='positive')
+                            async def copy_path():
+                                # navigator.clipboard kan rejecten op
+                                # secure-context/focus/permission edge-cases
+                                # (zelfs in pywebview WebKit). Wrap in try
+                                # en wacht via respond=True op het resultaat
+                                # zodat onze notify nooit liegt.
+                                ok = await ui.run_javascript(
+                                    f'(async () => {{'
+                                    f' try {{'
+                                    f' await navigator.clipboard.writeText('
+                                    f'{json.dumps(db_path_str)});'
+                                    f' return true;'
+                                    f' }} catch (e) {{ return false; }}'
+                                    f' }})()')
+                                if ok:
+                                    ui.notify(
+                                        'Pad gekopieerd naar klembord',
+                                        type='positive')
+                                else:
+                                    ui.notify(
+                                        'Kopiëren mislukt — selecteer en kopieer'
+                                        ' het pad handmatig',
+                                        type='warning', timeout=6)
 
                             ui.button(
                                 icon='content_copy', on_click=copy_path,
