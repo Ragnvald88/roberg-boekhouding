@@ -7,7 +7,6 @@ All functions are testable in isolation.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import date
 from typing import Literal
 
