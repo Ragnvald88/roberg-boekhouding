@@ -160,6 +160,10 @@ async def dashboard_page():
                 'month': month,
                 'confidence': projection['confidence'],
                 'basis_maanden': projection['basis_maanden'],
+                # T2.2: voor Jaareinde-projectie hero — al berekend via
+                # projection['extrapolated_omzet'], hier exposed zodat
+                # Card 2 geen extra extrapoleer_jaaromzet-call hoeft te doen.
+                'extrapolated_omzet': projection['extrapolated_omzet'],
             }
         except Exception:
             log.exception('IB estimate failed for year %s', jaar)
@@ -273,30 +277,78 @@ async def dashboard_page():
                     if any(v > 0 for v in omzet_huidig):
                         _render_sparkline(omzet_huidig, '#0F766E')
 
-                # Card 2: Bedrijfswinst
+                # Card 2: Jaareinde-projectie (Sprint H T2.2 — replaces
+                # Winst-YTD as separate hero). Per spec U1: 1 number =
+                # winst-projectie. Winst-YTD wordt sub-line eronder als
+                # rear-view anchor; YoY-delta verdwijnt — confidence-badge
+                # is het primaire trust-signaal voor een forward-looking
+                # tile. Hero is nu coherente forward-looking strip:
+                # Omzet (rear) / Winst-projectie (forward) / Belasting
+                # (forward) / Urencriterium (T2.3 forward).
                 ytd_winst = ib_resultaat['ytd_winst'] if ib_resultaat else (
                     kpis['omzet'] - kpis['kosten'])
-                vorig_winst = vorig_ytd_omzet - vorig_ytd_kosten
 
-                with ui.card().classes('dashboard-hero-tile') \
-                        .style('cursor: pointer') \
-                        .on('click', lambda: ui.navigate.to('/aangifte')):
-                    with ui.row().classes('w-full justify-between items-center'):
-                        ui.label('Bedrijfswinst').classes('hero-label')
-                        delta = _yoy_delta(ytd_winst, vorig_winst) \
-                            if vorig_winst else None
-                        if delta is not None:
-                            _render_delta_badge(delta)
-                    # Inline color-by-sign: winst is bijna altijd positief, dus
-                    # de variant-classes waren effectief dead code. Token-based
-                    # var(--q-positive|negative) houdt cascade voorspelbaar.
-                    winst_color = ('var(--q-positive)' if ytd_winst >= 0
-                                   else 'var(--q-negative)')
-                    ui.label(format_euro(ytd_winst, decimals=0)).classes(
-                        'hero-value').style(f'color: {winst_color}')
-                    if vorig_winst and vorig_winst > 0:
+                if ib_resultaat is not None:
+                    from services.dashboard import (
+                        compute_jaareinde_projectie_display)
+                    projection_display = compute_jaareinde_projectie_display(
+                        extrapolated_omzet=ib_resultaat['extrapolated_omzet'],
+                        kosten_ytd=kpis['kosten'],
+                        confidence=ib_resultaat['confidence'],
+                        basis_maanden=ib_resultaat['basis_maanden'],
+                    )
+
+                    # Confidence badge — same labels as Belasting-prognose
+                    # tile voor consistente trust-signaling.
+                    confidence_label_map = {
+                        'low': ('Schatting', 'var(--q-warning)'),
+                        'medium': ('Prognose', '#0369A1'),
+                        'high': ('Betrouwbaar', 'var(--q-positive)'),
+                    }
+                    conf_label, conf_color = confidence_label_map.get(
+                        projection_display['confidence'],
+                        ('Schatting', 'var(--q-warning)'))
+
+                    with ui.card().classes('dashboard-hero-tile') \
+                            .style('cursor: pointer') \
+                            .on('click', lambda: ui.navigate.to('/aangifte')):
+                        with ui.row().classes(
+                                'w-full justify-between items-center'):
+                            ui.label('Jaareinde-projectie').classes(
+                                'hero-label')
+                            ui.label(conf_label).style(
+                                f'font-size: 11px; font-weight: 500; '
+                                f'color: {conf_color}; '
+                                f'background: var(--surface); '
+                                f'padding: 2px 8px; border-radius: 10px; '
+                                f'border: 1px solid {conf_color}')
+                        # Hero value: winst-projectie (1 number per U1).
+                        # Inline color-by-sign — winst-projectie kan
+                        # negatief zijn bij verlies-jaar of zware kosten
+                        # in Q1; defensief net als Card 3 belasting-tile.
+                        winst_proj = projection_display['winst_projectie']
+                        winst_color = ('var(--q-positive)' if winst_proj >= 0
+                                       else 'var(--q-negative)')
                         ui.label(
-                            f'vs {format_euro(vorig_winst, decimals=0)} vorig jaar'
+                            format_euro(winst_proj, decimals=0)
+                        ).classes('hero-value').style(
+                            f'color: {winst_color}')
+                        # Sub-line: Winst YTD (rear-view anchor).
+                        ui.label(
+                            f'YTD: {format_euro(ytd_winst, decimals=0)}'
+                        ).classes('context-text')
+                else:
+                    # Fallback: geen ib_resultaat (lege fiscale_params) →
+                    # toon alleen YTD zonder projectie. Clickable naar
+                    # /aangifte zodat user fiscale_params kan invullen.
+                    with ui.card().classes('dashboard-hero-tile') \
+                            .style('cursor: pointer') \
+                            .on('click', lambda: ui.navigate.to('/aangifte')):
+                        ui.label('Jaareinde-projectie').classes('hero-label')
+                        ui.label('Geen gegevens').classes(
+                            'context-text').style('margin-top: 8px')
+                        ui.label(
+                            f'YTD-winst: {format_euro(ytd_winst, decimals=0)}'
                         ).classes('context-text')
 
                 # Card 3: Belasting-reservering (Sprint H — replaces verbose
