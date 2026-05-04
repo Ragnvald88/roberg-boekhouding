@@ -291,9 +291,19 @@ async def dashboard_page():
                 if ib_resultaat is not None:
                     from services.dashboard import (
                         compute_jaareinde_projectie_display)
+                    # Codex T2.2-review fix: kpis['kosten'] excludeert
+                    # afschrijvingen, maar ytd_winst (sub-line) includeert
+                    # ze. Hero-projectie zou dan winst over-rapporteren
+                    # vs sub-line. Reverse-engineer total_kosten_ytd uit
+                    # bestaande data: omzet_ytd - ytd_winst geeft kosten +
+                    # afschrijvingen samen — semantisch consistent met
+                    # de YTD-winst sub-line. Geen nieuwe fields exposen.
+                    omzet_ytd = kpis['omzet']
+                    total_kosten_ytd = max(
+                        0.0, omzet_ytd - ib_resultaat['ytd_winst'])
                     projection_display = compute_jaareinde_projectie_display(
                         extrapolated_omzet=ib_resultaat['extrapolated_omzet'],
-                        kosten_ytd=kpis['kosten'],
+                        kosten_ytd=total_kosten_ytd,
                         confidence=ib_resultaat['confidence'],
                         basis_maanden=ib_resultaat['basis_maanden'],
                     )
