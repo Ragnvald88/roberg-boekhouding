@@ -43,3 +43,29 @@ def compute_belasting_reservering_progress(
     if diff < -2000:
         return ('overreservering', diff)
     return ('op_koers', diff)
+
+
+def compute_jaareinde_projectie_display(
+    extrapolated_omzet: float,
+    kosten_ytd: float,
+    confidence: Literal['low', 'medium', 'high'],
+    basis_maanden: int,
+) -> dict:
+    """Returns dict with `winst_projectie`, `confidence`, `basis_maanden`
+    for the Jaareinde-projectie hero-tile (per spec U1: 1 number =
+    winst-projectie alleen).
+
+    Kosten YTD wordt geëxtrapoleerd naar 12mo gebruikmakend van
+    basis_maanden (zelfde extrapolatie-logica als omzet). Edge-case:
+    basis_maanden=0 → kosten_extrapolated = 0, winst = extrapolated_omzet.
+    """
+    if basis_maanden <= 0:
+        kosten_extrapolated = 0.0
+    else:
+        kosten_extrapolated = kosten_ytd * 12 / basis_maanden
+    winst_projectie = extrapolated_omzet - kosten_extrapolated
+    return {
+        'winst_projectie': winst_projectie,
+        'confidence': confidence,
+        'basis_maanden': basis_maanden,
+    }

@@ -108,3 +108,59 @@ class TestComputeBelastingReserveringProgress:
         )
         assert status == 'op_koers'
         assert diff == 0.0
+
+
+class TestComputeJaareindeProjectieDisplay:
+    """Tests for the hero-tile data-shape (1 number — winst-projectie)."""
+
+    def test_high_confidence_full_year_exact(self):
+        # Eind dec, basis_maanden=12 → kosten extrapolated = ytd × 1.0
+        from services.dashboard import compute_jaareinde_projectie_display
+        result = compute_jaareinde_projectie_display(
+            extrapolated_omzet=120_000.0,
+            kosten_ytd=30_000.0,
+            confidence='high',
+            basis_maanden=12,
+        )
+        assert result['winst_projectie'] == 90_000.0
+        assert result['confidence'] == 'high'
+        assert result['basis_maanden'] == 12
+
+    def test_medium_confidence_mid_year(self):
+        from services.dashboard import compute_jaareinde_projectie_display
+        # Juli, basis_maanden=6, ytd_omzet ≈ 60k → projectie 120k
+        result = compute_jaareinde_projectie_display(
+            extrapolated_omzet=120_000.0,
+            kosten_ytd=18_000.0,  # halfjaar kosten
+            confidence='medium',
+            basis_maanden=6,
+        )
+        # Kosten worden ook geëxtrapoleerd naar 12mo: 18k × 12/6 = 36k
+        # Winst = 120k - 36k = 84k
+        assert result['winst_projectie'] == 84_000.0
+        assert result['confidence'] == 'medium'
+
+    def test_low_confidence_early_year(self):
+        from services.dashboard import compute_jaareinde_projectie_display
+        # Januari, basis_maanden=1
+        result = compute_jaareinde_projectie_display(
+            extrapolated_omzet=130_000.0,
+            kosten_ytd=2_500.0,
+            confidence='low',
+            basis_maanden=1,
+        )
+        # Kosten extrapoleren: 2500 × 12/1 = 30000
+        assert result['winst_projectie'] == 100_000.0
+        assert result['confidence'] == 'low'
+
+    def test_zero_basis_maanden_falls_back_to_ytd_omzet(self):
+        from services.dashboard import compute_jaareinde_projectie_display
+        # Edge case: basis_maanden=0 zou divide-by-zero geven
+        result = compute_jaareinde_projectie_display(
+            extrapolated_omzet=0.0,
+            kosten_ytd=0.0,
+            confidence='low',
+            basis_maanden=0,
+        )
+        assert result['winst_projectie'] == 0.0
+        assert result['confidence'] == 'low'
