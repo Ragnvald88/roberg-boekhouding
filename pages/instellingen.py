@@ -350,13 +350,11 @@ async def instellingen_page():
                             cards.append(card_visueel)
                             ui.label('Logo & visueel').classes('settings-card-title')
 
-                            # ─── Logo media-row (hidden upload + JS pickFiles trigger) ─
+                            # ─── Logo media-row (hidden upload + JS pickFiles trigger + local refresh) ─
                             logo_dir = DB_PATH.parent / 'logo'
                             logo_dir.mkdir(parents=True, exist_ok=True)
-                            logo_files = list(logo_dir.glob('logo.*'))
-                            current_logo = logo_files[0] if logo_files else None
 
-                            # Hidden ui.upload — wordt JS-side getriggerd via pickFiles()
+                            # Hidden ui.upload — created once, persists across local refreshes
                             async def handle_logo_upload(e):
                                 content = await e.file.read()
                                 ext = e.file.name.rsplit('.', 1)[-1].lower()
@@ -371,7 +369,7 @@ async def instellingen_page():
                                             pass
                                 await asyncio.to_thread(tmp.rename, target)
                                 ui.notify('Logo opgeslagen', type='positive')
-                                await refresh_bedrijf()  # Re-render om preview te updaten
+                                render_logo_row()  # local refresh — preserves other inputs
 
                             _logo_upload = ui.upload(
                                 label='', auto_upload=True,
@@ -386,58 +384,70 @@ async def instellingen_page():
                                 f'() => getElement({_logo_upload.id})'
                                 f'.$refs.qRef.pickFiles()')
 
-                            # Media-row: preview links | knop + info + verwijder rechts
-                            with ui.row().classes(
-                                'w-full items-center q-gutter-md q-mb-md'
-                            ):
-                                # Framed preview (klikbaar — opent ook file-picker)
-                                preview_box = ui.element('div').style(
-                                    'width: 96px; height: 96px; border-radius: 8px;'
-                                    ' border: 1px solid var(--border);'
-                                    ' background: var(--bg);'
-                                    ' display: flex; align-items: center;'
-                                    ' justify-content: center; overflow: hidden;'
-                                    ' cursor: pointer;')
-                                with preview_box:
-                                    if current_logo:
-                                        ui.image(f'/logo-files/{current_logo.name}').style(
-                                            'max-width: 96px; max-height: 96px;'
-                                            ' object-fit: contain;')
-                                    else:
-                                        ui.icon('image_not_supported').classes(
-                                            'text-grey').style('font-size: 32px;')
-                                preview_box.on('click', js_handler=_pick_logo_js)
+                            # Container voor de zichtbare row — clear+rebuild bij upload/delete
+                            logo_row_container = ui.column().classes('w-full q-mb-md')
 
-                                # Right: button + file-info + delete-link
-                                with ui.column().classes('items-start gap-1'):
-                                    ui.button(
-                                        'Logo vervangen', icon='upload',
-                                    ).on(
-                                        'click', js_handler=_pick_logo_js,
-                                    ).props('flat color=primary')
-                                    if current_logo:
-                                        size_kb = current_logo.stat().st_size // 1024
-                                        ui.label(
-                                            f'{current_logo.name} · {size_kb} KB'
-                                        ).classes('text-caption text-grey')
+                            def render_logo_row():
+                                """Re-render only the logo row — preserves other inputs' state."""
+                                logo_files = list(logo_dir.glob('logo.*'))
+                                current_logo = logo_files[0] if logo_files else None
 
-                                        async def delete_logo():
-                                            try:
-                                                await asyncio.to_thread(current_logo.unlink)
-                                            except OSError as ex:
-                                                ui.notify(
-                                                    f'Kon logo niet verwijderen: {ex}',
-                                                    type='negative')
-                                                return
-                                            ui.notify('Logo verwijderd', type='positive')
-                                            await refresh_bedrijf()
+                                async def delete_logo():
+                                    if current_logo is None:
+                                        return
+                                    try:
+                                        await asyncio.to_thread(current_logo.unlink)
+                                    except OSError as ex:
+                                        ui.notify(
+                                            f'Kon logo niet verwijderen: {ex}',
+                                            type='negative')
+                                        return
+                                    ui.notify('Logo verwijderd', type='positive')
+                                    render_logo_row()
 
-                                        ui.button(
-                                            'Verwijderen', on_click=delete_logo,
-                                        ).props('flat dense color=negative size=sm')
-                                    else:
-                                        ui.label('Geen logo geüpload').classes(
-                                            'text-caption text-grey')
+                                logo_row_container.clear()
+                                with logo_row_container:
+                                    with ui.row().classes(
+                                        'w-full items-center q-gutter-md'
+                                    ):
+                                        # Framed preview (klikbaar — opent ook file-picker)
+                                        preview_box = ui.element('div').style(
+                                            'width: 96px; height: 96px; border-radius: 8px;'
+                                            ' border: 1px solid var(--border);'
+                                            ' background: var(--bg);'
+                                            ' display: flex; align-items: center;'
+                                            ' justify-content: center; overflow: hidden;'
+                                            ' cursor: pointer;')
+                                        with preview_box:
+                                            if current_logo:
+                                                ui.image(f'/logo-files/{current_logo.name}').style(
+                                                    'max-width: 96px; max-height: 96px;'
+                                                    ' object-fit: contain;')
+                                            else:
+                                                ui.icon('image_not_supported').classes(
+                                                    'text-grey').style('font-size: 32px;')
+                                        preview_box.on('click', js_handler=_pick_logo_js)
+
+                                        # Right: button + file-info + delete-link
+                                        with ui.column().classes('items-start gap-1'):
+                                            ui.button(
+                                                'Logo vervangen', icon='upload',
+                                            ).on(
+                                                'click', js_handler=_pick_logo_js,
+                                            ).props('flat color=primary')
+                                            if current_logo:
+                                                size_kb = current_logo.stat().st_size // 1024
+                                                ui.label(
+                                                    f'{current_logo.name} · {size_kb} KB'
+                                                ).classes('text-caption text-grey')
+                                                ui.button(
+                                                    'Verwijderen', on_click=delete_logo,
+                                                ).props('flat dense color=negative size=sm')
+                                            else:
+                                                ui.label('Geen logo geüpload').classes(
+                                                    'text-caption text-grey')
+
+                            render_logo_row()  # initial populate
 
                             # Klant-kleur-toggle (verhuisd uit eigen "Visuele instellingen"
                             # subtitle — semantisch onderdeel van branding).
