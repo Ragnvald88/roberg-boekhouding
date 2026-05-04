@@ -403,8 +403,8 @@ async def instellingen_page():
                         # NOTE: Task 3 verwijdert dit hele blok en bouwt de echte
                         # media-row binnen `logo_slot` van card_visueel hierboven.
                         with ui.card().classes('w-full q-mt-md'):
-                            ui.label('Bedrijfslogo (verhuist in Task 3 naar Logo & visueel-card)') \
-                                .classes('text-subtitle2 text-grey-8')
+                            ui.label('Bedrijfslogo').classes(
+                                'text-subtitle2 text-grey-8')
                             ui.label(
                                 'Upload een logo dat op facturen wordt getoond.'
                             ).classes('text-caption text-grey')
