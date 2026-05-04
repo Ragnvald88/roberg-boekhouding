@@ -283,6 +283,11 @@ def test_sprint_g_settings_card_chained_selector():
     on equal specificity since Quasar declares its defaults later in the
     cascade. Same lesson as agenda-cell.holiday-marker (Sprint A) and
     .alert-link (Sprint F).
+
+    Complements `test_known_quasar_applied_classes_unlayered` (broad allow-
+    list test, line ~199): that test catches `.settings-card` leaking INSIDE
+    @layer components; this one additionally asserts the chained form
+    EXISTS (anywhere) and that no naked form exists outside the layer either.
     """
     css = _strip_comments(_extract_css())
 
