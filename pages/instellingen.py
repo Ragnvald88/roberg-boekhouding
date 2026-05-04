@@ -397,11 +397,13 @@ async def instellingen_page():
                                 current_logo = logo_files[0] if logo_files else None
 
                                 async def delete_logo():
-                                    # Verwijderen-knop wordt alleen gerenderd
-                                    # als current_logo bestaat (zie below);
-                                    # geen None-guard nodig per CLAUDE.md
-                                    # "geen validation voor scenario's die
-                                    # niet kunnen voorkomen".
+                                    # Invariant: Verwijderen-knop wordt
+                                    # alleen gerenderd binnen `if current_logo:`.
+                                    # Assert ipv silent-return: faalt loud als
+                                    # de invariant ooit breekt (toekomstige
+                                    # refactor) en narrowt het type voor
+                                    # Pyright (Path|None → Path).
+                                    assert current_logo is not None
                                     try:
                                         await asyncio.to_thread(current_logo.unlink)
                                     except OSError as ex:
