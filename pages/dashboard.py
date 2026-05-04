@@ -57,7 +57,8 @@ async def dashboard_page():
 
         # Header row: title + shortcuts
         with ui.row().classes('w-full items-center'):
-            page_title('Overzicht')
+            # Title shows current calendar year (user knows selected jaar via dropdown)
+            page_title(f'Overzicht {huidig_jaar}')
             ui.space()
             ui.button('Werkdag', icon='add',
                       on_click=lambda: ui.navigate.to('/werkdagen')) \
@@ -285,9 +286,13 @@ async def dashboard_page():
                             if vorig_winst else None
                         if delta is not None:
                             _render_delta_badge(delta)
+                    # Inline color-by-sign: winst is bijna altijd positief, dus
+                    # de variant-classes waren effectief dead code. Token-based
+                    # var(--q-positive|negative) houdt cascade voorspelbaar.
+                    winst_color = ('var(--q-positive)' if ytd_winst >= 0
+                                   else 'var(--q-negative)')
                     ui.label(format_euro(ytd_winst, decimals=0)).classes(
-                        'hero-value-positive' if ytd_winst >= 0
-                        else 'hero-value-negative')
+                        'hero-value').style(f'color: {winst_color}')
                     if vorig_winst and vorig_winst > 0:
                         ui.label(
                             f'vs {format_euro(vorig_winst, decimals=0)} vorig jaar'
@@ -452,10 +457,12 @@ async def dashboard_page():
                 docs_total = len(AANGIFTE_DOCS)
                 docs_pct = round(
                     docs_done / docs_total * 100) if docs_total else 0
+                # Click → /aangifte (documenten-detail leeft daar — niet /werkdagen)
                 with ui.card().classes('flex-1 q-pa-sm').style(
                         'border-radius: 10px; border: 1px solid var(--border); '
                         'display: flex; align-items: center; gap: 10px; '
-                        'flex-direction: row'):
+                        'flex-direction: row; cursor: pointer') \
+                        .on('click', lambda: ui.navigate.to('/aangifte')):
                     ui.icon('folder_open', size='20px').style(
                         f'color: {"var(--q-positive)" if docs_pct >= 100 else "var(--q-warning)"}')
                     with ui.column().classes('flex-1 gap-0'):
