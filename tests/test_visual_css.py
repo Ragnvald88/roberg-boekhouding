@@ -192,6 +192,7 @@ QUASAR_APPLIED_APP_CLASSES = [
     'alert-icon',       # used on `ui.icon(...)` in pages/dashboard.py
     'alert-link',       # used on `ui.button(...)` in pages/dashboard.py
     'severity-fg',      # used on `ui.icon(...)` + `ui.button(...)` in pages/dashboard.py
+    'settings-card',    # Sprint G — applied to ui.card (= .q-card) in pages/instellingen.py
 ]
 
 
@@ -271,3 +272,43 @@ def test_sprint_f_alert_severity_modifiers_complete():
             f".severity-card{variant} missing vars: {missing}. "
             f"Defined: {defined}. Required: {severity_required}."
         )
+
+
+def test_sprint_g_settings_card_chained_selector():
+    """Sprint G cascade-rule: .settings-card MUST be defined as chained
+    selector .q-card.settings-card (not naked .settings-card) to win from
+    Quasar's unlayered .q-card defaults via specificity + source order.
+
+    Naked .settings-card { ... } would lose to .q-card { background: white }
+    on equal specificity since Quasar declares its defaults later in the
+    cascade. Same lesson as agenda-cell.holiday-marker (Sprint A) and
+    .alert-link (Sprint F).
+    """
+    css = _strip_comments(_extract_css())
+
+    # Naked .settings-card declaration without .q-card prefix would match
+    # this regex; chained .q-card.settings-card would not.
+    naked_pattern = r"(?<![.\w-])\.settings-card\s*\{"
+    naked_matches = re.findall(naked_pattern, css)
+
+    chained_pattern = r"\.q-card\.settings-card\s*\{"
+    chained_matches = re.findall(chained_pattern, css)
+
+    assert chained_matches, (
+        "Sprint G: .settings-card MUST be defined as chained selector "
+        ".q-card.settings-card { ... } in components/layout.py — naked "
+        ".settings-card loses to Quasar's unlayered .q-card defaults."
+    )
+    assert not naked_matches, (
+        f"Sprint G: found naked .settings-card definition(s). Use chained "
+        f"selector .q-card.settings-card { { ... } } instead. Hits: {naked_matches}"
+    )
+
+
+def test_sprint_g_settings_section_defined():
+    """Sprint G: .settings-section MUST be defined in CSS (no chained-
+    selector requirement — applied to plain ui.column, not q-card)."""
+    css = _strip_comments(_extract_css())
+    pattern = r"\.settings-section\s*\{"
+    matches = re.findall(pattern, css)
+    assert matches, ".settings-section selector missing in components/layout.py"

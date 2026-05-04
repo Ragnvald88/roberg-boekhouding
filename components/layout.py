@@ -444,6 +444,53 @@ body {
 
 /* Sprint F — severity-card */
 .severity-card .severity-fg { color: var(--severity-fg); }
+
+/* === Sprint G — /instellingen redesign (settings-card + settings-section)
+   Defined OUTSIDE @layer components for cascade-safety. .settings-card is
+   applied to ui.card (= .q-card), so chained selector .q-card.settings-card
+   is required to win from Quasar's unlayered .q-card { background: white }.
+   .settings-section sits on a plain ui.column — chained-selector not needed
+   but kept here next to .settings-card for readability. */
+.q-card.settings-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 24px;
+    box-shadow: var(--shadow);
+    margin-bottom: 16px;
+}
+.q-card.settings-card .q-card__section {
+    /* settings-card has its own padding; suppress Quasar's wrapper-pad */
+    padding: 0;
+}
+.q-card.settings-card.is-dirty {
+    /* Subtle visual cue when user has changed inputs but not yet saved */
+    border-left: 3px solid var(--accent);
+}
+.settings-card-title {
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 4px;
+    font-size: 1rem;
+}
+.settings-card-subtitle {
+    color: var(--muted);
+    font-size: 0.875rem;
+    margin-bottom: 16px;
+}
+.settings-section {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: calc(var(--radius) * 0.66);
+    padding: 16px;
+    margin-bottom: 12px;
+}
+.settings-section-title {
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 12px;
+    font-size: 0.95rem;
+}
 ''', shared=True)
 
 # Sprint B: Google Fonts CDN-link voor JetBrains Mono verwijderd —
