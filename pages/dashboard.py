@@ -24,6 +24,7 @@ from components.fiscal_utils import fetch_fiscal_data, extrapoleer_jaaromzet
 from components.shared_ui import year_options
 from fiscal.berekeningen import bereken_volledig
 from fiscal.constants import URENCRITERIUM_DEFAULT
+from services.agenda import get_urencriterium_projectie
 from services.dashboard import compute_belasting_reservering_progress
 
 
@@ -56,17 +57,24 @@ async def dashboard_page():
 
     with ui.column().classes('w-full p-6 max-w-7xl mx-auto gap-6'):
 
-        # Header row: title + shortcuts
-        with ui.row().classes('w-full items-center'):
+        # Header row: title + Quick-actions (Sprint H T2.3 — Acumulus-pattern).
+        # Vervangen 2 grijze flat-knoppen door 3 prominente CTAs (unelevated
+        # color=primary) zodat ze als echte calls-to-action herkenbaar zijn.
+        # + Werkdag → /agenda (Sprint A planning-flow), + Factuur → builder,
+        # + Uitgave → /transacties inbox.
+        with ui.row().classes('w-full items-center gap-2'):
             # Title shows current calendar year (user knows selected jaar via dropdown)
             page_title(f'Overzicht {huidig_jaar}')
             ui.space()
-            ui.button('Werkdag', icon='add',
-                      on_click=lambda: ui.navigate.to('/werkdagen')) \
-                .props('flat color=secondary dense')
-            ui.button('Factuur', icon='add',
-                      on_click=lambda: ui.navigate.to('/facturen')) \
-                .props('flat color=secondary dense')
+            ui.button('+ Werkdag',
+                      on_click=lambda: ui.navigate.to('/agenda')) \
+                .props('unelevated color=primary dense')
+            ui.button('+ Factuur',
+                      on_click=lambda: ui.navigate.to('/facturen?nieuw=1')) \
+                .props('unelevated color=primary dense')
+            ui.button('+ Uitgave',
+                      on_click=lambda: ui.navigate.to('/transacties')) \
+                .props('unelevated color=primary dense')
 
         # Filter bar
         with ui.element('div').classes('page-toolbar w-full'):
@@ -208,10 +216,13 @@ async def dashboard_page():
         jaar = jaar_select.value
 
         # Run all independent DB calls concurrently
+        # NOTE (T2.3): km_data + aangifte_docs blijven in gather() — Uren
+        # wordt nu hero Card 4 (via urencrit_state), maar Km en Documenten
+        # verhuizen pas in T4b naar inzicht-grid. Niet alvast verwijderen.
         (kpis, kpis_vorig, omzet_huidig, omzet_vorig, kosten_per_cat,
          openstaande, ongefact, km_data,
          ib_resultaat, fp, va_data, aangifte_docs,
-         health_alerts) = await asyncio.gather(
+         health_alerts, urencrit_state) = await asyncio.gather(
             get_kpis(DB_PATH, jaar=jaar),
             get_kpis(DB_PATH, jaar=jaar - 1),
             get_omzet_per_maand(DB_PATH, jaar=jaar),
@@ -225,9 +236,8 @@ async def dashboard_page():
             get_va_betalingen(DB_PATH, jaar),
             get_aangifte_documenten(DB_PATH, jaar),
             get_health_alerts(DB_PATH, jaar=jaar),
+            get_urencriterium_projectie(DB_PATH, jaar),
         )
-
-        uren_criterium = int(fp.urencriterium) if fp else URENCRITERIUM_DEFAULT
 
         # For YoY delta: compare exact same calendar period
         huidig_jaar = date.today().year
@@ -253,8 +263,11 @@ async def dashboard_page():
         container.clear()
         with container:
 
+            # Sprint H T2.3: 3-col → 4-col hero-grid (Card 4 = Urencriterium).
+            # Strip-row (Uren/Km/Documenten) is verwijderd; Uren wordt hero,
+            # Km/Documenten verhuizen naar inzicht-grid in T4b.
             with ui.element('div').style(
-                    'display: grid; grid-template-columns: repeat(3, 1fr); '
+                    'display: grid; grid-template-columns: repeat(4, 1fr); '
                     'gap: 20px; align-items: stretch'):
 
                 # Card 1: Bruto omzet
@@ -439,69 +452,49 @@ async def dashboard_page():
                         ui.label('Geen gegevens').classes(
                             'context-text').style('margin-top: 8px')
 
-            with ui.row().classes('w-full gap-3'):
-                # Uren
-                uren = kpis.get('uren', 0)
-                with ui.card().classes('flex-1 q-pa-sm').style(
-                        'border-radius: 10px; border: 1px solid var(--border); '
-                        'display: flex; align-items: center; gap: 10px; '
-                        'flex-direction: row; cursor: pointer').on(
-                        'click', lambda: ui.navigate.to('/werkdagen')):
-                    ui.icon('schedule', size='20px').style('color: var(--accent)')
-                    with ui.row().classes('items-baseline gap-1'):
-                        ui.label(
-                            f'{uren:,.0f} / {uren_criterium:,} uur'.replace(',', '.')
-                        ).classes('strip-value')
-                        uren_pct = uren / uren_criterium * 100 if uren_criterium else 0
-                        color = 'text-positive' if uren_pct >= 100 else 'text-grey-6'
-                        with ui.element('span').classes(
-                                f'text-caption {color}'):
-                            ui.label(f'({uren_pct:.0f}% urencriterium)')
-                            ui.tooltip(
-                                'Exclusief achterwacht (urennorm=0)')
+                # Card 4: Urencriterium-projectie (Sprint H T2.3 — was strip-card,
+                # nu hero). Toont "huidig / target" met "bij dit tempo: prognose
+                # eind van jaar". Pace-color signaleert: groen op tempo (≥105%
+                # target), amber krap (≥target), rood niet op tempo.
+                # Sprint A's UrencriteriumState velden: confirmed_uren (YTD +
+                # ingeplande future, urennorm=1), expected_uren_remainder
+                # (patterns vanaf morgen tot jaareinde, exclude ZERO_UREN/
+                # ACHTERWACHT), target (1225 default of fp.urencriterium).
+                # Prognose = confirmed + expected_remainder (= will_make basis).
+                huidig_uren = urencrit_state.confirmed_uren
+                target_uren = urencrit_state.target
+                prognose_uren = (urencrit_state.confirmed_uren
+                                 + urencrit_state.expected_uren_remainder)
 
-                # Km (only if > 0)
-                km = km_data.get('km', 0) if km_data else 0
-                km_bedrag = km_data.get('vergoeding', 0) if km_data else 0
-                if km > 0:
-                    with ui.card().classes('flex-1 q-pa-sm').style(
-                            'border-radius: 10px; border: 1px solid var(--border); '
-                            'display: flex; align-items: center; gap: 10px; '
-                            'flex-direction: row'):
-                        ui.icon('directions_car', size='20px').style(
-                            'color: var(--accent)')
-                        with ui.row().classes('items-baseline gap-1'):
-                            ui.label(f'{km:,.0f} km'.replace(',', '.')).classes(
-                                'strip-value')
-                            ui.label(format_euro(km_bedrag)).classes(
-                                'context-text num')
+                if target_uren > 0 and prognose_uren >= target_uren * 1.05:
+                    pace_color = 'var(--q-positive)'
+                    pace_label = '✓ Op tempo'
+                elif target_uren > 0 and prognose_uren >= target_uren:
+                    pace_color = '#D97706'  # amber
+                    pace_label = '⚠ Krap'
+                else:
+                    pace_color = 'var(--q-negative)'
+                    pace_label = '✕ Niet op tempo'
 
-                # Documenten
-                docs = aangifte_docs
-                docs_done = len({d.documenttype for d in docs})
-                docs_total = len(AANGIFTE_DOCS)
-                docs_pct = round(
-                    docs_done / docs_total * 100) if docs_total else 0
-                # Click → /documenten (standalone page, niet /aangifte tab — die
-                # initialiseert op tab_winst en mist tab-query-param-handling).
-                with ui.card().classes('flex-1 q-pa-sm').style(
-                        'border-radius: 10px; border: 1px solid var(--border); '
-                        'display: flex; align-items: center; gap: 10px; '
-                        'flex-direction: row; cursor: pointer') \
-                        .on('click', lambda: ui.navigate.to('/documenten')):
-                    ui.icon('folder_open', size='20px').style(
-                        f'color: {"var(--q-positive)" if docs_pct >= 100 else "var(--q-warning)"}')
-                    with ui.column().classes('flex-1 gap-0'):
-                        with ui.row().classes(
-                                'w-full justify-between items-baseline'):
-                            ui.label(
-                                f'{docs_done} / {docs_total} documenten'
-                            ).classes('strip-value')
-                            ui.label(f'{docs_pct}%').classes('strip-pct')
-                        ui.linear_progress(
-                            value=min(docs_pct / 100, 1.0), size='3px',
-                            color='positive' if docs_pct >= 100 else 'warning',
-                        ).style('margin-top: 6px')
+                with ui.card().classes('dashboard-hero-tile') \
+                        .style('cursor: pointer') \
+                        .on('click', lambda: ui.navigate.to('/agenda')):
+                    with ui.row().classes(
+                            'w-full justify-between items-center'):
+                        ui.label('Urencriterium').classes('hero-label')
+                        ui.label(pace_label).style(
+                            f'font-size: 11px; font-weight: 600; '
+                            f'color: {pace_color}')
+                    ui.label(
+                        f'{huidig_uren:,.0f} / {target_uren:,.0f}'.replace(',', '.')
+                    ).classes('hero-value')
+                    ui.label(
+                        f'Bij dit tempo: {prognose_uren:,.0f} eind van jaar'
+                        .replace(',', '.')
+                    ).classes('context-text')
+                    ui.tooltip(
+                        'Exclusief achterwacht (urennorm=0). '
+                        'Toekomstig ingeplande werkdagen tellen mee.')
 
             maanden = ['Jan', 'Feb', 'Mrt', 'Apr', 'Mei', 'Jun',
                        'Jul', 'Aug', 'Sep', 'Okt', 'Nov', 'Dec']
