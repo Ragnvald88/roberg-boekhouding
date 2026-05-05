@@ -297,7 +297,10 @@ CREATE TABLE IF NOT EXISTS fiscale_params (
     kia_plateau_eind REAL DEFAULT 0,
     kia_afbouw_eind REAL DEFAULT 0,
     kia_afbouw_pct REAL DEFAULT 0,
-    kia_plateau_bedrag REAL DEFAULT 0
+    kia_plateau_bedrag REAL DEFAULT 0,
+    -- Migration 40 columns (Sprint I VA-tracker)
+    voorlopige_aanslag_ib_termijnen INTEGER NOT NULL DEFAULT 11,
+    voorlopige_aanslag_zvw_termijnen INTEGER NOT NULL DEFAULT 11
 );
 
 CREATE TABLE IF NOT EXISTS bedrijfsgegevens (
@@ -689,6 +692,14 @@ MIGRATIONS = [
     ]),
     (39, "add_bedrijfsgegevens_dashboard_widgets_json", [
         "ALTER TABLE bedrijfsgegevens ADD COLUMN dashboard_widgets_json TEXT NULL",
+    ]),
+    (40, "add_va_termijnen_columns", [
+        # Sprint I T1.1 — VA-tracker hero-tile inputs.
+        # NB: SQLite ALTER TABLE ADD COLUMN CHECK is niet bruikbaar
+        # (vereist full table-rewrite); 1-12 enforcement gebeurt via UI
+        # ui.number(min=1,max=12) + Python-side guard in update_ib_inputs.
+        "ALTER TABLE fiscale_params ADD COLUMN voorlopige_aanslag_ib_termijnen INTEGER NOT NULL DEFAULT 11",
+        "ALTER TABLE fiscale_params ADD COLUMN voorlopige_aanslag_zvw_termijnen INTEGER NOT NULL DEFAULT 11",
     ]),
 ]
 
@@ -2985,9 +2996,11 @@ def _row_to_fiscale_params(r) -> FiscaleParams:
         woz_waarde=r['woz_waarde'] or 0,
         hypotheekrente=r['hypotheekrente'] or 0,
         voorlopige_aanslag_betaald=r['voorlopige_aanslag_betaald'] or 0,
+        voorlopige_aanslag_ib_termijnen=int(_v(r['voorlopige_aanslag_ib_termijnen'], 11)),
         pvv_premiegrondslag=r['pvv_premiegrondslag'] or 0,
         ew_naar_partner=bool(r['ew_naar_partner'] if r['ew_naar_partner'] is not None else 1),
         voorlopige_aanslag_zvw=r['voorlopige_aanslag_zvw'] or 0,
+        voorlopige_aanslag_zvw_termijnen=int(_v(r['voorlopige_aanslag_zvw_termijnen'], 11)),
         partner_bruto_loon=r['partner_bruto_loon'] or 0,
         partner_loonheffing=r['partner_loonheffing'] or 0,
         arbeidskorting_brackets=r['arbeidskorting_brackets'] or '',
@@ -3031,6 +3044,26 @@ async def get_all_fiscale_params(db_path: Path = DB_PATH) -> list[FiscaleParams]
         return [_row_to_fiscale_params(r) for r in rows]
 
 
+def _validate_va_termijnen(kwargs: dict) -> None:
+    """Application-level guard voor VA-termijn-velden (Sprint I T1.1).
+
+    DB-side CHECK is niet beschikbaar (SQLite ALTER ADD COLUMN CHECK
+    onbruikbaar). Daarom gevalideerd in beide CRUD-paden:
+    upsert_fiscale_params + update_ib_inputs. Eis: 1-12 èn integer
+    (geen 1.5 / True / False). Lege/ontbrekende kwargs slaan we over —
+    preserve-pad handelt die af.
+    """
+    for key in ('voorlopige_aanslag_ib_termijnen',
+                'voorlopige_aanslag_zvw_termijnen'):
+        if key not in kwargs:
+            continue
+        v = kwargs[key]
+        if v is None:
+            continue
+        if isinstance(v, bool) or not isinstance(v, int) or not (1 <= v <= 12):
+            raise ValueError(f"{key} moet een integer 1-12 zijn, kreeg {v!r}")
+
+
 async def upsert_fiscale_params(db_path: Path = DB_PATH, **kwargs) -> None:
     # Year-lock guard (A6): block full upserts on a definitief jaar.
     # Exception: if caller is passing only jaarafsluiting_status (plus jaar),
@@ -3041,6 +3074,7 @@ async def upsert_fiscale_params(db_path: Path = DB_PATH, **kwargs) -> None:
     jaar = kwargs.get('jaar')
     if jaar is not None and (set(kwargs) - {'jaar', 'jaarafsluiting_status'}):
         await assert_year_writable(db_path, jaar)
+    _validate_va_termijnen(kwargs)
     async with get_db_ctx(db_path) as conn:
         # Preserve IB-input, partner, box3 input, balans, and ew_naar_partner when overwriting from Instellingen
         cur = await conn.execute(
@@ -3057,7 +3091,10 @@ async def upsert_fiscale_params(db_path: Path = DB_PATH, **kwargs) -> None:
             # fields when the caller does not pass them, instead of
             # silently overwriting an existing configured value with 0.
             "kia_drempel_per_item, kia_plateau_eind, kia_afbouw_eind, "
-            "kia_afbouw_pct, kia_plateau_bedrag "
+            "kia_afbouw_pct, kia_plateau_bedrag, "
+            # Sprint I T1.1 — VA termijnen preserveren wanneer Instellingen
+            # ze niet meegeeft (Instellingen-form gaat via update_ib_inputs).
+            "voorlopige_aanslag_ib_termijnen, voorlopige_aanslag_zvw_termijnen "
             "FROM fiscale_params WHERE jaar = ?",
             (kwargs['jaar'],))
         existing = await cur.fetchone()
@@ -3084,10 +3121,12 @@ async def upsert_fiscale_params(db_path: Path = DB_PATH, **kwargs) -> None:
                 ew_naar_partner, lijfrente_premie,
                 balans_bank_saldo, balans_crediteuren,
                 balans_overige_vorderingen, balans_overige_schulden,
-                jaarafsluiting_status)
+                jaarafsluiting_status,
+                voorlopige_aanslag_ib_termijnen, voorlopige_aanslag_zvw_termijnen)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                       ?, ?)
                ON CONFLICT(jaar) DO UPDATE SET
                     zelfstandigenaftrek = excluded.zelfstandigenaftrek,
                     startersaftrek = excluded.startersaftrek,
@@ -3147,7 +3186,9 @@ async def upsert_fiscale_params(db_path: Path = DB_PATH, **kwargs) -> None:
                     balans_crediteuren = excluded.balans_crediteuren,
                     balans_overige_vorderingen = excluded.balans_overige_vorderingen,
                     balans_overige_schulden = excluded.balans_overige_schulden,
-                    jaarafsluiting_status = excluded.jaarafsluiting_status""",
+                    jaarafsluiting_status = excluded.jaarafsluiting_status,
+                    voorlopige_aanslag_ib_termijnen = excluded.voorlopige_aanslag_ib_termijnen,
+                    voorlopige_aanslag_zvw_termijnen = excluded.voorlopige_aanslag_zvw_termijnen""",
             (kwargs['jaar'], kwargs['zelfstandigenaftrek'], kwargs.get('startersaftrek'),
              kwargs['mkb_vrijstelling_pct'], kwargs['kia_ondergrens'],
              kwargs['kia_bovengrens'], kwargs['kia_pct'],
@@ -3216,7 +3257,17 @@ async def upsert_fiscale_params(db_path: Path = DB_PATH, **kwargs) -> None:
              existing['balans_crediteuren'] if existing else 0,
              existing['balans_overige_vorderingen'] if existing else 0,
              existing['balans_overige_schulden'] if existing else 0,
-             existing['jaarafsluiting_status'] if existing else 'concept')
+             existing['jaarafsluiting_status'] if existing else 'concept',
+             # Sprint I T1.1 — VA termijnen: caller-supplied (niet-None) of
+             # preserve-existing of default 11 (op first-write). Expliciete
+             # None in kwargs valt terug op existing/default — kolom is
+             # NOT NULL, dus None mag NOOIT door naar de tuple.
+             (kwargs.get('voorlopige_aanslag_ib_termijnen')
+              if kwargs.get('voorlopige_aanslag_ib_termijnen') is not None
+              else (existing['voorlopige_aanslag_ib_termijnen'] if existing else 11)),
+             (kwargs.get('voorlopige_aanslag_zvw_termijnen')
+              if kwargs.get('voorlopige_aanslag_zvw_termijnen') is not None
+              else (existing['voorlopige_aanslag_zvw_termijnen'] if existing else 11)))
         )
         await conn.commit()
 
@@ -3226,19 +3277,53 @@ async def update_ib_inputs(db_path: Path = DB_PATH, jaar: int = 0,
                            hypotheekrente: float = 0,
                            voorlopige_aanslag_betaald: float = 0,
                            voorlopige_aanslag_zvw: float = 0,
-                           lijfrente_premie: float = 0) -> None:
-    """Update only the IB-input columns for a specific year."""
+                           lijfrente_premie: float = 0,
+                           voorlopige_aanslag_ib_termijnen: int | None = None,
+                           voorlopige_aanslag_zvw_termijnen: int | None = None) -> None:
+    """Update only the IB-input columns for a specific year.
+
+    Termijnen-kwargs zijn None-default zodat callers die ze niet meegeven
+    de bestaande waarden niet overschrijven. Validatie 1-12 op application
+    level (CHECK in DB ontbreekt; ALTER ... ADD COLUMN CHECK is SQLite-
+    onbruikbaar).
+    """
     await assert_year_writable(db_path, jaar)
+    _validate_va_termijnen({
+        'voorlopige_aanslag_ib_termijnen': voorlopige_aanslag_ib_termijnen,
+        'voorlopige_aanslag_zvw_termijnen': voorlopige_aanslag_zvw_termijnen,
+    })
     async with get_db_ctx(db_path) as conn:
-        await conn.execute(
-            """UPDATE fiscale_params
-               SET aov_premie = ?, woz_waarde = ?,
-                   hypotheekrente = ?, voorlopige_aanslag_betaald = ?,
-                   voorlopige_aanslag_zvw = ?, lijfrente_premie = ?
-               WHERE jaar = ?""",
-            (aov_premie, woz_waarde, hypotheekrente,
-             voorlopige_aanslag_betaald, voorlopige_aanslag_zvw,
-             lijfrente_premie, jaar))
+        if voorlopige_aanslag_ib_termijnen is None and voorlopige_aanslag_zvw_termijnen is None:
+            await conn.execute(
+                """UPDATE fiscale_params
+                   SET aov_premie = ?, woz_waarde = ?,
+                       hypotheekrente = ?, voorlopige_aanslag_betaald = ?,
+                       voorlopige_aanslag_zvw = ?, lijfrente_premie = ?
+                   WHERE jaar = ?""",
+                (aov_premie, woz_waarde, hypotheekrente,
+                 voorlopige_aanslag_betaald, voorlopige_aanslag_zvw,
+                 lijfrente_premie, jaar))
+        else:
+            # Read-modify-write voor termijnen om None-default te respecteren
+            cur = await conn.execute(
+                "SELECT voorlopige_aanslag_ib_termijnen, voorlopige_aanslag_zvw_termijnen "
+                "FROM fiscale_params WHERE jaar = ?", (jaar,))
+            existing = await cur.fetchone()
+            ib_t = (voorlopige_aanslag_ib_termijnen if voorlopige_aanslag_ib_termijnen is not None
+                    else (existing['voorlopige_aanslag_ib_termijnen'] if existing else 11))
+            zvw_t = (voorlopige_aanslag_zvw_termijnen if voorlopige_aanslag_zvw_termijnen is not None
+                     else (existing['voorlopige_aanslag_zvw_termijnen'] if existing else 11))
+            await conn.execute(
+                """UPDATE fiscale_params
+                   SET aov_premie = ?, woz_waarde = ?,
+                       hypotheekrente = ?, voorlopige_aanslag_betaald = ?,
+                       voorlopige_aanslag_zvw = ?, lijfrente_premie = ?,
+                       voorlopige_aanslag_ib_termijnen = ?,
+                       voorlopige_aanslag_zvw_termijnen = ?
+                   WHERE jaar = ?""",
+                (aov_premie, woz_waarde, hypotheekrente,
+                 voorlopige_aanslag_betaald, voorlopige_aanslag_zvw,
+                 lijfrente_premie, ib_t, zvw_t, jaar))
         await conn.commit()
 
 

@@ -155,13 +155,20 @@ class FiscaleParams:
     aov_premie: float = 0.0
     woz_waarde: float = 0.0
     hypotheekrente: float = 0.0
+    # NB: 'voorlopige_aanslag_betaald' bevat het BD-beschikkingsbedrag IB
+    # (de jaar-verplichting), NIET wat is betaald. Veldnaam is misleidend
+    # voor historische redenen — Sprint K kan renamen via migratie. Voor
+    # /dashboard VA-tracker (Sprint I) wordt dit veld lokaal gealiased
+    # naar `ib_verplicht` in compute_va_tracker.
     voorlopige_aanslag_betaald: float = 0.0
+    voorlopige_aanslag_ib_termijnen: int = 11
     # PVV premiegrondslag (2024: 38098, 2025+: = schijf1_grens)
     pvv_premiegrondslag: float = 0.0
     # Eigen woning toerekening
     ew_naar_partner: bool = True  # Default: allocate to partner (Boekhouder practice)
     # Voorlopige aanslag ZVW (apart van IB)
     voorlopige_aanslag_zvw: float = 0.0
+    voorlopige_aanslag_zvw_termijnen: int = 11
     # Partner inkomen (voor verzamelinkomen aangifte)
     partner_bruto_loon: float = 0.0
     partner_loonheffing: float = 0.0

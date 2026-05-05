@@ -19,6 +19,7 @@ from database import (
     set_afschrijving_override, delete_afschrijving_override,
     get_db_ctx, get_va_betalingen, get_openstaande_facturen,
     update_factuur_status, update_uitgave,
+    upsert_fiscale_params, get_fiscale_params, update_ib_inputs,
 )
 
 
@@ -1984,4 +1985,139 @@ async def test_get_omzet_per_maand_tot_datum_clamps_max_datum_to_jaar_end(db):
         db, jaar=2025, max_datum='2026-01-15')  # te hoge cutoff
     assert result[0] == 100, (
         "Januari-2025 = 100; 2026-factuur mag niet meegeteld worden")
+
+
+# === Sprint I T1.1: migratie 40 — VA termijn-kolommen ===
+
+def _minimal_fiscale_params_kwargs(jaar: int) -> dict:
+    """Minimal kwargs that satisfy upsert_fiscale_params required keys.
+
+    Used in Sprint I T1.1 tests to verify VA-termijnen preservation
+    without coupling tests to fiscal-data semantics.
+    """
+    return dict(
+        jaar=jaar,
+        zelfstandigenaftrek=0, mkb_vrijstelling_pct=0,
+        kia_ondergrens=0, kia_bovengrens=0, kia_pct=0,
+        km_tarief=0.23, schijf1_grens=0, schijf1_pct=0,
+        schijf2_grens=0, schijf2_pct=0, schijf3_pct=0,
+        ahk_max=0, ahk_afbouw_pct=0, ahk_drempel=0, ak_max=0,
+        zvw_pct=0, zvw_max_grondslag=0, repr_aftrek_pct=80,
+        ew_forfait_pct=0.35, villataks_grens=1_350_000,
+        wet_hillen_pct=0, urencriterium=1225,
+        pvv_premiegrondslag=0, arbeidskorting_brackets='',
+        pvv_aow_pct=17.90, pvv_anw_pct=0.10, pvv_wlz_pct=9.65,
+        box3_heffingsvrij_vermogen=57000,
+        box3_rendement_bank_pct=1.03, box3_rendement_overig_pct=6.17,
+        box3_rendement_schuld_pct=2.46, box3_tarief_pct=36,
+        box3_drempel_schulden=3700,
+    )
+
+
+@pytest.mark.asyncio
+async def test_migratie_40_va_termijnen_default_11(db):
+    """Migratie 40 voegt 2 termijn-kolommen toe met default 11."""
+    async with get_db_ctx(db) as conn:
+        cur = await conn.execute("PRAGMA table_info(fiscale_params)")
+        cols = {row['name']: row for row in await cur.fetchall()}
+    assert 'voorlopige_aanslag_ib_termijnen' in cols
+    assert 'voorlopige_aanslag_zvw_termijnen' in cols
+    assert int(cols['voorlopige_aanslag_ib_termijnen']['dflt_value']) == 11
+    assert int(cols['voorlopige_aanslag_zvw_termijnen']['dflt_value']) == 11
+
+
+@pytest.mark.asyncio
+async def test_update_ib_inputs_preserves_va_termijnen(db):
+    """update_ib_inputs zonder termijnen-kwargs laat termijn-velden ongemoeid."""
+    await upsert_fiscale_params(
+        db_path=db,
+        **_minimal_fiscale_params_kwargs(2026),
+        voorlopige_aanslag_ib_termijnen=8,
+        voorlopige_aanslag_zvw_termijnen=12,
+    )
+    await update_ib_inputs(db_path=db, jaar=2026, voorlopige_aanslag_betaald=9600)
+    fp = await get_fiscale_params(db, 2026)
+    assert fp.voorlopige_aanslag_ib_termijnen == 8
+    assert fp.voorlopige_aanslag_zvw_termijnen == 12
+
+
+@pytest.mark.asyncio
+async def test_upsert_fiscale_params_preserves_va_termijnen(db):
+    """upsert zonder termijnen-kwargs leest existing en behoudt waarde."""
+    await upsert_fiscale_params(
+        db_path=db,
+        **_minimal_fiscale_params_kwargs(2026),
+        voorlopige_aanslag_ib_termijnen=6,
+        voorlopige_aanslag_zvw_termijnen=10,
+    )
+    # Re-upsert zonder termijnen-kwargs — moet preserve'n
+    await upsert_fiscale_params(
+        db_path=db,
+        **_minimal_fiscale_params_kwargs(2026),
+    )
+    fp = await get_fiscale_params(db, 2026)
+    assert fp.voorlopige_aanslag_ib_termijnen == 6
+    assert fp.voorlopige_aanslag_zvw_termijnen == 10
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_value", [0, 13, 1.5, True, False])
+async def test_upsert_fiscale_params_rejects_bad_va_termijnen(db, bad_value):
+    """upsert weigert termijnen buiten 1-12 of niet-integer (incl. bool)."""
+    with pytest.raises(ValueError, match="termijnen moet een integer 1-12"):
+        await upsert_fiscale_params(
+            db_path=db,
+            **_minimal_fiscale_params_kwargs(2026),
+            voorlopige_aanslag_ib_termijnen=bad_value,
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_value", [0, 13, 1.5, True])
+async def test_update_ib_inputs_rejects_bad_va_termijnen(db, bad_value):
+    """update_ib_inputs weigert termijnen buiten 1-12 of niet-integer."""
+    await upsert_fiscale_params(
+        db_path=db, **_minimal_fiscale_params_kwargs(2026))
+    with pytest.raises(ValueError, match="termijnen moet een integer 1-12"):
+        await update_ib_inputs(
+            db_path=db, jaar=2026,
+            voorlopige_aanslag_ib_termijnen=bad_value)
+
+
+@pytest.mark.asyncio
+async def test_upsert_fiscale_params_explicit_none_preserves_va_termijnen(db):
+    """Expliciete None in kwargs gedraagt zich als preserve, NIET als NULL-write.
+
+    Regressie-guard: zonder deze fallback zou de NOT NULL kolom op NULL gezet
+    worden via kwargs.get(..., default) (None is een geldige value in kwargs).
+    """
+    await upsert_fiscale_params(
+        db_path=db,
+        **_minimal_fiscale_params_kwargs(2026),
+        voorlopige_aanslag_ib_termijnen=5,
+        voorlopige_aanslag_zvw_termijnen=9,
+    )
+    await upsert_fiscale_params(
+        db_path=db,
+        **_minimal_fiscale_params_kwargs(2026),
+        voorlopige_aanslag_ib_termijnen=None,
+        voorlopige_aanslag_zvw_termijnen=None,
+    )
+    fp = await get_fiscale_params(db, 2026)
+    assert fp.voorlopige_aanslag_ib_termijnen == 5
+    assert fp.voorlopige_aanslag_zvw_termijnen == 9
+
+
+@pytest.mark.asyncio
+async def test_update_ib_inputs_writes_va_termijnen(db):
+    """update_ib_inputs roundtrip: termijnen kwargs persisteren."""
+    await upsert_fiscale_params(
+        db_path=db, **_minimal_fiscale_params_kwargs(2026))
+    await update_ib_inputs(
+        db_path=db, jaar=2026,
+        voorlopige_aanslag_ib_termijnen=4,
+        voorlopige_aanslag_zvw_termijnen=7)
+    fp = await get_fiscale_params(db, 2026)
+    assert fp.voorlopige_aanslag_ib_termijnen == 4
+    assert fp.voorlopige_aanslag_zvw_termijnen == 7
 
