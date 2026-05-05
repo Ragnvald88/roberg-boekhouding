@@ -335,3 +335,193 @@ def _seasonal_action_rows(today: date) -> list[ActionRow]:
             metadata={'deadline': deadline.isoformat()},
         ))
     return rows
+
+
+# === VA-tracker (Sprint I) ============================================
+
+@dataclass(frozen=True)
+class VATrackLine:
+    """Per-soort (IB of ZVW) voortgang van de voorlopige aanslag.
+
+    `verplicht` = BD-beschikkingsbedrag voor het jaar (alias voor het
+    misleidend genaamde `voorlopige_aanslag_betaald` resp. `_zvw` veld
+    in fiscale_params — zie models.FiscaleParams comment).
+
+    `betaald` + `betaalde_termijnen` komen uit get_va_betalingen op basis
+    van bankdata + kenmerk-positie [10:12] split.
+
+    `achterstand` is in EUR maar **termijn-count-based**:
+    `max(expected_terms - betaalde_termijnen, 0) × termijnbedrag`. Niet
+    EUR-based (`verwacht - betaald`) — dat zou off-schedule lump-sum
+    payments per ongeluk als "op koers" zien terwijl er feitelijk een
+    termijn-vervaldatum is gemist (Codex round-3 motivatie: BD rekent
+    termijn-vervaltermijnen, niet EUR-totalen).
+
+    `overbetaald` is een @property — derive uit betaald/verplicht zonder
+    state. Voorkomt inconsistentie als velden ooit handmatig worden gezet.
+    """
+    soort: str  # 'IB' | 'ZVW'
+    verplicht: float
+    betaald: float
+    betaalde_termijnen: int
+    totaal_termijnen: int
+    termijnbedrag: float
+    resterend: float
+    achterstand: float
+
+    @property
+    def overbetaald(self) -> float:
+        return max(self.betaald - self.verplicht, 0.0)
+
+
+@dataclass(frozen=True)
+class VATrackSummary:
+    """Combined IB + ZVW tracker-state voor /dashboard tile."""
+    ib: VATrackLine
+    zvw: VATrackLine
+    totaal_verplicht: float
+    totaal_betaald: float          # excl. unmatched (na BREAKING contract)
+    totaal_resterend: float
+    totaal_achterstand: float
+    unmatched_betaald: float       # bankdata zonder bruikbaar kenmerk
+    unmatched_termijnen: int
+    has_bank_data: bool
+    bankdata_tot_datum: date | None
+    status: str                    # geen_data|geen_beschikking|bij|achter|voldaan
+    has_overbetaald: bool          # attribute, niet status (line-first ordering)
+    volgende_termijn_datum: date | None  # None bij voldaan/closed/geen-data
+
+
+def _expected_terms_elapsed(termijnen: int, today: date, jaar: int) -> int:
+    """Aantal termijnen dat tot vandaag betaald had moeten zijn.
+
+    Convention: aantal termijnen N impliceert eerste-termijn-maand =
+    13 - N (N=11 → feb-start, N=12 → jan-start). Onze heuristiek, geen
+    BD-bron-waarheid; documenteren in CLAUDE.md (T2.1).
+    """
+    if today.year < jaar:
+        return 0
+    if today.year > jaar:
+        return termijnen
+    eerste_maand = 13 - termijnen
+    return min(termijnen, max(0, today.month - eerste_maand + 1))
+
+
+def _last_day_of_month(year: int, month: int) -> date:
+    """Laatste kalenderdag van de maand (BD betaalt typisch ultimo)."""
+    if month == 12:
+        return date(year, 12, 31)
+    next_month_first = date(year, month + 1, 1)
+    return date.fromordinal(next_month_first.toordinal() - 1)
+
+
+def compute_va_tracker(
+    *,
+    jaar: int,
+    va_data: dict,
+    ib_verplicht: float,
+    zvw_verplicht: float,
+    ib_termijnen: int = 11,
+    zvw_termijnen: int = 11,
+    today: date,
+) -> VATrackSummary:
+    """Pure helper voor VA-tracker tile op /dashboard.
+
+    Status-rangschikking is line-first (Codex round-3 catch — voorkomt
+    dat IB-overbetaling een ZVW-achterstand maskeert).
+    """
+    def _clamp_terms(n: int) -> int:
+        return min(12, max(1, int(n or 11)))
+
+    def _line(soort: str, verplicht: float, betaald: float,
+              betaalde_termijnen: int, termijnen: int) -> VATrackLine:
+        termijnen = _clamp_terms(termijnen)
+        verplicht = max(0.0, float(verplicht or 0))
+        betaald = max(0.0, float(betaald or 0))
+        bet_n = int(betaalde_termijnen or 0)
+        termijnbedrag = verplicht / termijnen if verplicht > 0 else 0.0
+        expected_n = _expected_terms_elapsed(termijnen, today, jaar)
+        # Achterstand is termijn-count-based (not EUR-based): off-schedule
+        # payments — bv. 1 lump-sum bedrag — kunnen anders per ongeluk
+        # achterstand maskeren (Codex round-3 motivatie). Termijnen-diff
+        # is wat de Belastingdienst zelf rekent voor vervaldatum-achterstand.
+        missing_terms = max(expected_n - bet_n, 0)
+        return VATrackLine(
+            soort=soort,
+            verplicht=verplicht,
+            betaald=betaald,
+            betaalde_termijnen=bet_n,
+            totaal_termijnen=termijnen,
+            termijnbedrag=termijnbedrag,
+            resterend=max(verplicht - betaald, 0.0),
+            achterstand=missing_terms * termijnbedrag,
+        )
+
+    ib = _line('IB', ib_verplicht, va_data.get('ib_betaald', 0),
+               va_data.get('ib_termijnen', 0), ib_termijnen)
+    zvw = _line('ZVW', zvw_verplicht, va_data.get('zvw_betaald', 0),
+                va_data.get('zvw_termijnen', 0), zvw_termijnen)
+
+    totaal_verplicht = ib.verplicht + zvw.verplicht
+    totaal_betaald = ib.betaald + zvw.betaald
+    totaal_resterend = ib.resterend + zvw.resterend
+    totaal_achterstand = ib.achterstand + zvw.achterstand
+    has_bank_data = bool(va_data.get('has_bank_data'))
+    has_input = totaal_verplicht > 0
+
+    # Status — line-first ordering
+    if not has_input and not has_bank_data:
+        status = 'geen_data'
+    elif not has_input and has_bank_data:
+        status = 'geen_beschikking'
+    elif any(line.achterstand > 1 for line in [ib, zvw]):
+        status = 'achter'
+    elif totaal_resterend == 0 and has_input:
+        status = 'voldaan'
+    else:
+        status = 'bij'
+
+    # has_overbetaald detecteert ELKE lijn met overbetaling — ook als
+    # totaal_resterend > 0 (bv. IB overbetaald + ZVW nog open). Codex
+    # round-3 line-first principle: nooit een overbetaling verbergen
+    # achter een totaal-aggregate.
+    has_overbetaald = any(line.overbetaald > 0 for line in [ib, zvw])
+
+    # Volgende termijn — alleen bij open verplichting (Codex D-1)
+    volgende: date | None = None
+    if status in ('achter', 'bij') and totaal_resterend > 0:
+        # Voor 'achter': toon oudste onbetaalde termijn (overdue date) —
+        # antwoord op "wanneer had ik moeten betalen?". Voor 'bij': toon
+        # eerstvolgende toekomstige termijn (Codex round-2 finding 2).
+        candidates: list[date] = []
+        for line in (ib, zvw):
+            if line.resterend > 0 and line.verplicht > 0:
+                eerste_maand = 13 - line.totaal_termijnen
+                if status == 'achter':
+                    next_idx = line.betaalde_termijnen + 1
+                else:  # 'bij'
+                    expected = _expected_terms_elapsed(line.totaal_termijnen,
+                                                        today, jaar)
+                    next_idx = max(line.betaalde_termijnen, expected) + 1
+                if next_idx > line.totaal_termijnen:
+                    continue
+                next_maand = eerste_maand + next_idx - 1
+                if 1 <= next_maand <= 12:
+                    candidates.append(_last_day_of_month(jaar, next_maand))
+        if candidates:
+            volgende = min(candidates)
+
+    return VATrackSummary(
+        ib=ib, zvw=zvw,
+        totaal_verplicht=totaal_verplicht,
+        totaal_betaald=totaal_betaald,
+        totaal_resterend=totaal_resterend,
+        totaal_achterstand=totaal_achterstand,
+        unmatched_betaald=float(va_data.get('unmatched_betaald', 0) or 0),
+        unmatched_termijnen=int(va_data.get('unmatched_termijnen', 0) or 0),
+        has_bank_data=has_bank_data,
+        bankdata_tot_datum=va_data.get('bankdata_tot_datum'),
+        status=status,
+        has_overbetaald=has_overbetaald,
+        volgende_termijn_datum=volgende,
+    )
