@@ -3537,6 +3537,94 @@ async def get_werkdagen_ongefactureerd_summary(
         return {'aantal': r['aantal'], 'bedrag': r['bedrag']}
 
 
+async def get_factuur_aging_buckets(
+    db_path: Path = DB_PATH, jaar: int = 2026,
+) -> dict:
+    """Returns aging-buckets voor openstaande facturen (status='verstuurd').
+
+    Sprint H T3.3 — gebruikt door action-inbox (T3.4) om verlopen facturen
+    in aging-tranches te tonen met [Stuur herinnering]-actie.
+
+    Buckets count days OVERDUE (vervaldatum vs today). Vervaldatum =
+    factuur.datum + 14 days (Dutch convention; not stored as column).
+
+    - overdue_30: 0-29 days overdue
+    - overdue_60: 30-59 days overdue
+    - overdue_90: 60-89 days overdue
+    - overdue_90_plus: ≥90 days overdue
+
+    Returns: {bucket_key: list[dict]} met velden id, nummer, klant_naam,
+    totaal_bedrag, datum, vervaldatum, days_overdue. Sorted DESC binnen
+    elke bucket (oudste eerst).
+    """
+    today_iso = _today_iso()
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            """
+            SELECT f.id, f.nummer, k.naam AS klant_naam, f.totaal_bedrag,
+                   f.datum,
+                   date(f.datum, '+14 days') AS vervaldatum,
+                   CAST(julianday(?) - julianday(date(f.datum, '+14 days'))
+                        AS INTEGER) AS days_overdue
+            FROM facturen f
+            JOIN klanten k ON f.klant_id = k.id
+            WHERE f.status = 'verstuurd'
+              AND f.datum >= ? AND f.datum < ?
+              AND date(f.datum, '+14 days') < ?
+            ORDER BY days_overdue DESC
+            """,
+            (today_iso, f'{jaar}-01-01', f'{jaar+1}-01-01', today_iso),
+        )
+        rows = await cur.fetchall()
+
+    buckets = {
+        'overdue_30': [], 'overdue_60': [],
+        'overdue_90': [], 'overdue_90_plus': [],
+    }
+    for r in rows:
+        days = int(r['days_overdue'])
+        row_dict = dict(r)
+        if days < 30:
+            buckets['overdue_30'].append(row_dict)
+        elif days < 60:
+            buckets['overdue_60'].append(row_dict)
+        elif days < 90:
+            buckets['overdue_90'].append(row_dict)
+        else:
+            buckets['overdue_90_plus'].append(row_dict)
+    return buckets
+
+
+async def get_concept_facturen_stale(
+    db_path: Path = DB_PATH, jaar: int = 2026, days: int = 14,
+) -> list[dict]:
+    """Returns concept-facturen waarvan datum > N dagen geleden ligt.
+
+    Sprint H T3.3 — gebruikt door action-inbox (T3.4) om vergeten concepten
+    te tonen met [Verstuur]-actie. Default-threshold 14 dagen matcht
+    `get_health_alerts` concept-warn-cutoff.
+
+    Returns: list[dict] met velden id, nummer, klant_naam, totaal_bedrag,
+    datum. Sorted ASC op datum (oudste eerst — meest urgent boven).
+    """
+    cutoff = (_date.today() - _timedelta(days=days)).isoformat()
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            """
+            SELECT f.id, f.nummer, k.naam AS klant_naam, f.totaal_bedrag,
+                   f.datum
+            FROM facturen f
+            JOIN klanten k ON f.klant_id = k.id
+            WHERE f.status = 'concept'
+              AND f.datum >= ? AND f.datum < ?
+              AND f.datum < ?
+            ORDER BY f.datum ASC
+            """,
+            (f'{jaar}-01-01', f'{jaar+1}-01-01', cutoff),
+        )
+        return [dict(r) for r in await cur.fetchall()]
+
+
 async def get_health_alerts(db_path: Path = DB_PATH, jaar: int = 2026) -> list[dict]:
     """Return actionable health alerts for the dashboard.
 
