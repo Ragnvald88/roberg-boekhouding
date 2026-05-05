@@ -16,6 +16,12 @@ from database import (
     get_all_fiscale_params, upsert_fiscale_params,
     get_bedrijfsgegevens, upsert_bedrijfsgegevens, get_db_ctx, DB_PATH,
     YearLockedError,
+    get_dashboard_widgets_config, set_dashboard_widgets_config,
+)
+from services.dashboard import (
+    DEFAULT_WIDGETS,
+    DASHBOARD_CONFIG_SCHEMA_VERSION,
+    load_dashboard_widgets_config,
 )
 
 
@@ -266,6 +272,7 @@ async def instellingen_page():
             tab_bedrijf = ui.tab('Bedrijfsgegevens')
             tab_fiscaal = ui.tab('Fiscale parameters')
             tab_backup = ui.tab('Backup')
+            tab_dashboard = ui.tab('Dashboard')  # Sprint H T4a.3
 
         with ui.tab_panels(tabs, value=tab_bedrijf).classes('w-full'):
 
@@ -1110,3 +1117,75 @@ async def instellingen_page():
                             ui.button(
                                 icon='content_copy', on_click=copy_path,
                             ).props('flat dense round').tooltip('Kopieer pad')
+
+            with ui.tab_panel(tab_dashboard):
+                dashboard_container = ui.column().classes('w-full')
+
+                async def refresh_dashboard_tab():
+                    dashboard_container.clear()
+                    raw_config = await get_dashboard_widgets_config(DB_PATH)
+                    config = load_dashboard_widgets_config(raw_config)
+
+                    with dashboard_container:
+                        with ui.card().classes('settings-card'):
+                            ui.label('Inzicht-tegels').classes(
+                                'settings-card-title')
+                            ui.label(
+                                'Kies welke tegels je in zone 3 '
+                                '(inzicht-grid) wilt zien. Maximaal 6 '
+                                'tegels tegelijk zichtbaar.'
+                            ).classes('settings-card-subtitle')
+
+                            widget_labels = {
+                                'I-1': 'Cumulatieve omzet (YoY)',
+                                'I-2': 'Kosten breakdown donut',
+                                'I-3': 'SPH-pensioen status',
+                                'I-4': '6-weken omzet-prognose',
+                                'I-5': 'Top 5 klanten + concentratie',
+                                'I-6': 'Aangifte-documenten checklist',
+                                'I-7': 'Cash-positie + flow YTD',
+                                'I-8': 'Tax-calendar (alle deadlines)',
+                            }
+
+                            checkboxes: dict = {}
+                            for key, label in widget_labels.items():
+                                cb = ui.checkbox(
+                                    label,
+                                    value=config['widgets'].get(
+                                        key, DEFAULT_WIDGETS[key]),
+                                )
+                                checkboxes[key] = cb
+
+                            async def save_dashboard_config():
+                                new_widgets = {
+                                    k: cb.value for k, cb in checkboxes.items()
+                                }
+                                # Cap-check: max 6 ON
+                                enabled_count = sum(
+                                    1 for v in new_widgets.values() if v)
+                                if enabled_count > 6:
+                                    ui.notify(
+                                        'Limiet 6 tegels bereikt — verberg '
+                                        'eerst een andere tegel om deze toe '
+                                        'te voegen.',
+                                        type='warning', timeout=8000)
+                                    return
+                                new_config = {
+                                    'schema_version':
+                                        DASHBOARD_CONFIG_SCHEMA_VERSION,
+                                    'widgets': new_widgets,
+                                    'prive_section_collapsed': config.get(
+                                        'prive_section_collapsed'),
+                                }
+                                await set_dashboard_widgets_config(
+                                    DB_PATH, json.dumps(new_config))
+                                ui.notify(
+                                    'Dashboard-config opgeslagen',
+                                    type='positive')
+
+                            ui.button(
+                                'Opslaan', icon='save',
+                                on_click=save_dashboard_config,
+                            ).props('color=primary').classes('q-mt-md')
+
+                await refresh_dashboard_tab()
