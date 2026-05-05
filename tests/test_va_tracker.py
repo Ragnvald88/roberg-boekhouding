@@ -6,9 +6,7 @@ from datetime import date
 
 import pytest
 
-from services.dashboard import (
-    VATrackLine, VATrackSummary, compute_va_tracker,
-)
+from services.dashboard import compute_va_tracker
 
 
 def _bank(ib=0, zvw=0, ib_n=0, zvw_n=0, unm=0, unm_n=0,
