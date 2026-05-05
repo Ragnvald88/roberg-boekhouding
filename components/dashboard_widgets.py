@@ -179,3 +179,77 @@ def render_zes_weken_tile(weken: tuple) -> None:
             }],
             'tooltip': {'show': True},
         }).style('height: 80px; width: 100%')
+
+
+def render_top_klanten_tile(klanten: list[dict]) -> None:
+    """Render I-5 Top 5 klanten + concentratie tile.
+
+    `klanten` from `get_omzet_per_klant(jaar)` — list[dict] with keys
+    `naam` + `bedrag` (omzet excl concept), already sorted by bedrag
+    DESC. Toont top-5 + percentage van het jaar-totaal zodat de
+    gebruiker concentratierisico ziet (bijv. één opdrachtgever > 50%).
+    """
+    with ui.card().classes('q-pa-md').style(
+            'border: 1px solid var(--border)'):
+        ui.label('Top 5 klanten').style(
+            'font-weight: 600; color: var(--text); margin-bottom: 8px')
+
+        if not klanten:
+            ui.label('Geen omzet').classes('text-caption text-grey-6')
+            return
+
+        top5 = klanten[:5]
+        totaal = sum(k.get('bedrag', 0) for k in klanten)
+
+        for k in top5:
+            bedrag = k.get('bedrag', 0)
+            pct = (bedrag / totaal * 100) if totaal > 0 else 0
+            with ui.row().classes('w-full items-center gap-2'):
+                ui.label(k.get('naam', '?')).style(
+                    'flex: 1; font-size: 12px')
+                ui.label(format_euro(bedrag, decimals=0)).classes(
+                    'num').style('font-size: 12px')
+                ui.label(f'{pct:.0f}%').classes(
+                    'text-caption text-grey-6 num').style(
+                    'width: 36px; text-align: right')
+
+
+def render_documenten_tile(
+    aangifte_docs: list,
+    aangifte_docs_keys: list,
+) -> None:
+    """Render I-6 Aangifte-documenten checklist DETAIL tile.
+
+    `aangifte_docs` = list of AangifteDocument objects from
+    `get_aangifte_documenten(jaar)`.
+    `aangifte_docs_keys` = list of expected document-specs. Accepts
+    either:
+      - list of `DocSpec` NamedTuples (e.g. `AANGIFTE_DOCS` directly), or
+      - list of `(documenttype, label)` tuples, or
+      - list of strings (documenttype keys; gebruikt zelf als label).
+    De renderer normaliseert deze drie vormen naar `(key, label)` paren.
+    """
+    with ui.card().classes('q-pa-md').style(
+            'border: 1px solid var(--border)'):
+        ui.label('Aangifte-documenten').style(
+            'font-weight: 600; color: var(--text); margin-bottom: 8px')
+
+        done = {d.documenttype for d in aangifte_docs}
+        for spec in aangifte_docs_keys:
+            # Normaliseer naar (key, label) — DocSpec NamedTuple heeft
+            # documenttype + label velden; tuple/string fallbacks voor
+            # callers die alleen de key meegeven.
+            if hasattr(spec, 'documenttype'):
+                key, label = spec.documenttype, spec.label
+            elif isinstance(spec, str):
+                key, label = spec, spec
+            else:
+                key, label = spec[0], (spec[1] if len(spec) > 1 else spec[0])
+            is_done = key in done
+            with ui.row().classes('w-full items-center gap-2'):
+                icon = ('check_circle' if is_done
+                        else 'radio_button_unchecked')
+                color = ('var(--q-positive)' if is_done
+                         else 'var(--muted)')
+                ui.icon(icon, size='16px').style(f'color: {color}')
+                ui.label(label).style('font-size: 12px; flex: 1')

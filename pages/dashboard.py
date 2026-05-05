@@ -20,6 +20,7 @@ from database import (
     get_va_betalingen, get_health_alerts, DB_PATH,
     get_factuur_aging_buckets, get_concept_facturen_stale,
     update_factuur_status, get_db_ctx,
+    get_omzet_per_klant,
 )
 from components.document_specs import AANGIFTE_DOCS
 from components.fiscal_utils import fetch_fiscal_data, extrapoleer_jaaromzet
@@ -230,7 +231,8 @@ async def dashboard_page():
         (kpis, kpis_vorig, omzet_huidig, omzet_vorig, kosten_per_cat,
          openstaande, ongefact, km_data,
          ib_resultaat, fp, va_data, aangifte_docs,
-         health_alerts, urencrit_state, zes_weken) = await asyncio.gather(
+         health_alerts, urencrit_state, zes_weken,
+         omzet_per_klant) = await asyncio.gather(
             get_kpis(DB_PATH, jaar=jaar),
             get_kpis(DB_PATH, jaar=jaar - 1),
             get_omzet_per_maand(DB_PATH, jaar=jaar),
@@ -246,6 +248,7 @@ async def dashboard_page():
             get_health_alerts(DB_PATH, jaar=jaar),
             get_urencriterium_projectie(DB_PATH, jaar),
             get_zes_weken_prognose(DB_PATH, vanaf=date.today()),
+            get_omzet_per_klant(DB_PATH, jaar=jaar),
         )
 
         # === T4b.1: SPH-prognose data (render wired in T4b.4) ===
@@ -285,6 +288,7 @@ async def dashboard_page():
         _ = sph_prognose
         _ = sph_betaald_ytd
         _ = zes_weken
+        _ = omzet_per_klant
 
         # For YoY delta: compare exact same calendar period
         huidig_jaar = date.today().year
