@@ -20,7 +20,7 @@ from database import (
     get_va_betalingen, get_health_alerts, DB_PATH,
     get_factuur_aging_buckets, get_concept_facturen_stale,
     update_factuur_status, get_db_ctx,
-    get_omzet_per_klant,
+    get_omzet_per_klant, get_dashboard_widgets_config,
 )
 from components.document_specs import AANGIFTE_DOCS
 from components.fiscal_utils import fetch_fiscal_data, extrapoleer_jaaromzet
@@ -33,9 +33,13 @@ from services.agenda import (
 from services.dashboard import (
     compute_belasting_reservering_progress, compute_sph_prognose,
     ActionRow, prioritise_actions, _seasonal_action_rows,
-    tax_calendar,
+    tax_calendar, load_dashboard_widgets_config,
 )
-from components.dashboard_widgets import render_action_inbox
+from components.dashboard_widgets import (
+    render_action_inbox, render_sph_tile, render_zes_weken_tile,
+    render_top_klanten_tile, render_documenten_tile,
+    render_cash_positie_tile, render_tax_calendar_tile,
+)
 
 
 def _has_va_data(fp, va_data) -> bool:
@@ -312,19 +316,14 @@ async def dashboard_page():
         # === T4b.3: Tax-calendar data ===
         tax_deadlines = tax_calendar(jaar)
 
-        # NOTE: render-calls (render_sph_tile, render_zes_weken_tile,
+        # T4b.4: render-calls (render_sph_tile, render_zes_weken_tile,
         # render_top_klanten_tile, render_documenten_tile,
-        # render_cash_positie_tile, render_tax_calendar_tile) worden in
-        # T4b.4 wired aan de inzicht-grid via config-check. Hier alleen
-        # data-prep + linting (no-op assignments markeren de variabelen
-        # als-used).
-        _ = sph_prognose
-        _ = sph_betaald_ytd
-        _ = zes_weken
-        _ = omzet_per_klant
-        _ = opening_saldo
-        _ = flow_ytd
-        _ = tax_deadlines
+        # render_cash_positie_tile, render_tax_calendar_tile) worden
+        # verderop in de inzicht-grid wired via config-check.
+
+        # T4b.4: Load dashboard widgets config (defaults if NULL)
+        raw_widget_config = await get_dashboard_widgets_config(DB_PATH)
+        widgets_config = load_dashboard_widgets_config(raw_widget_config)
 
         # For YoY delta: compare exact same calendar period
         huidig_jaar = date.today().year
@@ -772,16 +771,9 @@ async def dashboard_page():
                 cum_huidig.append(round(rh))
                 cum_vorig.append(round(rv))
 
-            # Chart 1: Revenue bar chart — FULL WIDTH
-            with ui.card().classes('w-full q-pa-lg'):
-                with ui.row().classes(
-                        'w-full justify-between items-baseline'):
-                    ui.label('Omzet per maand').classes('chart-title')
-                    ui.label(f'{jaar} vs {jaar - 1}').classes(
-                        'chart-subtitle')
-                revenue_bar_chart(omzet_huidig, omzet_vorig, jaar)
-
-            # Chart 2: Cumulative + Donut side by side (or just cumulative)
+            # Cumulatieve-omzet chart config (used by I-1 tile in
+            # inzicht-grid below; defined once here zodat we hem niet in
+            # de render-loop opnieuw bouwen)
             cum_chart_config = {
                 'tooltip': {'trigger': 'axis'},
                 'legend': {
@@ -829,11 +821,23 @@ async def dashboard_page():
                 ],
             }
 
-            if has_kosten:
-                # Side by side: cumulative + donut
-                with ui.element('div').style(
-                        'display: grid; grid-template-columns: 1fr 1fr;'
-                        ' gap: 20px'):
+            # Action-inbox vervangt huidige losse alert-cards (Sprint H T3.4)
+            render_action_inbox(action_rows, on_action)
+
+            # === Inzicht-grid (config-driven render, Sprint H T4b.4) ===
+            # Render in fixed visual order regardless of toggle order. The
+            # order matches DEFAULT_WIDGETS dict which is dict-insertion-
+            # ordered (Python 3.7+). Empty-state handling leeft binnen elke
+            # renderer zelf (Cash heeft expliciete "geen openingssaldo"
+            # branch; overige tonen lege-lijst-tekst).
+            tile_flags = widgets_config['widgets']
+
+            with ui.element('div').style(
+                    'display: grid; grid-template-columns: 1fr 1fr; '
+                    'gap: 20px; align-items: start'):
+
+                if tile_flags.get('I-1', False):
+                    # Cumulatieve omzet YoY chart
                     with ui.card().classes('q-pa-lg'):
                         with ui.row().classes(
                                 'w-full justify-between items-baseline'):
@@ -844,22 +848,47 @@ async def dashboard_page():
                         ui.echart(cum_chart_config).style(
                             'height: 300px; width: 100%')
 
+                if tile_flags.get('I-2', False) and has_kosten:
                     with ui.card().classes('q-pa-lg'):
                         ui.label('Kostenverdeling').classes('chart-title')
                         cost_donut_chart(kosten_per_cat)
-            else:
-                # No costs — full-width cumulative
-                with ui.card().classes('w-full q-pa-lg'):
-                    with ui.row().classes(
-                            'w-full justify-between items-baseline'):
-                        ui.label('Cumulatieve omzet').classes('chart-title')
-                        ui.label(f'{jaar} vs {jaar - 1}').classes(
-                            'chart-subtitle')
-                    ui.echart(cum_chart_config).style(
-                        'height: 300px; width: 100%')
 
-            # Action-inbox vervangt huidige losse alert-cards (Sprint H T3.4)
-            render_action_inbox(action_rows, on_action)
+                if tile_flags.get('I-3', False):
+                    render_sph_tile(sph_betaald_ytd, sph_prognose)
+
+                if tile_flags.get('I-4', False):
+                    render_zes_weken_tile(zes_weken)
+
+                if tile_flags.get('I-5', False):
+                    render_top_klanten_tile(omzet_per_klant)
+
+                if tile_flags.get('I-6', False):
+                    render_documenten_tile(aangifte_docs, AANGIFTE_DOCS)
+
+                if tile_flags.get('I-7', False):
+                    render_cash_positie_tile(opening_saldo, flow_ytd)
+
+                if tile_flags.get('I-8', False):
+                    render_tax_calendar_tile(tax_deadlines)
+
+            # Revenue bar chart — altijd zichtbaar (page-anchor, niet
+            # toggleable per spec; complement aan YoY badge in hero).
+            with ui.card().classes('w-full q-pa-lg'):
+                with ui.row().classes(
+                        'w-full justify-between items-baseline'):
+                    ui.label('Omzet per maand').classes('chart-title')
+                    ui.label(f'{jaar} vs {jaar - 1}').classes(
+                        'chart-subtitle')
+                revenue_bar_chart(omzet_huidig, omzet_vorig, jaar)
+
+            # Customisation footer-link (Spec U2: ⚙ Tegels aanpassen)
+            with ui.row().classes('w-full justify-end').style(
+                    'margin-top: 8px'):
+                ui.button(
+                    '⚙ Tegels aanpassen',
+                    on_click=lambda: ui.navigate.to(
+                        '/instellingen?tab=dashboard'),
+                ).props('flat dense color=primary size=sm')
 
     jaar_select.on_value_change(lambda _: refresh_dashboard())
     await refresh_dashboard()
