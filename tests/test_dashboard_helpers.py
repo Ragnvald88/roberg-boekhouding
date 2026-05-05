@@ -1,7 +1,11 @@
 """Unit tests for services.dashboard pure helpers."""
 from datetime import date
 
-from services.dashboard import compute_belasting_reservering_progress
+from services.dashboard import (
+    ActionRow,
+    compute_belasting_reservering_progress,
+    prioritise_actions,
+)
 
 
 class TestComputeBelastingReserveringProgress:
@@ -164,3 +168,81 @@ class TestComputeJaareindeProjectieDisplay:
         )
         assert result['winst_projectie'] == 0.0
         assert result['confidence'] == 'low'
+
+
+class TestActionRow:
+    def test_actionrow_is_frozen_dataclass(self):
+        row = ActionRow(
+            kind='verlopen_factuur',
+            severity='warning',
+            message='2 facturen verlopen >30d',
+            action_kind='stuur_herinnering',
+            link='/facturen',
+            age_days=30,
+            metadata={},
+        )
+        assert row.kind == 'verlopen_factuur'
+        assert row.severity == 'warning'
+
+
+class TestPrioritiseActions:
+    def _make_row(self, kind, severity, age=0):
+        return ActionRow(
+            kind=kind, severity=severity, message=f'{kind}-msg',
+            action_kind=None, link=None, age_days=age, metadata={},
+        )
+
+    def test_critical_first_warning_second_info_last(self):
+        rows = [
+            self._make_row('a', 'info'),
+            self._make_row('b', 'critical'),
+            self._make_row('c', 'warning'),
+        ]
+        result = prioritise_actions(rows, max_items=10)
+        assert [r.kind for r in result] == ['b', 'c', 'a']
+
+    def test_within_severity_age_desc(self):
+        rows = [
+            self._make_row('a', 'warning', age=10),
+            self._make_row('b', 'warning', age=30),
+            self._make_row('c', 'warning', age=5),
+        ]
+        result = prioritise_actions(rows, max_items=10)
+        assert [r.kind for r in result] == ['b', 'a', 'c']
+
+    def test_max_items_truncates(self):
+        rows = [self._make_row(f'r{i}', 'warning', age=i) for i in range(10)]
+        result = prioritise_actions(rows, max_items=3)
+        assert len(result) == 3
+
+    def test_empty_input(self):
+        assert prioritise_actions([], max_items=5) == []
+
+    def test_single_row(self):
+        rows = [self._make_row('a', 'info')]
+        assert prioritise_actions(rows, max_items=5) == rows
+
+    def test_max_items_zero_returns_empty(self):
+        rows = [self._make_row('a', 'critical')]
+        assert prioritise_actions(rows, max_items=0) == []
+
+    def test_severity_order_complete(self):
+        # critical → warning → info → unknown_severity (treated as info)
+        rows = [
+            self._make_row('a', 'unknown_severity'),
+            self._make_row('b', 'info'),
+            self._make_row('c', 'warning'),
+            self._make_row('d', 'critical'),
+        ]
+        result = prioritise_actions(rows, max_items=10)
+        # critical first, then warning, then info+unknown (kind ASC tiebreak)
+        assert result[0].kind == 'd'
+        assert result[1].kind == 'c'
+
+    def test_metadata_passes_through(self):
+        rows = [ActionRow(
+            kind='a', severity='info', message='m', action_kind=None,
+            link=None, age_days=0, metadata={'factuur_id': 42},
+        )]
+        result = prioritise_actions(rows, max_items=10)
+        assert result[0].metadata == {'factuur_id': 42}
