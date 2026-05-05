@@ -117,3 +117,78 @@ def prioritise_actions(
 
     sorted_rows = sorted(rows, key=_sort_key)
     return sorted_rows[:max_items]
+
+
+def tax_calendar(jaar: int) -> list[dict]:
+    """Returns list of known Belastingdienst-deadlines for the year.
+
+    Each entry: {'kind': str, 'date': date, 'label': str}.
+
+    Hardcoded per-jaar — Belastingdienst publishes deadlines annually.
+    Add new years here when next-year support is needed.
+    """
+    if jaar == 2026:
+        return [
+            {'kind': 'ib_aangifte', 'date': date(2026, 5, 1),
+             'label': 'IB-aangifte deadline (rentevrij)'},
+            {'kind': 'va_laatste_termijn', 'date': date(2026, 12, 31),
+             'label': 'Laatste VA-termijn'},
+            {'kind': 'va_uitbetaling', 'date': date(2026, 12, 15),
+             'label': 'VA-uitbetaling teruggave'},
+        ]
+    if jaar == 2027:
+        return [
+            {'kind': 'ib_aangifte', 'date': date(2027, 5, 1),
+             'label': 'IB-aangifte deadline (rentevrij)'},
+            {'kind': 'va_laatste_termijn', 'date': date(2027, 12, 31),
+             'label': 'Laatste VA-termijn'},
+            {'kind': 'va_uitbetaling', 'date': date(2027, 12, 15),
+             'label': 'VA-uitbetaling teruggave'},
+        ]
+    return []
+
+
+def _seasonal_action_rows(today: date) -> list[ActionRow]:
+    """Emit seasonal context-rows for action-inbox.
+
+    Apr/Mei: IB-aangifte countdown
+    Nov/Dec: VA-laatste termijn reminder
+
+    Severity escalates as deadline approaches: <14 days = critical,
+    <30 days = warning, else info.
+    """
+    rows: list[ActionRow] = []
+    cal = tax_calendar(today.year)
+    for entry in cal:
+        deadline = entry['date']
+        days_remaining = (deadline - today).days
+        if days_remaining < 0 or days_remaining > 60:
+            continue
+
+        # Map kind → action-row kind
+        if entry['kind'] == 'ib_aangifte':
+            kind = 'ib_aangifte_deadline'
+            link = '/aangifte'
+        elif entry['kind'] == 'va_laatste_termijn':
+            kind = 'va_laatste_termijn'
+            link = '/aangifte'
+        else:
+            continue
+
+        if days_remaining < 14:
+            severity = 'critical'
+        elif days_remaining < 30:
+            severity = 'warning'
+        else:
+            severity = 'info'
+
+        rows.append(ActionRow(
+            kind=kind,
+            severity=severity,
+            message=f'{entry["label"]} over {days_remaining} dagen',
+            action_kind=None,  # info-only, geen inline action
+            link=link,
+            age_days=0,
+            metadata={'deadline': deadline.isoformat()},
+        ))
+    return rows

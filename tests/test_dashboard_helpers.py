@@ -246,3 +246,47 @@ class TestPrioritiseActions:
         )]
         result = prioritise_actions(rows, max_items=10)
         assert result[0].metadata == {'factuur_id': 42}
+
+
+class TestTaxCalendar:
+    def test_tax_calendar_2026_returns_known_deadlines(self):
+        from services.dashboard import tax_calendar
+        cal = tax_calendar(2026)
+        assert isinstance(cal, list)
+        # Must include 1 mei IB-aangifte deadline
+        ib_deadline = next((d for d in cal if d['kind'] == 'ib_aangifte'), None)
+        assert ib_deadline is not None
+        assert ib_deadline['date'] == date(2026, 5, 1)
+
+    def test_tax_calendar_unknown_year_returns_empty(self):
+        from services.dashboard import tax_calendar
+        # Unknown years (e.g. 1999) return empty list, not error
+        assert tax_calendar(1999) == []
+
+
+class TestSeasonalActionRows:
+    def test_april_emits_ib_aangifte_deadline(self):
+        from services.dashboard import _seasonal_action_rows
+        rows = _seasonal_action_rows(today=date(2026, 4, 15))
+        ib_rows = [r for r in rows if r.kind == 'ib_aangifte_deadline']
+        assert len(ib_rows) == 1
+        assert ib_rows[0].severity == 'warning'  # 16 days remaining
+        assert '16 dagen' in ib_rows[0].message
+
+    def test_late_april_critical_severity(self):
+        from services.dashboard import _seasonal_action_rows
+        rows = _seasonal_action_rows(today=date(2026, 4, 25))
+        ib_rows = [r for r in rows if r.kind == 'ib_aangifte_deadline']
+        assert ib_rows[0].severity == 'critical'  # 6 days
+
+    def test_july_emits_no_seasonal_rows(self):
+        from services.dashboard import _seasonal_action_rows
+        rows = _seasonal_action_rows(today=date(2026, 7, 15))
+        # July: no IB-deadline, no VA-laatste-termijn, no jaarafsluiting
+        assert rows == []
+
+    def test_december_emits_va_laatste_termijn(self):
+        from services.dashboard import _seasonal_action_rows
+        rows = _seasonal_action_rows(today=date(2026, 12, 15))
+        va_rows = [r for r in rows if r.kind == 'va_laatste_termijn']
+        assert len(va_rows) == 1
