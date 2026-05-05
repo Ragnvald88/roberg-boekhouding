@@ -88,15 +88,36 @@ Als je een nieuwe sessie begint, lees in deze volgorde:
 3. **`docs/superpowers/specs/`** + **`plans/`** — recente design-decisions met SHIPPED-banners
 4. **`tests/test_visual_css.py`** — 5 cascade-lint tests die de structurele CSS-invariants enforced
 
-**Recente sprint-state** (2026-05-04, na Sprint A→F + 2 post-merge audits):
-- Pytest baseline **1298** (was 1054 vóór Sprint A)
-- Master is HEAD na 50+ commits sinds Sprint A
-- `feature/sprint-b-visual-refresh` branch is gemerged + opgeruimd
-- `klant.color` kolom (mig 37) + `bedrijfsgegevens.gebruik_klant_kleur_in_agenda` (mig 38)
+**Recente sprint-state** (2026-05-05, na Sprint A→G + Sprint H Phases 1-5):
+- Pytest baseline **1355** (was 1054 vóór Sprint A, 1298 vóór Sprint G, 1300 post-G, 1355 post-Sprint-H Phases 1-5)
+- Master is HEAD na 80+ commits sinds Sprint A
+- `klant.color` kolom (mig 37) + `bedrijfsgegevens.gebruik_klant_kleur_in_agenda` (mig 38) + `bedrijfsgegevens.dashboard_widgets_json` (mig 39)
 - `pages/bank.py` bestaat NIET MEER, sidebar heeft één "Werkdagen" entry → /agenda
-- `.alert-card`, `.severity-card` componenten met scope-vars i.p.v. globale tokens
+- `.alert-card`, `.severity-card`, `.settings-card` (Sprint G), `.q-card.dashboard-hero-tile` + `.is-tekort` modifier (Sprint H) componenten met scope-vars
+- `services/dashboard.py` (NEW Sprint H) — pure helpers UI-vrij (compute_belasting_reservering_progress, compute_jaareinde_projectie_display, compute_sph_prognose, ActionRow, prioritise_actions, _seasonal_action_rows, tax_calendar, load_dashboard_widgets_config, DEFAULT_WIDGETS, should_show_prive_zone)
+- `components/dashboard_widgets.py` (NEW Sprint H) — 7 per-tile renderers (action_inbox, sph_tile, zes_weken_tile, top_klanten_tile, documenten_tile, cash_positie_tile, tax_calendar_tile, prive_zone)
 
-**Bij twijfel over recente staat**: `git log --oneline | head -30` geeft de laatste 30 commits — sprint-tag in commit-message (sprint-b/c/d/e/f) markeert origine.
+**Sprint H state (2026-05-05)** — dashboard redesign Phases 1-5 SHIPPED, Phase 6 audit pending:
+- Hero strip 4 forward-looking tiles: Omzet YTD / **Jaareinde-projectie** / **Belasting-reservering** / **Urencriterium-projectie**
+- Action-inbox vervangt wand-van-alert-cards: 4 inline-actions (Stuur herinnering, Categoriseer, Upload nu, Verstuur) + seasonal-row injector
+- Inzicht-grid 8 toggleable tiles, max 6 visible, configureerbaar via /instellingen → "Dashboard" tab
+- Privé-zone (AOV only, conditional auto-collapse — geen "persoonlijke SPH", die is bedrijfskost)
+- Quick-actions header: 3 prominente CTAs (+ Werkdag/Factuur/Uitgave)
+
+**KRITIEK — dashboard berekeningen zijn NIET betrouwbaar (user feedback 2026-05-05)**:
+- `compute_belasting_reservering_progress` extrapoleert IB+ZVW × dagen-elapsed/365 dat puur abstract is — staat los van wat Belastingdienst werkelijk in rekening brengt
+- `compute_sph_prognose` formule (23.94% × winst) is theoretisch maar baseert op `winst_extrapolatie` (omzet_ytd - ytd_winst geëxtrapoleerd) — onzekere proxy
+- `compute_jaareinde_projectie_display` extrapoleert kosten linear naar 12mo — werkdag-locum heeft seizoensvariatie
+- **User-quote**: "de berekeningen op dashboard slaan nergens op"
+
+**Sprint I richting (NEXT)**: vervang `Belasting-reservering` hero-tile door **VA-tracker** met REAL data:
+- User uploadt PDF van Voorlopige Aanslag (of typt bedragen handmatig)
+- Twee inputs: VA-verplichting jaarbedrag + VA-betaald-stand
+- VA-betaald moet idealiter auto-detect uit `banktransacties` (categorie='Belasting' of regex-match op `betalingskenmerk`)
+- Hero toont: "VA-stand: betaald €X / verplicht €Y · openstaand €Z (N termijnen)"
+- Concreet, audit-trail-traceerbaar, geen hand-wavy extrapolatie
+
+**Bij twijfel over recente staat**: `git log --oneline | head -50` geeft sprint-tags (sprint-h/g/cdef/etc.) per commit. Memory `project_sprint_h.md` heeft Sprint H details.
 
 ## Database
 15 tabellen: `klanten` (mig 37 + color), `klant_locaties`, `klant_aliases`, `werkdagen`, `facturen`, `uitgaven`, `banktransacties`, `fiscale_params`, `bedrijfsgegevens` (mig 38 + gebruik_klant_kleur_in_agenda), `aangifte_documenten`, `afschrijving_overrides`, `jaarafsluiting_snapshots`, `klant_recurring_patterns` (mig 35), `blockers` (mig 36)
