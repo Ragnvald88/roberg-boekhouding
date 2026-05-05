@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from datetime import date, datetime
+from datetime import date
 
 log = logging.getLogger(__name__)
 
@@ -18,6 +18,8 @@ from database import (
     get_werkdagen_ongefactureerd_summary, get_km_totaal,
     get_fiscale_params, get_aangifte_documenten,
     get_va_betalingen, get_health_alerts, DB_PATH,
+    get_factuur_aging_buckets, get_concept_facturen_stale,
+    update_factuur_status,
 )
 from components.document_specs import AANGIFTE_DOCS
 from components.fiscal_utils import fetch_fiscal_data, extrapoleer_jaaromzet
@@ -25,7 +27,11 @@ from components.shared_ui import year_options
 from fiscal.berekeningen import bereken_volledig
 from fiscal.constants import URENCRITERIUM_DEFAULT
 from services.agenda import get_urencriterium_projectie
-from services.dashboard import compute_belasting_reservering_progress
+from services.dashboard import (
+    compute_belasting_reservering_progress,
+    ActionRow, prioritise_actions, _seasonal_action_rows,
+)
+from components.dashboard_widgets import render_action_inbox
 
 
 def _has_va_data(fp, va_data) -> bool:
@@ -257,6 +263,163 @@ async def dashboard_page():
         else:
             vorig_ytd_omzet = kpis_vorig['omzet']
             vorig_ytd_kosten = kpis_vorig['kosten']
+
+        # === Build action-inbox rows from existing data sources (Sprint H T3.4) ===
+        # Geconsolideerde work-inbox per Acumulus-pattern: 5 bronnen +
+        # seasonal-rows samen, dan prioritise_actions truncate naar 5.
+        raw_rows: list[ActionRow] = []
+
+        # From health_alerts (uncategorized_bank, etc.)
+        for alert in health_alerts:
+            action_kind = None
+            if alert.get('key') == 'uncategorized_bank':
+                action_kind = 'categoriseer'
+            raw_rows.append(ActionRow(
+                kind=alert.get('key', 'health_alert'),
+                severity=alert.get('severity', 'info'),
+                message=alert.get('message', ''),
+                action_kind=action_kind,
+                link=alert.get('link'),
+                age_days=0,
+                metadata={},
+            ))
+
+        # From ongefactureerd-summary. `oudste_dagen` zit niet in summary
+        # — fallback 0 (prioriteit-tiebreak werkt nog via severity).
+        if ongefact and ongefact.get('aantal', 0) > 0:
+            raw_rows.append(ActionRow(
+                kind='werkdag_ongefactureerd',
+                severity='warning',
+                message=(
+                    f'{ongefact["aantal"]} werkdagen ongefactureerd · '
+                    f'{format_euro(ongefact["bedrag"])}'),
+                action_kind=None,  # T6.1 voegt 'genereer_factuur' toe
+                link='/werkdagen',
+                age_days=ongefact.get('oudste_dagen', 0),
+                metadata={},
+            ))
+
+        # From openstaande facturen aging — één rij per niet-lege bucket.
+        # 90+ dagen = critical (cash-flow harm), rest = warning.
+        aging_buckets = await get_factuur_aging_buckets(DB_PATH, jaar=jaar)
+        for bucket_key, facturen_list in aging_buckets.items():
+            if not facturen_list:
+                continue
+            severity = 'critical' if bucket_key == 'overdue_90_plus' else 'warning'
+            raw_rows.append(ActionRow(
+                kind='verlopen_factuur',
+                severity=severity,
+                message=(
+                    f'{len(facturen_list)} facturen verlopen '
+                    f'({bucket_key.replace("overdue_", "")} dagen)'),
+                action_kind='stuur_herinnering',
+                link='/facturen',
+                age_days=int(facturen_list[0].get('days_overdue', 0)),
+                metadata={'factuur_id': facturen_list[0]['id']},
+            ))
+
+        # From concept-facturen stale (>14 dagen oud).
+        concepts = await get_concept_facturen_stale(DB_PATH, jaar=jaar, days=14)
+        if concepts:
+            raw_rows.append(ActionRow(
+                kind='concept_factuur_stale',
+                severity='info',
+                message=f'{len(concepts)} concept-facturen >14 dagen oud',
+                action_kind='verstuur_concept',
+                link='/facturen?status=concept',
+                age_days=14,
+                metadata={'factuur_id': concepts[0]['id']},
+            ))
+
+        # From documenten ontbreken (max 3 rows — anders overstemt
+        # documenten-lijst de hele inbox bij start van het jaar).
+        docs_done = {d.documenttype for d in aangifte_docs}
+        docs_missing = [d for d in AANGIFTE_DOCS if d not in docs_done]
+        for missing in docs_missing[:3]:
+            raw_rows.append(ActionRow(
+                kind='documenten_ontbreken',
+                severity='info',
+                message=f'Aangifte-doc "{missing}" mist',
+                action_kind='upload_nu',
+                link='/aangifte',
+                age_days=0,
+                metadata={'documenttype': missing},
+            ))
+
+        # Add seasonal rows (T3.2 helper — IB-aangifte/VA-deadlines).
+        raw_rows.extend(_seasonal_action_rows(date.today()))
+
+        # Prioritise + truncate naar max 5 (cognitive-load cap).
+        action_rows = prioritise_actions(raw_rows, max_items=5)
+
+        # === Action dispatcher ===
+        async def on_action(row: ActionRow, action_kind: str):
+            """Dispatch inline-action handlers per action_kind.
+
+            stuur_herinnering / verstuur_concept tonen confirm-dialog
+            voor mutation-actions (Spec U3 — geen surprise sends).
+            categoriseer / upload_nu zijn pure navigatie.
+            """
+            if action_kind == 'stuur_herinnering':
+                # Per spec U3: confirm-dialog before opening Mail.app.
+                # Defer naar /facturen page; T6.1 kan inline
+                # _build_herinnering_body extracten naar shared helper
+                # voor true inline-send zonder navigation.
+                with ui.dialog() as dlg, ui.card():
+                    ui.label('Herinnering versturen?').classes('text-h6')
+                    ui.label(row.message).classes('text-body2 text-grey')
+                    ui.label(
+                        'Mail.app opent met conceptbericht; jij verstuurt.'
+                    ).classes('text-caption text-grey')
+                    with ui.row():
+                        ui.button('Annuleren', on_click=dlg.close).props('flat')
+
+                        def _confirm():
+                            dlg.close()
+                            factuur_id = row.metadata.get('factuur_id')
+                            if factuur_id:
+                                ui.navigate.to(f'/facturen?factuur={factuur_id}')
+
+                        ui.button(
+                            'Stuur herinnering', on_click=_confirm
+                        ).props('unelevated color=primary')
+                dlg.open()
+
+            elif action_kind == 'categoriseer':
+                ui.navigate.to('/transacties?status=ongecategoriseerd')
+
+            elif action_kind == 'upload_nu':
+                cat = row.metadata.get('documenttype', '')
+                if cat:
+                    ui.navigate.to(f'/aangifte?documenttype={cat}')
+                else:
+                    ui.navigate.to('/aangifte')
+
+            elif action_kind == 'verstuur_concept':
+                factuur_id = row.metadata.get('factuur_id')
+                if not factuur_id:
+                    ui.notify('Geen factuur-id', type='warning')
+                    return
+                with ui.dialog() as dlg, ui.card():
+                    ui.label('Concept-factuur versturen?').classes('text-h6')
+                    ui.label(row.message).classes('text-body2 text-grey')
+                    with ui.row():
+                        ui.button('Annuleren', on_click=dlg.close).props('flat')
+
+                        async def _confirm():
+                            dlg.close()
+                            await update_factuur_status(
+                                DB_PATH, factuur_id=factuur_id,
+                                status='verstuurd')
+                            ui.notify(
+                                'Status bijgewerkt naar verstuurd',
+                                type='positive')
+                            await refresh_dashboard()
+
+                        ui.button(
+                            'Verstuur', on_click=_confirm
+                        ).props('unelevated color=primary')
+                dlg.open()
 
         # Render into content container
         container = content_container['ref']
@@ -607,103 +770,8 @@ async def dashboard_page():
                     ui.echart(cum_chart_config).style(
                         'height: 300px; width: 100%')
 
-            has_ongefact = ongefact and ongefact.get('aantal', 0) > 0
-            has_openstaand = len(openstaande) > 0
-            if has_ongefact or has_openstaand:
-                ui.label('AANDACHTSPUNTEN').classes('section-label')
-
-                if has_ongefact:
-                    with ui.element('div').classes(
-                            'alert-card alert-card--warning') \
-                            .style('justify-content: space-between'):
-                        with ui.row().classes('items-center gap-2'):
-                            ui.icon('pending_actions', size='20px') \
-                                .classes('alert-icon')
-                            ui.html(
-                                f'<span class="alert-title" '
-                                f'style="font-size:13px">'
-                                f'{ongefact["aantal"]} werkdagen '
-                                f'ongefactureerd</span>'
-                                f'<span class="alert-body" '
-                                f'style="font-size:12px;margin-left:8px">'
-                                f'{format_euro(ongefact["bedrag"])}</span>')
-                        ui.button(
-                            'Bekijk',
-                            on_click=lambda: ui.navigate.to('/werkdagen'),
-                        ).props('flat dense size=sm') \
-                            .classes('alert-link')
-
-                if has_openstaand:
-                    totaal = sum(f.totaal_bedrag for f in openstaande)
-                    try:
-                        oudste = max(
-                            (date.today()
-                             - datetime.strptime(f.datum, '%Y-%m-%d').date()
-                             ).days
-                            for f in openstaande)
-                    except (ValueError, TypeError):
-                        oudste = 0
-                    with ui.element('div').classes(
-                            'alert-card alert-card--attention') \
-                            .style('justify-content: space-between'):
-                        with ui.row().classes('items-center gap-2'):
-                            ui.icon('receipt_long', size='20px') \
-                                .classes('alert-icon')
-                            ui.html(
-                                f'<span class="alert-title" '
-                                f'style="font-size:13px">'
-                                f'{len(openstaande)} facturen openstaand'
-                                f'</span>'
-                                f'<span class="alert-body" '
-                                f'style="font-size:12px;margin-left:8px">'
-                                f'{format_euro(totaal)} \u00b7 oudste '
-                                f'{oudste} dagen</span>')
-                        ui.button(
-                            'Bekijk',
-                            on_click=lambda: ui.navigate.to('/facturen'),
-                        ).props('flat dense size=sm') \
-                            .classes('alert-link')
-
-            # Health alerts — additional signals beyond ongefact/openstaand
-            if health_alerts:
-                if not (has_ongefact or has_openstaand):
-                    # Only show header if AANDACHTSPUNTEN wasn't already rendered
-                    ui.label('AANDACHTSPUNTEN').classes('section-label')
-
-                _severity_class = {
-                    'critical': 'severity-card--danger-deep',
-                    'warning': 'severity-card--danger',
-                    'info': 'severity-card--info',
-                }
-                _icon_for = {
-                    'critical': 'error',
-                    'warning': 'warning',
-                    'info': 'info_outline',
-                }
-                for alert in health_alerts:
-                    sev_modifier = _severity_class.get(
-                        alert['severity'], 'severity-card--info')
-                    with ui.element('div').classes(
-                            f'severity-card {sev_modifier}') \
-                            .style('display: flex; align-items: center; '
-                                   'justify-content: space-between'):
-                        with ui.row().classes('items-center gap-2'):
-                            icon = _icon_for.get(
-                                alert['severity'], 'info_outline')
-                            ui.icon(icon, size='20px').classes('severity-fg')
-                            ui.html(
-                                f'<span class="severity-dark" '
-                                f'style="font-size:13px;font-weight:600">'
-                                f'{alert["message"]}</span>')
-                        if alert.get('link'):
-                            ui.button(
-                                'Bekijk',
-                                on_click=lambda l=alert['link']: ui.navigate.to(l),
-                            ).props('flat dense size=sm') \
-                                .classes('severity-fg') \
-                                .style('border: 1px solid currentColor; '
-                                       'border-radius: 6px; '
-                                       'font-size: 12px')
+            # Action-inbox vervangt huidige losse alert-cards (Sprint H T3.4)
+            render_action_inbox(action_rows, on_action)
 
     jaar_select.on_value_change(lambda _: refresh_dashboard())
     await refresh_dashboard()
