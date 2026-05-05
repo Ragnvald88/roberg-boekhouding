@@ -362,3 +362,33 @@ class TestComputeSphPrognose:
         result = compute_sph_prognose(winst_extrapolatie=200_000.0, jaar=2026)
         assert result['pensioengrondslag'] == 137_800
         assert abs(result['jaarverplichting'] - 32989.32) < 0.01
+
+
+class TestShouldShowPriveZone:
+    """Test the Privé-zone visibility/collapse helper (Sprint H T5.1).
+
+    Auto-detect path renders only when AOV-data exists; user-override
+    forces render regardless of AOV-state, optionally collapsed.
+    """
+
+    def test_no_aov_no_override_hidden(self):
+        from services.dashboard import should_show_prive_zone
+        # Auto-detect path: no AOV → don't render
+        assert should_show_prive_zone(0, None) == (False, False)
+
+    def test_has_aov_no_override_visible(self):
+        from services.dashboard import should_show_prive_zone
+        # Auto-detect path: AOV exists → render visible
+        assert should_show_prive_zone(5, None) == (True, False)
+
+    def test_user_override_collapsed_renders_collapsed(self):
+        from services.dashboard import should_show_prive_zone
+        # User explicit collapsed (even with no AOV) → render but collapsed
+        assert should_show_prive_zone(0, True) == (True, True)
+        assert should_show_prive_zone(5, True) == (True, True)
+
+    def test_user_override_visible_renders_visible(self):
+        from services.dashboard import should_show_prive_zone
+        # User explicit visible (even with no AOV) → render visible
+        assert should_show_prive_zone(0, False) == (True, False)
+        assert should_show_prive_zone(5, False) == (True, False)

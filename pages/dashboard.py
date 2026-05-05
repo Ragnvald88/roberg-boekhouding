@@ -21,6 +21,7 @@ from database import (
     get_factuur_aging_buckets, get_concept_facturen_stale,
     update_factuur_status, get_db_ctx,
     get_omzet_per_klant, get_dashboard_widgets_config,
+    get_aov_total,
 )
 from components.document_specs import AANGIFTE_DOCS
 from components.fiscal_utils import fetch_fiscal_data, extrapoleer_jaaromzet
@@ -34,11 +35,13 @@ from services.dashboard import (
     compute_belasting_reservering_progress, compute_sph_prognose,
     ActionRow, prioritise_actions, _seasonal_action_rows,
     tax_calendar, load_dashboard_widgets_config,
+    should_show_prive_zone,
 )
 from components.dashboard_widgets import (
     render_action_inbox, render_sph_tile, render_zes_weken_tile,
     render_top_klanten_tile, render_documenten_tile,
     render_cash_positie_tile, render_tax_calendar_tile,
+    render_prive_zone,
 )
 
 
@@ -237,7 +240,7 @@ async def dashboard_page():
          openstaande, ongefact, km_data,
          ib_resultaat, fp, va_data, aangifte_docs,
          health_alerts, urencrit_state, zes_weken,
-         omzet_per_klant) = await asyncio.gather(
+         omzet_per_klant, aov_data) = await asyncio.gather(
             get_kpis(DB_PATH, jaar=jaar),
             get_kpis(DB_PATH, jaar=jaar - 1),
             get_omzet_per_maand(DB_PATH, jaar=jaar),
@@ -254,6 +257,7 @@ async def dashboard_page():
             get_urencriterium_projectie(DB_PATH, jaar),
             get_zes_weken_prognose(DB_PATH, vanaf=date.today()),
             get_omzet_per_klant(DB_PATH, jaar=jaar),
+            get_aov_total(DB_PATH, jaar=jaar),
         )
 
         # === T4b.1: SPH-prognose data (render wired in T4b.4) ===
@@ -889,6 +893,17 @@ async def dashboard_page():
                     on_click=lambda: ui.navigate.to(
                         '/instellingen?tab=dashboard'),
                 ).props('flat dense color=primary size=sm')
+
+            # === T5.1: Privé-zone (AOV only, conditional auto-collapse) ===
+            # Render-gate combineert auto-detect (AOV-tx aanwezig?) met
+            # user-override uit dashboard_widgets_json. Geen render = clean
+            # dashboard voor users zonder AOV-flagging.
+            should_render, is_collapsed = should_show_prive_zone(
+                aov_data['count'],
+                widgets_config.get('prive_section_collapsed'),
+            )
+            if should_render:
+                render_prive_zone(aov_data['total'], is_collapsed)
 
     jaar_select.on_value_change(lambda _: refresh_dashboard())
     await refresh_dashboard()

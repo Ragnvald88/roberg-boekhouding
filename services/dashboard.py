@@ -262,6 +262,35 @@ def tax_calendar(jaar: int) -> list[dict]:
     return []
 
 
+def should_show_prive_zone(
+    aov_count: int,
+    user_override_collapsed: bool | None,
+) -> tuple[bool, bool]:
+    """Returns (should_render, is_collapsed_by_default).
+
+    Auto-detect: geen AOV-tx → don't render at all (clean dashboard for
+    users zonder AOV-flag). Met AOV → render visible. User-override
+    (bedrijfsgegevens.dashboard_widgets_json.prive_section_collapsed)
+    overrules auto-detect zodat de user de zone kan tonen/dichthouden
+    onafhankelijk van DB-staat.
+
+    Logic:
+    - user_override_collapsed=True  → render but collapsed (user pinned dicht)
+    - user_override_collapsed=False → render visible        (user pinned open)
+    - user_override_collapsed=None  → auto-detect via aov_count
+        - aov_count > 0  → render visible
+        - aov_count == 0 → don't render
+    """
+    if user_override_collapsed is True:
+        return (True, True)
+    if user_override_collapsed is False:
+        return (True, False)
+    # auto-detect
+    if aov_count > 0:
+        return (True, False)
+    return (False, False)
+
+
 def _seasonal_action_rows(today: date) -> list[ActionRow]:
     """Emit seasonal context-rows for action-inbox.
 

@@ -332,3 +332,37 @@ def render_tax_calendar_tile(deadlines: list[dict]) -> None:
                     f'flex: 1; font-size: 12px; color: {color}')
                 ui.label(label_text).classes(
                     'text-caption num').style(f'color: {color}')
+
+
+def render_prive_zone(aov_total: float, is_collapsed: bool) -> None:
+    """Render Privé-vaste-lasten zone (AOV ONLY).
+
+    AOV is conceptueel privé Box 1 inkomensvoorziening per CLAUDE.md
+    "AOV: GEEN bedrijfskosten" — staat dus expliciet niet in de
+    bedrijfs-kosten-kolom op het dashboard maar wel zichtbaar als
+    privé-vaste-last (relevant voor netto-inkomen-projectie).
+
+    GEEN persoonlijke SPH hier: SPH (Pensioenpremie SPH) is wel
+    bedrijfskost in ons model, dus die hoort thuis bij /kosten en de
+    SPH-tile, NIET in de privé-zone. Dit was de factuele error in
+    v2-discussion die de spec heeft gecorrigeerd.
+
+    `ui.expansion` voor collapse-gedrag. `is_collapsed=True` start
+    dichtgeklapt. State-persist via toggle-handler in pages/dashboard.py
+    is out-of-scope voor T5.1 — eerste render-iteratie respecteert
+    alleen de inkomende `is_collapsed`-waarde uit `should_show_prive_zone`.
+    """
+    with ui.expansion(
+            'Privé-vaste-lasten',
+            icon='account_balance_wallet',
+            value=not is_collapsed,
+        ).classes('w-full prive-zone'):
+        with ui.card().classes('w-full q-pa-md').style(
+                'border: 1px solid var(--border)'):
+            with ui.row().classes('items-center gap-2'):
+                ui.label('AOV YTD:').style('font-size: 13px')
+                ui.label(format_euro(aov_total, decimals=0)).classes(
+                    'num').style('font-size: 13px; font-weight: 600')
+            ui.label(
+                'Niet aftrekbaar als bedrijfskost — wel relevant voor netto-inkomen.'
+            ).classes('text-caption text-grey-6')

@@ -3574,6 +3574,30 @@ async def get_representatie_totaal(db_path: Path = DB_PATH, jaar: int = 2026) ->
         return (await cur.fetchone())[0]
 
 
+async def get_aov_total(
+        db_path: Path = DB_PATH, jaar: int = 2026) -> dict:
+    """Return AOV YTD total + count from banktransacties.
+
+    AOV is in BANK_EXTRA_CATEGORIEEN (bank-only marker), conceptueel privé
+    Box 1 inkomensvoorziening per CLAUDE.md "AOV: GEEN bedrijfskosten".
+
+    Used by Sprint H T5.1 Privé-zone — auto-collapse logic gates op count.
+    Negative bedragen worden naar abs gemapt zodat "AOV YTD" altijd
+    positief gepresenteerd wordt (bank-tx zelf is debit).
+    """
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            """SELECT COALESCE(SUM(ABS(bedrag)), 0) AS total,
+                      COUNT(*) AS count
+               FROM banktransacties
+               WHERE categorie = 'AOV'
+                 AND CAST(strftime('%Y', datum) AS INTEGER) = ?""",
+            (jaar,),
+        )
+        row = await cur.fetchone()
+    return {'total': row['total'], 'count': row['count']}
+
+
 async def get_werkdagen_ongefactureerd_summary(
         db_path: Path = DB_PATH, jaar: int = 2026) -> dict:
     """Get count and estimated amount of unfactured werkdagen for a year.
