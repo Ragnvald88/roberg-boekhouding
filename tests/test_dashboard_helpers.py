@@ -331,3 +331,34 @@ class TestLoadDashboardWidgetsConfig:
         result = load_dashboard_widgets_config(config_in)
         # Falls through to defaults — I-1 default-on
         assert result['widgets']['I-1'] is True
+
+
+class TestComputeSphPrognose:
+    def test_zero_winst_zero_premium(self):
+        from services.dashboard import compute_sph_prognose
+        result = compute_sph_prognose(winst_extrapolatie=0.0, jaar=2026)
+        assert result['pensioengrondslag'] == 0.0
+        assert result['jaarverplichting'] == 0.0
+
+    def test_winst_below_franchise_zero_premium(self):
+        from services.dashboard import compute_sph_prognose
+        # Winst 10k < franchise 19172 → grondslag 0 → premium 0
+        result = compute_sph_prognose(winst_extrapolatie=10_000.0, jaar=2026)
+        assert result['pensioengrondslag'] == 0.0
+        assert result['jaarverplichting'] == 0.0
+
+    def test_mid_winst_above_franchise(self):
+        from services.dashboard import compute_sph_prognose
+        # Winst 80k → grondslag = 80000-19172 = 60828 → premium = 60828 × 0.2394
+        result = compute_sph_prognose(winst_extrapolatie=80_000.0, jaar=2026)
+        assert result['pensioengrondslag'] == 60_828
+        assert abs(result['jaarverplichting'] - 14562.22) < 0.01
+
+    def test_winst_above_cap_clamped(self):
+        from services.dashboard import compute_sph_prognose
+        # Winst 200k → grondslag clamped at cap 137800
+        # 137800 × 0.2394 = 32989.32 (cap × rate, geen franchise-aftrek
+        # nadat min() geclampt heeft)
+        result = compute_sph_prognose(winst_extrapolatie=200_000.0, jaar=2026)
+        assert result['pensioengrondslag'] == 137_800
+        assert abs(result['jaarverplichting'] - 32989.32) < 0.01

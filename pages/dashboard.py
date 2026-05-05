@@ -19,16 +19,18 @@ from database import (
     get_fiscale_params, get_aangifte_documenten,
     get_va_betalingen, get_health_alerts, DB_PATH,
     get_factuur_aging_buckets, get_concept_facturen_stale,
-    update_factuur_status,
+    update_factuur_status, get_db_ctx,
 )
 from components.document_specs import AANGIFTE_DOCS
 from components.fiscal_utils import fetch_fiscal_data, extrapoleer_jaaromzet
 from components.shared_ui import year_options
 from fiscal.berekeningen import bereken_volledig
 from fiscal.constants import URENCRITERIUM_DEFAULT
-from services.agenda import get_urencriterium_projectie
+from services.agenda import (
+    get_urencriterium_projectie, get_zes_weken_prognose,
+)
 from services.dashboard import (
-    compute_belasting_reservering_progress,
+    compute_belasting_reservering_progress, compute_sph_prognose,
     ActionRow, prioritise_actions, _seasonal_action_rows,
 )
 from components.dashboard_widgets import render_action_inbox
@@ -228,7 +230,7 @@ async def dashboard_page():
         (kpis, kpis_vorig, omzet_huidig, omzet_vorig, kosten_per_cat,
          openstaande, ongefact, km_data,
          ib_resultaat, fp, va_data, aangifte_docs,
-         health_alerts, urencrit_state) = await asyncio.gather(
+         health_alerts, urencrit_state, zes_weken) = await asyncio.gather(
             get_kpis(DB_PATH, jaar=jaar),
             get_kpis(DB_PATH, jaar=jaar - 1),
             get_omzet_per_maand(DB_PATH, jaar=jaar),
@@ -243,7 +245,46 @@ async def dashboard_page():
             get_aangifte_documenten(DB_PATH, jaar),
             get_health_alerts(DB_PATH, jaar=jaar),
             get_urencriterium_projectie(DB_PATH, jaar),
+            get_zes_weken_prognose(DB_PATH, vanaf=date.today()),
         )
+
+        # === T4b.1: SPH-prognose data (render wired in T4b.4) ===
+        # Eerst SPH betaald YTD voor het geselecteerde jaar via inline
+        # query (niet de moeite waard om een generieke helper voor te
+        # bouwen — categorie-string is hardcoded contract).
+        async with get_db_ctx(DB_PATH) as conn:
+            cur = await conn.execute(
+                """SELECT COALESCE(SUM(bedrag), 0) AS sph_total
+                   FROM uitgaven
+                   WHERE categorie = 'Pensioenpremie SPH'
+                     AND CAST(strftime('%Y', datum) AS INTEGER) = ?""",
+                (jaar,),
+            )
+            sph_row = await cur.fetchone()
+        sph_betaald_ytd = sph_row['sph_total'] if sph_row else 0.0
+
+        # Winst-projectie voor SPH: zelfde extrapolatie-logica als de
+        # Jaareinde-projectie hero-tile (Card 2). Reverse-engineer
+        # total_kosten_ytd uit (omzet - ytd_winst) + extrapoleer naar 12mo
+        # zodat SPH-grondslag consistent blijft met getoond projectie-getal.
+        if ib_resultaat is not None:
+            omzet_ytd = kpis['omzet']
+            total_kosten_ytd = max(
+                0.0, omzet_ytd - ib_resultaat['ytd_winst'])
+            basis_m = ib_resultaat.get('basis_maanden', 12) or 1
+            kosten_factor = 12 / basis_m
+            winst_proj = (ib_resultaat['extrapolated_omzet']
+                          - (total_kosten_ytd * kosten_factor))
+        else:
+            winst_proj = 0.0
+        sph_prognose = compute_sph_prognose(winst_proj, jaar)
+        # NOTE: render-calls (render_sph_tile, render_zes_weken_tile)
+        # worden in T4b.4 wired aan de inzicht-grid via config-check.
+        # Hier alleen data-prep + linting (no-op assignments markeren
+        # de variabelen als-used).
+        _ = sph_prognose
+        _ = sph_betaald_ytd
+        _ = zes_weken
 
         # For YoY delta: compare exact same calendar period
         huidig_jaar = date.today().year

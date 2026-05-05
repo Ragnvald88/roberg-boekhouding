@@ -17,6 +17,39 @@ log = logging.getLogger(__name__)
 
 DASHBOARD_CONFIG_SCHEMA_VERSION = 1
 
+# SPH (Stichting Pensioenfonds Huisartsen) — premium parameters voor
+# pensioengrondslag berekening. Publicatie 2026; als het bestuur de
+# percentages later wijzigt, voeg per-jaar branch toe in
+# compute_sph_prognose ipv constants overschrijven.
+SPH_PREMIUM_RATE_2026 = 0.2394
+SPH_FRANCHISE_2026 = 19_172
+SPH_GRONDSLAG_CAP_2026 = 137_800
+
+
+def compute_sph_prognose(winst_extrapolatie: float, jaar: int) -> dict:
+    """Computeer geprognoseerde SPH-jaarverplichting.
+
+    Formula 2026: 23.94% × min(€137.800, max(0, winst − €19.172))
+
+    Returns dict: {'pensioengrondslag', 'jaarverplichting',
+                   'rate', 'cap', 'franchise'}.
+
+    Voor jaren ≠ 2026: same formule (publicatie 2026 — als premies
+    later wijzigen, update deze constants per-jaar).
+    """
+    grondslag = max(
+        0.0,
+        min(SPH_GRONDSLAG_CAP_2026, winst_extrapolatie - SPH_FRANCHISE_2026),
+    )
+    jaarverplichting = grondslag * SPH_PREMIUM_RATE_2026
+    return {
+        'pensioengrondslag': grondslag,
+        'jaarverplichting': jaarverplichting,
+        'rate': SPH_PREMIUM_RATE_2026,
+        'cap': SPH_GRONDSLAG_CAP_2026,
+        'franchise': SPH_FRANCHISE_2026,
+    }
+
 DEFAULT_WIDGETS: dict[str, bool] = {
     'I-1': True,   # Cumulatieve omzet YoY
     'I-2': True,   # Kosten breakdown donut
