@@ -11,7 +11,7 @@ from typing import Callable
 from nicegui import ui
 
 from components.utils import format_euro
-from services.dashboard import ActionRow
+from services.dashboard import ActionRow, VATrackSummary
 
 
 # Severity → icon/color mapping. Critical uses Quasar negative token
@@ -366,3 +366,129 @@ def render_prive_zone(aov_total: float, is_collapsed: bool) -> None:
             ui.label(
                 'Niet aftrekbaar als bedrijfskost — wel relevant voor netto-inkomen.'
             ).classes('text-caption text-grey-6')
+
+
+def render_va_tile(summary: VATrackSummary, jaar: int) -> None:
+    """Render VA-tracker hero-tile op dashboard (Sprint I — vervangt
+    Sprint H Belasting-reservering Card 3).
+
+    Toont een line-first overview: hero-value = totaal_resterend
+    (verplicht − betaald), per-soort lines (IB/ZVW), volgende-termijn
+    footer (alleen bij open verplichting), en bankdata-versheid footer.
+    `.is-tekort` modifier alleen bij status='achter' (echte achterstand —
+    user heeft een vervaldatum gemist). Overbetaald-badge verschijnt
+    alleen bij status='voldaan' AND has_overbetaald (Codex round-3
+    line-first principe — toont overbetaling ook bij open totaal).
+
+    Click-target deep-linkt naar /aangifte?jaar=X zodat de gebruiker
+    direct de beschikkingsbedragen + termijnen kan controleren.
+    """
+    is_warning = (summary.status == 'achter')
+    card_classes = 'dashboard-hero-tile'
+    if is_warning:
+        card_classes += ' is-tekort'
+
+    with ui.card().classes(card_classes) \
+            .style('cursor: pointer') \
+            .on('click', lambda j=jaar: ui.navigate.to(f'/aangifte?jaar={j}')):
+        # Title row + warning icon (alleen bij echte achterstand)
+        with ui.row().classes('w-full justify-between items-center'):
+            ui.label(f'Voorlopige aanslag {jaar}').classes('hero-label')
+            if is_warning:
+                tooltip = (
+                    f'Achterstand: '
+                    f'{format_euro(summary.totaal_achterstand, decimals=0)}'
+                )
+                ui.icon('warning', size='18px').style(
+                    'color: var(--q-negative)').tooltip(tooltip)
+
+        # Geen-data fallback (geen beschikking + geen bankdata)
+        if summary.status == 'geen_data':
+            ui.label('—').classes('hero-value')
+            ui.label(
+                f'Geen beschikking of bankbetalingen voor {jaar}'
+            ).classes('context-text').style('margin-top: 8px')
+            return
+
+        # Geen-beschikking fallback (bankdata wel, beschikking niet —
+        # tile linkt door naar /aangifte zodat user de jaarbedragen
+        # invult; we tonen alvast wat de bank aan IB/ZVW + termijnen
+        # heeft gevangen, plus unmatched-regel als die er is)
+        if summary.status == 'geen_beschikking':
+            ui.label('—').classes('hero-value')
+            ui.label('Bankbetalingen gevonden — vul beschikking in').classes(
+                'context-text').style('margin-top: 8px')
+            ui.label(
+                f'IB  {format_euro(summary.ib.betaald, decimals=0)} '
+                f'· {summary.ib.betaalde_termijnen} termijnen'
+            ).classes('context-text')
+            ui.label(
+                f'ZVW {format_euro(summary.zvw.betaald, decimals=0)} '
+                f'· {summary.zvw.betaalde_termijnen} termijnen'
+            ).classes('context-text')
+            if summary.unmatched_betaald > 0:
+                ui.label(
+                    f'Niet toegewezen: '
+                    f'{format_euro(summary.unmatched_betaald, decimals=0)} '
+                    f'({summary.unmatched_termijnen} betalingen)'
+                ).classes('context-text').style('color: var(--q-warning)')
+            return
+
+        # Hero value: resterend (wat nog moet worden betaald aan BD)
+        with ui.row().classes('w-full items-baseline gap-2'):
+            ui.label(format_euro(summary.totaal_resterend, decimals=0)) \
+                .classes('hero-value')
+            # Overbetaald-badge: alleen bij voldaan AND has_overbetaald
+            # — niet bij status='bij' want dan kan een IB-overbetaling een
+            # nog-open ZVW-resterend maskeren (Codex round-3 motivatie).
+            if summary.status == 'voldaan' and summary.has_overbetaald:
+                overbetaald = (summary.ib.overbetaald
+                               + summary.zvw.overbetaald)
+                ui.label(
+                    f'overbetaald {format_euro(overbetaald, decimals=0)}'
+                ).style(
+                    'font-size: 12px; color: var(--q-warning); '
+                    'background: var(--bg-warning-soft); '
+                    'padding: 2px 8px; border-radius: 10px')
+
+        # Body: per-soort lines (IB + ZVW) — sla over als zowel
+        # verplichting als betaald 0 zijn (bv. ZVW niet apart aangeslagen).
+        for line in (summary.ib, summary.zvw):
+            if line.verplicht == 0 and line.betaald == 0:
+                continue
+            ui.label(
+                f'{line.soort}    '
+                f'{format_euro(line.betaald, decimals=0)} / '
+                f'{format_euro(line.verplicht, decimals=0)}  ·  '
+                f'rest {format_euro(line.resterend, decimals=0)}'
+            ).classes('context-text')
+            ui.label(
+                f'   {line.betaalde_termijnen} v.d. {line.totaal_termijnen}'
+                f'   ± {format_euro(line.termijnbedrag, decimals=0)} p/m'
+            ).classes('context-text').style('opacity: 0.75')
+
+        # Unmatched-regel (Codex T1.4 catch — spec §4 vereist deze als
+        # sub-line bij > 0). Bankbetalingen zonder bruikbaar kenmerk
+        # mogen niet stil onzichtbaar blijven op het dashboard.
+        if summary.unmatched_betaald > 0:
+            ui.label(
+                f'Niet toegewezen: '
+                f'{format_euro(summary.unmatched_betaald, decimals=0)} '
+                f'({summary.unmatched_termijnen} betalingen)'
+            ).classes('context-text').style('color: var(--q-warning)')
+
+        # Volgende-termijn footer — alleen bij open verplichting
+        # (compute_va_tracker zet None bij voldaan/closed/geen-data).
+        if summary.volgende_termijn_datum is not None:
+            datum_str = summary.volgende_termijn_datum.strftime(
+                '%-d %b %Y').lower()
+            ui.label(f'Volgende termijn: {datum_str}').classes(
+                'context-text').style('margin-top: 4px; opacity: 0.85')
+
+        # Bankdata-versheid footer — laat user weten t/m welke datum
+        # de bankbetalingen geteld zijn (anders is "betaald = X" zonder
+        # context — lijkt definitief terwijl er nog rijen later inkomen).
+        if summary.bankdata_tot_datum is not None:
+            datum_str = summary.bankdata_tot_datum.strftime('%-d %b').lower()
+            ui.label(f'Bankdata t/m {datum_str}').classes(
+                'context-text').style('opacity: 0.6; font-size: 11px')

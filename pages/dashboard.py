@@ -33,6 +33,7 @@ from services.agenda import (
 )
 from services.dashboard import (
     compute_belasting_reservering_progress, compute_sph_prognose,
+    compute_va_tracker,
     ActionRow, prioritise_actions, _seasonal_action_rows,
     tax_calendar, load_dashboard_widgets_config,
     should_show_prive_zone,
@@ -41,7 +42,7 @@ from components.dashboard_widgets import (
     render_action_inbox, render_sph_tile, render_zes_weken_tile,
     render_top_klanten_tile, render_documenten_tile,
     render_cash_positie_tile, render_tax_calendar_tile,
-    render_prive_zone,
+    render_prive_zone, render_va_tile,
 )
 
 
@@ -628,83 +629,29 @@ async def dashboard_page():
                             f'YTD-winst: {format_euro(ytd_winst, decimals=0)}'
                         ).classes('context-text')
 
-                # Card 3: Belasting-reservering (Sprint H — replaces verbose
-                # Belasting-prognose). Uses engine-exact day-precision
-                # proration via services.dashboard helper. Verbose
-                # progress-bar + VA-termijn-info verhuizen naar /aangifte
-                # per spec C.2 (hero-card moet scannable in 2 sec).
-                if ib_resultaat is not None:
-                    berekend_jaarbelasting = (ib_resultaat['netto_ib']
-                                              + ib_resultaat['zvw'])
-                    if va_data['has_bank_data']:
-                        va_betaald = va_data['totaal_betaald']
-                    else:
-                        va_betaald = (ib_resultaat['va_ib_betaald']
-                                      + ib_resultaat['va_zvw_betaald'])
-
-                    # Codex T1.4-review fix: helper expects `today.year` ==
-                    # `jaar`. Voor afgesloten jaren (jaar < huidig) clamp
-                    # naar 31-dec van dat jaar zodat days_elapsed = full
-                    # year (proratie 100%). Voor toekomstige jaren (zou
-                    # niet mogen — dashboard toont 2023..nu) idem 31-dec.
-                    today_for_proration = min(
-                        date.today(), date(jaar, 12, 31))
-                    status, diff = compute_belasting_reservering_progress(
-                        berekend_jaarbelasting=berekend_jaarbelasting,
-                        va_betaald_ytd=va_betaald,
-                        today=today_for_proration,
-                    )
-                    is_tekort = (status == 'tekort')
-                    # diff > 0 = tekort = bedrag dat nog moet worden
-                    # gereserveerd. Helper rekent day-precision proration —
-                    # reuse i.p.v. lokale formule om drift te voorkomen.
-                    nu_te_reserveren = max(0.0, diff)
-
-                    card_classes = 'dashboard-hero-tile'
-                    if is_tekort:
-                        card_classes += ' is-tekort'
-
-                    with ui.card().classes(card_classes) \
-                            .style('cursor: pointer') \
-                            .on('click', lambda: ui.navigate.to('/aangifte')):
-                        with ui.row().classes(
-                                'w-full justify-between items-center'):
-                            ui.label('Belasting-reservering').classes(
-                                'hero-label')
-                            if is_tekort:
-                                ui.icon('warning', size='18px').style(
-                                    'color: var(--q-negative)') \
-                                    .tooltip(
-                                        f'Tekort: '
-                                        f'{format_euro(diff, decimals=0)}')
-                        # Engine-exact bedrag — toon wat NU op spaarrekening
-                        # moet staan (max 0 zodat overreservering niet
-                        # negatief weergeeft).
-                        ui.label(
-                            format_euro(nu_te_reserveren, decimals=0)
-                        ).classes('hero-value')
-                        # Context-line: berekend + betaald + status-suffix.
-                        # Codex T1.4-review flagde dat overreservering-status
-                        # weggegooid werd; nu zichtbaar als "overgereserveerd".
-                        context_parts = [
-                            f'Berekend {format_euro(berekend_jaarbelasting, decimals=0)}',
-                            f'betaald {format_euro(va_betaald, decimals=0)}',
-                        ]
-                        if status == 'overreservering':
-                            context_parts.append(
-                                f'overgereserveerd {format_euro(abs(diff), decimals=0)}'
-                            )
-                        ui.label(' \u00b7 '.join(context_parts)).classes(
-                            'context-text')
-                else:
-                    # Geen-gegevens fallback ook clickable naar /aangifte
-                    # (Codex T1.4-review flagde dat else-branch handler miste).
-                    with ui.card().classes('dashboard-hero-tile') \
-                            .style('cursor: pointer') \
-                            .on('click', lambda: ui.navigate.to('/aangifte')):
-                        ui.label('Belasting-reservering').classes('hero-label')
-                        ui.label('Geen gegevens').classes(
-                            'context-text').style('margin-top: 8px')
+                # Card 3: Voorlopige aanslag (Sprint I — vervangt Sprint H
+                # Belasting-reservering). compute_va_tracker geeft een
+                # line-first VATrackSummary met IB + ZVW progress, op basis
+                # van de jaarbedragen (fp.voorlopige_aanslag_betaald/_zvw)
+                # en de bank-gematchte termijnen (va_data uit
+                # get_va_betalingen). Geen extrapolatie meer — alleen
+                # audit-trail-traceerbare data.
+                va_summary = compute_va_tracker(
+                    jaar=jaar,
+                    va_data=va_data,
+                    ib_verplicht=(fp.voorlopige_aanslag_betaald
+                                  if fp else 0) or 0,
+                    zvw_verplicht=(fp.voorlopige_aanslag_zvw
+                                   if fp else 0) or 0,
+                    ib_termijnen=(getattr(
+                        fp, 'voorlopige_aanslag_ib_termijnen', 11)
+                        if fp else 11) or 11,
+                    zvw_termijnen=(getattr(
+                        fp, 'voorlopige_aanslag_zvw_termijnen', 11)
+                        if fp else 11) or 11,
+                    today=date.today(),
+                )
+                render_va_tile(va_summary, jaar=jaar)
 
                 # Card 4: Urencriterium-projectie (Sprint H T2.3 — was strip-card,
                 # nu hero). Toont "huidig / target" met "bij dit tempo: prognose

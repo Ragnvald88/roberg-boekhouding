@@ -28,6 +28,7 @@ from database import (
     update_ib_inputs, update_box3_inputs, update_box3_fiscaal_partner,
     update_ew_naar_partner,
     update_za_sa_toggles, get_belastingdienst_betalingen,
+    get_va_betalingen,
     update_partner_inputs, DB_PATH,
     YearLockedError, assert_year_writable,
 )
@@ -70,13 +71,19 @@ from components.document_specs import (
 )
 
 @ui.page('/aangifte')
-async def aangifte_page():
+async def aangifte_page(jaar: int | None = None):
     create_layout('Aangifte', '/aangifte')
 
     huidig_jaar = date.today().year
     vorig_jaar = huidig_jaar - 1
     jaren = year_options()
-    state = {'jaar': vorig_jaar}
+    # Sprint I T1.4 — query-param `?jaar=X` deep-link uit dashboard
+    # VA-tile. Default blijft vorig_jaar (aangifte-context); explicit
+    # jaar-param wint mits het in de jaar-dropdown options zit.
+    initial_jaar = vorig_jaar
+    if jaar is not None and jaar in jaren:
+        initial_jaar = jaar
+    state = {'jaar': initial_jaar}
     _cache = {'jaar': None, 'data': None, 'fiscaal': None, 'error': None}
 
     async def _get_fiscal(jaar: int):
@@ -183,7 +190,8 @@ async def aangifte_page():
         # Filter bar
         with ui.element('div').classes('page-toolbar w-full'):
             jaar_select = ui.select(
-                {j: str(j) for j in jaren}, value=vorig_jaar, label='Aangiftejaar',
+                {j: str(j) for j in jaren}, value=initial_jaar,
+                label='Aangiftejaar',
                 on_change=lambda e: on_jaar_change(e.value),
             ).classes('w-32')
 
@@ -565,37 +573,88 @@ async def aangifte_page():
                 ui.label(f'{BD["va_ib"]}, {BD["va_zvw"]}') \
                     .classes('text-caption text-grey-6')
 
-                # Show bank-detected payments
-                bd_betaald = await get_belastingdienst_betalingen(DB_PATH, jaar)
-                va_totaal = data['voorlopige_aanslag'] + data['voorlopige_aanslag_zvw']
-                if bd_betaald > 0 or va_totaal > 0:
+                # Sprint I T1.4 — termijnen-inputs (1-12 per soort).
+                # Default 11 = feb-start (BD-praktijk wanneer beschikking
+                # in januari binnenkomt). User kan per beschikking
+                # afwijken (bv. 12 als BD vanaf januari rekent).
+                with ui.row().classes('gap-4 flex-wrap q-mt-sm'):
+                    va_ib_termijnen_input = ui.number(
+                        'Aantal termijnen IB',
+                        value=getattr(
+                            params, 'voorlopige_aanslag_ib_termijnen', 11)
+                            or 11,
+                        min=1, max=12, step=1, format='%d',
+                    ).classes('w-40')
+                    if is_locked:
+                        va_ib_termijnen_input.props('disable')
+                    va_zvw_termijnen_input = ui.number(
+                        'Aantal termijnen ZVW',
+                        value=getattr(
+                            params, 'voorlopige_aanslag_zvw_termijnen', 11)
+                            or 11,
+                        min=1, max=12, step=1, format='%d',
+                    ).classes('w-40')
+                    if is_locked:
+                        va_zvw_termijnen_input.props('disable')
+                ui.label(
+                    '11 = feb-start (BD-praktijk), 12 = jan-start.'
+                ).classes('text-caption text-grey-6')
+
+                # Sprint I T1.4 — bank-summary herschrijving:
+                # gesplitste IB/ZVW + termijnen + unmatched-rij.
+                # va_data uit get_va_betalingen (kenmerk-positie [10:12]
+                # split na BREAKING contract change in T1.2).
+                va_data = await get_va_betalingen(DB_PATH, jaar)
+                va_totaal = (data['voorlopige_aanslag']
+                             + data['voorlopige_aanslag_zvw'])
+                if va_data['has_bank_data'] or va_totaal > 0:
                     ui.separator().classes('q-my-sm')
-                    with ui.row().classes('gap-8 items-start'):
-                        with ui.column().classes('gap-0'):
-                            ui.label('Betaald via bank').classes(
-                                'text-caption text-grey-7')
-                            ui.label(format_euro(bd_betaald)).classes(
-                                'text-body1 text-weight-bold text-positive num')
-                        if va_totaal > 0:
-                            with ui.column().classes('gap-0'):
-                                ui.label('Beschikking totaal').classes(
-                                    'text-caption text-grey-7')
-                                ui.label(format_euro(va_totaal)).classes(
-                                    'text-body1 text-weight-bold num')
-                            with ui.column().classes('gap-0'):
-                                verschil = va_totaal - bd_betaald
-                                ui.label(
-                                    'Nog te betalen' if verschil > 0
-                                    else 'Meer betaald'
-                                ).classes('text-caption text-grey-7')
-                                color = ('text-warning' if verschil > 0
-                                         else 'text-positive')
-                                ui.label(format_euro(abs(verschil))) \
-                                    .classes(f'text-body1 text-weight-bold {color} num')
+                    if va_data.get('bankdata_tot_datum'):
+                        ui.label(
+                            f"Bankbetalingen aan Belastingdienst (t/m "
+                            f"{va_data['bankdata_tot_datum'].strftime('%-d %b')})"
+                        ).classes('text-sm text-weight-bold')
+                    else:
+                        ui.label('Bankbetalingen aan Belastingdienst') \
+                            .classes('text-sm text-weight-bold')
+
+                    # Per-soort betaald + termijnen + rest (Codex T1.4 catch
+                    # — spec §6 toont expliciet "rest €X" per regel).
+                    ib_betaald = va_data.get('ib_betaald', 0) or 0
+                    zvw_betaald = va_data.get('zvw_betaald', 0) or 0
+                    ib_rest = max(
+                        (data['voorlopige_aanslag'] or 0) - ib_betaald, 0)
+                    zvw_rest = max(
+                        (data['voorlopige_aanslag_zvw'] or 0) - zvw_betaald,
+                        0)
                     ui.label(
-                        'Banktotaal = alle betalingen aan Belastingdienst '
-                        '(IB + ZVW + evt. definitieve aanslagen)'
-                    ).classes('text-caption text-grey-6')
+                        f"  IB:  {format_euro(ib_betaald)} "
+                        f"betaald · {va_data.get('ib_termijnen', 0)} "
+                        f"termijnen · rest {format_euro(ib_rest)}"
+                    ).classes('text-sm num')
+                    ui.label(
+                        f"  ZVW: {format_euro(zvw_betaald)} "
+                        f"betaald · {va_data.get('zvw_termijnen', 0)} "
+                        f"termijnen · rest {format_euro(zvw_rest)}"
+                    ).classes('text-sm num')
+
+                    if va_data.get('unmatched_betaald', 0) > 0:
+                        with ui.row().classes('items-center gap-2 q-mt-xs'):
+                            ui.label(
+                                f"  Niet toegewezen: "
+                                f"{format_euro(va_data['unmatched_betaald'])} "
+                                f"({va_data['unmatched_termijnen']} "
+                                f"betalingen)"
+                            ).classes('text-sm text-warning num')
+                            # j=jaar binding voorkomt late-binding closure-bug
+                            # (alle buttons zouden anders dezelfde jaar-waarde
+                            # zien op het moment van click i.p.v. render).
+                            ui.button(
+                                'Controleer in transacties',
+                                on_click=lambda j=jaar: ui.navigate.to(
+                                    f'/transacties?search=NL86INGB0002445588'
+                                    f'&jaar={j}')
+                            ).props('flat dense color=primary')
 
             # Card 4: Partner gegevens
             with ui.card().classes('w-full'):
@@ -631,6 +690,14 @@ async def aangifte_page():
                 hyp_val = hyp_input.value or 0
                 va_ib_val = va_ib_input.value or 0
                 va_zvw_val = va_zvw_input.value or 0
+                # Sprint I T1.4 — termijn-inputs (defensieve 1..12 clamp;
+                # `ui.number(min=1,max=12)` bewaakt UI maar manueel
+                # ingetypte out-of-range zou anders ValueError uit
+                # `update_ib_inputs` triggeren bij elke blur).
+                va_ib_termijnen_val = max(1, min(12, int(
+                    va_ib_termijnen_input.value or 11)))
+                va_zvw_termijnen_val = max(1, min(12, int(
+                    va_zvw_termijnen_input.value or 11)))
                 ew_val = ew_partner_check.value
                 lijfrente_val = lijfrente_input.value or 0
 
@@ -645,6 +712,8 @@ async def aangifte_page():
                         voorlopige_aanslag_betaald=va_ib_val,
                         voorlopige_aanslag_zvw=va_zvw_val,
                         lijfrente_premie=lijfrente_val,
+                        voorlopige_aanslag_ib_termijnen=va_ib_termijnen_val,
+                        voorlopige_aanslag_zvw_termijnen=va_zvw_termijnen_val,
                     )
                     await update_ew_naar_partner(
                         DB_PATH, jaar=jaar, value=ew_val)
@@ -666,6 +735,12 @@ async def aangifte_page():
                     ew_partner_check.value = data['ew_naar_partner']
                     partner_loon_input.value = params.partner_bruto_loon or 0
                     partner_lh_input.value = params.partner_loonheffing or 0
+                    # Sprint I T1.4 — termijn-inputs ook reverten naar
+                    # de op-disk waarden zodat de UI niet over de DB liegt.
+                    va_ib_termijnen_input.value = getattr(
+                        params, 'voorlopige_aanslag_ib_termijnen', 11) or 11
+                    va_zvw_termijnen_input.value = getattr(
+                        params, 'voorlopige_aanslag_zvw_termijnen', 11) or 11
                     return
 
                 # Invalidate cache and refresh dependent views
@@ -681,6 +756,7 @@ async def aangifte_page():
             # Attach auto-save to all prive inputs
             for _inp in [woz_input, hyp_input, aov_input, lijfrente_input,
                          va_ib_input, va_zvw_input,
+                         va_ib_termijnen_input, va_zvw_termijnen_input,
                          partner_loon_input, partner_lh_input]:
                 _inp.on('blur', save_prive)
             ew_partner_check.on('change', save_prive)
