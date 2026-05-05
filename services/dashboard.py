@@ -7,9 +7,90 @@ All functions are testable in isolation.
 """
 from __future__ import annotations
 
+import json
+import logging
 from dataclasses import dataclass
 from datetime import date
 from typing import Literal
+
+log = logging.getLogger(__name__)
+
+DASHBOARD_CONFIG_SCHEMA_VERSION = 1
+
+DEFAULT_WIDGETS: dict[str, bool] = {
+    'I-1': True,   # Cumulatieve omzet YoY
+    'I-2': True,   # Kosten breakdown donut
+    'I-3': True,   # SPH-status (T4b.1)
+    'I-4': True,   # 6-weken prognose (T4b.1)
+    'I-5': False,  # Top klanten (T4b.2)
+    'I-6': False,  # Documenten checklist (T4b.2)
+    'I-7': False,  # Cash-positie (T4b.3)
+    'I-8': False,  # Tax-calendar full (T4b.3)
+}
+
+
+def _defaults_dict() -> dict:
+    return {
+        'schema_version': DASHBOARD_CONFIG_SCHEMA_VERSION,
+        'widgets': dict(DEFAULT_WIDGETS),
+        'prive_section_collapsed': None,
+    }
+
+
+def load_dashboard_widgets_config(raw_json: str | None) -> dict:
+    """Load + validate dashboard config with 5 defensiveness rules:
+
+    1. NULL → defaults
+    2. Invalid JSON → defaults + log warning
+    3. Not a dict → defaults
+    4. schema_version mismatch → defaults + log warning (do NOT migrate silently)
+    5. Unknown widget keys → ignored
+    6. Missing widget keys → fall through to DEFAULT_WIDGETS
+
+    Returns: {'schema_version': N, 'widgets': {...},
+              'prive_section_collapsed': null | bool}
+    """
+    if raw_json is None:
+        return _defaults_dict()
+
+    try:
+        parsed = json.loads(raw_json)
+    except json.JSONDecodeError:
+        log.warning('dashboard_widgets_json invalid JSON, using defaults')
+        return _defaults_dict()
+
+    if not isinstance(parsed, dict):
+        log.warning('dashboard_widgets_json not a dict, using defaults')
+        return _defaults_dict()
+
+    if parsed.get('schema_version') != DASHBOARD_CONFIG_SCHEMA_VERSION:
+        log.warning(
+            'dashboard_widgets_json schema_version mismatch '
+            f'({parsed.get("schema_version")} != {DASHBOARD_CONFIG_SCHEMA_VERSION}), '
+            'using defaults'
+        )
+        return _defaults_dict()
+
+    user_widgets = parsed.get('widgets', {})
+    if not isinstance(user_widgets, dict):
+        return _defaults_dict()
+
+    # Merge: known keys → user value if present + bool, else default
+    merged = {}
+    for key, default in DEFAULT_WIDGETS.items():
+        user_val = user_widgets.get(key)
+        merged[key] = user_val if isinstance(user_val, bool) else default
+
+    # Defensiveness: prive_section_collapsed must be bool | None per contract;
+    # any other type (string, dict, int) → None to avoid leaking junk to UI.
+    raw_collapsed = parsed.get('prive_section_collapsed')
+    prive_section_collapsed = raw_collapsed if isinstance(raw_collapsed, bool) else None
+
+    return {
+        'schema_version': DASHBOARD_CONFIG_SCHEMA_VERSION,
+        'widgets': merged,
+        'prive_section_collapsed': prive_section_collapsed,
+    }
 
 
 def compute_belasting_reservering_progress(

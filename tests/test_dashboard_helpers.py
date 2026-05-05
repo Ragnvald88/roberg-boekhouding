@@ -290,3 +290,44 @@ class TestSeasonalActionRows:
         rows = _seasonal_action_rows(today=date(2026, 12, 15))
         va_rows = [r for r in rows if r.kind == 'va_laatste_termijn']
         assert len(va_rows) == 1
+
+
+class TestLoadDashboardWidgetsConfig:
+    def test_null_input_returns_defaults(self):
+        from services.dashboard import (
+            load_dashboard_widgets_config, DEFAULT_WIDGETS,
+        )
+        result = load_dashboard_widgets_config(None)
+        # All keys present
+        for key in DEFAULT_WIDGETS:
+            assert key in result['widgets']
+        # Default-on for I-1..I-4
+        assert result['widgets']['I-1'] is True
+        assert result['widgets']['I-4'] is True
+
+    def test_invalid_json_returns_defaults(self):
+        from services.dashboard import load_dashboard_widgets_config
+        result = load_dashboard_widgets_config('not valid json')
+        assert result['widgets']['I-1'] is True
+
+    def test_unknown_keys_ignored(self):
+        from services.dashboard import load_dashboard_widgets_config
+        config_in = '{"schema_version": 1, "widgets": {"I-99": true}}'
+        result = load_dashboard_widgets_config(config_in)
+        assert 'I-99' not in result['widgets']
+
+    def test_missing_keys_use_defaults(self):
+        from services.dashboard import load_dashboard_widgets_config
+        # Only specifies I-5; rest must use defaults
+        config_in = '{"schema_version": 1, "widgets": {"I-5": true}}'
+        result = load_dashboard_widgets_config(config_in)
+        assert result['widgets']['I-5'] is True  # explicit
+        assert result['widgets']['I-1'] is True  # default-on
+        assert result['widgets']['I-6'] is False  # default-off
+
+    def test_schema_version_mismatch_falls_through_to_defaults(self):
+        from services.dashboard import load_dashboard_widgets_config
+        config_in = '{"schema_version": 99, "widgets": {"I-1": false}}'
+        result = load_dashboard_widgets_config(config_in)
+        # Falls through to defaults — I-1 default-on
+        assert result['widgets']['I-1'] is True
