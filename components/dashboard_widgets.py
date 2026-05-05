@@ -5,6 +5,7 @@ self-contained widget. Pure-data helpers live in services/dashboard.py.
 """
 from __future__ import annotations
 
+from datetime import date
 from typing import Callable
 
 from nicegui import ui
@@ -253,3 +254,81 @@ def render_documenten_tile(
                          else 'var(--muted)')
                 ui.icon(icon, size='16px').style(f'color: {color}')
                 ui.label(label).style('font-size: 12px; flex: 1')
+
+
+def render_cash_positie_tile(
+    opening_saldo: float | None,
+    flow_ytd: float,
+) -> None:
+    """Render I-7 Cash-positie + flow YTD tile.
+
+    `opening_saldo` from `fp.balans_bank_saldo` (None of 0 → empty-state).
+    Per spec § E R1 wordt empty-state idealiter via `IS NULL` per jaar
+    bepaald, maar het schema zet DEFAULT 0 zodat NULL aan de Python-kant
+    altijd al naar 0 gecoerced is (zie `_row_to_fiscale_params`). Caller
+    moet daarom 0 → None mappen vóór deze renderer aanroepen.
+
+    `flow_ytd` = SUM(banktransacties.bedrag) voor het jaar — kan negatief
+    zijn als kosten > inkomsten YTD.
+    """
+    with ui.card().classes('q-pa-md').style(
+            'border: 1px solid var(--border)'):
+        ui.label('Cash-positie').style(
+            'font-weight: 600; color: var(--text); margin-bottom: 8px')
+
+        if opening_saldo is None:
+            with ui.column().classes('gap-1'):
+                ui.label('Geen opening-saldo ingevuld').classes(
+                    'text-body2 text-grey-6')
+                ui.button(
+                    'Vul in /instellingen',
+                    on_click=lambda: ui.navigate.to(
+                        '/instellingen?tab=fiscaal')) \
+                    .props('flat dense color=primary size=sm')
+            return
+
+        current = opening_saldo + flow_ytd
+        ui.label(format_euro(current, decimals=0)).classes('text-h6 num')
+        ui.label(
+            f'Opening: {format_euro(opening_saldo)} · '
+            f'flow: {format_euro(flow_ytd)}'
+        ).classes('text-caption text-grey-6')
+
+
+def render_tax_calendar_tile(deadlines: list[dict]) -> None:
+    """Render I-8 Tax-calendar (alle deadlines voor het jaar) tile.
+
+    `deadlines` from `services.dashboard.tax_calendar(jaar)` — list[dict]
+    met `kind`/`date`/`label` per deadline. Past en future deadlines
+    worden allebei getoond (anders krimpt de tile end-of-year tot leeg);
+    past deadlines tonen "voorbij" + grey, <14d future = red urgency.
+    """
+    with ui.card().classes('q-pa-md').style(
+            'border: 1px solid var(--border)'):
+        ui.label('Belasting-deadlines').style(
+            'font-weight: 600; color: var(--text); margin-bottom: 8px')
+
+        if not deadlines:
+            ui.label('Geen deadlines bekend').classes(
+                'text-caption text-grey-6')
+            return
+
+        today = date.today()
+        for d in deadlines:
+            days = (d['date'] - today).days
+            # Color logic: <0 = past (muted), 0..14 = urgent (red),
+            # >14 = normal (text). Exhaustive over int domain.
+            if days < 0:
+                color = 'var(--muted)'
+                label_text = 'voorbij'
+            elif days < 14:
+                color = 'var(--q-negative)'
+                label_text = f'{days}d'
+            else:
+                color = 'var(--text)'
+                label_text = f'{days}d'
+            with ui.row().classes('w-full items-center gap-2'):
+                ui.label(d['label']).style(
+                    f'flex: 1; font-size: 12px; color: {color}')
+                ui.label(label_text).classes(
+                    'text-caption num').style(f'color: {color}')

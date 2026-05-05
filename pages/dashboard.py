@@ -33,6 +33,7 @@ from services.agenda import (
 from services.dashboard import (
     compute_belasting_reservering_progress, compute_sph_prognose,
     ActionRow, prioritise_actions, _seasonal_action_rows,
+    tax_calendar,
 )
 from components.dashboard_widgets import render_action_inbox
 
@@ -281,14 +282,49 @@ async def dashboard_page():
         else:
             winst_proj = 0.0
         sph_prognose = compute_sph_prognose(winst_proj, jaar)
-        # NOTE: render-calls (render_sph_tile, render_zes_weken_tile)
-        # worden in T4b.4 wired aan de inzicht-grid via config-check.
-        # Hier alleen data-prep + linting (no-op assignments markeren
-        # de variabelen als-used).
+
+        # === T4b.3: Cash-positie data (render wired in T4b.4) ===
+        # Empty-state per spec § E R1: idealiter `IS NULL` per jaar, maar
+        # `_row_to_fiscale_params` coerced NULL → 0 via `or 0`. Pragmatisch:
+        # 0 → None mapping hier — de tile toont dan de "vul in /instellingen"
+        # CTA. Een legitiem €0-saldo gaat verloren maar dat is een edge-case
+        # (huisarts-praktijk heeft altijd >0 saldo); user kan altijd handmatig
+        # via /instellingen iets > 0 invullen om de tile te activeren.
+        if fp is not None:
+            raw_opening = fp.balans_bank_saldo
+            opening_saldo = raw_opening if raw_opening else None
+        else:
+            opening_saldo = None
+
+        # flow_ytd = SUM van alle banktransacties.bedrag voor het jaar
+        # (signed: positives = inkomsten, negatives = uitgaven). Inline
+        # query — single-purpose, geen helper waard.
+        async with get_db_ctx(DB_PATH) as conn:
+            cur = await conn.execute(
+                """SELECT COALESCE(SUM(bedrag), 0) AS flow_total
+                   FROM banktransacties
+                   WHERE CAST(strftime('%Y', datum) AS INTEGER) = ?""",
+                (jaar,),
+            )
+            flow_row = await cur.fetchone()
+        flow_ytd = flow_row['flow_total'] if flow_row else 0.0
+
+        # === T4b.3: Tax-calendar data ===
+        tax_deadlines = tax_calendar(jaar)
+
+        # NOTE: render-calls (render_sph_tile, render_zes_weken_tile,
+        # render_top_klanten_tile, render_documenten_tile,
+        # render_cash_positie_tile, render_tax_calendar_tile) worden in
+        # T4b.4 wired aan de inzicht-grid via config-check. Hier alleen
+        # data-prep + linting (no-op assignments markeren de variabelen
+        # als-used).
         _ = sph_prognose
         _ = sph_betaald_ytd
         _ = zes_weken
         _ = omzet_per_klant
+        _ = opening_saldo
+        _ = flow_ytd
+        _ = tax_deadlines
 
         # For YoY delta: compare exact same calendar period
         huidig_jaar = date.today().year
