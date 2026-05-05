@@ -687,6 +687,9 @@ MIGRATIONS = [
         "gebruik_klant_kleur_in_agenda INTEGER NOT NULL DEFAULT 0 "
         "CHECK (gebruik_klant_kleur_in_agenda IN (0, 1))",
     ]),
+    (39, "add_bedrijfsgegevens_dashboard_widgets_json", [
+        "ALTER TABLE bedrijfsgegevens ADD COLUMN dashboard_widgets_json TEXT NULL",
+    ]),
 ]
 
 
@@ -1189,19 +1192,75 @@ async def get_bedrijfsgegevens(db_path: Path = DB_PATH) -> Bedrijfsgegevens | No
 
 async def upsert_bedrijfsgegevens(db_path: Path = DB_PATH, **kwargs) -> None:
     async with get_db_ctx(db_path) as conn:
+        # Preserve dashboard_widgets_json across INSERT OR REPLACE: caller may
+        # explicitly pass it, otherwise we read the existing value (if any) so
+        # that a generic "save bedrijfsgegevens" doesn't silently wipe the
+        # dashboard customisation.
+        if 'dashboard_widgets_json' in kwargs:
+            dashboard_widgets_json = kwargs.get('dashboard_widgets_json')
+        else:
+            cur = await conn.execute(
+                "SELECT dashboard_widgets_json FROM bedrijfsgegevens WHERE id = 1"
+            )
+            existing = await cur.fetchone()
+            dashboard_widgets_json = (
+                existing['dashboard_widgets_json'] if existing else None
+            )
         await conn.execute(
             """INSERT OR REPLACE INTO bedrijfsgegevens
                (id, bedrijfsnaam, naam, functie, adres, postcode_plaats,
                 kvk, iban, thuisplaats, telefoon, email,
-                gebruik_klant_kleur_in_agenda)
-               VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                gebruik_klant_kleur_in_agenda, dashboard_widgets_json)
+               VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (kwargs.get('bedrijfsnaam', ''), kwargs.get('naam', ''),
              kwargs.get('functie', ''), kwargs.get('adres', ''),
              kwargs.get('postcode_plaats', ''), kwargs.get('kvk', ''),
              kwargs.get('iban', ''), kwargs.get('thuisplaats', ''),
              kwargs.get('telefoon', ''), kwargs.get('email', ''),
-             int(bool(kwargs.get('gebruik_klant_kleur_in_agenda', False))))
+             int(bool(kwargs.get('gebruik_klant_kleur_in_agenda', False))),
+             dashboard_widgets_json)
         )
+        await conn.commit()
+
+
+async def get_dashboard_widgets_config(db_path: Path = DB_PATH) -> str | None:
+    """Returns raw JSON string of dashboard_widgets_json from bedrijfsgegevens.
+
+    None = not yet configured (defaults apply per services.dashboard.DEFAULT_WIDGETS).
+    """
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            "SELECT dashboard_widgets_json FROM bedrijfsgegevens LIMIT 1"
+        )
+        row = await cur.fetchone()
+    if row is None:
+        return None
+    return row['dashboard_widgets_json']
+
+
+async def set_dashboard_widgets_config(
+    db_path: Path = DB_PATH, config_json: str | None = None,
+) -> None:
+    """Update dashboard_widgets_json on bedrijfsgegevens (single row).
+
+    Pass None to reset to defaults. If no bedrijfsgegevens row exists yet, an
+    empty placeholder row is created so the config is never silently dropped.
+    """
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute("SELECT id FROM bedrijfsgegevens WHERE id = 1")
+        exists = await cur.fetchone()
+        if exists is None:
+            await conn.execute(
+                "INSERT INTO bedrijfsgegevens (id, dashboard_widgets_json) "
+                "VALUES (1, ?)",
+                (config_json,),
+            )
+        else:
+            await conn.execute(
+                "UPDATE bedrijfsgegevens SET dashboard_widgets_json = ? "
+                "WHERE id = 1",
+                (config_json,),
+            )
         await conn.commit()
 
 
