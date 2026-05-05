@@ -837,19 +837,156 @@ async def test_get_va_betalingen_no_data(db):
 
 @pytest.mark.asyncio
 async def test_get_va_betalingen_no_kenmerk_fallback(db):
-    """Without betalingskenmerk, sums all BD payments as combined."""
-    txns = [
-        {'datum': '2025-05-28', 'bedrag': -1900.0,
-         'tegenrekening': BELASTINGDIENST_IBAN, 'tegenpartij': 'Belastingdienst',
-         'omschrijving': '', 'betalingskenmerk': ''},
-    ]
-    await add_banktransacties(db, txns)
+    """No-kenmerk → unmatched_betaald, niet totaal_betaald (post-Sprint-I)."""
+    BD = 'NL86INGB0002445588'
+    async with get_db_ctx(db) as conn:
+        await conn.execute(
+            "INSERT INTO banktransacties (datum, bedrag, tegenrekening, "
+            "betalingskenmerk, omschrijving) VALUES (?,?,?,?,?)",
+            ('2025-06-15', -500, BD, '', 'BD geen kenmerk'))
+        await conn.commit()
 
-    result = await get_va_betalingen(db, 2025)
-    assert result['has_bank_data'] is True
-    assert result['totaal_betaald'] == pytest.approx(1900.0)
-    assert result['ib_termijnen'] == 0
-    assert result['zvw_termijnen'] == 0
+    out = await get_va_betalingen(db, jaar=2025)
+    assert out['totaal_betaald'] == 0  # was 500 in pre-Sprint-I
+    assert out['unmatched_betaald'] == 500
+    assert out['has_bank_data'] is True
+
+
+@pytest.mark.asyncio
+async def test_get_va_betalingen_excludes_unmatched_from_totaal_betaald(db):
+    """BREAKING: totaal_betaald = ib + zvw, NIET inclusief unmatched."""
+    BD = 'NL86INGB0002445588'
+    async with get_db_ctx(db) as conn:
+        # 1 IB-betaling (kenmerk pos 10-11 = '12' < 50)
+        await conn.execute(
+            "INSERT INTO banktransacties (datum, bedrag, tegenrekening, "
+            "betalingskenmerk, omschrijving, categorie) VALUES (?,?,?,?,?,?)",
+            ('2026-03-15', -800, BD, '0123456789120000', 'VA IB', 'Belasting'))
+        # 1 ZVW-betaling (kenmerk pos 10-11 = '50' >= 50)
+        await conn.execute(
+            "INSERT INTO banktransacties (datum, bedrag, tegenrekening, "
+            "betalingskenmerk, omschrijving, categorie) VALUES (?,?,?,?,?,?)",
+            ('2026-04-15', -300, BD, '0123456789500000', 'VA ZVW', 'Belasting'))
+        # 1 unmatched (kenmerk te kort)
+        await conn.execute(
+            "INSERT INTO banktransacties (datum, bedrag, tegenrekening, "
+            "betalingskenmerk, omschrijving, categorie) VALUES (?,?,?,?,?,?)",
+            ('2026-05-15', -200, BD, '12345', 'BD onbekend', 'Belasting'))
+        await conn.commit()
+
+    out = await get_va_betalingen(db, jaar=2026)
+    assert out['ib_betaald'] == 800
+    assert out['zvw_betaald'] == 300
+    assert out['unmatched_betaald'] == 200
+    assert out['unmatched_termijnen'] == 1
+    assert out['totaal_betaald'] == 1100  # ib + zvw, NIET +200
+    assert out['has_bank_data'] is True
+
+
+@pytest.mark.asyncio
+async def test_get_va_betalingen_bankdata_tot_datum_negative_only(db):
+    """bankdata_tot_datum max van negatieve BD-rows; positieve genegeerd."""
+    BD = 'NL86INGB0002445588'
+    from datetime import date as _date
+    async with get_db_ctx(db) as conn:
+        await conn.execute(
+            "INSERT INTO banktransacties (datum, bedrag, tegenrekening, "
+            "betalingskenmerk, omschrijving) VALUES (?,?,?,?,?)",
+            ('2026-03-15', -800, BD, '0123456789120000', 'VA IB'))
+        # Positief = correctie/teruggave; negeren voor zowel betaald als datum
+        await conn.execute(
+            "INSERT INTO banktransacties (datum, bedrag, tegenrekening, "
+            "betalingskenmerk, omschrijving) VALUES (?,?,?,?,?)",
+            ('2026-08-20', 100, BD, '0123456789120000', 'BD teruggave'))
+        await conn.commit()
+
+    out = await get_va_betalingen(db, jaar=2026)
+    assert out['bankdata_tot_datum'] == _date(2026, 3, 15)
+    assert out['ib_betaald'] == 800  # positieve genegeerd
+
+
+@pytest.mark.asyncio
+async def test_get_va_betalingen_bankdata_tot_datum_none_when_no_negative_rows(db):
+    """Geen negatieve BD-rijen → bankdata_tot_datum is None."""
+    out = await get_va_betalingen(db, jaar=2026)
+    assert out['bankdata_tot_datum'] is None
+    assert out['has_bank_data'] is False
+
+
+@pytest.mark.asyncio
+async def test_get_va_betalingen_return_contract_shape(db):
+    """Return-dict heeft exact 9 keys in zowel no-data als data-pad."""
+    expected_keys = {
+        'ib_betaald', 'ib_termijnen',
+        'zvw_betaald', 'zvw_termijnen',
+        'unmatched_betaald', 'unmatched_termijnen',
+        'totaal_betaald', 'has_bank_data',
+        'bankdata_tot_datum',
+    }
+    # No-data path
+    out_empty = await get_va_betalingen(db, jaar=2026)
+    assert set(out_empty.keys()) == expected_keys
+
+    # Data path
+    BD = 'NL86INGB0002445588'
+    async with get_db_ctx(db) as conn:
+        await conn.execute(
+            "INSERT INTO banktransacties (datum, bedrag, tegenrekening, "
+            "betalingskenmerk, omschrijving) VALUES (?,?,?,?,?)",
+            ('2026-03-15', -800, BD, '0123456789120000', 'VA IB'))
+        await conn.commit()
+    out_data = await get_va_betalingen(db, jaar=2026)
+    assert set(out_data.keys()) == expected_keys
+
+
+@pytest.mark.asyncio
+async def test_get_va_betalingen_only_positive_rows_treated_as_no_data(db):
+    """Alleen positieve BD-tx (correctie/teruggave) → has_bank_data False."""
+    BD = 'NL86INGB0002445588'
+    async with get_db_ctx(db) as conn:
+        await conn.execute(
+            "INSERT INTO banktransacties (datum, bedrag, tegenrekening, "
+            "betalingskenmerk, omschrijving) VALUES (?,?,?,?,?)",
+            ('2026-08-20', 100, BD, '0123456789120000', 'BD teruggave'))
+        await conn.commit()
+
+    out = await get_va_betalingen(db, jaar=2026)
+    assert out['has_bank_data'] is False
+    assert out['bankdata_tot_datum'] is None
+    assert out['totaal_betaald'] == 0
+    assert out['ib_betaald'] == 0
+    assert out['zvw_betaald'] == 0
+    assert out['unmatched_betaald'] == 0
+    assert out['unmatched_termijnen'] == 0
+
+
+@pytest.mark.asyncio
+async def test_get_va_betalingen_unmatched_kenmerk_variants(db):
+    """3 kenmerk-edge-cases vallen alle in unmatched."""
+    BD = 'NL86INGB0002445588'
+    async with get_db_ctx(db) as conn:
+        # Te kort kenmerk
+        await conn.execute(
+            "INSERT INTO banktransacties (datum, bedrag, tegenrekening, "
+            "betalingskenmerk, omschrijving) VALUES (?,?,?,?,?)",
+            ('2026-02-15', -100, BD, '12345', 'kort'))
+        # Niet-numerieke chars (alleen letters)
+        await conn.execute(
+            "INSERT INTO banktransacties (datum, bedrag, tegenrekening, "
+            "betalingskenmerk, omschrijving) VALUES (?,?,?,?,?)",
+            ('2026-03-15', -150, BD, 'ABCDEFGHIJ123', 'letters'))
+        # Lege kenmerk
+        await conn.execute(
+            "INSERT INTO banktransacties (datum, bedrag, tegenrekening, "
+            "betalingskenmerk, omschrijving) VALUES (?,?,?,?,?)",
+            ('2026-04-15', -200, BD, '', 'leeg'))
+        await conn.commit()
+
+    out = await get_va_betalingen(db, jaar=2026)
+    assert out['unmatched_termijnen'] == 3
+    assert out['unmatched_betaald'] == 450
+    assert out['ib_betaald'] == 0
+    assert out['zvw_betaald'] == 0
 
 
 

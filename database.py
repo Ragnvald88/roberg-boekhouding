@@ -2805,10 +2805,17 @@ async def get_va_betalingen(db_path: Path = DB_PATH, jaar: int = 0) -> dict:
 
     Matches by Belastingdienst IBAN. Uses betalingskenmerk to split IB vs ZVW.
     IB kenmerken have digits at position 10-11 below 50, ZVW have 50+.
+
+    Sprint I BREAKING contract change:
+    - `totaal_betaald` = `ib_betaald + zvw_betaald` (was: incl. unmatched)
+    - `unmatched_betaald` + `unmatched_termijnen` zichtbaar in return
+    - `bankdata_tot_datum: date | None` — max(datum) van NEGATIEVE BD-rows
+    - Positieve BD-tx (correcties/teruggaves) genegeerd voor alles
     """
+    from datetime import date as _date_cls
     async with get_db_ctx(db_path) as conn:
         cur = await conn.execute(
-            """SELECT ABS(bedrag) as amount, betalingskenmerk
+            """SELECT ABS(bedrag) as amount, betalingskenmerk, datum
                FROM banktransacties
                WHERE tegenrekening = ?
                  AND datum >= ? AND datum <= ?
@@ -2821,16 +2828,22 @@ async def get_va_betalingen(db_path: Path = DB_PATH, jaar: int = 0) -> dict:
         return {
             'ib_betaald': 0, 'ib_termijnen': 0,
             'zvw_betaald': 0, 'zvw_termijnen': 0,
+            'unmatched_betaald': 0, 'unmatched_termijnen': 0,
             'totaal_betaald': 0, 'has_bank_data': False,
+            'bankdata_tot_datum': None,
         }
 
     ib_betaald = 0.0
     ib_count = 0
     zvw_betaald = 0.0
     zvw_count = 0
-    unmatched = 0.0
+    unmatched_betaald = 0.0
+    unmatched_count = 0
+    max_datum_iso: str | None = None
 
-    for amount, kenmerk in rows:
+    for amount, kenmerk, datum in rows:
+        if max_datum_iso is None or datum > max_datum_iso:
+            max_datum_iso = datum
         # B5: normalize separators (dots, spaces) vóór positionele slice.
         norm = _normalize_va_kenmerk(kenmerk)
         if len(norm) >= 12 and norm[10:12].isdigit():
@@ -2842,15 +2855,22 @@ async def get_va_betalingen(db_path: Path = DB_PATH, jaar: int = 0) -> dict:
                 ib_betaald += amount
                 ib_count += 1
         else:
-            unmatched += amount
+            unmatched_betaald += amount
+            unmatched_count += 1
+
+    bankdata_tot_datum = (_date_cls.fromisoformat(max_datum_iso)
+                          if max_datum_iso else None)
 
     return {
         'ib_betaald': round(ib_betaald, 2),
         'ib_termijnen': ib_count,
         'zvw_betaald': round(zvw_betaald, 2),
         'zvw_termijnen': zvw_count,
-        'totaal_betaald': round(ib_betaald + zvw_betaald + unmatched, 2),
+        'unmatched_betaald': round(unmatched_betaald, 2),
+        'unmatched_termijnen': unmatched_count,
+        'totaal_betaald': round(ib_betaald + zvw_betaald, 2),  # BREAKING
         'has_bank_data': True,
+        'bankdata_tot_datum': bankdata_tot_datum,
     }
 
 
