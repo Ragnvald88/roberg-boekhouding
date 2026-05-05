@@ -269,8 +269,15 @@ async def dashboard_page():
         # seasonal-rows samen, dan prioritise_actions truncate naar 5.
         raw_rows: list[ActionRow] = []
 
-        # From health_alerts (uncategorized_bank, etc.)
+        # From health_alerts. Filter expliciet: overdue_invoices en
+        # concept_invoices worden hieronder al via aging_buckets resp.
+        # get_concept_facturen_stale toegevoegd → zonder filter zou de
+        # user dubbele rijen zien en max-5 prioritisering verkeerd
+        # bumpen (Codex T3.4 catch).
+        _DUPLICATE_HEALTH_KEYS = {'overdue_invoices', 'concept_invoices'}
         for alert in health_alerts:
+            if alert.get('key') in _DUPLICATE_HEALTH_KEYS:
+                continue
             action_kind = None
             if alert.get('key') == 'uncategorized_bank':
                 action_kind = 'categoriseer'
