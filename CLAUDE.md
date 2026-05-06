@@ -88,24 +88,26 @@ Als je een nieuwe sessie begint, lees in deze volgorde:
 3. **`docs/superpowers/specs/`** + **`plans/`** — recente design-decisions met SHIPPED-banners
 4. **`tests/test_visual_css.py`** — 5 cascade-lint tests die de structurele CSS-invariants enforced
 
-**Recente sprint-state** (2026-05-05, na Sprint I VA-tracker SHIPPED):
-- Pytest baseline **1386** (was 1355 vóór Sprint I). Math: 1355 + 14 (T1.1) + 6 (T1.2) + 12 (T1.3) − 9 (T2.1 oude reservering) − 6 (T2.1 obsolete _has_va_data) + 14 (post-merge audit follow-up: 13 Dutch-maand + 1 termijnen year-lock) = 1386 ✓
-- Master HEAD = na Sprint I — directe-op-master (Sprint A→H+I conventie)
-- Migratie 40: `fiscale_params.voorlopige_aanslag_ib_termijnen` + `_zvw_termijnen`
-- `get_va_betalingen` BREAKING contract: `totaal_betaald` excludeert unmatched,
-  + `unmatched_betaald` + `unmatched_termijnen` + `bankdata_tot_datum: date|None`
-- `services.dashboard.compute_va_tracker` (NEW Sprint I) — vervangt
-  `compute_belasting_reservering_progress` (verwijderd in T2.1)
-- `services.dashboard.VATrackLine` + `VATrackSummary` frozen dataclasses
-- `components.dashboard_widgets.render_va_tile` (NEW Sprint I) — Card 3 op /dashboard
-- `pages/aangifte.py` Card 3: 2 termijn-inputs + bank-summary herschreven met
-  IB/ZVW-split + unmatched-link "Controleer in transacties"
-- `components.utils.format_datum_kort_nl` + `format_datum_jaar_nl` (NEW Sprint I)
-  voor Dutch-maand short formatting (mei ipv may)
+**Recente sprint-state** (2026-05-06, na Sprint J VA-tracker drill-down + PDF-parse SHIPPED):
+- Pytest baseline **1426** (was 1386 vóór Sprint J). Math: 1386 + 15 (T1.1 schema/CRUD/year-lock) + 20 (T1.2 va_parser) + 1 (T1.3 userflow) + 4 (T1.4 schedule + wrapper-tests + termijnen=0 edge) = 1426 ✓
+- Master HEAD = na Sprint J — directe-op-master (Sprint A→I+J conventie)
+- Migratie 41: nieuwe `voorlopige_aanslagen` table met FK CASCADE naar `aangifte_documenten` + UNIQUE(aanslagnummer) + UNIQUE(document_id) + partial unique index `WHERE is_active=1` (Sprint J)
+- `services/va_parser.py` (NEW Sprint J) — pure parser `parse_va_beschikking(pdf_path)` + `parse_va_beschikking_text(text)` + `ParsedBeschikking` frozen dataclass + `VAParseError`. Gebruikt `import_/pdf_parser.extract_pdf_text` (pdftotext subprocess)
+- `database.py` Sprint J helpers: `get_active_voorlopige_aanslag`, `process_voorlopige_aanslag_upload` (atomic BEGIN IMMEDIATE), `delete_aangifte_document_with_va_cleanup` (single-tx atomic — NIET delegate, behoud atomicity), `get_va_betalingen_detail` (classification ib_matched/zvw_matched/unmatched)
+- `pages/documenten.py` Sprint J: parse-on-upload voor categorie='voorlopige_aanslag' in alle 3 handlers, mismatch-confirm dialog (idiomatic NiceGUI `await dlg`), documenttype↔soort sanity-warning, idempotent skip-cleanup
+- `pages/va_tracker.py` (NEW Sprint J) — `/va-tracker/{jaar}` drill-down page met IB+ZVW expansion-sections + termijnen-overzicht + bank-tx tabel + unmatched-section
+- `services.dashboard.compute_va_termijnen_schedule` + `load_va_tracker_summary` async wrapper (Sprint J) — datasource fall-through: active beschikking > fp-handmatig > defaults; `compute_va_tracker` blijft pure
+- `components.dashboard_widgets.render_va_tile` Sprint J: click-target gewijzigd naar `/va-tracker/{jaar}` (was `/aangifte?jaar=X`)
+- **Sprint I (2026-05-05) state nog actueel**:
+  - Migratie 40: `fiscale_params.voorlopige_aanslag_ib_termijnen` + `_zvw_termijnen`
+  - `get_va_betalingen` BREAKING contract: `totaal_betaald` excludeert unmatched, + `unmatched_betaald` + `unmatched_termijnen` + `bankdata_tot_datum: date|None`
+  - `services.dashboard.compute_va_tracker` + `VATrackLine` + `VATrackSummary` frozen dataclasses
+  - `pages/aangifte.py` Card 3: 2 termijn-inputs + bank-summary herschreven met IB/ZVW-split + unmatched-link
+  - `components.utils.format_datum_kort_nl` + `format_datum_jaar_nl` voor Dutch-maand short formatting
 - `klant.color` kolom (mig 37) + `bedrijfsgegevens.gebruik_klant_kleur_in_agenda` (mig 38) + `bedrijfsgegevens.dashboard_widgets_json` (mig 39)
 - `pages/bank.py` bestaat NIET MEER, sidebar heeft één "Werkdagen" entry → /agenda
 - `.alert-card`, `.severity-card`, `.settings-card` (Sprint G), `.q-card.dashboard-hero-tile` + `.is-tekort` modifier (Sprint H) componenten met scope-vars
-- `services/dashboard.py` — pure helpers UI-vrij (compute_jaareinde_projectie_display, compute_sph_prognose, compute_va_tracker, ActionRow, prioritise_actions, _seasonal_action_rows, tax_calendar, load_dashboard_widgets_config, DEFAULT_WIDGETS, should_show_prive_zone)
+- `services/dashboard.py` — pure helpers UI-vrij (compute_jaareinde_projectie_display, compute_sph_prognose, compute_va_tracker, compute_va_termijnen_schedule, ActionRow, prioritise_actions, _seasonal_action_rows, tax_calendar, load_dashboard_widgets_config, DEFAULT_WIDGETS, should_show_prive_zone) + async wrapper `load_va_tracker_summary`
 - `components/dashboard_widgets.py` — 9 per-tile renderers (action_inbox, sph_tile, zes_weken_tile, top_klanten_tile, documenten_tile, cash_positie_tile, tax_calendar_tile, prive_zone, va_tile)
 
 **Sprint H state (2026-05-05)** — dashboard redesign Phases 1-5 SHIPPED:
@@ -489,3 +491,50 @@ Geen: user auth, BTW-administratie, loon/voorraad, real-time bank-API, auto-matc
   ook bij open totaal_resterend (asymmetrisch IB-vooruit + ZVW-achter
   scenario). Renderer toont badge alleen bij status='voldaan' AND
   has_overbetaald — voorkomt verwarrende badge naast warning-icon.
+
+### VA-tracker drill-down (Sprint J, 2026-05-06)
+
+- **BD voorlopige aanslag PDF-format** is voorspelbaar over jaren — alleen
+  jaar/bedrag/kenmerk wijzigen. Type-detect via aanslagnummer-suffix:
+  `1244.12.646.H.60.01` → IB, `1244.12.646.W.60.01.4` → ZVW. `H` (Hoofd-
+  belasting/IB+PVV) en `W` (Werknemersverzekering/ZVW) zijn betrouwbare
+  type-markers; header-tekst is fallback. Betalingskenmerk is 16 digits
+  (genormaliseerd via `_normalize_va_kenmerk` regex), positie [10:12]
+  splitst IB vs ZVW (<50 = IB, ≥50 = ZVW).
+- **PDF-parser regex strategie**: whitespace-normalize ÉÉN keer (`re.sub(r'\s+', ' ', text)`)
+  vóór matching — multi-line layout uit pdftotext-layout breekt anders. `_BEDRAG_RE`
+  gebruikt specifiek `Te betalen\s*:\s*€` separator (uniek voor betaalblok;
+  PDF heeft 4 "Te betalen" varianten waarvan alleen deze het bedrag heeft).
+  Critical fields raise `VAParseError`: aanslagnummer, jaar, dagtekening,
+  bedrag, kenmerk. Termijnen optional (default 11 als regex faalt of
+  buiten 1-12).
+- **Atomic upload pipeline**: `process_voorlopige_aanslag_upload` doet
+  ALLES in één `BEGIN IMMEDIATE`-tx (deactivate-old + insert-new + sync-fp).
+  Document-validation (existence + categorie + jaar-match) vóór mutaties.
+  Idempotent skip op duplicate `aanslagnummer`. Bij ANY exception: full
+  ROLLBACK. Voorkomt partial-state na revisie-upload.
+- **Schema invariant `UNIQUE(document_id)`**: garandeert 1-1 koppeling
+  doc↔VA-row. Zonder dit zou `delete_aangifte_document_with_va_cleanup`
+  fp niet deterministisch kunnen clearen (multi-VA-per-doc → maar één
+  fp-veld zou worden gewist). NIET wegoptimaliseren bij re-runs.
+- **`delete_aangifte_document_with_va_cleanup` is single-tx atomic** —
+  NIET delegate naar `delete_aangifte_document` met aparte fp-clear.
+  De delegate-pattern heeft een failure-window tussen 2 commits waarin
+  fp stale blijft. Naam suggereert "wrap" maar implementatie is bewust
+  inline — comment in code waarschuwt re-runners.
+- **Beschikking-revisie semantiek**: BD verstuurt nieuwe brief met nieuw
+  aanslagnummer mid-year → atomic transaction deactiveert oude rij,
+  inserts nieuwe als `is_active=1`. Partial-unique-index `WHERE is_active=1`
+  garandeert max 1 actieve per (jaar, soort). Audit-trail in inactive rows.
+- **Fall-through datasource voor compute_va_tracker**: `load_va_tracker_summary`
+  async-wrapper leest active beschikking → fp-handmatig → defaults. `compute_va_tracker`
+  zelf blijft pure (geen DB-imports). Caller in `pages/dashboard.py` is 1-line.
+- **`/va-tracker/{jaar}` page**: drill-down met IB+ZVW expansion-sections,
+  termijnen-overzicht (compute_va_termijnen_schedule), bank-tx tabel
+  (gefilterd op kenmerk-classification), unmatched-section onderaan.
+  Locked-jaar UI: upload-knoppen `disable` + tooltip (NIET hidden).
+- **PDF privacy**: tests/fixtures gebruiken **geanonimiseerde** pdftotext-output
+  (`9999.99.999.[HW].60.01` aanslagnummers, `FICTIEF NAAM`/`ADRES 1`,
+  fictieve kenmerk-digits). Echte PDFs blijven in
+  `~/Library/Application Support/Boekhouding/data/aangifte/{jaar}/voorlopige_aanslag/`
+  (gitignored). Privacy-grep verifieert geen PII-leak in commits.
