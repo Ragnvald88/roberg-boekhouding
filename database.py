@@ -3073,28 +3073,6 @@ async def process_voorlopige_aanslag_upload(
             raise
 
 
-async def clear_fiscale_params_va_for_jaar(
-    db_path: Path = DB_PATH, jaar: int = 0, soort: str = '',
-) -> None:
-    """Reset fp.voorlopige_aanslag_{betaald|zvw} naar 0 + termijnen naar 11.
-
-    Aangeroepen door delete-hook wanneer geen andere actieve beschikking
-    voor (jaar, soort) overblijft — voorkomt stale fp-waarden na delete.
-    Year-locked: weigert in definitief jaar (consistent met andere VA-
-    schrijfpaden). No-op als er geen fiscale_params row voor het jaar is.
-    """
-    await assert_year_writable(db_path, jaar)
-    fp_bedrag_field, fp_termijnen_field = _va_fp_field_names(soort)
-    async with get_db_ctx(db_path) as conn:
-        await conn.execute(
-            "UPDATE fiscale_params SET "
-            f"{fp_bedrag_field} = 0, {fp_termijnen_field} = 11 "
-            "WHERE jaar = ?",
-            (jaar,),
-        )
-        await conn.commit()
-
-
 async def delete_aangifte_document_with_va_cleanup(
     db_path: Path = DB_PATH, doc_id: int = 0,
 ) -> None:
@@ -3110,6 +3088,13 @@ async def delete_aangifte_document_with_va_cleanup(
     transactie. Eerder werd gedelegeerd naar delete_aangifte_document
     (eigen commit) met fp-clear in aparte transactie — bij een crash of
     exception tussen beide commits bleef VA-row weg en fp stale.
+
+    Naam suggereert "wrap" maar implementatie is **bewust inline**, niet
+    delegate naar delete_aangifte_document — de delegate zou de atomicity-
+    garantie breken (twee commits = window). Als delete_aangifte_document
+    in toekomst side-effects krijgt (PDF-unlink, audit-log), MOET die
+    logica ook hier worden toegevoegd. Re-runners: niet "simplifyen" naar
+    delegate-pattern.
 
     Year-lock: assert vóór BEGIN IMMEDIATE op zowel doc.jaar als (indien
     VA) va.jaar. Voor VA-docs garandeert process_voorlopige_aanslag_upload
