@@ -1,6 +1,6 @@
 # Sprint J — VA-tracker drill-down + PDF-parse design
 
-**Status**: LOCKED 2026-05-06 — post-Codex-round-2 amendments applied, awaiting user approval to invoke writing-plans
+**Status**: SHIPPED 2026-05-06 — 5 commits + 4 cleanup-/follow-up commits direct-on-master (`4d4859e..8dc90ad`), pytest 1386 → 1426 (+40), post-merge audit verdict "Needs-followup-fixes" → 3 cumulative critical bugs gefixt in audit-followup. 4 Codex-rondes voor design (parallel-plan, spec-review, fresh-review, discussion) plus per-task 4-layer reviews + post-merge Codex audit.
 **Builds on**: Sprint I VA-tracker (master `fc18da3`, pytest 1386)
 **Replaces tile click-target**: was `/aangifte?jaar=X`, wordt `/va-tracker/{jaar}` page
 
@@ -411,6 +411,8 @@ Nieuwe page in `pages/va_tracker.py`. Layout:
 
 **Totaal**: ~25 nieuwe tests. Pytest 1386 → ~1411.
 
+> **Post-implementation actuals (2026-05-06)**: 1386 → **1426** (+40 netto). T1.1 voegde 15 ipv 9 tests toe (Codex-driven extra negative tests voor doc-validation, idempotency-rollback, partial-index, ZVW-coexist), T1.2 voegde 20 ipv 12 tests toe (Codex-driven 8 regression-tests voor BEDRAG_RE rechts-anker, KENMERK_RE trailing-digit, comma-tak coverage), T1.3 +1 userflow E2E, T1.4 +4 (3 plan + termijnen=0 edge na quality-review). Audit-followup: 0 nieuwe tests (alleen caller-migratie fixes).
+
 **Geanonimiseerde fixtures** (Codex round-2 should-fix — privacy):
 NIET de echte 2026 PDFs in git. Maak `tests/fixtures/va_beschikking_ib_2026_anon.txt` en `_zvw_2026_anon.txt` — pdftotext-output met fictieve naam/adres/BSN/aanslagnummer. Parser-tests laden text-fixture en parsen direct (skip pdftotext-subprocess in unit-tests; mock of bypass via `parse_va_beschikking_text(text)`-helper).
 
@@ -424,7 +426,7 @@ NIET de echte 2026 PDFs in git. Maak `tests/fixtures/va_beschikking_ib_2026_anon
 | **T1.4** | Nieuwe `/va-tracker/{jaar}` page + `compute_va_termijnen_schedule` helper + `get_va_betalingen_detail` DB-helper + `load_va_tracker_summary` async wrapper + tile click-target migratie naar /va-tracker + locked-year UI guards + 3 page/helper tests + smoke | 1 commit |
 | **T2.1** | Caller-migratie naar `load_va_tracker_summary` in pages/dashboard.py + CLAUDE.md update (Sprint J VA-tracker drill-down sectie + sprint-state) + spec/plan commit + post-merge audit | 1 commit |
 
-**5 commits, ~2 dagen**. Pytest 1386 → ~1408 (+22 nieuwe).
+**5 plan-tasks geleverd in 9 commits** (5 feat + 3 cleanup/follow-up + 1 docs + 1 post-merge-audit-fix), ~1 dag. Pytest 1386 → **1426 actual** (+40 netto, hoger dan plan-target door Codex-driven negative tests).
 
 ## 9. Risks
 

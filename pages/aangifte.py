@@ -24,7 +24,7 @@ from components.layout import create_layout, page_title
 from components.utils import format_datum_kort_nl, format_euro
 from database import (
     get_fiscale_params, get_aangifte_documenten,
-    add_aangifte_document, delete_aangifte_document,
+    add_aangifte_document, delete_aangifte_document_with_va_cleanup,
     update_ib_inputs, update_box3_inputs, update_box3_fiscaal_partner,
     update_ew_naar_partner,
     update_za_sa_toggles, get_belastingdienst_betalingen,
@@ -1263,8 +1263,11 @@ async def aangifte_page(jaar: int | None = None):
         # Delete DB record first, then file (if DB fails, file survives).
         # Lane 5 (review A13/A8): year-locked → YearLockedError; surface
         # the warning and leave the file untouched.
+        # Sprint J post-merge audit fix: gebruik cleanup-wrapper zodat
+        # fp.voorlopige_aanslag_* ge-cleared wordt bij delete van VA-doc.
+        # Niet-VA docs: wrapper delegeert alleen de delete (no side-effects).
         try:
-            await delete_aangifte_document(DB_PATH, doc.id)
+            await delete_aangifte_document_with_va_cleanup(DB_PATH, doc.id)
         except YearLockedError as ex:
             ui.notify(str(ex), type='warning', position='top')
             dialog.close()

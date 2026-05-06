@@ -16,7 +16,7 @@ from components.document_specs import AANGIFTE_DOCS, AUTO_TYPES, CATEGORIE_LABEL
 from components.layout import create_layout, page_title
 from components.shared_ui import year_options
 from database import (
-    get_aangifte_documenten, add_aangifte_document, delete_aangifte_document,
+    get_aangifte_documenten, add_aangifte_document,
     delete_aangifte_document_with_va_cleanup,
     process_voorlopige_aanslag_upload, get_fiscale_params,
     DB_PATH, YearLockedError, assert_year_writable,
@@ -261,10 +261,19 @@ async def _post_save_va_parse(
 
 
 @ui.page('/documenten')
-async def documenten_page():
+async def documenten_page(jaar: int | None = None):
     create_layout('Documenten', '/documenten')
 
-    huidig_jaar = date.today().year
+    # Sprint J post-merge audit fix: respect ?jaar=X query-param uit
+    # /va-tracker deep-link. Fall back op today.year als param missing of
+    # niet in jaar-options range.
+    today_year = date.today().year
+    jaren_dict = year_options(as_dict=True)
+    available_years = set(jaren_dict.keys()) if isinstance(jaren_dict, dict) else set()
+    if jaar is not None and jaar in available_years:
+        huidig_jaar = jaar
+    else:
+        huidig_jaar = today_year
 
     with ui.column().classes('w-full p-6 max-w-7xl mx-auto gap-6'):
         # Header row
@@ -594,8 +603,13 @@ def _render_uploaded_rows(spec, existing, jaar, show_preview_fn, refresh_fn):
                                   on_click=del_dlg.close).props('flat')
 
                         async def confirm_del():
+                            # Sprint J post-merge audit fix: gebruik
+                            # cleanup-wrapper zodat fp.voorlopige_aanslag_*
+                            # ook ge-cleared wordt bij delete van een
+                            # VA-document. Niet-VA docs: wrapper delegeert
+                            # alleen de delete (geen extra side-effects).
                             try:
-                                await delete_aangifte_document(
+                                await delete_aangifte_document_with_va_cleanup(
                                     DB_PATH, doc_id=did)
                             except YearLockedError as exc:
                                 del_dlg.close()
