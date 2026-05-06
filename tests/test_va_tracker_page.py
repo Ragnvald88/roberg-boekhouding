@@ -83,6 +83,17 @@ def test_compute_va_termijnen_schedule_status_per_termijn():
     assert all(abs(r.bedrag - 30670.0 / 11) < 1e-9 for r in rows)
 
 
+def test_compute_va_termijnen_schedule_zero_termijnen():
+    """Edge case: termijnen=0 (data-corruption defense) → empty list,
+    geen division-by-zero. Code-quality reviewer T1.4 catched dat de
+    early-return path uncovered was."""
+    rows = compute_va_termijnen_schedule(
+        bedrag=1000.0, termijnen=0, jaar=2026,
+        bank_tx=[], today=date(2026, 5, 15),
+    )
+    assert rows == []
+
+
 # --------------------------------------------------------------------- #
 # 2a. load_va_tracker_summary — active beschikking wins over fp
 # --------------------------------------------------------------------- #
