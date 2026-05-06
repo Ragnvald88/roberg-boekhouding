@@ -17,7 +17,7 @@ from database import (
     get_uitgaven_per_categorie, get_openstaande_facturen,
     get_werkdagen_ongefactureerd_summary, get_km_totaal,
     get_fiscale_params, get_aangifte_documenten,
-    get_va_betalingen, get_health_alerts, DB_PATH,
+    get_health_alerts, DB_PATH,
     get_factuur_aging_buckets, get_concept_facturen_stale,
     update_factuur_status, get_db_ctx,
     get_omzet_per_klant, get_dashboard_widgets_config,
@@ -33,7 +33,7 @@ from services.agenda import (
 )
 from services.dashboard import (
     compute_sph_prognose,
-    compute_va_tracker,
+    load_va_tracker_summary,
     ActionRow, prioritise_actions, _seasonal_action_rows,
     tax_calendar, load_dashboard_widgets_config,
     should_show_prive_zone,
@@ -219,7 +219,7 @@ async def dashboard_page():
         # verhuizen pas in T4b naar inzicht-grid. Niet alvast verwijderen.
         (kpis, kpis_vorig, omzet_huidig, omzet_vorig, kosten_per_cat,
          openstaande, ongefact, km_data,
-         ib_resultaat, fp, va_data, aangifte_docs,
+         ib_resultaat, fp, va_summary, aangifte_docs,
          health_alerts, urencrit_state, zes_weken,
          omzet_per_klant, aov_data) = await asyncio.gather(
             get_kpis(DB_PATH, jaar=jaar),
@@ -232,7 +232,7 @@ async def dashboard_page():
             get_km_totaal(DB_PATH, jaar=jaar),
             _compute_ib_estimate(jaar),
             get_fiscale_params(DB_PATH, jaar),
-            get_va_betalingen(DB_PATH, jaar),
+            load_va_tracker_summary(DB_PATH, jaar, date.today()),
             get_aangifte_documenten(DB_PATH, jaar),
             get_health_alerts(DB_PATH, jaar=jaar),
             get_urencriterium_projectie(DB_PATH, jaar),
@@ -609,28 +609,11 @@ async def dashboard_page():
                             f'YTD-winst: {format_euro(ytd_winst, decimals=0)}'
                         ).classes('context-text')
 
-                # Card 3: Voorlopige aanslag (Sprint I — vervangt Sprint H
-                # Belasting-reservering). compute_va_tracker geeft een
-                # line-first VATrackSummary met IB + ZVW progress, op basis
-                # van de jaarbedragen (fp.voorlopige_aanslag_betaald/_zvw)
-                # en de bank-gematchte termijnen (va_data uit
-                # get_va_betalingen). Geen extrapolatie meer — alleen
-                # audit-trail-traceerbare data.
-                va_summary = compute_va_tracker(
-                    jaar=jaar,
-                    va_data=va_data,
-                    ib_verplicht=(fp.voorlopige_aanslag_betaald
-                                  if fp else 0) or 0,
-                    zvw_verplicht=(fp.voorlopige_aanslag_zvw
-                                   if fp else 0) or 0,
-                    ib_termijnen=(getattr(
-                        fp, 'voorlopige_aanslag_ib_termijnen', 11)
-                        if fp else 11) or 11,
-                    zvw_termijnen=(getattr(
-                        fp, 'voorlopige_aanslag_zvw_termijnen', 11)
-                        if fp else 11) or 11,
-                    today=date.today(),
-                )
+                # Card 3: Voorlopige aanslag (Sprint J T1.4 — wrapper-call).
+                # `va_summary` is in de gather() opgehaald via
+                # `load_va_tracker_summary`, die de fall-through
+                # active-beschikking > fp-handmatig > defaults regelt.
+                # Click-target navigeert naar /va-tracker/{jaar} drill-down.
                 render_va_tile(va_summary, jaar=jaar)
 
                 # Card 4: Urencriterium-projectie (Sprint H T2.3 — was strip-card,

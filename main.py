@@ -34,6 +34,7 @@ import pages.transacties
 import pages.jaarafsluiting
 import pages.aangifte
 import pages.documenten
+import pages.va_tracker  # noqa: F401  — Sprint J: /va-tracker/{jaar} drill-down
 import pages.instellingen
 
 

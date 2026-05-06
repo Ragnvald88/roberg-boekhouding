@@ -491,3 +491,156 @@ def compute_va_tracker(
         has_overbetaald=has_overbetaald,
         volgende_termijn_datum=volgende,
     )
+
+
+# === VA-tracker drill-down (Sprint J T1.4) ============================
+# Per-termijn schedule + async wrapper voor /va-tracker page render.
+
+@dataclass(frozen=True)
+class TermijnRow:
+    """Eén termijn-rij in de drill-down schedule.
+
+    `vervaldatum` = ultimo van de maand (BD-conventie).
+    `status`:
+      - 'betaald'   → bank-tx in deze maand gevonden
+      - 'verwacht'  → vervaldatum in het verleden, geen bank-tx (overdue)
+      - 'toekomst'  → vervaldatum in de toekomst
+    """
+    maand: int                       # 1-12
+    vervaldatum: date
+    bedrag: float                    # termijn-bedrag = verplicht / N
+    status: Literal['betaald', 'verwacht', 'toekomst']
+    betaald_op: date | None
+    betaald_bedrag: float | None
+
+
+def compute_va_termijnen_schedule(
+    *,
+    bedrag: float,
+    termijnen: int,
+    jaar: int,
+    bank_tx: list[dict],
+    today: date,
+) -> list[TermijnRow]:
+    """Bouw de per-termijn schedule voor één soort (IB of ZVW).
+
+    Conventie: `eerste_maand = 13 - termijnen` (N=11 → feb-start, N=12 →
+    jan-start). Zelfde heuristiek als `_expected_terms_elapsed`.
+
+    Bank-tx matching is per kalendermaand (eerste tx in de maand wint).
+    Caller filtert `bank_tx` zelf op kenmerk-classificatie (IB / ZVW)
+    voordat de lijst hier komt — dit is een pure helper, geen DB-query.
+
+    Returns: list[TermijnRow] met N rijen voor maanden binnen [1..12].
+    """
+    if termijnen <= 0:
+        return []
+
+    eerste_maand = 13 - termijnen
+    termijn_bedrag = bedrag / termijnen if termijnen > 0 else 0.0
+
+    # Group bank-tx per kalendermaand binnen `jaar`. Sorteer op datum
+    # zodat de "eerste tx in de maand" deterministisch is bij meerdere
+    # betalingen in dezelfde maand.
+    def _to_date(v) -> date:
+        return date.fromisoformat(v) if isinstance(v, str) else v
+
+    bank_by_month: dict[int, list[dict]] = {}
+    for tx in sorted(bank_tx, key=lambda t: t['datum']):
+        tx_d = _to_date(tx['datum'])
+        if tx_d.year == jaar:
+            bank_by_month.setdefault(tx_d.month, []).append(tx)
+
+    rows: list[TermijnRow] = []
+    for offset in range(termijnen):
+        maand = eerste_maand + offset
+        if maand < 1 or maand > 12:
+            continue
+        vervaldatum = _last_day_of_month(jaar, maand)
+        match = bank_by_month.get(maand)
+        if match:
+            tx = match[0]
+            rows.append(TermijnRow(
+                maand=maand,
+                vervaldatum=vervaldatum,
+                bedrag=termijn_bedrag,
+                status='betaald',
+                betaald_op=_to_date(tx['datum']),
+                betaald_bedrag=float(tx['bedrag']),
+            ))
+        elif vervaldatum < today:
+            rows.append(TermijnRow(
+                maand=maand,
+                vervaldatum=vervaldatum,
+                bedrag=termijn_bedrag,
+                status='verwacht',
+                betaald_op=None,
+                betaald_bedrag=None,
+            ))
+        else:
+            rows.append(TermijnRow(
+                maand=maand,
+                vervaldatum=vervaldatum,
+                bedrag=termijn_bedrag,
+                status='toekomst',
+                betaald_op=None,
+                betaald_bedrag=None,
+            ))
+    return rows
+
+
+async def load_va_tracker_summary(
+    db_path,
+    jaar: int,
+    today: date,
+) -> VATrackSummary:
+    """Async wrapper: fetch beschikkingen + bankdata → compute_va_tracker.
+
+    Datasource fall-through per soort:
+      1. active beschikking (voorlopige_aanslagen, is_active=1)
+      2. handmatig fp-veld (`voorlopige_aanslag_betaald` / `_zvw`)
+      3. defaults (0 bedrag, 11 termijnen)
+
+    Importing `database` lazy om service → database circulariteit te vermijden
+    in scripts die alleen de pure helpers willen gebruiken.
+    """
+    from database import (
+        get_active_voorlopige_aanslag,
+        get_va_betalingen,
+        get_fiscale_params,
+    )
+
+    fp = await get_fiscale_params(db_path, jaar)
+    ib_b = await get_active_voorlopige_aanslag(db_path, jaar, 'ib')
+    zvw_b = await get_active_voorlopige_aanslag(db_path, jaar, 'zvw')
+    va_data = await get_va_betalingen(db_path, jaar)
+
+    if ib_b is not None:
+        ib_verplicht = float(ib_b['bedrag'] or 0)
+        ib_termijnen = int(ib_b['termijnen'] or 11)
+    else:
+        ib_verplicht = float((fp.voorlopige_aanslag_betaald if fp else 0) or 0)
+        ib_termijnen = int(
+            (getattr(fp, 'voorlopige_aanslag_ib_termijnen', 11) if fp else 11)
+            or 11
+        )
+
+    if zvw_b is not None:
+        zvw_verplicht = float(zvw_b['bedrag'] or 0)
+        zvw_termijnen = int(zvw_b['termijnen'] or 11)
+    else:
+        zvw_verplicht = float((fp.voorlopige_aanslag_zvw if fp else 0) or 0)
+        zvw_termijnen = int(
+            (getattr(fp, 'voorlopige_aanslag_zvw_termijnen', 11) if fp else 11)
+            or 11
+        )
+
+    return compute_va_tracker(
+        jaar=jaar,
+        va_data=va_data,
+        ib_verplicht=ib_verplicht,
+        zvw_verplicht=zvw_verplicht,
+        ib_termijnen=ib_termijnen,
+        zvw_termijnen=zvw_termijnen,
+        today=today,
+    )

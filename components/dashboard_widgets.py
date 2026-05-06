@@ -382,8 +382,9 @@ def render_va_tile(summary: VATrackSummary, jaar: int) -> None:
     alleen bij status='voldaan' AND has_overbetaald (Codex round-3
     line-first principe — toont overbetaling ook bij open totaal).
 
-    Click-target deep-linkt naar /aangifte?jaar=X zodat de gebruiker
-    direct de beschikkingsbedragen + termijnen kan controleren.
+    Click-target deep-linkt naar /va-tracker/{jaar} (Sprint J T1.4) —
+    de drill-down page met IB+ZVW collapsible sections, termijnen-overzicht
+    per soort en bank-tx tabel. Eerder: /aangifte?jaar=X (Sprint I).
     """
     is_warning = (summary.status == 'achter')
     card_classes = 'dashboard-hero-tile'
@@ -392,7 +393,7 @@ def render_va_tile(summary: VATrackSummary, jaar: int) -> None:
 
     with ui.card().classes(card_classes) \
             .style('cursor: pointer') \
-            .on('click', lambda j=jaar: ui.navigate.to(f'/aangifte?jaar={j}')):
+            .on('click', lambda j=jaar: ui.navigate.to(f'/va-tracker/{j}')):
         # Title row + warning icon (alleen bij echte achterstand)
         with ui.row().classes('w-full justify-between items-center'):
             ui.label(f'Voorlopige aanslag {jaar}').classes('hero-label')
@@ -413,9 +414,11 @@ def render_va_tile(summary: VATrackSummary, jaar: int) -> None:
             return
 
         # Geen-beschikking fallback (bankdata wel, beschikking niet —
-        # tile linkt door naar /aangifte zodat user de jaarbedragen
-        # invult; we tonen alvast wat de bank aan IB/ZVW + termijnen
-        # heeft gevangen, plus unmatched-regel als die er is)
+        # tile linkt door naar /va-tracker drill-down voor detail; daar
+        # kan de user via "Upload PDF" naar /documenten doorklikken om
+        # de beschikking te uploaden. We tonen alvast wat de bank aan
+        # IB/ZVW + termijnen heeft gevangen, plus unmatched-regel als
+        # die er is.)
         if summary.status == 'geen_beschikking':
             ui.label('—').classes('hero-value')
             ui.label('Bankbetalingen gevonden — vul beschikking in').classes(
