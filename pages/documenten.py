@@ -2,12 +2,15 @@
 
 import asyncio
 import contextlib
+import logging
 import os
 import tempfile
 from datetime import date
 from pathlib import Path
 
 from nicegui import app, events, ui
+
+log = logging.getLogger(__name__)
 
 from components.document_specs import AANGIFTE_DOCS, AUTO_TYPES, CATEGORIE_LABELS
 from components.layout import create_layout, page_title
@@ -114,10 +117,14 @@ async def _confirm_pdf_overrides_manual(
 ) -> bool:
     """Toon confirm-dialog als PDF-bedrag afwijkt van handmatige fp-waarde.
 
-    Returns True als user OK kiest (PDF wint), False als annuleert.
-    """
-    confirmed: asyncio.Future[bool] = asyncio.Future()
+    Returns True als user OK kiest (PDF wint), False als annuleert OF
+    de dialog dismisses (escape/click-outside) — safe default voor
+    destructive overwrite.
 
+    Gebruikt NiceGUI's built-in `Dialog.__await__` + `submit(value)` —
+    geen handmatige asyncio.Future nodig (T1.3 code-quality reviewer
+    catched dit als reinvented wheel).
+    """
     with ui.dialog() as dlg, ui.card().classes('q-pa-md'):
         ui.label(
             f'PDF zegt €{pdf_bedrag:.0f}, je had handmatig '
@@ -125,38 +132,35 @@ async def _confirm_pdf_overrides_manual(
         ).classes('text-h6')
         ui.label('PDF-waarde gebruiken?').classes('text-sm text-grey-7')
         with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
-            def _set_and_close(value: bool):
-                if not confirmed.done():
-                    confirmed.set_result(value)
-                dlg.close()
+            ui.button('Annuleren',
+                      on_click=lambda: dlg.submit(False)).props('flat')
+            ui.button('PDF gebruiken',
+                      on_click=lambda: dlg.submit(True)).props('color=primary')
+    # __await__ opens dialog, blocks until submit() of dismissal.
+    # Dismissal via escape/click-outside levert None → bool(None) = False.
+    result = await dlg
+    return bool(result)
 
-            ui.button(
-                'Annuleren',
-                on_click=lambda: _set_and_close(False),
-            ).props('flat')
-            ui.button(
-                'PDF gebruiken',
-                on_click=lambda: _set_and_close(True),
-            ).props('color=primary')
-    # Ensure the future resolves even if the user dismisses the dialog
-    # (escape-key, click outside) — interpret dismissal as "annuleren".
-    dlg.on('hide', lambda _e: (
-        confirmed.set_result(False) if not confirmed.done() else None))
-    dlg.open()
-    return await confirmed
+
+_DOCUMENTTYPE_TO_SOORT = {
+    'va_ib_beschikking': 'ib',
+    'va_zvw_beschikking': 'zvw',
+}
 
 
 async def _post_save_va_parse(
     document_id: int, pdf_path: Path,
+    documenttype: str | None = None,
 ) -> None:
     """Parse-on-upload pipeline voor een net opgeslagen VA-beschikking.
 
     Stappen:
       1. parse_va_beschikking (blocking subprocess → to_thread)
-      2. mismatch-check tegen bestaande fp-waarde → user-confirm
-      3. process_voorlopige_aanslag_upload (atomic insert/replace/skip)
-      4. skip-action → cleanup duplicate document
-      5. notify outcome
+      2. documenttype↔parsed.soort sanity-check (info-notify bij mismatch)
+      3. mismatch-check tegen bestaande fp-waarde → user-confirm
+      4. process_voorlopige_aanslag_upload (atomic insert/replace/skip)
+      5. skip-action → cleanup duplicate document
+      6. notify outcome
 
     Faalt soft: bij parse-error blijft het document staan (user kan
     handmatig invullen via /aangifte). Bij YearLockedError notify we
@@ -173,13 +177,30 @@ async def _post_save_va_parse(
         )
         return
     except Exception as err:  # pragma: no cover — defense-in-depth
+        log.exception('Onverwachte parse-error voor VA-beschikking %s', pdf_path)
         ui.notify(
             f'PDF opgeslagen, parse-error: {err}',
             type='warning', timeout=8000,
         )
         return
 
-    # 2. Mismatch-check (UI-laag, vóór atomic insert)
+    # 2. Documenttype↔soort sanity-check (T1.3 code-quality reviewer fix).
+    # User kan bv. een VA-IB PDF in het VA-ZVW-slot uploaden — DB accepteert
+    # dat (alleen categorie+jaar gevalideerd), maar /documenten badge zou
+    # dan ZVW-checkbox groen tonen terwijl het IB-bedrag wordt gesynced.
+    # We laten de upload doorgaan (parser is single source of truth voor
+    # soort), maar waarschuwen de user expliciet zodat ze bewust zijn.
+    if documenttype:
+        expected_soort = _DOCUMENTTYPE_TO_SOORT.get(documenttype)
+        if expected_soort and expected_soort != parsed.soort:
+            ui.notify(
+                f'Let op: PDF is een VA-{parsed.soort.upper()}-beschikking '
+                f'maar geüpload als {documenttype}-slot. Het bedrag wordt '
+                f'verwerkt als VA-{parsed.soort.upper()}.',
+                type='info', timeout=8000,
+            )
+
+    # 3. Mismatch-check (UI-laag, vóór atomic insert)
     fp = await get_fiscale_params(DB_PATH, parsed.jaar)
     if fp is not None:
         existing_bedrag = (
@@ -197,7 +218,7 @@ async def _post_save_va_parse(
                     type='info')
                 return
 
-    # 3. Atomic DB-pipeline
+    # 4. Atomic DB-pipeline
     try:
         result = await process_voorlopige_aanslag_upload(
             db_path=DB_PATH, document_id=document_id, parsed=parsed,
@@ -213,7 +234,7 @@ async def _post_save_va_parse(
         ui.notify(f'VA-verwerking afgewezen: {exc}', type='warning')
         return
 
-    # 4. Skip → duplicate, ruim het net-uploadedde document op
+    # 5. Skip → duplicate, ruim het net-uploadedde document op
     if result['action'] == 'skip':
         try:
             await delete_aangifte_document_with_va_cleanup(
@@ -230,7 +251,7 @@ async def _post_save_va_parse(
             type='info')
         return
 
-    # 5. inserted / replaced
+    # 6. inserted / replaced
     action_label = (
         'vervangen' if result['action'] == 'replaced' else 'bijgewerkt')
     ui.notify(
@@ -371,7 +392,8 @@ async def documenten_page():
                                 # opslaan zelf (PDF blijft staan).
                                 if cat_select.value == 'voorlopige_aanslag':
                                     await _post_save_va_parse(
-                                        document_id, final_path)
+                                        document_id, final_path,
+                                        documenttype=type_select.value)
                                 await refresh()
 
                             ui.button('Opslaan', icon='save',
@@ -639,7 +661,8 @@ def _render_uploaded_rows(spec, existing, jaar, show_preview_fn, refresh_fn):
             ui.notify(f'{_spec.label} toegevoegd', type='positive')
             # Sprint J: parse-on-upload voor VA beschikkingen.
             if _spec.categorie == 'voorlopige_aanslag':
-                await _post_save_va_parse(document_id, final_path)
+                await _post_save_va_parse(document_id, final_path,
+                                          documenttype=_spec.documenttype)
             await refresh_fn()
 
         with ui.row().classes('q-mt-xs'):
@@ -710,7 +733,8 @@ def _render_missing_row(spec, jaar, refresh_fn):
             ui.notify(f'{_spec.label} geupload', type='positive')
             # Sprint J: parse-on-upload voor VA beschikkingen.
             if _spec.categorie == 'voorlopige_aanslag':
-                await _post_save_va_parse(document_id, final_path)
+                await _post_save_va_parse(document_id, final_path,
+                                          documenttype=_spec.documenttype)
             await refresh_fn()
 
         ui.upload(
