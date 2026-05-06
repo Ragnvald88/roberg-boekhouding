@@ -14,8 +14,11 @@ from components.layout import create_layout, page_title
 from components.shared_ui import year_options
 from database import (
     get_aangifte_documenten, add_aangifte_document, delete_aangifte_document,
+    delete_aangifte_document_with_va_cleanup,
+    process_voorlopige_aanslag_upload, get_fiscale_params,
     DB_PATH, YearLockedError, assert_year_writable,
 )
+from services.va_parser import parse_va_beschikking, VAParseError
 
 AANGIFTE_DIR = DB_PATH.parent / 'aangifte'
 AANGIFTE_DIR.mkdir(parents=True, exist_ok=True)
@@ -105,6 +108,136 @@ async def _safe_atomic_write(
         await asyncio.to_thread(_cleanup)
         raise
     return candidate, True
+
+async def _confirm_pdf_overrides_manual(
+    pdf_bedrag: float, manual_bedrag: float,
+) -> bool:
+    """Toon confirm-dialog als PDF-bedrag afwijkt van handmatige fp-waarde.
+
+    Returns True als user OK kiest (PDF wint), False als annuleert.
+    """
+    confirmed: asyncio.Future[bool] = asyncio.Future()
+
+    with ui.dialog() as dlg, ui.card().classes('q-pa-md'):
+        ui.label(
+            f'PDF zegt €{pdf_bedrag:.0f}, je had handmatig '
+            f'€{manual_bedrag:.0f}.'
+        ).classes('text-h6')
+        ui.label('PDF-waarde gebruiken?').classes('text-sm text-grey-7')
+        with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
+            def _set_and_close(value: bool):
+                if not confirmed.done():
+                    confirmed.set_result(value)
+                dlg.close()
+
+            ui.button(
+                'Annuleren',
+                on_click=lambda: _set_and_close(False),
+            ).props('flat')
+            ui.button(
+                'PDF gebruiken',
+                on_click=lambda: _set_and_close(True),
+            ).props('color=primary')
+    # Ensure the future resolves even if the user dismisses the dialog
+    # (escape-key, click outside) — interpret dismissal as "annuleren".
+    dlg.on('hide', lambda _e: (
+        confirmed.set_result(False) if not confirmed.done() else None))
+    dlg.open()
+    return await confirmed
+
+
+async def _post_save_va_parse(
+    document_id: int, pdf_path: Path,
+) -> None:
+    """Parse-on-upload pipeline voor een net opgeslagen VA-beschikking.
+
+    Stappen:
+      1. parse_va_beschikking (blocking subprocess → to_thread)
+      2. mismatch-check tegen bestaande fp-waarde → user-confirm
+      3. process_voorlopige_aanslag_upload (atomic insert/replace/skip)
+      4. skip-action → cleanup duplicate document
+      5. notify outcome
+
+    Faalt soft: bij parse-error blijft het document staan (user kan
+    handmatig invullen via /aangifte). Bij YearLockedError notify we
+    en doen niets verder (document blijft als upload zonder VA-row).
+    """
+    # 1. Parse PDF
+    try:
+        parsed = await asyncio.to_thread(parse_va_beschikking, pdf_path)
+    except VAParseError as err:
+        ui.notify(
+            f'PDF opgeslagen, automatisch lezen mislukt: {err}. '
+            f'Vul handmatig in via /aangifte.',
+            type='warning', timeout=8000,
+        )
+        return
+    except Exception as err:  # pragma: no cover — defense-in-depth
+        ui.notify(
+            f'PDF opgeslagen, parse-error: {err}',
+            type='warning', timeout=8000,
+        )
+        return
+
+    # 2. Mismatch-check (UI-laag, vóór atomic insert)
+    fp = await get_fiscale_params(DB_PATH, parsed.jaar)
+    if fp is not None:
+        existing_bedrag = (
+            fp.voorlopige_aanslag_betaald if parsed.soort == 'ib'
+            else fp.voorlopige_aanslag_zvw
+        )
+        if existing_bedrag and abs(existing_bedrag - parsed.bedrag) > 1:
+            ok = await _confirm_pdf_overrides_manual(
+                parsed.bedrag, existing_bedrag)
+            if not ok:
+                # User koos annuleren — handmatige fp-waarde behouden.
+                # Document blijft staan als upload zonder VA-row.
+                ui.notify(
+                    'PDF-waarde genegeerd; handmatige bedrag behouden.',
+                    type='info')
+                return
+
+    # 3. Atomic DB-pipeline
+    try:
+        result = await process_voorlopige_aanslag_upload(
+            db_path=DB_PATH, document_id=document_id, parsed=parsed,
+        )
+    except YearLockedError as exc:
+        ui.notify(str(exc), type='warning')
+        return
+    except ValueError as exc:
+        # Defensieve guard van process_voorlopige_aanslag_upload (jaar
+        # mismatch / categorie mismatch) — zou niet moeten gebeuren omdat
+        # we de doc zelf net inserted'en als categorie='voorlopige_aanslag'
+        # met dezelfde jaar; toch tonen en niet crashen.
+        ui.notify(f'VA-verwerking afgewezen: {exc}', type='warning')
+        return
+
+    # 4. Skip → duplicate, ruim het net-uploadedde document op
+    if result['action'] == 'skip':
+        try:
+            await delete_aangifte_document_with_va_cleanup(
+                DB_PATH, doc_id=document_id)
+        except YearLockedError:
+            # Cleanup faalt op locked jaar — info-melding, document blijft.
+            ui.notify(
+                'Beschikking al verwerkt; duplicate document kon niet '
+                'worden opgeruimd (jaar afgesloten).',
+                type='info')
+            return
+        ui.notify(
+            'Beschikking al verwerkt — duplicate upload opgeruimd',
+            type='info')
+        return
+
+    # 5. inserted / replaced
+    action_label = (
+        'vervangen' if result['action'] == 'replaced' else 'bijgewerkt')
+    ui.notify(
+        f"VA {parsed.soort.upper()} {action_label} naar "
+        f"€{parsed.bedrag:.0f}, {parsed.termijnen} termijnen",
+        type='positive')
+
 
 @ui.page('/documenten')
 async def documenten_page():
@@ -203,7 +336,7 @@ async def documenten_page():
                                     return
                                 # 4. DB-row + cleanup-on-fail (alleen als WIJ schreven)
                                 try:
-                                    await add_aangifte_document(
+                                    document_id = await add_aangifte_document(
                                         DB_PATH, jaar=jaar_select.value,
                                         categorie=cat_select.value,
                                         documenttype=type_select.value,
@@ -233,6 +366,12 @@ async def documenten_page():
                                      if d.documenttype == type_select.value),
                                     final_path.name)
                                 ui.notify(f'{lbl} opgeslagen', type='positive')
+                                # Sprint J: parse-on-upload voor VA beschikkingen.
+                                # Soft-fail: parse-error blokkeert nooit het
+                                # opslaan zelf (PDF blijft staan).
+                                if cat_select.value == 'voorlopige_aanslag':
+                                    await _post_save_va_parse(
+                                        document_id, final_path)
                                 await refresh()
 
                             ui.button('Opslaan', icon='save',
@@ -477,7 +616,7 @@ def _render_uploaded_rows(spec, existing, jaar, show_preview_fn, refresh_fn):
                 ui.notify(f'Schrijven mislukt: {exc}', type='negative')
                 return
             try:
-                await add_aangifte_document(
+                document_id = await add_aangifte_document(
                     DB_PATH, jaar=_jaar,
                     categorie=_spec.categorie,
                     documenttype=_spec.documenttype,
@@ -498,6 +637,9 @@ def _render_uploaded_rows(spec, existing, jaar, show_preview_fn, refresh_fn):
                 ui.notify(f'Database-fout: {exc}', type='negative')
                 return
             ui.notify(f'{_spec.label} toegevoegd', type='positive')
+            # Sprint J: parse-on-upload voor VA beschikkingen.
+            if _spec.categorie == 'voorlopige_aanslag':
+                await _post_save_va_parse(document_id, final_path)
             await refresh_fn()
 
         with ui.row().classes('q-mt-xs'):
@@ -545,7 +687,7 @@ def _render_missing_row(spec, jaar, refresh_fn):
                 ui.notify(f'Schrijven mislukt: {exc}', type='negative')
                 return
             try:
-                await add_aangifte_document(
+                document_id = await add_aangifte_document(
                     DB_PATH, jaar=_jaar,
                     categorie=_spec.categorie,
                     documenttype=_spec.documenttype,
@@ -566,6 +708,9 @@ def _render_missing_row(spec, jaar, refresh_fn):
                 ui.notify(f'Database-fout: {exc}', type='negative')
                 return
             ui.notify(f'{_spec.label} geupload', type='positive')
+            # Sprint J: parse-on-upload voor VA beschikkingen.
+            if _spec.categorie == 'voorlopige_aanslag':
+                await _post_save_va_parse(document_id, final_path)
             await refresh_fn()
 
         ui.upload(
