@@ -2930,6 +2930,94 @@ async def get_active_voorlopige_aanslag(
     return dict(row)
 
 
+def resolve_aangifte_document_path(
+    bestandspad: str | None,
+    *,
+    jaar: int | None = None,
+    aangifte_dir: Path | None = None,
+) -> Path | None:
+    """Resolve een aangifte_documenten.bestandspad naar een bestaande Path.
+
+    Background: legacy uploads (pre-Sprint-J) hebben soms een absolute pad
+    opgeslagen onder een DB-prefix die niet meer bestaat (bv. cwd-relative
+    op moment van upload, dat later anders is geconfigureerd). Het bestand
+    zelf staat dan wel in de canonical AANGIFTE_DIR maar de stored pad
+    klopt niet meer.
+
+    Strategie:
+      1. Stored pad bestaat → gebruik direct (snel pad)
+      2. Anders: zoek basename binnen geprioriteerde roots (jaar-
+         specifiek voorlopige_aanslag-dir → jaar-dir → hele AANGIFTE_DIR).
+         Resolve alleen bij **globaal-unieke match** (over alle roots
+         heen). Bij 0 of meerdere matches: return None (caller fail-loud)
+         zodat we niet gokken op verkeerde inhoud — ook niet op een
+         high-priority-match als er ergens anders nog een ambigue duplicate
+         staat.
+
+    Returns: bestaande Path bij succes, None bij missing/ambiguous.
+    Caller verantwoordelijk voor self-healing DB-update na succesvolle
+    parse (zie services.va_backfill).
+    """
+    if not bestandspad:
+        return None
+    p = Path(bestandspad)
+    if p.exists() and p.is_file():
+        return p
+
+    base_dir = aangifte_dir if aangifte_dir is not None else (
+        DB_PATH.parent / 'aangifte')
+    roots: list[Path] = []
+    if jaar:
+        roots.append(base_dir / str(jaar) / 'voorlopige_aanslag')
+        roots.append(base_dir / str(jaar))
+    roots.append(base_dir)
+
+    matches: list[Path] = []
+    name = p.name
+    for root in roots:
+        if not root.exists():
+            continue
+        for cand in root.rglob(name):
+            if cand.is_file():
+                matches.append(cand)
+
+    # Dedupe + sort voor deterministisch gedrag
+    unique = sorted(set(matches))
+    if len(unique) == 1:
+        return unique[0]
+    return None  # 0 = niet gevonden; >1 = ambiguous → fail-loud caller-zijde
+
+
+async def update_aangifte_document_pad(
+    db_path: Path = DB_PATH,
+    *,
+    document_id: int,
+    new_bestandspad: str,
+) -> None:
+    """Self-heal: update aangifte_documenten.bestandspad naar canonical pad.
+
+    Aangeroepen door backfill NA succesvolle parse — zo herschrijven we
+    geen DB-pad op basis van een toevallige basename-match die later een
+    parse-fail blijkt. Idempotent: skipt als nieuwe pad gelijk is aan oud.
+    Niet year-locked: dit is metadata-correctie, geen fiscale data-mutatie.
+    """
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            "SELECT bestandspad FROM aangifte_documenten WHERE id = ?",
+            (document_id,),
+        )
+        row = await cur.fetchone()
+        if row is None:
+            return
+        if row['bestandspad'] == new_bestandspad:
+            return
+        await conn.execute(
+            "UPDATE aangifte_documenten SET bestandspad = ? WHERE id = ?",
+            (new_bestandspad, document_id),
+        )
+        await conn.commit()
+
+
 async def get_unprocessed_voorlopige_aanslag_documents(
     db_path: Path = DB_PATH, jaar: int = 0,
 ) -> list[dict]:

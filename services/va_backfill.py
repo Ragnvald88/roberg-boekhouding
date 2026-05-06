@@ -22,8 +22,11 @@ from pathlib import Path
 from database import (
     DB_PATH,
     YearLockedError,
+    delete_aangifte_document_with_va_cleanup,
     get_unprocessed_voorlopige_aanslag_documents,
     process_voorlopige_aanslag_upload,
+    resolve_aangifte_document_path,
+    update_aangifte_document_pad,
 )
 from services.va_parser import VAParseError, parse_va_beschikking
 
@@ -81,14 +84,26 @@ async def backfill_voorlopige_aanslag_documents(
     for doc in docs:
         doc_id = int(doc['id'])
         fname = doc.get('bestandsnaam', '?')
-        pdf_path = Path(doc['bestandspad']) if doc.get('bestandspad') else None
-        if pdf_path is None or not pdf_path.exists():
+        stored_pad = doc.get('bestandspad') or ''
+        doc_jaar = doc.get('jaar')
+        # Path-resolver: stored absolute pad eerst, dan basename-fallback in
+        # canonical AANGIFTE_DIR. Lost legacy-bug op (DB-pad heeft non-existing
+        # prefix terwijl het bestand wel onder ~/Library/Application Support
+        # /Boekhouding/data/aangifte staat).
+        resolved = resolve_aangifte_document_path(
+            stored_pad, jaar=doc_jaar)
+        if resolved is None:
             failed.append(BackfillResult(
                 document_id=doc_id, bestandsnaam=fname,
                 status='parse_failed',
-                message=f'PDF-bestand niet gevonden op disk: {pdf_path}',
+                message=(
+                    f'PDF-bestand niet gevonden op disk (gezocht onder '
+                    f'AANGIFTE_DIR), of meerdere basename-matches '
+                    f'(ambiguous). Stored pad: {stored_pad}'
+                ),
             ))
             continue
+        pdf_path = resolved
 
         # Parse PDF (blocking subprocess → to_thread)
         try:
@@ -133,13 +148,42 @@ async def backfill_voorlopige_aanslag_documents(
             ))
             continue
 
+        # Self-heal stored pad NA succesvolle process_*_upload — anders
+        # zouden we DB-pad herschrijven op basis van een toevallige
+        # basename-match waar parse vervolgens kon falen op inhoud.
+        if str(pdf_path) != stored_pad:
+            try:
+                await update_aangifte_document_pad(
+                    db_path=db_path, document_id=doc_id,
+                    new_bestandspad=str(pdf_path),
+                )
+            except Exception:  # pragma: no cover — defense
+                log.exception(
+                    'Pad self-heal faalde voor doc %s', doc_id)
+
         action = result.get('action', 'inserted')
         if action == 'skip':
+            # Codex round-1 fix: na skip ruim de duplicate aangifte_doc op
+            # zodat de doc niet eeuwig in get_unprocessed_* blijft staan
+            # en elke /documenten page-load opnieuw skip-attempt logt.
+            # Spiegelt /documenten upload-flow (_post_save_va_parse).
+            cleanup_msg = ' (duplicate document opgeruimd)'
+            try:
+                await delete_aangifte_document_with_va_cleanup(
+                    db_path=db_path, doc_id=doc_id)
+            except YearLockedError:
+                cleanup_msg = (' (duplicate doc kon niet worden opgeruimd: '
+                               'jaar afgesloten)')
+            except Exception:  # pragma: no cover — defense
+                log.exception(
+                    'Skip-cleanup faalde voor doc %s', doc_id)
+                cleanup_msg = ' (duplicate-cleanup faalde — zie logs)'
             skipped.append(BackfillResult(
                 document_id=doc_id, bestandsnaam=fname,
                 status='skipped',
                 soort=parsed.soort, bedrag=parsed.bedrag,
-                message='Beschikking al verwerkt (duplicate aanslagnummer)',
+                message=(f'Beschikking al verwerkt (duplicate aanslagnummer)'
+                         f'{cleanup_msg}'),
             ))
         else:
             soort_upper = parsed.soort.upper()

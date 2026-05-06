@@ -35,14 +35,9 @@ from database import (
     DB_PATH,
     get_active_voorlopige_aanslag,
     get_fiscale_params,
-    get_unprocessed_voorlopige_aanslag_documents,
     get_va_betalingen_detail,
 )
 from services.dashboard import compute_va_termijnen_schedule
-from services.va_backfill import (
-    BackfillSummary,
-    backfill_voorlopige_aanslag_documents,
-)
 
 AANGIFTE_DIR = DB_PATH.parent / 'aangifte'
 
@@ -273,22 +268,21 @@ async def va_tracker_page(jaar: int):
         jaar=jaar, bank_tx=zvw_bank, today=today,
     ) if zvw_verplicht > 0 else []
 
-    # Achter-count uit alleen ACTIVE schedules (manual fallback heeft geen
-    # kenmerk-match dus 'verwacht' status is daar onbetrouwbaar).
+    # Achter-count uit alleen ACTIVE schedules. 'achter' = vervaldatum
+    # voorbij + cumulatief tekort. Indicatieve mode (handmatige fp) heeft
+    # geen kenmerk-match dus die count is onbetrouwbaar.
     achter_count = 0
     if ib_b is not None:
-        achter_count += sum(1 for r in ib_schedule if r.status == 'verwacht')
+        achter_count += sum(1 for r in ib_schedule if r.status == 'achter')
     if zvw_b is not None:
-        achter_count += sum(1 for r in zvw_schedule if r.status == 'verwacht')
+        achter_count += sum(1 for r in zvw_schedule if r.status == 'achter')
 
-    # === Backfill-detect: ongekoppelde VA-PDFs uit /documenten ===
-    # User-feedback round-3: PDFs in /documenten worden niet gebruikt.
-    # Codex round-3 design-keuze: detect-on-load + expliciete user-CTA
-    # (geen auto-mutate-on-render). Banner toont aantal en knop voor
-    # eenmalige verwerking. Idempotent — UNIQUE(aanslagnummer) voorkomt
-    # dubbele rows bij re-click.
-    unprocessed = await get_unprocessed_voorlopige_aanslag_documents(
-        DB_PATH, jaar)
+    # === /va-tracker is een PURE read-page (Sprint J round-3 architectuur).
+    # Auto-backfill van ongekoppelde VA-PDFs gebeurt op /documenten
+    # page-load (zie pages.documenten._auto_backfill_va_for_jaar). Geen
+    # banner of mutate-CTA hier — als er ongekoppelde docs zijn ziet user
+    # ze als "PDF nog niet geüpload" in de soort-card en wordt gevraagd
+    # naar /documenten te gaan (waar auto-process draait).
 
     with ui.column().classes('w-full p-6 max-w-4xl mx-auto gap-4'):
         # === Page-header (jaar + bewerk-link top-right)
@@ -299,11 +293,6 @@ async def va_tracker_page(jaar: int):
                 icon='edit',
                 on_click=lambda j=jaar: ui.navigate.to(f'/aangifte?jaar={j}'),
             ).props('flat dense color=primary')
-
-        # === Backfill-banner — alleen als ongekoppelde PDFs bestaan
-        if unprocessed:
-            await _render_backfill_banner(
-                jaar=jaar, count=len(unprocessed), is_locked=is_locked)
 
         # === Locked-jaar banner
         if is_locked:
@@ -637,85 +626,6 @@ def _render_stacked_field(label: str, value: str,
     ui.label(value).classes(value_class)
 
 
-async def _render_backfill_banner(*, jaar: int, count: int,
-                                   is_locked: bool) -> None:
-    """Banner bovenaan /va-tracker bij ongekoppelde VA-PDFs.
-
-    Toont detectie + één-klik CTA "PDFs verwerken". Bij click:
-    backfill_voorlopige_aanslag_documents → notify per result-categorie
-    → ui.navigate.reload() zodat de page direct de nieuwe state toont.
-
-    Locked-jaar: knop disabled + tooltip (DB-mutaties zouden alsnog
-    YearLockedError opleveren — pre-flight UX-guard).
-    """
-    plural = 'en' if count > 1 else ''
-    with ui.card().classes('w-full q-pa-md').style(
-            'background: var(--bg-warning-soft); '
-            'border-left: 4px solid var(--q-warning);'):
-        with ui.row().classes('w-full items-center gap-3'):
-            ui.icon('info').classes('text-warning')
-            with ui.column().classes('flex-1 gap-0'):
-                ui.label(
-                    f'{count} bestaande VA-PDF{plural} in Documenten '
-                    f'{"is" if count == 1 else "zijn"} nog niet verwerkt.'
-                ).classes('text-sm text-weight-medium')
-                ui.label(
-                    'Klik om bedragen, kenmerken en dagtekeningen uit de '
-                    'PDFs te halen en automatisch te koppelen.'
-                ).classes('text-caption text-grey-7')
-
-            async def _do_backfill():
-                summary = await backfill_voorlopige_aanslag_documents(
-                    DB_PATH, jaar)
-                _notify_backfill_result(summary)
-                # Reload zodat banner verdwijnt en cards de nieuwe
-                # active-beschikkingen tonen.
-                ui.navigate.reload()
-
-            backfill_btn = ui.button(
-                f'PDF{plural} verwerken',
-                icon='auto_fix_high',
-                on_click=_do_backfill,
-            ).props('color=primary unelevated')
-            if is_locked:
-                backfill_btn.props('disable')
-                backfill_btn.tooltip(
-                    'Jaar afgesloten — heropen via Jaarafsluiting voor '
-                    'verwerking'
-                )
-
-
-def _notify_backfill_result(summary: BackfillSummary) -> None:
-    """Toon resultaat-notify(s) na backfill — per result-categorie.
-
-    Skipped docs (Codex round-2 finding): krijgen een nuttige hint dat de
-    duplicate uit /documenten verwijderd moet worden om de banner te
-    laten verdwijnen. Anders blijft de banner eeuwig staan want de doc
-    blijft in aangifte_documenten zonder VA-link.
-    """
-    for r in summary.processed:
-        ui.notify(r.message, type='positive', timeout=6000)
-    for r in summary.skipped:
-        ui.notify(
-            f'{r.bestandsnaam}: {r.message}. '
-            f'Verwijder duplicate uit /documenten om banner te laten '
-            f'verdwijnen.',
-            type='info', timeout=8000,
-        )
-    for r in summary.failed:
-        ui.notify(
-            f'{r.bestandsnaam}: {r.message}',
-            type='warning', timeout=10000,
-        )
-    for r in summary.locked:
-        ui.notify(
-            f'{r.bestandsnaam}: {r.message}',
-            type='warning', timeout=10000,
-        )
-    if summary.total == 0:
-        ui.notify('Geen ongekoppelde PDFs gevonden.', type='info')
-
-
 def _render_per_soort_upload_button(soort: str, jaar: int,
                                     is_locked: bool) -> None:
     """Per-soort upload-CTA — deep-link naar /documenten met jaar-param.
@@ -792,28 +702,48 @@ def _render_planning_section(*, ib_active: bool, zvw_active: bool,
                         continue
                     for row in schedule:
                         with ui.row().classes(
-                                'w-full items-center text-sm gap-2'):
+                                'w-full items-center text-sm gap-2 no-wrap'):
+                            # Termijn N + vervaldatum
+                            ui.label(f'{row.termijn}/{len(schedule)}').classes(
+                                'w-12 text-grey-7 text-caption')
                             ui.label(
                                 format_datum_kort_nl(row.vervaldatum)
                             ).classes('w-16 text-grey-7')
-                            ui.label(format_euro(row.bedrag)).classes(
-                                'w-20')
-                            if row.status == 'betaald':
-                                if is_active:
-                                    ui.icon('check_circle').classes(
-                                        'text-positive')
-                                    ui.label('betaald').classes(
-                                        'text-grey-8')
-                                else:
-                                    # Geen ✓ — alleen tekstuele indicatie
-                                    # (per-soort indicatief, niet page-wide)
-                                    ui.label('betaald gevonden').classes(
-                                        'text-grey-8')
-                            elif row.status == 'verwacht':
-                                ui.icon('warning').classes('text-warning')
-                                ui.label(
-                                    'verwacht' if is_active
-                                    else 'nog niet gevonden'
-                                ).classes('text-grey-7')
-                            else:  # toekomst
-                                ui.label('toekomst').classes('text-grey')
+                            # Cumulatief: betaald / verwacht
+                            ui.label(
+                                f'{format_euro(row.cumulatief_betaald, decimals=0)}'
+                                f' / {format_euro(row.cumulatief_verwacht, decimals=0)}'
+                            ).classes('flex-1 text-mono text-caption')
+                            # Status + tekort/overschot indicator
+                            _render_termijn_status(row, is_active=is_active)
+
+
+def _render_termijn_status(row, *, is_active: bool) -> None:
+    """Render status-icoon + tekst voor één termijn-rij.
+
+    Cumulatief-aware: toont vooruitbetaling / tekort / overdue. Voor
+    indicatieve mode (handmatige fp, geen kenmerk-match): geen ✓ icoon
+    om "matched-by-kenmerk"-suggestie te vermijden.
+    """
+    if row.status == 'betaald':
+        if is_active:
+            ui.icon('check_circle').classes('text-positive')
+        # Toon overschot ("vooruit") als > 0
+        if row.overschot > 1:
+            ui.label(
+                f'{format_euro(row.overschot, decimals=0)} vooruit'
+            ).classes('text-caption text-grey-7')
+        else:
+            ui.label('voldaan').classes('text-caption text-grey-7')
+    elif row.status == 'partial':
+        ui.icon('schedule').classes('text-warning')
+        ui.label(
+            f'{format_euro(row.tekort, decimals=0)} tekort'
+        ).classes('text-caption text-warning')
+    elif row.status == 'achter':
+        ui.icon('warning').classes('text-negative')
+        ui.label(
+            f'{format_euro(row.tekort, decimals=0)} achter'
+        ).classes('text-caption text-negative')
+    else:  # toekomst
+        ui.label('toekomst').classes('text-caption text-grey')

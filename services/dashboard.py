@@ -498,20 +498,30 @@ def compute_va_tracker(
 
 @dataclass(frozen=True)
 class TermijnRow:
-    """Eén termijn-rij in de drill-down schedule.
+    """Eén termijn-rij met cumulatieve betaal-status.
 
-    `vervaldatum` = ultimo van de maand (BD-conventie).
-    `status`:
-      - 'betaald'   → bank-tx in deze maand gevonden
-      - 'verwacht'  → vervaldatum in het verleden, geen bank-tx (overdue)
-      - 'toekomst'  → vervaldatum in de toekomst
+    Vervangt per-maand-match (Sprint J initial) met cumulatieve allocatie
+    (post-redesign 2026-05-06). BD redeneert in cumulative-paid vs
+    cumulative-expected per vervaldatum. Vooruitbetaling op maand N dekt
+    automatisch maand N+1, N+2, ... totdat het bedrag op is. Pre-eerste-
+    maand-tx (bv. jan-betaling voor feb-start) telt mee in cumulatief.
+
+    Status:
+      - 'betaald'   → cumulatief betaald >= cumulatief verwacht (binnen tolerantie)
+      - 'partial'   → wel betaald maar < verwacht, vervaldatum nog niet voorbij
+      - 'achter'    → vervaldatum voorbij, cumulatief tekort
+      - 'toekomst'  → vervaldatum nog niet voorbij, niets betaald
     """
-    maand: int                       # 1-12
+    termijn: int                          # 1-indexed (1..N)
+    maand: int                            # 1-12
     vervaldatum: date
-    bedrag: float                    # termijn-bedrag = verplicht / N
-    status: Literal['betaald', 'verwacht', 'toekomst']
-    betaald_op: date | None
-    betaald_bedrag: float | None
+    bedrag: float                         # individueel termijn-bedrag
+    status: Literal['betaald', 'partial', 'achter', 'toekomst']
+    cumulatief_betaald: float             # som tx ≤ vervaldatum
+    cumulatief_verwacht: float            # termijn × bedrag (gecapt op totaal)
+    tekort: float                         # max(verwacht - betaald, 0)
+    overschot: float                      # max(betaald - verwacht, 0)
+    laatste_betaling_op: date | None      # max datum van bijdragende tx
 
 
 def compute_va_termijnen_schedule(
@@ -521,71 +531,84 @@ def compute_va_termijnen_schedule(
     jaar: int,
     bank_tx: list[dict],
     today: date,
+    tolerance: float = 1.0,
 ) -> list[TermijnRow]:
-    """Bouw de per-termijn schedule voor één soort (IB of ZVW).
+    """Cumulatieve termijn-schedule voor één soort (IB of ZVW).
 
-    Conventie: `eerste_maand = 13 - termijnen` (N=11 → feb-start, N=12 →
-    jan-start). Zelfde heuristiek als `_expected_terms_elapsed`.
+    Algorithm (Codex-bevestigd, post-bug-2-fix):
+      Voor elke termijn N (1..termijnen):
+        vervaldatum_N = ultimo(jaar, eerste_maand + N - 1)
+        cumulatief_betaald = sum(tx.bedrag for tx in bank_tx if tx.datum ≤ vervaldatum_N)
+        cumulatief_verwacht = min(bedrag, N × termijn_bedrag)
+        status = ...
 
-    Bank-tx matching is per kalendermaand (eerste tx in de maand wint).
-    Caller filtert `bank_tx` zelf op kenmerk-classificatie (IB / ZVW)
-    voordat de lijst hier komt — dit is een pure helper, geen DB-query.
+    Pre-eerste-maand tx (bv. €1808 op 22 jan voor feb-start ZVW) telt
+    mee in cumulatief: filter is `tx.datum.year == jaar`, niet
+    `tx.datum.month in iteration`. Lost ghost-money-bug op.
 
-    Returns: list[TermijnRow] met N rijen voor maanden binnen [1..12].
+    Bank_tx-bedragen worden behandeld als positieve waarden (input uit
+    `get_va_betalingen_detail` levert al ABS-bedragen, maar voor
+    veiligheid `abs()` toegepast).
+
+    Returns: list[TermijnRow] met N rijen voor termijnen 1..N (gecapt op
+    maand ≤ 12).
     """
-    if termijnen <= 0:
+    if termijnen <= 0 or bedrag <= 0:
         return []
 
-    eerste_maand = 13 - termijnen
-    termijn_bedrag = bedrag / termijnen if termijnen > 0 else 0.0
+    eerste_maand = max(1, 13 - termijnen)
+    termijn_bedrag = bedrag / termijnen
 
-    # Group bank-tx per kalendermaand binnen `jaar`. Sorteer op datum
-    # zodat de "eerste tx in de maand" deterministisch is bij meerdere
-    # betalingen in dezelfde maand.
     def _to_date(v) -> date:
         return date.fromisoformat(v) if isinstance(v, str) else v
 
-    bank_by_month: dict[int, list[dict]] = {}
-    for tx in sorted(bank_tx, key=lambda t: t['datum']):
+    # Normaliseer + filter tx tot dit boekjaar; sorteer op datum voor
+    # deterministische cumulative en `laatste_betaling_op`.
+    txs: list[tuple[date, float]] = []
+    for tx in bank_tx:
         tx_d = _to_date(tx['datum'])
         if tx_d.year == jaar:
-            bank_by_month.setdefault(tx_d.month, []).append(tx)
+            txs.append((tx_d, abs(float(tx['bedrag']))))
+    txs.sort(key=lambda x: x[0])
 
     rows: list[TermijnRow] = []
-    for offset in range(termijnen):
-        maand = eerste_maand + offset
-        if maand < 1 or maand > 12:
-            continue
+    for n in range(1, termijnen + 1):
+        maand = eerste_maand + n - 1
+        if maand > 12:
+            break
         vervaldatum = _last_day_of_month(jaar, maand)
-        match = bank_by_month.get(maand)
-        if match:
-            tx = match[0]
-            rows.append(TermijnRow(
-                maand=maand,
-                vervaldatum=vervaldatum,
-                bedrag=termijn_bedrag,
-                status='betaald',
-                betaald_op=_to_date(tx['datum']),
-                betaald_bedrag=float(tx['bedrag']),
-            ))
+        # Cumulatief: alle tx tot en met vervaldatum_N
+        contributing = [(d, b) for d, b in txs if d <= vervaldatum]
+        cumulatief_betaald = sum(b for _, b in contributing)
+        cumulatief_verwacht = min(bedrag, n * termijn_bedrag)
+        tekort = max(cumulatief_verwacht - cumulatief_betaald, 0.0)
+        overschot = max(cumulatief_betaald - cumulatief_verwacht, 0.0)
+
+        if cumulatief_betaald >= cumulatief_verwacht - tolerance:
+            status: Literal['betaald', 'partial', 'achter', 'toekomst'] = 'betaald'
         elif vervaldatum < today:
-            rows.append(TermijnRow(
-                maand=maand,
-                vervaldatum=vervaldatum,
-                bedrag=termijn_bedrag,
-                status='verwacht',
-                betaald_op=None,
-                betaald_bedrag=None,
-            ))
+            status = 'achter'
+        elif cumulatief_betaald > 0:
+            status = 'partial'
         else:
-            rows.append(TermijnRow(
-                maand=maand,
-                vervaldatum=vervaldatum,
-                bedrag=termijn_bedrag,
-                status='toekomst',
-                betaald_op=None,
-                betaald_bedrag=None,
-            ))
+            status = 'toekomst'
+
+        laatste_betaling = (
+            max((d for d, _ in contributing)) if contributing else None
+        )
+
+        rows.append(TermijnRow(
+            termijn=n,
+            maand=maand,
+            vervaldatum=vervaldatum,
+            bedrag=termijn_bedrag,
+            status=status,
+            cumulatief_betaald=cumulatief_betaald,
+            cumulatief_verwacht=cumulatief_verwacht,
+            tekort=tekort,
+            overschot=overschot,
+            laatste_betaling_op=laatste_betaling,
+        ))
     return rows
 
 

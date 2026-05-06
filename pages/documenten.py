@@ -148,6 +148,42 @@ _DOCUMENTTYPE_TO_SOORT = {
 }
 
 
+async def _auto_backfill_va_for_jaar(jaar: int) -> None:
+    """Auto-backfill VA-PDFs op /documenten page-load (Sprint J round-3).
+
+    Detecteert ongekoppelde VA-documenten (geen voorlopige_aanslagen-row)
+    en parset ze automatisch. Zichtbare notify per resultaat. Idempotent
+    — 2e bezoek doet niets als alles al gekoppeld is.
+
+    Vervangt expliciete CTA-banner op /va-tracker. Architectuur:
+    `/documenten` is een write/manage-page (uploads, deletes, categorize),
+    auto-derive metadata daar past. `/va-tracker` blijft pure read-page.
+
+    Soft-fail: parse-error op één doc blokkeert niet anderen. Year-locked:
+    process_voorlopige_aanslag_upload weigert per-doc.
+    """
+    from services.va_backfill import backfill_voorlopige_aanslag_documents
+    summary = await backfill_voorlopige_aanslag_documents(DB_PATH, jaar)
+    if summary.total == 0:
+        return  # niets te doen, silent
+    for r in summary.processed:
+        ui.notify(
+            f'Auto-verwerkt: {r.message}',
+            type='positive', timeout=6000)
+    for r in summary.skipped:
+        # Skipped: duplicate aanslagnummer. Geen notify — meestal komt dit
+        # door re-upload na correctie; user wil geen banner over duplicates.
+        log.info('Backfill skipped: doc %s (%s)', r.document_id, r.message)
+    for r in summary.failed:
+        ui.notify(
+            f'PDF kon niet auto-verwerkt worden: {r.bestandsnaam} — {r.message}',
+            type='warning', timeout=8000)
+    for r in summary.locked:
+        ui.notify(
+            f'Jaar afgesloten — {r.bestandsnaam} niet verwerkt',
+            type='warning', timeout=8000)
+
+
 async def _post_save_va_parse(
     document_id: int, pdf_path: Path,
     documenttype: str | None = None,
@@ -274,6 +310,14 @@ async def documenten_page(jaar: int | None = None):
         huidig_jaar = jaar
     else:
         huidig_jaar = today_year
+
+    # Auto-backfill ongekoppelde VA-PDFs voor het zichtbare jaar (Sprint J
+    # round-3 architectuur — Codex: read-page mag niet muteren, maar
+    # /documenten is geen read-page; auto-process is document-indexering
+    # met zichtbare notify, geen stille fiscale correctie). User-feedback:
+    # backfill-banner op /va-tracker was extra wrijving — auto-flow op
+    # /documenten lost dat op. Idempotent: 2e bezoek = 0 ongekoppelde docs.
+    await _auto_backfill_va_for_jaar(huidig_jaar)
 
     with ui.column().classes('w-full p-6 max-w-7xl mx-auto gap-6'):
         # Header row
