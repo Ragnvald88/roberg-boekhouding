@@ -75,22 +75,51 @@ def _doc_preview_url(bestandspad: str | None) -> str | None:
         return f'/aangifte-files/{p.name}'
 
 
-async def _resolve_doc_url(doc_id: int) -> str | None:
-    """Look-up bestandspad voor VA-beschikking-doc en bouw preview-URL.
+async def _resolve_doc_url_and_name(doc_id: int) -> tuple[str, str] | None:
+    """Look-up bestandspad+naam voor VA-beschikking-doc.
 
-    Returns None als doc niet bestaat of bestand missing — caller skipt
-    dan de PDF-knop (voorkomt 404 i.p.v. silent broken link).
+    Returns (preview_url, bestandsnaam) of None als doc niet bestaat of
+    bestand missing — caller skipt dan de PDF-knop (voorkomt 404 i.p.v.
+    silent broken link).
     """
     from database import get_db_ctx
     async with get_db_ctx(DB_PATH) as conn:
         cur = await conn.execute(
-            "SELECT bestandspad FROM aangifte_documenten WHERE id = ?",
+            "SELECT bestandspad, bestandsnaam FROM aangifte_documenten "
+            "WHERE id = ?",
             (doc_id,),
         )
         row = await cur.fetchone()
     if row is None:
         return None
-    return _doc_preview_url(row['bestandspad'])
+    url = _doc_preview_url(row['bestandspad'])
+    if url is None:
+        return None
+    return (url, row['bestandsnaam'] or 'beschikking.pdf')
+
+
+def _show_pdf_preview(url: str, bestandsnaam: str) -> None:
+    """Show PDF preview in dialog — consistent met /documenten patroon.
+
+    pywebview native-mode: ui.navigate.to(new_tab=True) gedrag is
+    inconsistent (kan extern browser openen of in-app navigeren); een
+    iframe-dialog blijft binnen de app en heeft een bekend gedrag
+    (Codex audit fix #4: consistent UX met /documenten show_preview).
+    """
+    with ui.dialog() as dlg, \
+            ui.card().classes('w-full max-w-4xl q-pa-md'):
+        with ui.row().classes('w-full items-center'):
+            ui.label(bestandsnaam).classes('text-h6 flex-grow')
+            ui.button(icon='close', on_click=dlg.close) \
+                .props('flat round')
+        ui.separator().classes('q-my-sm')
+        ui.html(
+            f'<iframe src="{url}" '
+            f'style="width:100%;height:70vh;border:none;'
+            f'border-radius:8px;"></iframe>',
+            sanitize=False,
+        )
+    dlg.open()
 
 
 def _per_soort_state(beschikking, fp_bedrag: float,
@@ -597,12 +626,14 @@ async def _render_soort_card(*, soort: str, state: str,
         # === Footer-actie: Open PDF (active) of Upload-CTA (anders)
         if state == 'active' and beschikking is not None \
                 and beschikking.get('document_id'):
-            doc_url = await _resolve_doc_url(beschikking['document_id'])
-            if doc_url:
+            resolved = await _resolve_doc_url_and_name(
+                beschikking['document_id'])
+            if resolved is not None:
+                doc_url, doc_name = resolved
                 ui.button(
                     'Open PDF', icon='picture_as_pdf',
-                    on_click=lambda u=doc_url: ui.navigate.to(
-                        u, new_tab=True),
+                    on_click=lambda u=doc_url, n=doc_name: _show_pdf_preview(
+                        u, n),
                 ).props('flat dense color=primary').classes('q-mt-sm')
         elif state in ('fp_only', 'fp_and_bank'):
             _render_per_soort_upload_button(soort, jaar, is_locked)

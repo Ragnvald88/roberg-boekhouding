@@ -2484,6 +2484,17 @@ async def test_process_voorlopige_aanslag_upload_idempotent_on_duplicate_aanslag
         db_path=db, document_id=doc2, parsed=p)
     assert r2['action'] == 'skip'
     assert r2['beschikking_id'] == first_id  # bestaande rij gerefereerd
+    # Codex audit fix #2: skip-result moet existing.document_id meegeven
+    # zodat de caller een race-self-skip kan onderscheiden van een echte
+    # duplicate (race-scenario beschreven in services/va_backfill.py).
+    assert r2['existing_document_id'] == doc1
+
+    # Self-skip: zelfde doc_id 2× verwerken — bv. parallel backfill race.
+    # Dan wijst existing_document_id naar de doc die we zelf net inserted'en.
+    r3 = await process_voorlopige_aanslag_upload(
+        db_path=db, document_id=doc1, parsed=p)
+    assert r3['action'] == 'skip'
+    assert r3['existing_document_id'] == doc1  # self-reference
 
     # Geen extra rij in voorlopige_aanslagen
     async with get_db_ctx(db) as conn:

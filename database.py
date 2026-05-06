@@ -3135,15 +3135,23 @@ async def process_voorlopige_aanslag_upload(
             # 2b. Idempotency: zelfde aanslagnummer al gezien → skip.
             # Skip-pad: ROLLBACK manueel + early-return zonder raise (geen
             # double-rollback want we returnen, niet raisen).
+            # Codex audit fix #2: returneer existing.document_id zodat de
+            # caller (va_backfill) een "self-skip" kan onderscheiden van een
+            # echte duplicate. Race-scenario: parallel backfill-runs voor
+            # hetzelfde doc — call A insert, call B ziet duplicate. Zonder
+            # existing_document_id zou B het juist net-ingevoegde doc deleten
+            # en daarmee A's net gemaakte VA-row CASCADE-mee-deleten.
             cur = await conn.execute(
-                "SELECT id FROM voorlopige_aanslagen WHERE aanslagnummer = ?",
+                "SELECT id, document_id FROM voorlopige_aanslagen "
+                "WHERE aanslagnummer = ?",
                 (parsed.aanslagnummer,),
             )
             existing = await cur.fetchone()
             if existing:
                 await conn.execute("ROLLBACK")
                 return {'action': 'skip',
-                        'beschikking_id': int(existing['id'])}
+                        'beschikking_id': int(existing['id']),
+                        'existing_document_id': int(existing['document_id'])}
 
             # 3. Detecteer huidige active → 'replaced' vs 'inserted'.
             cur = await conn.execute(

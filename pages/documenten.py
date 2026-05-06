@@ -166,22 +166,25 @@ async def _auto_backfill_va_for_jaar(jaar: int) -> None:
     summary = await backfill_voorlopige_aanslag_documents(DB_PATH, jaar)
     if summary.total == 0:
         return  # niets te doen, silent
+    # Alleen succes-notifies — failed/skipped/locked blijven als log-only.
+    # Reden (Codex audit fix #3): failed-parse PDFs worden niet automatisch
+    # opgeruimd, dus zonder log-only zou elke /documenten page-load opnieuw
+    # dezelfde warning-notify spammen. De gefaalde docs blijven zichtbaar
+    # in de standaard-doc-lijst — user kan ze handmatig deleten of fixen.
     for r in summary.processed:
         ui.notify(
             f'Auto-verwerkt: {r.message}',
             type='positive', timeout=6000)
     for r in summary.skipped:
-        # Skipped: duplicate aanslagnummer. Geen notify — meestal komt dit
-        # door re-upload na correctie; user wil geen banner over duplicates.
         log.info('Backfill skipped: doc %s (%s)', r.document_id, r.message)
     for r in summary.failed:
-        ui.notify(
-            f'PDF kon niet auto-verwerkt worden: {r.bestandsnaam} — {r.message}',
-            type='warning', timeout=8000)
+        log.warning(
+            'Backfill failed (auto): doc %s (%s) — %s',
+            r.document_id, r.bestandsnaam, r.message)
     for r in summary.locked:
-        ui.notify(
-            f'Jaar afgesloten — {r.bestandsnaam} niet verwerkt',
-            type='warning', timeout=8000)
+        log.info(
+            'Backfill skipped (locked): doc %s (%s)',
+            r.document_id, r.bestandsnaam)
 
 
 async def _post_save_va_parse(
@@ -368,6 +371,12 @@ async def documenten_page(jaar: int | None = None):
                                 if d.categorie == cat
                                 and d.documenttype not in AUTO_TYPES
                             }
+                            # Reset eerst — voorkomt dat een type uit een
+                            # andere categorie blijft staan als user wisselt
+                            # (Codex audit fix #5: save_categorized's "niet
+                            # leeg"-check accepteerde dan een type dat NIET
+                            # bij de gekozen categorie hoort → DB-mismatch).
+                            type_select.value = None
                             type_select.options = types
                             type_select.update()
                             if len(types) == 1:
@@ -586,7 +595,14 @@ async def documenten_page(jaar: int | None = None):
                         else:
                             _render_missing_row(spec, jaar, refresh)
 
-    jaar_select.on_value_change(lambda _: refresh())
+    async def _on_year_change():
+        # Auto-backfill triggert óók bij jaar-wissel via dropdown — anders
+        # blijven ongekoppelde VA-PDFs in andere jaren onverwerkt zolang de
+        # user die jaar niet via deep-link bezoekt (Codex audit fix #1).
+        await _auto_backfill_va_for_jaar(jaar_select.value)
+        await refresh()
+
+    jaar_select.on_value_change(lambda _: _on_year_change())
     await refresh()
 def _render_auto_row(spec, auto_done: bool):
     """Render a row for auto-generated documents (jaarafsluiting)."""

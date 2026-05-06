@@ -164,20 +164,32 @@ async def backfill_voorlopige_aanslag_documents(
         action = result.get('action', 'inserted')
         if action == 'skip':
             # Codex round-1 fix: na skip ruim de duplicate aangifte_doc op
-            # zodat de doc niet eeuwig in get_unprocessed_* blijft staan
-            # en elke /documenten page-load opnieuw skip-attempt logt.
-            # Spiegelt /documenten upload-flow (_post_save_va_parse).
-            cleanup_msg = ' (duplicate document opgeruimd)'
-            try:
-                await delete_aangifte_document_with_va_cleanup(
-                    db_path=db_path, doc_id=doc_id)
-            except YearLockedError:
-                cleanup_msg = (' (duplicate doc kon niet worden opgeruimd: '
-                               'jaar afgesloten)')
-            except Exception:  # pragma: no cover — defense
-                log.exception(
-                    'Skip-cleanup faalde voor doc %s', doc_id)
-                cleanup_msg = ' (duplicate-cleanup faalde — zie logs)'
+            # zodat de doc niet eeuwig in get_unprocessed_* blijft staan.
+            # Codex audit fix #2 (race): parallel backfills van zelfde
+            # doc kunnen call B het door call A net-gemaakte doc opruimen
+            # (CASCADE op aangifte_documenten zou dan ook A's net-gemaakte
+            # VA-row mee-deleten). Skip cleanup als existing_document_id ==
+            # current doc_id — dat is een "self-skip", VA-row hoort bij ons.
+            existing_doc_id = result.get('existing_document_id')
+            cleanup_msg = ''
+            if existing_doc_id == doc_id:
+                # Self-skip: A heeft net onze VA-row gemaakt, B detecteert
+                # via aanslagnummer-UNIQUE. Onze doc is correct gekoppeld —
+                # niet verwijderen. Volgende get_unprocessed-query ziet de
+                # doc niet meer (LEFT JOIN matched), dus geen herhaalde skip.
+                cleanup_msg = ' (al gekoppeld aan deze upload)'
+            else:
+                cleanup_msg = ' (duplicate document opgeruimd)'
+                try:
+                    await delete_aangifte_document_with_va_cleanup(
+                        db_path=db_path, doc_id=doc_id)
+                except YearLockedError:
+                    cleanup_msg = (' (duplicate doc kon niet worden opgeruimd: '
+                                   'jaar afgesloten)')
+                except Exception:  # pragma: no cover — defense
+                    log.exception(
+                        'Skip-cleanup faalde voor doc %s', doc_id)
+                    cleanup_msg = ' (duplicate-cleanup faalde — zie logs)'
             skipped.append(BackfillResult(
                 document_id=doc_id, bestandsnaam=fname,
                 status='skipped',

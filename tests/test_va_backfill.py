@@ -226,6 +226,57 @@ async def test_backfill_skip_path_for_duplicate_aanslagnummer(
 
 
 @pytest.mark.asyncio
+async def test_backfill_self_skip_does_not_delete_own_document(
+        db, tmp_path, monkeypatch):
+    """Codex audit fix #2 race-protect: als skip wijst naar HUIDIG doc
+    (self-skip = race waarbij parallel call A net inserted'e voor doc X
+    en B detecteert via aanslagnummer-UNIQUE), MAG B NIET doc X opruimen.
+    Anders zou CASCADE op aangifte_documenten.id == X de zojuist gemaakte
+    voorlopige_aanslagen-row mee-deleten.
+
+    Test simuleert race door process_*_upload 2× achter elkaar te roepen
+    op zelfde doc_id (via een geprepareerde voorlopige_aanslagen-row),
+    en daarna backfill — die ziet skip met existing_document_id == doc_id
+    en moet doc + VA-row bewaren.
+    """
+    from services import va_backfill
+    from database import (
+        get_active_voorlopige_aanslag, get_aangifte_documenten,
+    )
+    pdf = tmp_path / 'va.pdf'; pdf.write_text('fake')
+    await upsert_fiscale_params(db_path=db, **_minimal_fp_kwargs(2026))
+    doc_id = await add_aangifte_document(
+        db_path=db, jaar=2026, categorie='voorlopige_aanslag',
+        documenttype='va_ib_beschikking',
+        bestandspad=str(pdf), bestandsnaam='va.pdf',
+    )
+    fake_parsed = ParsedBeschikking(
+        jaar=2026, soort='ib', aanslagnummer='9999.99.999.H.60.01',
+        dagtekening=date(2026, 1, 31), bedrag=30670.0,
+        betalingskenmerk='9999999999990001', termijnen=11,
+    )
+    monkeypatch.setattr(
+        va_backfill, 'parse_va_beschikking',
+        lambda _path: fake_parsed,
+    )
+    # Eerste call: insert.
+    r1 = await process_voorlopige_aanslag_upload(
+        db_path=db, document_id=doc_id, parsed=fake_parsed)
+    assert r1['action'] == 'inserted'
+
+    # Backfill ziet GEEN unprocessed (doc heeft al VA-row), so should be no-op.
+    summary = await backfill_voorlopige_aanslag_documents(db, 2026)
+    assert summary.total == 0
+
+    # Doc + VA-row blijven intact.
+    docs = await get_aangifte_documenten(db, 2026)
+    assert len(docs) == 1
+    active = await get_active_voorlopige_aanslag(db, 2026, 'ib')
+    assert active is not None
+    assert active['document_id'] == doc_id
+
+
+@pytest.mark.asyncio
 async def test_backfill_year_locked_returns_locked_status(
         db, tmp_path, monkeypatch):
     """Backfill in definitief jaar → result.status='locked' per doc.
