@@ -2258,3 +2258,547 @@ async def test_update_ib_inputs_writes_va_termijnen(db):
     assert fp.voorlopige_aanslag_ib_termijnen == 4
     assert fp.voorlopige_aanslag_zvw_termijnen == 7
 
+
+# === Sprint J T1.1: migratie 41 — voorlopige_aanslagen tabel ===
+
+
+from dataclasses import dataclass
+from datetime import date as _date_cls
+
+
+@dataclass(frozen=True)
+class _FakeParsed:
+    """Duck-typed stand-in voor services.va_parser.ParsedBeschikking.
+
+    Used in T1.1 tests vóór services/va_parser.py bestaat (T1.2). Houd
+    veldnamen + types EXACT in sync met de echte ParsedBeschikking
+    dataclass — process_voorlopige_aanslag_upload leest deze attributen.
+    """
+    jaar: int
+    soort: str
+    aanslagnummer: str
+    dagtekening: _date_cls
+    bedrag: float
+    betalingskenmerk: str
+    termijnen: int
+
+
+async def _add_va_doc(db_path, jaar: int, soort: str = 'ib') -> int:
+    """Insert een aangifte_documenten-rij die VA-helpers kunnen gebruiken."""
+    from database import add_aangifte_document
+    return await add_aangifte_document(
+        db_path=db_path, jaar=jaar, categorie='voorlopige_aanslag',
+        documenttype=f'va_{soort}_beschikking',
+        bestandsnaam=f'VA_{soort}_{jaar}.pdf',
+        bestandspad=f'/data/aangifte/{jaar}/voorlopige_aanslag/VA_{soort}.pdf',
+        upload_datum=f'{jaar}-01-31',
+    )
+
+
+@pytest.mark.asyncio
+async def test_migratie_41_voorlopige_aanslagen_table_schema(db):
+    """Migratie 41 maakt voorlopige_aanslagen-tabel + partial unique index."""
+    from database import get_db_ctx
+    async with get_db_ctx(db) as conn:
+        cur = await conn.execute("PRAGMA table_info(voorlopige_aanslagen)")
+        cols = {r['name']: r for r in await cur.fetchall()}
+    # Required columns met juiste NOT NULL + defaults
+    for col in ('id', 'jaar', 'soort', 'document_id', 'aanslagnummer',
+                'dagtekening', 'bedrag', 'betalingskenmerk',
+                'termijnen', 'is_active', 'created_at'):
+        assert col in cols, f"missing column {col}"
+    assert cols['termijnen']['notnull'] == 1
+    assert int(cols['termijnen']['dflt_value']) == 11
+    assert cols['is_active']['notnull'] == 1
+    assert int(cols['is_active']['dflt_value']) == 1
+
+    # Partial unique index aanwezig met WHERE-clause
+    async with get_db_ctx(db) as conn:
+        cur = await conn.execute(
+            "SELECT sql FROM sqlite_master "
+            "WHERE type='index' AND name='idx_va_active'")
+        row = await cur.fetchone()
+    assert row is not None
+    assert 'is_active = 1' in row['sql']
+    assert '(jaar, soort)' in row['sql']
+
+    # CHECK constraints werken: soort ∈ {'ib','zvw'}, bedrag>=0,
+    # termijnen 1-12. Probeer een bad-row in te voegen — moet falen.
+    import aiosqlite
+    docid = await _add_va_doc(db, 2026, 'ib')
+    docid2 = await _add_va_doc(db, 2026, 'ib')
+    async with get_db_ctx(db) as conn:
+        with pytest.raises(aiosqlite.IntegrityError):
+            await conn.execute(
+                """INSERT INTO voorlopige_aanslagen
+                   (jaar, soort, document_id, aanslagnummer, dagtekening,
+                    bedrag, betalingskenmerk, termijnen, is_active)
+                   VALUES (?, 'andere', ?, ?, ?, ?, ?, ?, 1)""",
+                (2026, docid, 'X.1', '2026-01-31', 100.0, '0' * 16, 11),
+            )
+        with pytest.raises(aiosqlite.IntegrityError):
+            await conn.execute(
+                """INSERT INTO voorlopige_aanslagen
+                   (jaar, soort, document_id, aanslagnummer, dagtekening,
+                    bedrag, betalingskenmerk, termijnen, is_active)
+                   VALUES (?, 'ib', ?, ?, ?, ?, ?, ?, 1)""",
+                (2026, docid, 'X.2', '2026-01-31', -5.0, '0' * 16, 11),
+            )
+        with pytest.raises(aiosqlite.IntegrityError):
+            await conn.execute(
+                """INSERT INTO voorlopige_aanslagen
+                   (jaar, soort, document_id, aanslagnummer, dagtekening,
+                    bedrag, betalingskenmerk, termijnen, is_active)
+                   VALUES (?, 'ib', ?, ?, ?, ?, ?, ?, 1)""",
+                (2026, docid, 'X.3', '2026-01-31', 100.0, '0' * 16, 13),
+            )
+
+    # UNIQUE(document_id) — Codex round-3 fix: één beschikking per source-PDF.
+    # Garandeert dat delete-cleanup deterministisch is (LEFT JOIN fetchone
+    # is exhaustief). Twee VA-rows met zelfde document_id moet falen.
+    async with get_db_ctx(db) as conn:
+        await conn.execute(
+            """INSERT INTO voorlopige_aanslagen
+               (jaar, soort, document_id, aanslagnummer, dagtekening,
+                bedrag, betalingskenmerk, termijnen, is_active)
+               VALUES (?, 'ib', ?, ?, ?, ?, ?, ?, 1)""",
+            (2026, docid, 'OK.1', '2026-01-31', 100.0, '0' * 16, 11))
+        await conn.commit()
+        with pytest.raises(aiosqlite.IntegrityError):
+            await conn.execute(
+                """INSERT INTO voorlopige_aanslagen
+                   (jaar, soort, document_id, aanslagnummer, dagtekening,
+                    bedrag, betalingskenmerk, termijnen, is_active)
+                   VALUES (?, 'ib', ?, ?, ?, ?, ?, ?, 0)""",
+                (2026, docid, 'OK.2', '2026-01-31', 100.0, '0' * 16, 11))
+
+
+@pytest.mark.asyncio
+async def test_process_voorlopige_aanslag_upload_inserts_and_syncs_fp(db):
+    """Happy path: nieuwe upload INSERT + fp.voorlopige_aanslag_betaald sync."""
+    from database import (
+        process_voorlopige_aanslag_upload, get_active_voorlopige_aanslag,
+    )
+    await upsert_fiscale_params(
+        db_path=db, **_minimal_fiscale_params_kwargs(2026))
+    docid = await _add_va_doc(db, 2026, 'ib')
+
+    parsed = _FakeParsed(
+        jaar=2026, soort='ib', aanslagnummer='1244.12.646.H.60.01',
+        dagtekening=_date_cls(2026, 1, 31), bedrag=30670.0,
+        betalingskenmerk='0124412647060001', termijnen=11,
+    )
+    result = await process_voorlopige_aanslag_upload(
+        db_path=db, document_id=docid, parsed=parsed)
+
+    assert result['action'] == 'inserted'
+    assert isinstance(result['beschikking_id'], int)
+    active = await get_active_voorlopige_aanslag(db, 2026, 'ib')
+    assert active is not None
+    assert active['aanslagnummer'] == '1244.12.646.H.60.01'
+    assert active['bedrag'] == 30670.0
+    assert active['termijnen'] == 11
+    assert active['is_active'] == 1
+
+    # fp-sync
+    fp = await get_fiscale_params(db, 2026)
+    assert fp.voorlopige_aanslag_betaald == 30670.0
+    assert fp.voorlopige_aanslag_ib_termijnen == 11
+
+
+@pytest.mark.asyncio
+async def test_process_voorlopige_aanslag_upload_deactivates_old_active(db):
+    """Revisie-pad: tweede upload met ander aanslagnummer → oude is_active=0."""
+    from database import (
+        process_voorlopige_aanslag_upload, get_active_voorlopige_aanslag,
+        get_db_ctx,
+    )
+    await upsert_fiscale_params(
+        db_path=db, **_minimal_fiscale_params_kwargs(2026))
+
+    # Eerste upload
+    doc1 = await _add_va_doc(db, 2026, 'ib')
+    p1 = _FakeParsed(
+        jaar=2026, soort='ib', aanslagnummer='1244.12.646.H.60.01',
+        dagtekening=_date_cls(2026, 1, 31), bedrag=30670.0,
+        betalingskenmerk='0124412647060001', termijnen=11)
+    r1 = await process_voorlopige_aanslag_upload(
+        db_path=db, document_id=doc1, parsed=p1)
+    assert r1['action'] == 'inserted'
+    old_id = r1['beschikking_id']
+
+    # Tweede upload met ander aanslagnummer — revisie
+    doc2 = await _add_va_doc(db, 2026, 'ib')
+    p2 = _FakeParsed(
+        jaar=2026, soort='ib', aanslagnummer='1244.12.646.H.60.02',
+        dagtekening=_date_cls(2026, 6, 15), bedrag=35000.0,
+        betalingskenmerk='0124412647060002', termijnen=7)
+    r2 = await process_voorlopige_aanslag_upload(
+        db_path=db, document_id=doc2, parsed=p2)
+    assert r2['action'] == 'replaced'
+    assert r2['beschikking_id'] != old_id
+
+    # Active: nieuwste
+    active = await get_active_voorlopige_aanslag(db, 2026, 'ib')
+    assert active['aanslagnummer'] == '1244.12.646.H.60.02'
+    assert active['bedrag'] == 35000.0
+    assert active['termijnen'] == 7
+
+    # Oude rij: is_active=0 (history behouden)
+    async with get_db_ctx(db) as conn:
+        cur = await conn.execute(
+            "SELECT is_active FROM voorlopige_aanslagen WHERE id = ?",
+            (old_id,))
+        row = await cur.fetchone()
+    assert row['is_active'] == 0
+
+    # fp-sync naar nieuwe waarden
+    fp = await get_fiscale_params(db, 2026)
+    assert fp.voorlopige_aanslag_betaald == 35000.0
+    assert fp.voorlopige_aanslag_ib_termijnen == 7
+
+
+@pytest.mark.asyncio
+async def test_process_voorlopige_aanslag_upload_idempotent_on_duplicate_aanslagnummer(db):
+    """Duplicate aanslagnummer → action='skip', geen mutatie, geen extra rij."""
+    from database import (
+        process_voorlopige_aanslag_upload, get_active_voorlopige_aanslag,
+        get_db_ctx,
+    )
+    await upsert_fiscale_params(
+        db_path=db, **_minimal_fiscale_params_kwargs(2026))
+
+    doc1 = await _add_va_doc(db, 2026, 'ib')
+    p = _FakeParsed(
+        jaar=2026, soort='ib', aanslagnummer='1244.12.646.H.60.01',
+        dagtekening=_date_cls(2026, 1, 31), bedrag=30670.0,
+        betalingskenmerk='0124412647060001', termijnen=11)
+    r1 = await process_voorlopige_aanslag_upload(
+        db_path=db, document_id=doc1, parsed=p)
+    assert r1['action'] == 'inserted'
+    first_id = r1['beschikking_id']
+
+    # Tweede upload met ZELFDE aanslagnummer → skip
+    doc2 = await _add_va_doc(db, 2026, 'ib')
+    r2 = await process_voorlopige_aanslag_upload(
+        db_path=db, document_id=doc2, parsed=p)
+    assert r2['action'] == 'skip'
+    assert r2['beschikking_id'] == first_id  # bestaande rij gerefereerd
+
+    # Geen extra rij in voorlopige_aanslagen
+    async with get_db_ctx(db) as conn:
+        cur = await conn.execute("SELECT COUNT(*) AS n FROM voorlopige_aanslagen")
+        cnt = (await cur.fetchone())['n']
+    assert cnt == 1
+
+    # Active row intact
+    active = await get_active_voorlopige_aanslag(db, 2026, 'ib')
+    assert active['id'] == first_id
+
+
+@pytest.mark.asyncio
+async def test_get_active_voorlopige_aanslag_returns_active_only(db):
+    """get_active filtert op is_active=1 — inactive rows worden niet returned."""
+    from database import (
+        process_voorlopige_aanslag_upload, get_active_voorlopige_aanslag,
+    )
+    await upsert_fiscale_params(
+        db_path=db, **_minimal_fiscale_params_kwargs(2026))
+
+    # Geen rows → None
+    assert await get_active_voorlopige_aanslag(db, 2026, 'ib') is None
+
+    # Eerste upload + revisie
+    doc1 = await _add_va_doc(db, 2026, 'ib')
+    p1 = _FakeParsed(
+        jaar=2026, soort='ib', aanslagnummer='1244.12.646.H.60.01',
+        dagtekening=_date_cls(2026, 1, 31), bedrag=30670.0,
+        betalingskenmerk='0124412647060001', termijnen=11)
+    await process_voorlopige_aanslag_upload(
+        db_path=db, document_id=doc1, parsed=p1)
+    doc2 = await _add_va_doc(db, 2026, 'ib')
+    p2 = _FakeParsed(
+        jaar=2026, soort='ib', aanslagnummer='1244.12.646.H.60.02',
+        dagtekening=_date_cls(2026, 6, 15), bedrag=35000.0,
+        betalingskenmerk='0124412647060002', termijnen=7)
+    await process_voorlopige_aanslag_upload(
+        db_path=db, document_id=doc2, parsed=p2)
+
+    # 2 rows in DB, maar get_active geeft alleen de actieve
+    active = await get_active_voorlopige_aanslag(db, 2026, 'ib')
+    assert active is not None
+    assert active['aanslagnummer'] == '1244.12.646.H.60.02'
+
+    # Andere soort/jaar → None
+    assert await get_active_voorlopige_aanslag(db, 2026, 'zvw') is None
+    assert await get_active_voorlopige_aanslag(db, 2025, 'ib') is None
+
+
+@pytest.mark.asyncio
+async def test_get_va_betalingen_detail_classifies_ib_zvw_unmatched(db):
+    """Detail classifies bank-tx via kenmerk-positie [10:12]: <50=ib, >=50=zvw,
+    overige=unmatched. Unmatched-rij blijft zichtbaar voor audit."""
+    from database import get_va_betalingen_detail, BELASTINGDIENST_IBAN
+    # 3 BD-tx: IB (kenmerk 10:12 = '06'), ZVW ('70'), unmatched (random kenmerk)
+    await add_banktransacties(db, [
+        {'datum': '2026-02-28', 'bedrag': -2788.0,
+         'tegenpartij': 'BD', 'omschrijving': 'VA-IB feb',
+         'tegenrekening': BELASTINGDIENST_IBAN,
+         'betalingskenmerk': '0124412647060001'},
+        {'datum': '2026-03-31', 'bedrag': -800.0,
+         'tegenpartij': 'BD', 'omschrijving': 'VA-ZVW mrt',
+         'tegenrekening': BELASTINGDIENST_IBAN,
+         'betalingskenmerk': '0124412647700001'},
+        {'datum': '2026-04-15', 'bedrag': -100.0,
+         'tegenpartij': 'BD', 'omschrijving': 'overig',
+         'tegenrekening': BELASTINGDIENST_IBAN,
+         'betalingskenmerk': '12345'},  # te kort → unmatched
+    ], csv_bestand='va.csv')
+
+    detail = await get_va_betalingen_detail(db, 2026)
+    classifications = [r['classification'] for r in detail]
+    assert 'ib_matched' in classifications
+    assert 'zvw_matched' in classifications
+    assert 'unmatched' in classifications
+    assert len(detail) == 3
+
+    # Bedragen positief (ABS)
+    for r in detail:
+        assert r['bedrag'] >= 0
+    # Sorted by datum ASC
+    datums = [r['datum'] for r in detail]
+    assert datums == sorted(datums)
+
+
+@pytest.mark.asyncio
+async def test_process_voorlopige_aanslag_upload_rejects_doc_jaar_mismatch(db):
+    """Codex T1.1 critical: parsed.jaar != aangifte_document.jaar → ValueError.
+    Voorkomt cross-year stealth (2025-doc als bron voor 2026-VA)."""
+    from database import process_voorlopige_aanslag_upload, get_db_ctx
+    await upsert_fiscale_params(
+        db_path=db, **_minimal_fiscale_params_kwargs(2025))
+    await upsert_fiscale_params(
+        db_path=db, **_minimal_fiscale_params_kwargs(2026))
+    docid_2025 = await _add_va_doc(db, 2025, 'ib')
+
+    parsed_2026 = _FakeParsed(
+        jaar=2026, soort='ib', aanslagnummer='1244.12.646.H.60.01',
+        dagtekening=_date_cls(2026, 1, 31), bedrag=30670.0,
+        betalingskenmerk='0124412647060001', termijnen=11)
+    with pytest.raises(ValueError, match='jaar-mismatch'):
+        await process_voorlopige_aanslag_upload(
+            db_path=db, document_id=docid_2025, parsed=parsed_2026)
+
+    # Geen rij gemaakt
+    async with get_db_ctx(db) as conn:
+        cur = await conn.execute("SELECT COUNT(*) AS n FROM voorlopige_aanslagen")
+        assert (await cur.fetchone())['n'] == 0
+
+
+@pytest.mark.asyncio
+async def test_process_voorlopige_aanslag_upload_rejects_non_va_document(db):
+    """Codex T1.1 critical: niet-VA categorie → ValueError. Voorkomt
+    misbruik van WOZ-doc als VA-bron."""
+    from database import process_voorlopige_aanslag_upload, add_aangifte_document
+    await upsert_fiscale_params(
+        db_path=db, **_minimal_fiscale_params_kwargs(2026))
+    woz_doc = await add_aangifte_document(
+        db, jaar=2026, categorie='eigen_woning',
+        documenttype='woz_beschikking',
+        bestandsnaam='WOZ.pdf',
+        bestandspad='/data/aangifte/2026/eigen_woning/WOZ.pdf',
+        upload_datum='2026-01-01')
+
+    parsed = _FakeParsed(
+        jaar=2026, soort='ib', aanslagnummer='1244.12.646.H.60.01',
+        dagtekening=_date_cls(2026, 1, 31), bedrag=30670.0,
+        betalingskenmerk='0124412647060001', termijnen=11)
+    with pytest.raises(ValueError, match="verwacht 'voorlopige_aanslag'"):
+        await process_voorlopige_aanslag_upload(
+            db_path=db, document_id=woz_doc, parsed=parsed)
+
+
+@pytest.mark.asyncio
+async def test_process_voorlopige_aanslag_upload_rejects_missing_document(db):
+    """Onbekende document_id → ValueError (geen silent insert van orphan-FK)."""
+    from database import process_voorlopige_aanslag_upload
+    await upsert_fiscale_params(
+        db_path=db, **_minimal_fiscale_params_kwargs(2026))
+    parsed = _FakeParsed(
+        jaar=2026, soort='ib', aanslagnummer='1244.12.646.H.60.01',
+        dagtekening=_date_cls(2026, 1, 31), bedrag=30670.0,
+        betalingskenmerk='0124412647060001', termijnen=11)
+    with pytest.raises(ValueError, match='bestaat niet'):
+        await process_voorlopige_aanslag_upload(
+            db_path=db, document_id=99999, parsed=parsed)
+
+
+@pytest.mark.asyncio
+async def test_process_voorlopige_aanslag_upload_rollback_keeps_old_active_intact(db):
+    """Codex T1.1 should-fix: bewijs partial-state-protection — als de
+    INSERT van de nieuwe rij faalt (bedrag<0 → CHECK IntegrityError), dan
+    moet de gedeactiveerde oude rij gerestored zijn (is_active=1) en
+    fp ongewijzigd. Test bewijst de ROLLBACK-claim concreet."""
+    import aiosqlite
+    from database import (
+        process_voorlopige_aanslag_upload, get_active_voorlopige_aanslag,
+        get_db_ctx,
+    )
+    await upsert_fiscale_params(
+        db_path=db, **_minimal_fiscale_params_kwargs(2026))
+
+    # Eerste valid upload
+    doc1 = await _add_va_doc(db, 2026, 'ib')
+    p1 = _FakeParsed(
+        jaar=2026, soort='ib', aanslagnummer='1244.12.646.H.60.01',
+        dagtekening=_date_cls(2026, 1, 31), bedrag=30670.0,
+        betalingskenmerk='0124412647060001', termijnen=11)
+    await process_voorlopige_aanslag_upload(
+        db_path=db, document_id=doc1, parsed=p1)
+    fp_before = await get_fiscale_params(db, 2026)
+
+    # Tweede upload met bedrag<0 — CHECK constraint faalt op INSERT
+    # NA deactivate van oude rij. Rollback moet alles terugdraaien.
+    doc2 = await _add_va_doc(db, 2026, 'ib')
+    p_bad = _FakeParsed(
+        jaar=2026, soort='ib', aanslagnummer='1244.12.646.H.60.02',
+        dagtekening=_date_cls(2026, 6, 15), bedrag=-1.0,  # CHECK<0 fail
+        betalingskenmerk='0124412647060002', termijnen=7)
+    with pytest.raises(aiosqlite.IntegrityError):
+        await process_voorlopige_aanslag_upload(
+            db_path=db, document_id=doc2, parsed=p_bad)
+
+    # Oude active gerestored (is_active=1) — niet 0!
+    active = await get_active_voorlopige_aanslag(db, 2026, 'ib')
+    assert active is not None
+    assert active['aanslagnummer'] == '1244.12.646.H.60.01'
+    assert active['is_active'] == 1
+    # Geen tweede rij ingevoegd
+    async with get_db_ctx(db) as conn:
+        cur = await conn.execute("SELECT COUNT(*) AS n FROM voorlopige_aanslagen")
+        assert (await cur.fetchone())['n'] == 1
+    # fp ongewijzigd
+    fp_after = await get_fiscale_params(db, 2026)
+    assert fp_after.voorlopige_aanslag_betaald == fp_before.voorlopige_aanslag_betaald
+    assert fp_after.voorlopige_aanslag_ib_termijnen == fp_before.voorlopige_aanslag_ib_termijnen
+
+
+@pytest.mark.asyncio
+async def test_voorlopige_aanslagen_partial_index_blocks_two_active_per_jaar_soort(db):
+    """Codex T1.1 should-fix: bewijs partial unique index. Twee actieve
+    rows voor zelfde (jaar, soort) → IntegrityError. Inactive history
+    rows zijn ALLE toegestaan."""
+    import aiosqlite
+    from database import get_db_ctx
+    docid = await _add_va_doc(db, 2026, 'ib')
+    docid2 = await _add_va_doc(db, 2026, 'ib')
+    async with get_db_ctx(db) as conn:
+        # Eerste actieve rij — OK
+        await conn.execute(
+            """INSERT INTO voorlopige_aanslagen
+               (jaar, soort, document_id, aanslagnummer, dagtekening,
+                bedrag, betalingskenmerk, termijnen, is_active)
+               VALUES (?, 'ib', ?, ?, ?, ?, ?, ?, 1)""",
+            (2026, docid, 'X.1', '2026-01-31', 100.0, '0' * 16, 11))
+        # Tweede actieve rij voor (2026, 'ib') — moet falen
+        with pytest.raises(aiosqlite.IntegrityError):
+            await conn.execute(
+                """INSERT INTO voorlopige_aanslagen
+                   (jaar, soort, document_id, aanslagnummer, dagtekening,
+                    bedrag, betalingskenmerk, termijnen, is_active)
+                   VALUES (?, 'ib', ?, ?, ?, ?, ?, ?, 1)""",
+                (2026, docid2, 'X.2', '2026-01-31', 100.0, '0' * 16, 11))
+        # Inactieve rij voor zelfde (jaar, soort) — toegestaan
+        await conn.execute(
+            """INSERT INTO voorlopige_aanslagen
+               (jaar, soort, document_id, aanslagnummer, dagtekening,
+                bedrag, betalingskenmerk, termijnen, is_active)
+               VALUES (?, 'ib', ?, ?, ?, ?, ?, ?, 0)""",
+            (2026, docid2, 'X.3', '2026-01-31', 100.0, '0' * 16, 11))
+        await conn.commit()
+        # 2 rijen totaal: 1 active + 1 inactive
+        cur = await conn.execute(
+            "SELECT COUNT(*) AS n FROM voorlopige_aanslagen "
+            "WHERE jaar=2026 AND soort='ib'")
+        assert (await cur.fetchone())['n'] == 2
+
+
+@pytest.mark.asyncio
+async def test_process_voorlopige_aanslag_upload_zvw_syncs_zvw_field(db):
+    """Codex T1.1 should-fix: ZVW-pad schrijft naar voorlopige_aanslag_zvw
+    (NIET _betaald) + voorlopige_aanslag_zvw_termijnen. IB+ZVW kunnen
+    naast elkaar bestaan voor zelfde jaar (verschillende soort)."""
+    from database import (
+        process_voorlopige_aanslag_upload, get_active_voorlopige_aanslag,
+    )
+    await upsert_fiscale_params(
+        db_path=db, **_minimal_fiscale_params_kwargs(2026))
+    doc_zvw = await _add_va_doc(db, 2026, 'zvw')
+
+    parsed_zvw = _FakeParsed(
+        jaar=2026, soort='zvw', aanslagnummer='1244.12.646.W.60.01.4',
+        dagtekening=_date_cls(2026, 1, 31), bedrag=4500.0,
+        betalingskenmerk='0124412647500001', termijnen=11)
+    r = await process_voorlopige_aanslag_upload(
+        db_path=db, document_id=doc_zvw, parsed=parsed_zvw)
+    assert r['action'] == 'inserted'
+
+    fp = await get_fiscale_params(db, 2026)
+    assert fp.voorlopige_aanslag_zvw == 4500.0
+    assert fp.voorlopige_aanslag_zvw_termijnen == 11
+    # IB-velden ongemoeid (default)
+    assert fp.voorlopige_aanslag_betaald == 0
+
+    # IB-upload daarnaast — beide soorten coexist
+    doc_ib = await _add_va_doc(db, 2026, 'ib')
+    parsed_ib = _FakeParsed(
+        jaar=2026, soort='ib', aanslagnummer='1244.12.646.H.60.01',
+        dagtekening=_date_cls(2026, 1, 31), bedrag=30670.0,
+        betalingskenmerk='0124412647060001', termijnen=11)
+    await process_voorlopige_aanslag_upload(
+        db_path=db, document_id=doc_ib, parsed=parsed_ib)
+    fp2 = await get_fiscale_params(db, 2026)
+    assert fp2.voorlopige_aanslag_betaald == 30670.0
+    assert fp2.voorlopige_aanslag_zvw == 4500.0  # ZVW intact
+    # Beide actief
+    assert (await get_active_voorlopige_aanslag(db, 2026, 'ib'))['bedrag'] == 30670.0
+    assert (await get_active_voorlopige_aanslag(db, 2026, 'zvw'))['bedrag'] == 4500.0
+
+
+@pytest.mark.asyncio
+async def test_delete_aangifte_document_with_va_cleanup_clears_fp(db):
+    """Codex round-2 critical: delete laatste VA-doc → fp.voorlopige_aanslag_*
+    teruggezet naar 0 + termijnen naar 11. Voorkomt stale handmatige waarde."""
+    from database import (
+        process_voorlopige_aanslag_upload,
+        delete_aangifte_document_with_va_cleanup,
+        get_active_voorlopige_aanslag,
+    )
+    await upsert_fiscale_params(
+        db_path=db, **_minimal_fiscale_params_kwargs(2026))
+
+    docid = await _add_va_doc(db, 2026, 'ib')
+    p = _FakeParsed(
+        jaar=2026, soort='ib', aanslagnummer='1244.12.646.H.60.01',
+        dagtekening=_date_cls(2026, 1, 31), bedrag=30670.0,
+        betalingskenmerk='0124412647060001', termijnen=11)
+    await process_voorlopige_aanslag_upload(
+        db_path=db, document_id=docid, parsed=p)
+
+    # fp gevuld door process — eerst bevestigen
+    fp_before = await get_fiscale_params(db, 2026)
+    assert fp_before.voorlopige_aanslag_betaald == 30670.0
+
+    # Delete via wrapper → CASCADE verwijdert VA-row + clear fp
+    await delete_aangifte_document_with_va_cleanup(db, doc_id=docid)
+
+    # VA-row weg (CASCADE)
+    assert await get_active_voorlopige_aanslag(db, 2026, 'ib') is None
+
+    # fp teruggezet naar default 0/11
+    fp_after = await get_fiscale_params(db, 2026)
+    assert fp_after.voorlopige_aanslag_betaald == 0
+    assert fp_after.voorlopige_aanslag_ib_termijnen == 11
+    # ZVW ongemoeid (geen ZVW-VA was er)
+    assert fp_after.voorlopige_aanslag_zvw == 0
+

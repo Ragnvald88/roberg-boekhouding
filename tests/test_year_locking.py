@@ -1202,3 +1202,92 @@ async def test_update_uitgave_missing_id_silent_noop_with_locked_bank_tx(db):
     # bank_tx_id naar locked year.
     await update_uitgave(db, uitgave_id=99999, bank_tx_id=bid)
     # Geen exception → test passeert.
+
+
+# === Sprint J T1.1 — voorlopige_aanslagen year-lock guards ===
+
+from dataclasses import dataclass as _dataclass
+from datetime import date as _va_date
+
+
+@_dataclass(frozen=True)
+class _FakeParsedYL:
+    """Duck-typed ParsedBeschikking voor year-lock tests."""
+    jaar: int
+    soort: str
+    aanslagnummer: str
+    dagtekening: _va_date
+    bedrag: float
+    betalingskenmerk: str
+    termijnen: int
+
+
+@pytest.mark.asyncio
+async def test_process_voorlopige_aanslag_upload_rejected_in_definitief_year(db):
+    """Atomic upload weigert in definitief jaar — geen rij gemaakt + fp ongemoeid."""
+    from database import process_voorlopige_aanslag_upload, get_db_ctx
+    # Seed fp + voeg een aangifte_documenten-rij toe TERWIJL het jaar nog
+    # concept is (anders zou add_aangifte_document zelf al raisen).
+    await _seed_fiscale_params_row(db, 2024)
+    docid = await add_aangifte_document(
+        db, jaar=2024, categorie='voorlopige_aanslag',
+        documenttype='va_ib_beschikking',
+        bestandsnaam='VA.pdf',
+        bestandspad='/data/aangifte/2024/voorlopige_aanslag/VA.pdf',
+        upload_datum='2024-01-31',
+    )
+    # Lock jaar nu
+    await update_jaarafsluiting_status(db, 2024, 'definitief')
+
+    parsed = _FakeParsedYL(
+        jaar=2024, soort='ib', aanslagnummer='1244.12.646.H.40.01',
+        dagtekening=_va_date(2024, 1, 31), bedrag=20000.0,
+        betalingskenmerk='0124412640060001', termijnen=11)
+    with pytest.raises(YearLockedError, match='2024'):
+        await process_voorlopige_aanslag_upload(
+            db_path=db, document_id=docid, parsed=parsed)
+
+    # Geen rij in voorlopige_aanslagen — full rollback (eigenlijk aborted
+    # vóór BEGIN IMMEDIATE want assert_year_writable runt pre-tx, maar
+    # contract is hetzelfde).
+    async with get_db_ctx(db) as conn:
+        cur = await conn.execute(
+            "SELECT COUNT(*) AS n FROM voorlopige_aanslagen WHERE jaar = ?",
+            (2024,))
+        assert (await cur.fetchone())['n'] == 0
+
+
+@pytest.mark.asyncio
+async def test_delete_aangifte_document_with_va_cleanup_rejected_in_definitief_year(db):
+    """delete-wrapper weigert in definitief jaar — VA-row blijft intact."""
+    from database import (
+        process_voorlopige_aanslag_upload,
+        delete_aangifte_document_with_va_cleanup,
+        get_active_voorlopige_aanslag,
+    )
+    # Bouw normale VA-state op in concept-jaar
+    await _seed_fiscale_params_row(db, 2024)
+    docid = await add_aangifte_document(
+        db, jaar=2024, categorie='voorlopige_aanslag',
+        documenttype='va_ib_beschikking',
+        bestandsnaam='VA.pdf',
+        bestandspad='/data/aangifte/2024/voorlopige_aanslag/VA.pdf',
+        upload_datum='2024-01-31',
+    )
+    parsed = _FakeParsedYL(
+        jaar=2024, soort='ib', aanslagnummer='1244.12.646.H.40.01',
+        dagtekening=_va_date(2024, 1, 31), bedrag=20000.0,
+        betalingskenmerk='0124412640060001', termijnen=11)
+    await process_voorlopige_aanslag_upload(
+        db_path=db, document_id=docid, parsed=parsed)
+
+    # Lock daarna
+    await update_jaarafsluiting_status(db, 2024, 'definitief')
+
+    with pytest.raises(YearLockedError, match='2024'):
+        await delete_aangifte_document_with_va_cleanup(db, doc_id=docid)
+
+    # VA-row nog intact (delete_aangifte_document raised vóór CASCADE)
+    active = await get_active_voorlopige_aanslag(db, 2024, 'ib')
+    assert active is not None
+    assert active['aanslagnummer'] == '1244.12.646.H.40.01'

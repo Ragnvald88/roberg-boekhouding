@@ -701,6 +701,38 @@ MIGRATIONS = [
         "ALTER TABLE fiscale_params ADD COLUMN voorlopige_aanslag_ib_termijnen INTEGER NOT NULL DEFAULT 11",
         "ALTER TABLE fiscale_params ADD COLUMN voorlopige_aanslag_zvw_termijnen INTEGER NOT NULL DEFAULT 11",
     ]),
+    (41, "add_voorlopige_aanslagen_table", [
+        # Sprint J T1.1 — VA-beschikkingen tabel met FK naar
+        # aangifte_documenten + partial-unique-index actieve rij per
+        # (jaar, soort). Hist behouden voor audit; UI toont alleen actieve.
+        # UNIQUE(document_id): één beschikking per source-PDF —
+        # garandeert dat delete-cleanup (CASCADE) precies één VA-row
+        # raakt en daarmee de fp-clear deterministisch maakt (Codex
+        # round-3 critical fix). Revisies krijgen een NIEUWE PDF-upload,
+        # dus een nieuw document_id; deze constraint bijt nooit.
+        """CREATE TABLE voorlopige_aanslagen (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            jaar INTEGER NOT NULL,
+            soort TEXT NOT NULL CHECK (soort IN ('ib', 'zvw')),
+            document_id INTEGER NOT NULL REFERENCES aangifte_documenten(id) ON DELETE CASCADE,
+            aanslagnummer TEXT NOT NULL,
+            dagtekening TEXT NOT NULL,
+            bedrag REAL NOT NULL CHECK (bedrag >= 0),
+            betalingskenmerk TEXT NOT NULL,
+            termijnen INTEGER NOT NULL DEFAULT 11
+                CHECK (termijnen BETWEEN 1 AND 12),
+            is_active INTEGER NOT NULL DEFAULT 1
+                CHECK (is_active IN (0, 1)),
+            created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP),
+            UNIQUE(aanslagnummer),
+            UNIQUE(document_id)
+        )""",
+        # Partial unique index: max één actieve rij per (jaar, soort).
+        # SQLite ondersteunt WHERE-clause op CREATE UNIQUE INDEX.
+        """CREATE UNIQUE INDEX idx_va_active
+            ON voorlopige_aanslagen(jaar, soort)
+            WHERE is_active = 1""",
+    ]),
 ]
 
 
@@ -2872,6 +2904,335 @@ async def get_va_betalingen(db_path: Path = DB_PATH, jaar: int = 0) -> dict:
         'has_bank_data': True,
         'bankdata_tot_datum': bankdata_tot_datum,
     }
+
+
+# === Sprint J T1.1 — voorlopige_aanslagen CRUD helpers ===
+
+
+async def get_active_voorlopige_aanslag(
+    db_path: Path = DB_PATH, jaar: int = 0, soort: str = '',
+) -> dict | None:
+    """Return de actieve beschikking-row als dict, of None.
+
+    Uniek per (jaar, soort) gegarandeerd door partial unique index
+    `idx_va_active` (mig 41). Resultaat is een plain dict — caller hoeft
+    niet de aiosqlite Row API te gebruiken.
+    """
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            "SELECT * FROM voorlopige_aanslagen "
+            "WHERE jaar = ? AND soort = ? AND is_active = 1",
+            (jaar, soort),
+        )
+        row = await cur.fetchone()
+    if not row:
+        return None
+    return dict(row)
+
+
+def _va_fp_field_names(soort: str) -> tuple[str, str]:
+    """Map 'ib'|'zvw' → (fp_bedrag_field, fp_termijnen_field).
+
+    Centrale helper zodat alle write-paden dezelfde mapping gebruiken.
+    Validatie loud-fail bij onbekende soort — voorkomt typo-stille no-ops
+    in UPDATE WHERE jaar=? (veld bestaat niet → SQL error i.p.v. silently
+    schrijven naar verkeerde kolom).
+    """
+    if soort == 'ib':
+        return ('voorlopige_aanslag_betaald',
+                'voorlopige_aanslag_ib_termijnen')
+    if soort == 'zvw':
+        return ('voorlopige_aanslag_zvw',
+                'voorlopige_aanslag_zvw_termijnen')
+    raise ValueError(f"Onbekende VA soort: {soort!r} (verwacht 'ib' of 'zvw')")
+
+
+async def process_voorlopige_aanslag_upload(
+    db_path: Path = DB_PATH,
+    *,
+    document_id: int,
+    parsed,  # services.va_parser.ParsedBeschikking
+) -> dict:
+    """Atomic upload-pipeline voor een geparseerde VA-beschikking.
+
+    Codex round-2 critical fix: alle DB-mutaties in één BEGIN IMMEDIATE
+    transactie zodat we nooit een partial state achterlaten (oude
+    deactivated + new insert failed + stale fp).
+
+    Steps in transactie:
+      1. (Pre-transactie) assert_year_writable(parsed.jaar)
+      2. Idempotency-check op UNIQUE(aanslagnummer) → return 'skip'
+      3. Detecteer bestaande active rij voor (jaar, soort) → action label
+      4. SET is_active=0 op de oude active (als aanwezig)
+      5. INSERT nieuwe rij met is_active=1
+      6. UPDATE fiscale_params {bedrag, termijnen} WHERE jaar=?
+      7. COMMIT
+
+    Bij ANY exception in stappen 2-6: ROLLBACK + re-raise. document_id
+    wordt NIET opgeruimd (caller verantwoordelijk indien gewenst).
+
+    Returns dict met:
+      - 'action': 'inserted' | 'replaced' | 'skip'
+      - 'beschikking_id': int (van de actieve rij — bij 'skip' van de
+                                bestaande duplicate)
+    """
+    # Year-lock pre-flight (vóór BEGIN IMMEDIATE — assert_year_writable
+    # opent zelf een aparte connectie). Bij locked jaar: YearLockedError
+    # propageert; geen schrijf-actie in dezelfde tx geweest.
+    await assert_year_writable(db_path, parsed.jaar)
+
+    fp_bedrag_field, fp_termijnen_field = _va_fp_field_names(parsed.soort)
+
+    async with get_db_ctx(db_path) as conn:
+        await conn.execute("BEGIN IMMEDIATE")
+        try:
+            # 2a. Validate document_id: moet bestaan, categorie==
+            # 'voorlopige_aanslag', en jaar==parsed.jaar. Voorkomt
+            # cross-year stealth (doc.jaar=2025 maar VA-row voor 2026)
+            # en niet-VA documenten als bron — Codex T1.1 critical fix.
+            # Bij raise: outer except handelt ROLLBACK af (NIET hier
+            # roepen — dat geeft 'no transaction is active' op de tweede
+            # rollback in de except).
+            cur = await conn.execute(
+                "SELECT jaar, categorie FROM aangifte_documenten WHERE id = ?",
+                (document_id,),
+            )
+            doc = await cur.fetchone()
+            if doc is None:
+                raise ValueError(
+                    f"document_id {document_id} bestaat niet in "
+                    f"aangifte_documenten")
+            if doc['categorie'] != 'voorlopige_aanslag':
+                raise ValueError(
+                    f"document_id {document_id} heeft categorie "
+                    f"{doc['categorie']!r}, verwacht 'voorlopige_aanslag'")
+            if int(doc['jaar']) != int(parsed.jaar):
+                raise ValueError(
+                    f"document_id {document_id} hoort bij jaar "
+                    f"{doc['jaar']}, parsed.jaar={parsed.jaar} — "
+                    f"jaar-mismatch")
+
+            # 2b. Idempotency: zelfde aanslagnummer al gezien → skip.
+            # Skip-pad: ROLLBACK manueel + early-return zonder raise (geen
+            # double-rollback want we returnen, niet raisen).
+            cur = await conn.execute(
+                "SELECT id FROM voorlopige_aanslagen WHERE aanslagnummer = ?",
+                (parsed.aanslagnummer,),
+            )
+            existing = await cur.fetchone()
+            if existing:
+                await conn.execute("ROLLBACK")
+                return {'action': 'skip',
+                        'beschikking_id': int(existing['id'])}
+
+            # 3. Detecteer huidige active → 'replaced' vs 'inserted'.
+            cur = await conn.execute(
+                "SELECT id FROM voorlopige_aanslagen "
+                "WHERE jaar = ? AND soort = ? AND is_active = 1",
+                (parsed.jaar, parsed.soort),
+            )
+            old_active = await cur.fetchone()
+            action = 'replaced' if old_active else 'inserted'
+
+            # 4. Deactivate oude active (max 1 dankzij idx_va_active).
+            if old_active:
+                await conn.execute(
+                    "UPDATE voorlopige_aanslagen SET is_active = 0 "
+                    "WHERE id = ?",
+                    (int(old_active['id']),),
+                )
+
+            # 5. INSERT nieuwe active.
+            cur = await conn.execute(
+                """INSERT INTO voorlopige_aanslagen
+                   (jaar, soort, document_id, aanslagnummer, dagtekening,
+                    bedrag, betalingskenmerk, termijnen, is_active)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)""",
+                (parsed.jaar, parsed.soort, document_id,
+                 parsed.aanslagnummer, parsed.dagtekening.isoformat(),
+                 float(parsed.bedrag), parsed.betalingskenmerk,
+                 int(parsed.termijnen)),
+            )
+            beschikking_id = cur.lastrowid
+
+            # 6. Sync fiscale_params. Veldnamen via _va_fp_field_names
+            # gevalideerd → veilig om te string-substitueren in SQL
+            # (bedrag/termijnen-waarden blijven ?-params).
+            await conn.execute(
+                "UPDATE fiscale_params SET "
+                f"{fp_bedrag_field} = ?, {fp_termijnen_field} = ? "
+                "WHERE jaar = ?",
+                (float(parsed.bedrag), int(parsed.termijnen), parsed.jaar),
+            )
+
+            await conn.execute("COMMIT")
+            return {'action': action,
+                    'beschikking_id': int(beschikking_id)}
+        except Exception:
+            await conn.execute("ROLLBACK")
+            raise
+
+
+async def clear_fiscale_params_va_for_jaar(
+    db_path: Path = DB_PATH, jaar: int = 0, soort: str = '',
+) -> None:
+    """Reset fp.voorlopige_aanslag_{betaald|zvw} naar 0 + termijnen naar 11.
+
+    Aangeroepen door delete-hook wanneer geen andere actieve beschikking
+    voor (jaar, soort) overblijft — voorkomt stale fp-waarden na delete.
+    Year-locked: weigert in definitief jaar (consistent met andere VA-
+    schrijfpaden). No-op als er geen fiscale_params row voor het jaar is.
+    """
+    await assert_year_writable(db_path, jaar)
+    fp_bedrag_field, fp_termijnen_field = _va_fp_field_names(soort)
+    async with get_db_ctx(db_path) as conn:
+        await conn.execute(
+            "UPDATE fiscale_params SET "
+            f"{fp_bedrag_field} = 0, {fp_termijnen_field} = 11 "
+            "WHERE jaar = ?",
+            (jaar,),
+        )
+        await conn.commit()
+
+
+async def delete_aangifte_document_with_va_cleanup(
+    db_path: Path = DB_PATH, doc_id: int = 0,
+) -> None:
+    """Atomic delete van aangifte_document + fp-clear voor VA-documenten.
+
+    Codex round-2 critical fix: zonder deze functie bleef
+    fp.voorlopige_aanslag_betaald staan op het oude bedrag terwijl de
+    bron-beschikking weg was — silent data-corruption op /aangifte +
+    /va-tracker.
+
+    Codex round-3 critical fix: alle stappen (lookup + DELETE + CASCADE
+    + remaining-active-check + fp-clear) lopen nu in ÉÉN BEGIN IMMEDIATE
+    transactie. Eerder werd gedelegeerd naar delete_aangifte_document
+    (eigen commit) met fp-clear in aparte transactie — bij een crash of
+    exception tussen beide commits bleef VA-row weg en fp stale.
+
+    Year-lock: assert vóór BEGIN IMMEDIATE op zowel doc.jaar als (indien
+    VA) va.jaar. Voor VA-docs garandeert process_voorlopige_aanslag_upload
+    dat doc.jaar == va.jaar bij insert; defense-in-depth checken we beide.
+
+    Schema-invariant UNIQUE(document_id) (mig 41) garandeert maximaal
+    één voorlopige_aanslagen-rij per document — dus de LEFT JOIN
+    fetchone() lookup is exhaustief en de fp-clear deterministisch.
+
+    Niet-VA documenten worden gewoon gedelete'd in de tx (geen cleanup
+    nodig). Onbekende doc_id is silent no-op (bestaande contract).
+    """
+    # Lookup VA-info + doc.jaar VOOR de transactie (assert_year_writable
+    # opent zelf een aparte connectie). Bij locked: raise vóór BEGIN —
+    # geen schrijf-actie in de tx geweest.
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            "SELECT ad.jaar AS doc_jaar, ad.categorie AS doc_categorie, "
+            "va.soort AS va_soort, va.jaar AS va_jaar "
+            "FROM aangifte_documenten ad "
+            "LEFT JOIN voorlopige_aanslagen va ON va.document_id = ad.id "
+            "WHERE ad.id = ?",
+            (doc_id,),
+        )
+        info = await cur.fetchone()
+
+    if info is None:
+        # Onbekende doc_id — silent no-op (consistent met
+        # delete_aangifte_document).
+        return
+
+    # Year-lock pre-flight: doc.jaar altijd, va.jaar voor VA-docs.
+    await assert_year_writable(db_path, int(info['doc_jaar']))
+    is_va = (info['doc_categorie'] == 'voorlopige_aanslag'
+             and info['va_soort'] is not None)
+    if is_va:
+        await assert_year_writable(db_path, int(info['va_jaar']))
+        # Bepaal fp-veldnamen alvast (validatie soort + raise vóór tx).
+        fp_bedrag_field, fp_termijnen_field = _va_fp_field_names(
+            info['va_soort'])
+        va_jaar = int(info['va_jaar'])
+        va_soort = info['va_soort']
+
+    async with get_db_ctx(db_path) as conn:
+        await conn.execute("BEGIN IMMEDIATE")
+        try:
+            # 1. Delete aangifte_document — CASCADE wist gekoppelde
+            # voorlopige_aanslagen-rij(en) automatisch.
+            await conn.execute(
+                "DELETE FROM aangifte_documenten WHERE id = ?", (doc_id,))
+
+            # 2. Voor VA-docs: check of andere actieve beschikking
+            # voor (jaar, soort) overblijft; zo nee → clear fp.
+            if is_va:
+                cur = await conn.execute(
+                    "SELECT id FROM voorlopige_aanslagen "
+                    "WHERE jaar = ? AND soort = ? AND is_active = 1",
+                    (va_jaar, va_soort),
+                )
+                remaining = await cur.fetchone()
+                if remaining is None:
+                    # Geen andere actieve VA voor (jaar, soort) — reset
+                    # fp om stale waarde te voorkomen. Veldnamen zijn
+                    # via _va_fp_field_names gevalideerd; waarden zijn
+                    # ?-params.
+                    await conn.execute(
+                        "UPDATE fiscale_params SET "
+                        f"{fp_bedrag_field} = 0, "
+                        f"{fp_termijnen_field} = 11 "
+                        "WHERE jaar = ?",
+                        (va_jaar,),
+                    )
+
+            await conn.execute("COMMIT")
+        except Exception:
+            await conn.execute("ROLLBACK")
+            raise
+
+
+async def get_va_betalingen_detail(
+    db_path: Path = DB_PATH, jaar: int = 0,
+) -> list[dict]:
+    """Per-bank-tx detail van Belastingdienst-betalingen voor het jaar.
+
+    Returns list[dict] met keys datum, bedrag (positief, ABS),
+    betalingskenmerk, omschrijving, classification.
+
+    classification ∈ {'ib_matched', 'zvw_matched', 'unmatched'}, gebaseerd
+    op _normalize_va_kenmerk[10:12]: <50 → IB, ≥50 → ZVW, anders unmatched.
+    Dezelfde split-logica als get_va_betalingen (Sprint I) — single source
+    of truth via _normalize_va_kenmerk.
+
+    Voor /va-tracker drill-down detail-view (Sprint J).
+    """
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            """SELECT datum, ABS(bedrag) AS bedrag, betalingskenmerk,
+                      omschrijving
+               FROM banktransacties
+               WHERE tegenrekening = ?
+                 AND datum >= ? AND datum <= ?
+                 AND bedrag < 0
+               ORDER BY datum""",
+            (BELASTINGDIENST_IBAN, f'{jaar}-01-01', f'{jaar}-12-31'),
+        )
+        rows = await cur.fetchall()
+
+    result: list[dict] = []
+    for row in rows:
+        norm = _normalize_va_kenmerk(row['betalingskenmerk'])
+        if len(norm) >= 12 and norm[10:12].isdigit():
+            classification = ('zvw_matched' if int(norm[10:12]) >= 50
+                              else 'ib_matched')
+        else:
+            classification = 'unmatched'
+        result.append({
+            'datum': row['datum'],
+            'bedrag': float(row['bedrag']),
+            'betalingskenmerk': row['betalingskenmerk'] or '',
+            'omschrijving': row['omschrijving'] or '',
+            'classification': classification,
+        })
+    return result
 
 
 async def backfill_betalingskenmerken(db_path: Path = DB_PATH,
