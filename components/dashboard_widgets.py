@@ -11,7 +11,7 @@ from typing import Callable
 from nicegui import ui
 
 from components.utils import (
-    format_datum_jaar_nl, format_datum_kort_nl, format_euro,
+    format_datum_jaar_nl, format_euro,
 )
 from services.dashboard import ActionRow, VATrackSummary
 
@@ -371,20 +371,19 @@ def render_prive_zone(aov_total: float, is_collapsed: bool) -> None:
 
 
 def render_va_tile(summary: VATrackSummary, jaar: int) -> None:
-    """Render VA-tracker hero-tile op dashboard (Sprint I — vervangt
-    Sprint H Belasting-reservering Card 3).
+    """Render VA-tracker hero-tile op dashboard.
 
-    Toont een line-first overview: hero-value = totaal_resterend
-    (verplicht − betaald), per-soort lines (IB/ZVW), volgende-termijn
-    footer (alleen bij open verplichting), en bankdata-versheid footer.
-    `.is-tekort` modifier alleen bij status='achter' (echte achterstand —
-    user heeft een vervaldatum gemist). Overbetaald-badge verschijnt
+    User-feedback 2026-05-06 round-3: vorige tile had te veel detail (8
+    regels: IB-line/IB-sub/ZVW-line/ZVW-sub/unmatched/volgende-termijn/
+    bankdata-versheid). Hero-tile moet in 2 sec scanbaar zijn — detail
+    hoort op de drill-down `/va-tracker/{jaar}` page.
+
+    Nieuwe minimum-tile: title + hero-value (resterend) + 1 context-line.
+    Click → /va-tracker/{jaar} voor alle detail.
+
+    `.is-tekort` modifier alleen bij status='achter'. Overbetaald-badge
     alleen bij status='voldaan' AND has_overbetaald (Codex round-3
-    line-first principe — toont overbetaling ook bij open totaal).
-
-    Click-target deep-linkt naar /va-tracker/{jaar} (Sprint J T1.4) —
-    de drill-down page met IB+ZVW collapsible sections, termijnen-overzicht
-    per soort en bank-tx tabel. Eerder: /aangifte?jaar=X (Sprint I).
+    line-first principe).
     """
     is_warning = (summary.status == 'achter')
     card_classes = 'dashboard-hero-tile'
@@ -394,7 +393,7 @@ def render_va_tile(summary: VATrackSummary, jaar: int) -> None:
     with ui.card().classes(card_classes) \
             .style('cursor: pointer') \
             .on('click', lambda j=jaar: ui.navigate.to(f'/va-tracker/{j}')):
-        # Title row + warning icon (alleen bij echte achterstand)
+        # Title-row + warning icon (alleen bij echte achterstand)
         with ui.row().classes('w-full justify-between items-center'):
             ui.label(f'Voorlopige aanslag {jaar}').classes('hero-label')
             if is_warning:
@@ -405,47 +404,27 @@ def render_va_tile(summary: VATrackSummary, jaar: int) -> None:
                 ui.icon('warning', size='18px').style(
                     'color: var(--q-negative)').tooltip(tooltip)
 
-        # Geen-data fallback (geen beschikking + geen bankdata)
+        # === Geen-data fallback
         if summary.status == 'geen_data':
             ui.label('—').classes('hero-value')
+            ui.label('Geen data — klik voor uploaden').classes(
+                'context-text').style('margin-top: 8px')
+            return
+
+        # === Geen-beschikking fallback (bankdata wel, beschikking niet)
+        if summary.status == 'geen_beschikking':
+            ui.label(format_euro(summary.totaal_betaald, decimals=0)) \
+                .classes('hero-value')
             ui.label(
-                f'Geen beschikking of bankbetalingen voor {jaar}'
+                'betaald — vul beschikking in voor exacte tracking'
             ).classes('context-text').style('margin-top: 8px')
             return
 
-        # Geen-beschikking fallback (bankdata wel, beschikking niet —
-        # tile linkt door naar /va-tracker drill-down voor detail; daar
-        # kan de user via "Upload PDF" naar /documenten doorklikken om
-        # de beschikking te uploaden. We tonen alvast wat de bank aan
-        # IB/ZVW + termijnen heeft gevangen, plus unmatched-regel als
-        # die er is.)
-        if summary.status == 'geen_beschikking':
-            ui.label('—').classes('hero-value')
-            ui.label('Bankbetalingen gevonden — vul beschikking in').classes(
-                'context-text').style('margin-top: 8px')
-            ui.label(
-                f'IB  {format_euro(summary.ib.betaald, decimals=0)} '
-                f'· {summary.ib.betaalde_termijnen} termijnen'
-            ).classes('context-text')
-            ui.label(
-                f'ZVW {format_euro(summary.zvw.betaald, decimals=0)} '
-                f'· {summary.zvw.betaalde_termijnen} termijnen'
-            ).classes('context-text')
-            if summary.unmatched_betaald > 0:
-                ui.label(
-                    f'Niet toegewezen: '
-                    f'{format_euro(summary.unmatched_betaald, decimals=0)} '
-                    f'({summary.unmatched_termijnen} betalingen)'
-                ).classes('context-text').style('color: var(--q-warning)')
-            return
-
-        # Hero value: resterend (wat nog moet worden betaald aan BD)
+        # === Standaard: hero = resterend, 1 context-regel
         with ui.row().classes('w-full items-baseline gap-2'):
             ui.label(format_euro(summary.totaal_resterend, decimals=0)) \
                 .classes('hero-value')
             # Overbetaald-badge: alleen bij voldaan AND has_overbetaald
-            # — niet bij status='bij' want dan kan een IB-overbetaling een
-            # nog-open ZVW-resterend maskeren (Codex round-3 motivatie).
             if summary.status == 'voldaan' and summary.has_overbetaald:
                 overbetaald = (summary.ib.overbetaald
                                + summary.zvw.overbetaald)
@@ -456,43 +435,42 @@ def render_va_tile(summary: VATrackSummary, jaar: int) -> None:
                     'background: var(--bg-warning-soft); '
                     'padding: 2px 8px; border-radius: 10px')
 
-        # Body: per-soort lines (IB + ZVW) — sla over als zowel
-        # verplichting als betaald 0 zijn (bv. ZVW niet apart aangeslagen).
-        for line in (summary.ib, summary.zvw):
-            if line.verplicht == 0 and line.betaald == 0:
-                continue
-            ui.label(
-                f'{line.soort}    '
-                f'{format_euro(line.betaald, decimals=0)} / '
-                f'{format_euro(line.verplicht, decimals=0)}  ·  '
-                f'rest {format_euro(line.resterend, decimals=0)}'
-            ).classes('context-text')
-            ui.label(
-                f'   {line.betaalde_termijnen} v.d. {line.totaal_termijnen}'
-                f'   ± {format_euro(line.termijnbedrag, decimals=0)} p/m'
-            ).classes('context-text').style('opacity: 0.75')
+        # === Eén context-line — kies de meest informatieve voor de state
+        context_text = _va_tile_context_line(summary)
+        if context_text:
+            ui.label(context_text).classes('context-text').style(
+                'margin-top: 8px')
 
-        # Unmatched-regel (Codex T1.4 catch — spec §4 vereist deze als
-        # sub-line bij > 0). Bankbetalingen zonder bruikbaar kenmerk
-        # mogen niet stil onzichtbaar blijven op het dashboard.
-        if summary.unmatched_betaald > 0:
-            ui.label(
-                f'Niet toegewezen: '
-                f'{format_euro(summary.unmatched_betaald, decimals=0)} '
-                f'({summary.unmatched_termijnen} betalingen)'
-            ).classes('context-text').style('color: var(--q-warning)')
 
-        # Volgende-termijn footer — alleen bij open verplichting
-        # (compute_va_tracker zet None bij voldaan/closed/geen-data).
-        if summary.volgende_termijn_datum is not None:
-            datum_str = format_datum_jaar_nl(summary.volgende_termijn_datum)
-            ui.label(f'Volgende termijn: {datum_str}').classes(
-                'context-text').style('margin-top: 4px; opacity: 0.85')
+def _va_tile_context_line(summary: VATrackSummary) -> str | None:
+    """Bepaal 1 context-regel onder de hero (max signal in min tekens).
 
-        # Bankdata-versheid footer — laat user weten t/m welke datum
-        # de bankbetalingen geteld zijn (anders is "betaald = X" zonder
-        # context — lijkt definitief terwijl er nog rijen later inkomen).
-        if summary.bankdata_tot_datum is not None:
-            datum_str = format_datum_kort_nl(summary.bankdata_tot_datum)
-            ui.label(f'Bankdata t/m {datum_str}').classes(
-                'context-text').style('opacity: 0.6; font-size: 11px')
+    Priority-order:
+      1. status=achter   → "Achterstand: €X" (eerlijke EUR-zin, geen line-count)
+      2. status=voldaan  → "voldaan"
+      3. status=bij + volgende_termijn → "Volgende termijn: 30 jun 2026"
+      4. status=bij      → "{N}/{M} termijnen voldaan"
+      5. fallback        → None (geen extra regel)
+    """
+    if summary.status == 'achter':
+        # Codex round-3 fix: vorige zin telde lines (1 IB-line met 3 gemiste
+        # termijnen → "1 termijn verwacht" misleidend). EUR-totaal is eerlijk
+        # en exact. Detail-breakdown staat op /va-tracker.
+        return (f'Achterstand: '
+                f'{format_euro(summary.totaal_achterstand, decimals=0)}')
+
+    if summary.status == 'voldaan':
+        return 'voldaan'
+
+    # status='bij'
+    if summary.volgende_termijn_datum is not None:
+        return f'Volgende termijn: {format_datum_jaar_nl(summary.volgende_termijn_datum)}'
+
+    # Geen volgende termijn (bv. closed-year of edge case) — toon counts
+    n_betaald = (summary.ib.betaalde_termijnen
+                 + summary.zvw.betaalde_termijnen)
+    n_totaal = (summary.ib.totaal_termijnen
+                + summary.zvw.totaal_termijnen)
+    if n_totaal > 0:
+        return f'{n_betaald}/{n_totaal} termijnen voldaan'
+    return None
