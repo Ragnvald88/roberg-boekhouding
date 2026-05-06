@@ -2930,6 +2930,38 @@ async def get_active_voorlopige_aanslag(
     return dict(row)
 
 
+async def get_unprocessed_voorlopige_aanslag_documents(
+    db_path: Path = DB_PATH, jaar: int = 0,
+) -> list[dict]:
+    """Return aangifte_documenten met categorie='voorlopige_aanslag' die
+    nog GEEN match hebben in voorlopige_aanslagen.document_id.
+
+    Gebruik: backfill-flow op /va-tracker — detecteert PDFs die zijn
+    geüpload vóór Sprint J T1.3 (parse-on-upload), of waar de parse-flow
+    is gefaald. Returnt dict per row met alle aangifte_documenten-velden
+    plus pad-string (bestandspad) zodat caller de PDF kan parsen.
+
+    Schema-invariant UNIQUE(document_id) op voorlopige_aanslagen
+    garandeert dat de LEFT JOIN één-op-één is: elk doc heeft 0 of 1
+    matchende VA-rij.
+    """
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            """SELECT ad.id, ad.jaar, ad.categorie, ad.documenttype,
+                      ad.bestandspad, ad.bestandsnaam, ad.upload_datum
+               FROM aangifte_documenten ad
+               LEFT JOIN voorlopige_aanslagen va
+                 ON va.document_id = ad.id
+               WHERE ad.jaar = ?
+                 AND ad.categorie = 'voorlopige_aanslag'
+                 AND va.id IS NULL
+               ORDER BY ad.id""",
+            (jaar,),
+        )
+        rows = await cur.fetchall()
+    return [dict(r) for r in rows]
+
+
 def _va_fp_field_names(soort: str) -> tuple[str, str]:
     """Map 'ib'|'zvw' → (fp_bedrag_field, fp_termijnen_field).
 

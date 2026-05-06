@@ -35,9 +35,14 @@ from database import (
     DB_PATH,
     get_active_voorlopige_aanslag,
     get_fiscale_params,
+    get_unprocessed_voorlopige_aanslag_documents,
     get_va_betalingen_detail,
 )
 from services.dashboard import compute_va_termijnen_schedule
+from services.va_backfill import (
+    BackfillSummary,
+    backfill_voorlopige_aanslag_documents,
+)
 
 AANGIFTE_DIR = DB_PATH.parent / 'aangifte'
 
@@ -276,6 +281,15 @@ async def va_tracker_page(jaar: int):
     if zvw_b is not None:
         achter_count += sum(1 for r in zvw_schedule if r.status == 'verwacht')
 
+    # === Backfill-detect: ongekoppelde VA-PDFs uit /documenten ===
+    # User-feedback round-3: PDFs in /documenten worden niet gebruikt.
+    # Codex round-3 design-keuze: detect-on-load + expliciete user-CTA
+    # (geen auto-mutate-on-render). Banner toont aantal en knop voor
+    # eenmalige verwerking. Idempotent — UNIQUE(aanslagnummer) voorkomt
+    # dubbele rows bij re-click.
+    unprocessed = await get_unprocessed_voorlopige_aanslag_documents(
+        DB_PATH, jaar)
+
     with ui.column().classes('w-full p-6 max-w-4xl mx-auto gap-4'):
         # === Page-header (jaar + bewerk-link top-right)
         with ui.row().classes('w-full items-center justify-between'):
@@ -285,6 +299,11 @@ async def va_tracker_page(jaar: int):
                 icon='edit',
                 on_click=lambda j=jaar: ui.navigate.to(f'/aangifte?jaar={j}'),
             ).props('flat dense color=primary')
+
+        # === Backfill-banner — alleen als ongekoppelde PDFs bestaan
+        if unprocessed:
+            await _render_backfill_banner(
+                jaar=jaar, count=len(unprocessed), is_locked=is_locked)
 
         # === Locked-jaar banner
         if is_locked:
@@ -430,9 +449,12 @@ def _render_hero(*, state: str, jaar: int,
                 f'Nog te betalen: {format_euro(totaal_resterend)}'
             ).classes('text-body1 text-weight-medium q-mt-xs')
 
-            # Progress bar
+            # Progress bar (show_value=False — NiceGUI default rendert de
+            # raw float-waarde als tekst-overlay op de bar wat lelijk staat
+            # naast onze eigen "X% betaald"-label)
             ui.linear_progress(
                 value=min(progress_pct, 1.0),
+                show_value=False,
                 color='primary' if progress_pct < 1.0 else 'positive',
             ).props('size=10px rounded').classes('q-mt-md')
             ui.label(f'{int(progress_pct * 100)}% betaald').classes(
@@ -577,6 +599,7 @@ async def _render_soort_card(*, soort: str, state: str,
 
         ui.linear_progress(
             value=min(pct, 1.0),
+            show_value=False,
             color='primary' if pct < 1.0 else 'positive',
         ).props('size=6px rounded').classes('q-mt-sm')
         ui.label(f'{int(pct * 100)}% betaald').classes(
@@ -612,6 +635,85 @@ def _render_stacked_field(label: str, value: str,
     if emphasize:
         value_class += ' text-weight-medium'
     ui.label(value).classes(value_class)
+
+
+async def _render_backfill_banner(*, jaar: int, count: int,
+                                   is_locked: bool) -> None:
+    """Banner bovenaan /va-tracker bij ongekoppelde VA-PDFs.
+
+    Toont detectie + één-klik CTA "PDFs verwerken". Bij click:
+    backfill_voorlopige_aanslag_documents → notify per result-categorie
+    → ui.navigate.reload() zodat de page direct de nieuwe state toont.
+
+    Locked-jaar: knop disabled + tooltip (DB-mutaties zouden alsnog
+    YearLockedError opleveren — pre-flight UX-guard).
+    """
+    plural = 'en' if count > 1 else ''
+    with ui.card().classes('w-full q-pa-md').style(
+            'background: var(--bg-warning-soft); '
+            'border-left: 4px solid var(--q-warning);'):
+        with ui.row().classes('w-full items-center gap-3'):
+            ui.icon('info').classes('text-warning')
+            with ui.column().classes('flex-1 gap-0'):
+                ui.label(
+                    f'{count} bestaande VA-PDF{plural} in Documenten '
+                    f'{"is" if count == 1 else "zijn"} nog niet verwerkt.'
+                ).classes('text-sm text-weight-medium')
+                ui.label(
+                    'Klik om bedragen, kenmerken en dagtekeningen uit de '
+                    'PDFs te halen en automatisch te koppelen.'
+                ).classes('text-caption text-grey-7')
+
+            async def _do_backfill():
+                summary = await backfill_voorlopige_aanslag_documents(
+                    DB_PATH, jaar)
+                _notify_backfill_result(summary)
+                # Reload zodat banner verdwijnt en cards de nieuwe
+                # active-beschikkingen tonen.
+                ui.navigate.reload()
+
+            backfill_btn = ui.button(
+                f'PDF{plural} verwerken',
+                icon='auto_fix_high',
+                on_click=_do_backfill,
+            ).props('color=primary unelevated')
+            if is_locked:
+                backfill_btn.props('disable')
+                backfill_btn.tooltip(
+                    'Jaar afgesloten — heropen via Jaarafsluiting voor '
+                    'verwerking'
+                )
+
+
+def _notify_backfill_result(summary: BackfillSummary) -> None:
+    """Toon resultaat-notify(s) na backfill — per result-categorie.
+
+    Skipped docs (Codex round-2 finding): krijgen een nuttige hint dat de
+    duplicate uit /documenten verwijderd moet worden om de banner te
+    laten verdwijnen. Anders blijft de banner eeuwig staan want de doc
+    blijft in aangifte_documenten zonder VA-link.
+    """
+    for r in summary.processed:
+        ui.notify(r.message, type='positive', timeout=6000)
+    for r in summary.skipped:
+        ui.notify(
+            f'{r.bestandsnaam}: {r.message}. '
+            f'Verwijder duplicate uit /documenten om banner te laten '
+            f'verdwijnen.',
+            type='info', timeout=8000,
+        )
+    for r in summary.failed:
+        ui.notify(
+            f'{r.bestandsnaam}: {r.message}',
+            type='warning', timeout=10000,
+        )
+    for r in summary.locked:
+        ui.notify(
+            f'{r.bestandsnaam}: {r.message}',
+            type='warning', timeout=10000,
+        )
+    if summary.total == 0:
+        ui.notify('Geen ongekoppelde PDFs gevonden.', type='info')
 
 
 def _render_per_soort_upload_button(soort: str, jaar: int,

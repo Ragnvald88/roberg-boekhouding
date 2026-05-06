@@ -253,7 +253,7 @@ async def _laad_breakdown(container, jaar):
                         ui.label(
                             f'{format_euro(amt)} · {pct:.1f}%') \
                             .classes('text-body2 text-bold num')
-                    ui.linear_progress(value=pct / 100) \
+                    ui.linear_progress(value=pct / 100, show_value=False) \
                         .props('color=primary size=6px')
                 row.on('click', lambda _=None, n=name:
                         ui.navigate.to(
