@@ -1,19 +1,24 @@
 """VA-tracker drill-down page — Sprint J T1.4 (redesigned 2026-05-06).
 
-Click-doel van de /dashboard VA-tile. Information architecture (top-down):
+Click-doel van de /dashboard VA-tile. Information architecture (top-down,
+ALLES PLAT zichtbaar — geen expansions, user-feedback "geen extra klikjes"):
 
 1. Hero — status-zin + bedragen + progress + bron-disclaimer + primary CTA
-2. Twee summary-cards naast elkaar (IB + ZVW), GEEN expansions per soort
-3. Termijnen-overzicht (active) of Indicatieve maandplanning (fallback)
-4. Bankregels expansion (collapsed default)
-5. Unmatched-audit expansion (alleen indien aanwezig)
+2. Twee summary-cards naast elkaar (IB + ZVW) met:
+   - Header met uploaded/niet-uploaded status-badge
+   - Active: volledige beschikking-details (bedrag/aanslagnr/kenmerk/datum)
+   - Fallback: handmatig bedrag + per-soort upload-CTA naar /documenten
+   - Betaald/resterend/progress + Open-PDF (active) of Upload-CTA (fallback)
+3. Termijnen-overzicht (per-soort active/indicatief flag)
+4. Bankregels — flat card-blok met chronologische lijst
+5. Unmatched-audit — flat card-blok (alleen indien aanwezig)
 
 Redesign-rationale: vorige versie was 3 disjoint feiten per sectie zonder
-narrative ("extreem onduidelijk" — user feedback 2026-05-06). Synthese
-Claude+Codex round-1 brainstorm: hero geeft conclusie, cards zijn bewijs,
-expansions zijn audit. CTA-priority schuift met state — Upload-PDF blijft
-primary tot een actieve beschikking bestaat, daarna verschuift het naar
-"Bekijk betalingen" bij issues.
+narrative ("extreem onduidelijk" — user feedback 2026-05-06 round-1).
+Round-2 feedback: geen expansions overal + per-soort uploaded-status met
+volledige beschikking-velden + per-card upload-CTA. Synthese Claude+Codex
+round-2: alle informatie altijd zichtbaar, status visueel duidelijk per
+soort, deep-links naar /documenten?jaar=X voor concrete actie.
 
 Year-lock policy: bij definitief jaar wordt upload-knop disabled +
 tooltip (NIET hidden) — spec § 350. DB-mutaties zijn server-side al
@@ -40,6 +45,20 @@ _SOORT_META = {
     'ib': {'label': 'Inkomstenbelasting', 'icon': 'account_balance'},
     'zvw': {'label': 'Zorgverzekeringswet', 'icon': 'health_and_safety'},
 }
+
+
+def _format_kenmerk_display(k: str | None) -> str:
+    """Format 16-digit kenmerk als '0124 4126 4706 0001' voor leesbaarheid.
+
+    Match BD's eigen weergave-conventie in de PDF zelf. Niet-16-digit
+    input wordt onveranderd geretourneerd (defensive).
+    """
+    if not k:
+        return '(geen kenmerk)'
+    digits = ''.join(c for c in k if c.isdigit())
+    if len(digits) == 16:
+        return f'{digits[0:4]} {digits[4:8]} {digits[8:12]} {digits[12:16]}'
+    return k
 
 
 def _doc_preview_url(bestandspad: str | None) -> str | None:
@@ -296,12 +315,14 @@ async def va_tracker_page(jaar: int):
                         soort='ib', state=ib_state,
                         beschikking=ib_b, verplicht=ib_verplicht,
                         betaald=ib_betaald, bank_count=len(ib_bank),
+                        jaar=jaar, is_locked=is_locked,
                     )
                 with ui.column().classes('flex-1').style('min-width: 280px;'):
                     await _render_soort_card(
                         soort='zvw', state=zvw_state,
                         beschikking=zvw_b, verplicht=zvw_verplicht,
                         betaald=zvw_betaald, bank_count=len(zvw_bank),
+                        jaar=jaar, is_locked=is_locked,
                     )
 
         # === Termijnen / Indicatieve planning (alleen als bedragen bekend)
@@ -317,45 +338,55 @@ async def va_tracker_page(jaar: int):
                 ib_schedule=ib_schedule, zvw_schedule=zvw_schedule,
             )
 
-        # === Bankregels expansion (default-collapsed)
+        # === Bankregels — FLAT lijst, geen expansion (user-feedback:
+        # "geen extra klikjes"). Gerendered binnen card voor visuele
+        # afgrenzing maar zonder toggle-interactie.
         all_matched = ib_bank + zvw_bank
         if all_matched:
-            with ui.expansion(
-                f'{len(all_matched)} bankbetaling'
-                f'{"en" if len(all_matched) != 1 else ""} '
-                f'aan Belastingdienst ({format_euro(totaal_betaald)})',
-                icon='account_balance',
-            ).classes('w-full'):
-                with ui.column().classes('w-full gap-1 q-mt-sm'):
+            with ui.card().classes('w-full q-pa-md'):
+                ui.label(
+                    f'{len(all_matched)} bankbetaling'
+                    f'{"en" if len(all_matched) != 1 else ""} aan '
+                    f'Belastingdienst ({format_euro(totaal_betaald)})'
+                ).classes('text-subtitle1 text-weight-medium')
+                ui.separator().classes('q-my-sm')
+                with ui.column().classes('w-full gap-1'):
                     for tx in sorted(all_matched, key=lambda t: t['datum']):
-                        with ui.row().classes('w-full items-center text-sm gap-2'):
+                        with ui.row().classes(
+                                'w-full items-center text-sm gap-2'):
                             ui.label(format_datum_kort_nl(
                                 date.fromisoformat(tx['datum']))
                             ).classes('w-20')
-                            soort_label = ('IB' if tx['classification'] == 'ib_matched'
-                                           else 'ZVW')
+                            soort_label = (
+                                'IB' if tx['classification'] == 'ib_matched'
+                                else 'ZVW')
                             ui.label(soort_label).classes(
                                 'w-12 text-grey-7 text-caption')
                             ui.label(format_euro(tx['bedrag'])).classes('w-24')
                             ui.label(tx['omschrijving'] or '') \
                                 .classes('q-ml-md text-grey-7')
 
-        # === Unmatched-audit (alleen indien aanwezig)
+        # === Unmatched — FLAT lijst (alleen indien aanwezig)
         if unmatched:
             total_unmatched = sum(t['bedrag'] for t in unmatched)
-            with ui.expansion(
-                f'Niet-toegewezen ({len(unmatched)} · '
-                f'{format_euro(total_unmatched)})',
-                icon='warning',
-            ).classes('w-full'):
+            with ui.card().classes('w-full q-pa-md').style(
+                    'border-left: 4px solid var(--q-warning);'):
+                with ui.row().classes('items-center gap-2'):
+                    ui.icon('warning').classes('text-warning')
+                    ui.label(
+                        f'Niet-toegewezen ({len(unmatched)} · '
+                        f'{format_euro(total_unmatched)})'
+                    ).classes('text-subtitle1 text-weight-medium')
                 ui.label(
                     'Deze BD-betalingen hebben geen herkenbaar IB/ZVW-kenmerk '
                     '(positie [10:12] van het 16-cijferige kenmerk). '
                     'Controleer in Transacties.'
-                ).classes('text-sm text-grey-7')
-                with ui.column().classes('w-full gap-1 q-mt-sm'):
+                ).classes('text-sm text-grey-7 q-mt-xs')
+                ui.separator().classes('q-my-sm')
+                with ui.column().classes('w-full gap-1'):
                     for tx in unmatched:
-                        with ui.row().classes('w-full items-center text-sm gap-2'):
+                        with ui.row().classes(
+                                'w-full items-center text-sm gap-2'):
                             ui.label(format_datum_kort_nl(
                                 date.fromisoformat(tx['datum']))
                             ).classes('w-20')
@@ -440,33 +471,103 @@ def _render_hero(*, state: str, jaar: int,
 async def _render_soort_card(*, soort: str, state: str,
                               beschikking: dict | None,
                               verplicht: float, betaald: float,
-                              bank_count: int) -> None:
-    """Render één soort-summary-card (IB of ZVW). NIET expansion — visueel
-    side-by-side comparison met IB en ZVW even prominent.
+                              bank_count: int, jaar: int,
+                              is_locked: bool) -> None:
+    """Render één soort-summary-card (IB of ZVW). NIET expansion — alle
+    info altijd zichtbaar (user-feedback: "geen extra klikjes").
+
+    User-feedback 2026-05-06: card moet expliciet tonen of PDF geüpload
+    is, en zo ja álle relevante velden uit de beschikking (aanslagnummer,
+    betalingskenmerk, dagtekening). Zo niet: prominent upload-CTA per
+    soort (niet alleen via hero) met deep-link naar /documenten.
     """
     meta = _SOORT_META[soort]
+    soort_upper = soort.upper()
     with ui.card().classes('w-full q-pa-md').style('height: 100%;'):
-        # Header
-        with ui.row().classes('items-center gap-2'):
+        # === Header: icon + label + uploaded-status badge
+        with ui.row().classes('items-center gap-2 w-full'):
             ui.icon(meta['icon']).classes('text-primary')
             ui.label(meta['label']).classes(
                 'text-subtitle1 text-weight-medium')
+            ui.space()
+            if state == 'active':
+                with ui.row().classes('items-center gap-1'):
+                    ui.icon('check_circle').classes('text-positive')
+                    ui.label('Beschikking geüpload').classes(
+                        'text-caption text-positive')
+            elif state == 'no_data':
+                with ui.row().classes('items-center gap-1'):
+                    ui.icon('cancel').classes('text-grey-6')
+                    ui.label('Geen data').classes('text-caption text-grey-6')
+            else:  # fp_only / fp_and_bank
+                with ui.row().classes('items-center gap-1'):
+                    ui.icon('warning').classes('text-warning')
+                    ui.label('PDF nog niet geüpload').classes(
+                        'text-caption text-warning')
 
+        ui.separator().classes('q-my-sm')
+
+        # === No-data state — minimal + upload-CTA
         if state == 'no_data':
-            ui.label('Geen verwacht bedrag bekend.').classes(
-                'text-sm text-grey-7 q-mt-sm')
+            ui.label(
+                f'Geen verwacht bedrag bekend voor {soort_upper}.'
+            ).classes('text-sm text-grey-7')
+            ui.label(
+                'Vul handmatig in via Aangifte, of upload de '
+                'beschikking-PDF.'
+            ).classes('text-sm text-grey-7 q-mt-xs')
+            _render_per_soort_upload_button(soort, jaar, is_locked)
             return
 
-        # Bedragen-grid
+        # === Active state — toon volledige beschikking-details
+        # Stacked layout (label-boven / value-onder) ipv justify-between:
+        # voorkomt dat lange waarden (kenmerk 19 chars, aanslagnummer
+        # 18+ chars) tegen het label aandrukken op smalle cards (Codex
+        # round-2 layout-responsiveness fix).
+        if state == 'active' and beschikking is not None:
+            aanslagnummer = beschikking.get('aanslagnummer', '?')
+            kenmerk_raw = beschikking.get('betalingskenmerk', '')
+            kenmerk_disp = _format_kenmerk_display(kenmerk_raw)
+            dagtekening_str = '?'
+            if beschikking.get('dagtekening'):
+                try:
+                    dagtekening_str = format_datum_kort_nl(
+                        date.fromisoformat(beschikking['dagtekening']))
+                except (TypeError, ValueError):
+                    dagtekening_str = str(beschikking['dagtekening'])
+
+            with ui.column().classes('w-full gap-2'):
+                _render_stacked_field('Bedrag', format_euro(verplicht),
+                                      mono=False, emphasize=True)
+                _render_stacked_field('Aanslagnummer', aanslagnummer,
+                                      mono=True)
+                _render_stacked_field('Betalingskenmerk', kenmerk_disp,
+                                      mono=True)
+                _render_stacked_field('Dagtekening', dagtekening_str,
+                                      mono=False)
+        else:
+            # === fp_only / fp_and_bank — toon handmatig + bank-summary
+            with ui.column().classes('w-full gap-1'):
+                with ui.row().classes('items-baseline justify-between w-full'):
+                    ui.label('Handmatig bedrag').classes(
+                        'text-sm text-grey-7')
+                    ui.label(format_euro(verplicht)).classes(
+                        'text-sm text-weight-medium')
+                ui.label('(uit Aangifte)').classes(
+                    'text-caption text-grey-6')
+
+        ui.separator().classes('q-my-sm')
+
+        # === Betaald + Resterend + Progress (alle states behalve no_data)
         resterend = max(verplicht - betaald, 0.0)
         pct = betaald / verplicht if verplicht > 0 else 0.0
 
-        with ui.column().classes('w-full gap-1 q-mt-sm'):
+        with ui.column().classes('w-full gap-1'):
             with ui.row().classes('items-baseline justify-between w-full'):
-                ui.label('Verwacht').classes('text-sm text-grey-7')
-                ui.label(format_euro(verplicht)).classes('text-sm')
-            with ui.row().classes('items-baseline justify-between w-full'):
-                ui.label('Betaald').classes('text-sm text-grey-7')
+                ui.label(
+                    f'Betaald ({bank_count} bank-tx)' if bank_count
+                    else 'Betaald'
+                ).classes('text-sm text-grey-7')
                 ui.label(format_euro(betaald)).classes('text-sm')
             with ui.row().classes('items-baseline justify-between w-full'):
                 ui.label('Resterend').classes(
@@ -474,7 +575,6 @@ async def _render_soort_card(*, soort: str, state: str,
                 ui.label(format_euro(resterend)).classes(
                     'text-sm text-weight-medium')
 
-        # Progress
         ui.linear_progress(
             value=min(pct, 1.0),
             color='primary' if pct < 1.0 else 'positive',
@@ -482,32 +582,56 @@ async def _render_soort_card(*, soort: str, state: str,
         ui.label(f'{int(pct * 100)}% betaald').classes(
             'text-caption text-grey-7')
 
-        # Bron-info onderaan
-        if state == 'active':
-            aanslag = beschikking.get('aanslagnummer', '?') if beschikking else '?'
-            with ui.row().classes('items-center gap-2 q-mt-sm'):
-                ui.icon('verified').classes('text-positive')
-                ui.label(f'Beschikking {aanslag}').classes(
-                    'text-caption text-grey-7')
-            # Open-PDF knop (alleen als bestand bestaat)
-            if beschikking and beschikking.get('document_id'):
-                doc_url = await _resolve_doc_url(beschikking['document_id'])
-                if doc_url:
-                    ui.button(
-                        'Open PDF', icon='picture_as_pdf',
-                        on_click=lambda u=doc_url: ui.navigate.to(
-                            u, new_tab=True),
-                    ).props('flat dense color=primary').classes('q-mt-xs')
-        else:
-            with ui.row().classes('items-center gap-2 q-mt-sm'):
-                ui.icon('info').classes('text-warning')
-                ui.label('Handmatig bedrag (geen PDF)').classes(
-                    'text-caption text-grey-7')
+        # === Footer-actie: Open PDF (active) of Upload-CTA (anders)
+        if state == 'active' and beschikking is not None \
+                and beschikking.get('document_id'):
+            doc_url = await _resolve_doc_url(beschikking['document_id'])
+            if doc_url:
+                ui.button(
+                    'Open PDF', icon='picture_as_pdf',
+                    on_click=lambda u=doc_url: ui.navigate.to(
+                        u, new_tab=True),
+                ).props('flat dense color=primary').classes('q-mt-sm')
+        elif state in ('fp_only', 'fp_and_bank'):
+            _render_per_soort_upload_button(soort, jaar, is_locked)
 
-        # Bank-count badge
-        plural = 'en' if bank_count != 1 else ''
-        ui.label(f'{bank_count} bankbetaling{plural}').classes(
-            'text-caption text-grey-7 q-mt-xs')
+
+def _render_stacked_field(label: str, value: str,
+                          *, mono: bool = False,
+                          emphasize: bool = False) -> None:
+    """Render een label-boven / value-onder veld voor compacte cards.
+
+    Stacked layout voorkomt overflow van lange waarden (betalingskenmerk
+    19 chars, aanslagnummer 18+ chars) op smalle cards waar
+    justify-between de tekst tegen elkaar zou drukken.
+    """
+    ui.label(label).classes('text-caption text-grey-7')
+    value_class = 'text-sm'
+    if mono:
+        value_class += ' font-mono'
+    if emphasize:
+        value_class += ' text-weight-medium'
+    ui.label(value).classes(value_class)
+
+
+def _render_per_soort_upload_button(soort: str, jaar: int,
+                                    is_locked: bool) -> None:
+    """Per-soort upload-CTA — deep-link naar /documenten met jaar-param.
+
+    User-feedback: upload-CTA per soort i.p.v. alleen in de hero, zodat
+    het direct duidelijk is welke soort nog niet geüpload is.
+    """
+    soort_label = 'IB' if soort == 'ib' else 'ZVW'
+    btn = ui.button(
+        f'Upload {soort_label}-beschikking',
+        icon='upload',
+        on_click=lambda j=jaar: ui.navigate.to(f'/documenten?jaar={j}'),
+    ).props('outline color=primary').classes('q-mt-sm')
+    if is_locked:
+        btn.props('disable')
+        btn.tooltip(
+            'Jaar afgesloten — heropen via Jaarafsluiting voor wijzigingen'
+        )
 
 
 def _render_planning_section(*, ib_active: bool, zvw_active: bool,
