@@ -89,7 +89,7 @@ Als je een nieuwe sessie begint, lees in deze volgorde:
 4. **`tests/test_visual_css.py`** — 5 cascade-lint tests die de structurele CSS-invariants enforced
 
 **Recente sprint-state** (2026-05-05, na Sprint I VA-tracker SHIPPED):
-- Pytest baseline **1372** (was 1355 vóór Sprint I). Math: 1355 + 14 (T1.1 schema/CRUD/validatie) + 6 (T1.2 contract+edges) + 12 (T1.3 helper) − 9 (T2.1 oude `compute_belasting_reservering_progress` tests) − 6 (T2.1 obsolete `_has_va_data` tests) = 1372 ✓
+- Pytest baseline **1386** (was 1355 vóór Sprint I). Math: 1355 + 14 (T1.1) + 6 (T1.2) + 12 (T1.3) − 9 (T2.1 oude reservering) − 6 (T2.1 obsolete _has_va_data) + 14 (post-merge audit follow-up: 13 Dutch-maand + 1 termijnen year-lock) = 1386 ✓
 - Master HEAD = na Sprint I — directe-op-master (Sprint A→H+I conventie)
 - Migratie 40: `fiscale_params.voorlopige_aanslag_ib_termijnen` + `_zvw_termijnen`
 - `get_va_betalingen` BREAKING contract: `totaal_betaald` excludeert unmatched,

@@ -1,6 +1,6 @@
 # Sprint I — VA-tracker design (Voorlopige Aanslag)
 
-**Status**: LOCKED 2026-05-05 — awaiting user approval to invoke `writing-plans`. Synthese over 4 Codex-rondes (parallel-plan, spec-review, fresh-review, discussion).
+**Status**: SHIPPED 2026-05-06 — 5 commits direct-on-master (`1f5850b..9cdfeb0`), pytest 1355 → 1372, post-merge audit verdict "Ready-to-ship". 4 Codex-rondes (parallel-plan, spec-review, fresh-review, discussion) plus per-task 4-layer reviews + post-merge Codex+code-reviewer audit.
 **Replaces**: dashboard hero Card 3 "Belasting-reservering" (`pages/dashboard.py:631-707`)
 **Helper to retire**: `services/dashboard.compute_belasting_reservering_progress` (+ 9 tests in `tests/test_dashboard_helpers.py`)
 
@@ -51,19 +51,17 @@ Tile toont per IB en ZVW: betaald, verplicht, resterend, termijnbedrag, aantal v
 
 ```sql
 ALTER TABLE fiscale_params
-ADD COLUMN voorlopige_aanslag_ib_termijnen INTEGER NOT NULL DEFAULT 11
-  CHECK (voorlopige_aanslag_ib_termijnen BETWEEN 1 AND 12);
+ADD COLUMN voorlopige_aanslag_ib_termijnen INTEGER NOT NULL DEFAULT 11;
 
 ALTER TABLE fiscale_params
-ADD COLUMN voorlopige_aanslag_zvw_termijnen INTEGER NOT NULL DEFAULT 11
-  CHECK (voorlopige_aanslag_zvw_termijnen BETWEEN 1 AND 12);
+ADD COLUMN voorlopige_aanslag_zvw_termijnen INTEGER NOT NULL DEFAULT 11;
 ```
+
+> **Plan-amendment 2026-05-06 (T1.1)**: SQLite `ALTER TABLE ... ADD COLUMN ... CHECK` is onbruikbaar (vereist full table-rewrite via temp-table swap). CHECK is geschrapt; range-enforcement gebeurt op application-level via `_validate_va_termijnen()` in `update_ib_inputs` en `upsert_fiscale_params` (rejects 0/13/1.5/True), plus UI `ui.number(min=1, max=12)` in /aangifte.
 
 **Default 11** — BD-standaard voor jaar-eerste beschikking is feb–dec = 11 termijnen. User kan in `/aangifte` overrulen naar 12 (jan-start) of korter (mid-year revisie). Bestaande rows krijgen 11.
 
 **Twee velden, niet één gedeeld** — BD kan IB en ZVW met verschillende termijnen sturen (bijv. ZVW pas later opgelegd). De gedeelde-veld-aanname uit mijn v1 was broos.
-
-**CHECK 1-12** — defensief tegen data-corruptie en tegen verkeerde `update_ib_inputs`-calls.
 
 **Updates aan**:
 - `models.FiscaleParams` dataclass — 2 nieuwe velden, `int = 11` default
@@ -96,7 +94,9 @@ ADD COLUMN voorlopige_aanslag_zvw_termijnen INTEGER NOT NULL DEFAULT 11
 
 **Footer** "Bankdata t/m {datum}" — geeft een eerlijke indicatie hoe vers de detect is. Contract: `bankdata_tot_datum: date | None` = `max(banktransacties.datum)` over **negatieve** BD-rows in jaar-scope (consistent met `betaald`-filter; positieve correcties tellen niet voor versheid). `None` als er geen negatieve BD-rows zijn voor het jaar. Bij `None` wordt de regel weggelaten — `today` invullen zou liegen over data-versheid.
 
-**Warning-icon** ⚠ wanneer `status == 'achter'` (achterstand > €1) of `summary.has_overbetaald` flag (totaal_resterend == 0 én een lijn heeft `betaald > verplicht`). `.is-tekort` modifier-class hergebruikt — semantiek wordt: "hier moet je naar kijken", niet meer "engine-prognose tekort".
+**Warning-icon** ⚠ wanneer `status == 'achter'` (achterstand > €1). `.is-tekort` modifier-class hergebruikt — semantiek wordt: "hier moet je naar kijken", niet meer "engine-prognose tekort". Bij overbetaling toont de renderer een kleine warning-pill naast het hero-bedrag (zie "Overbetaald-rendering" hieronder), GEEN warning-icon — die zou samen met `.is-tekort`-rood verwarrend zijn.
+
+> **Plan-amendment 2026-05-06 (post-merge audit)**: in een eerdere spec-versie was warning-icon ook bij `has_overbetaald` getoond. Implementatie kiest icoon alleen bij `status='achter'` om visuele dubbelzeggen te voorkomen.
 
 **Volgende-termijn footer** (alleen tonen wanneer `status in ('achter', 'bij')` AND `totaal_resterend > 0`): toont één gecombineerde regel "Volgende termijn: {datum}" — laatste-dag-van-volgende-betaalmaand, gederiveerd uit `eerste_maand = 13 - termijnen` + max(betaalde_termijnen, expected_terms_elapsed) + 1. Per IB en ZVW apart toonbaar in v2 — voor v1 nemen we de eerstvolgende van de twee. Bij `status='voldaan'` of `'overbetaald'`-flag wordt deze regel weggelaten zodat de gebruiker geen stale "moet nog"-suggestie ziet.
 
@@ -227,7 +227,7 @@ Caller (de tile) toont `unmatched_betaald` apart als sub-line wanneer > 0. `/aan
 | Geen beschikking + geen bankdata | `status='geen_data'`, hero "—", click → `/aangifte` |
 | Bankdata zonder beschikking | `status='geen_beschikking'`, body toont alleen IB/ZVW betaald + termijnen, geen resterend, click → `/aangifte` |
 | Beschikking zonder bankdata (vroeg in jaar) | Normale tile, IB en ZVW lines met `betaald €0`, resterend = verplicht, achterstand = `verwacht_betaald` (kan al meteen tekort flaggen in feb) |
-| Betaald > verplicht | `status='overbetaald'`, `resterend=0`, body sub-line "overbetaald €X" |
+| Betaald > verplicht | `status='voldaan'` met `has_overbetaald=True` attribute, `resterend=0`, badge "overbetaald €X" naast hero (renderer-conditional). Status `'overbetaald'` is bewust **NIET** in de status-set (zie §3 line-first ordering — drop in round-3). |
 | Closed year (jaar < huidig) | `expected_terms_elapsed` returns `termijnen` (volle jaar). Mutatie-paden vallen onder bestaande `assert_year_writable` |
 | Future year (jaar > huidig) | Dashboard rendert geen data voor toekomstige jaren — bestaand gedrag, geen tile-specifieke logica |
 | Jan-betaling met VA-vorig-jaar kenmerk | Wordt door `get_va_betalingen` datum-filter aan huidig jaar gekoppeld. **v1 accepteert dit zonder waarschuwing**; gebruiker kan via /transacties handmatig kenmerk inspecteren. Sprint J kan kenmerk-jaardigit-inspectie + heuristische waarschuwing samen toevoegen |

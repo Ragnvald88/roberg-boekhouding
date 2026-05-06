@@ -560,6 +560,19 @@ async def test_update_ib_inputs_rejected_in_definitief_year(db):
 
 
 @pytest.mark.asyncio
+async def test_update_ib_inputs_va_termijnen_kwargs_rejected_in_definitief_year(db):
+    """Sprint I: nieuwe termijn-kwargs moeten ook door year-lock guard gaan."""
+    await _seed_fiscale_params_row(db, 2025)
+    await update_jaarafsluiting_status(db, 2025, 'definitief')
+    with pytest.raises(YearLockedError):
+        await update_ib_inputs(
+            db, jaar=2025,
+            voorlopige_aanslag_ib_termijnen=8,
+            voorlopige_aanslag_zvw_termijnen=12,
+        )
+
+
+@pytest.mark.asyncio
 async def test_update_za_sa_toggles_rejected_in_definitief_year(db):
     await _seed_fiscale_params_row(db, 2025)
     await update_jaarafsluiting_status(db, 2025, 'definitief')
