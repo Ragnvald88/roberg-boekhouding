@@ -10,7 +10,9 @@ from typing import Callable
 
 from nicegui import ui
 
-from components.utils import format_euro
+from components.utils import (
+    format_datum_jaar_nl, format_datum_kort_nl, format_euro,
+)
 from services.dashboard import ActionRow, VATrackSummary
 
 
@@ -480,8 +482,7 @@ def render_va_tile(summary: VATrackSummary, jaar: int) -> None:
         # Volgende-termijn footer — alleen bij open verplichting
         # (compute_va_tracker zet None bij voldaan/closed/geen-data).
         if summary.volgende_termijn_datum is not None:
-            datum_str = summary.volgende_termijn_datum.strftime(
-                '%-d %b %Y').lower()
+            datum_str = format_datum_jaar_nl(summary.volgende_termijn_datum)
             ui.label(f'Volgende termijn: {datum_str}').classes(
                 'context-text').style('margin-top: 4px; opacity: 0.85')
 
@@ -489,6 +490,6 @@ def render_va_tile(summary: VATrackSummary, jaar: int) -> None:
         # de bankbetalingen geteld zijn (anders is "betaald = X" zonder
         # context — lijkt definitief terwijl er nog rijen later inkomen).
         if summary.bankdata_tot_datum is not None:
-            datum_str = summary.bankdata_tot_datum.strftime('%-d %b').lower()
+            datum_str = format_datum_kort_nl(summary.bankdata_tot_datum)
             ui.label(f'Bankdata t/m {datum_str}').classes(
                 'context-text').style('opacity: 0.6; font-size: 11px')

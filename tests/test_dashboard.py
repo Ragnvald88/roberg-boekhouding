@@ -54,55 +54,10 @@ def test_verlopen_empty_string():
     assert _is_verlopen('') is False
 
 
-# === Lane 4: _has_va_data helper (Plan 2026-04-26) ===
-
-from pages.dashboard import _has_va_data
-from models import FiscaleParams
-
-
-def _fp(va_ib=0.0, va_zvw=0.0):
-    """Minimal FiscaleParams for VA-detection tests."""
-    return FiscaleParams(
-        jaar=2026,
-        voorlopige_aanslag_betaald=va_ib,
-        voorlopige_aanslag_zvw=va_zvw,
-    )
-
-
-def test_has_va_data_false_when_nothing_entered():
-    """No fiscale_params + no bank data → no VA at all."""
-    assert _has_va_data(None, {'has_bank_data': False}) is False
-
-
-def test_has_va_data_false_when_fp_zero_and_no_bank():
-    fp = _fp(va_ib=0.0, va_zvw=0.0)
-    assert _has_va_data(fp, {'has_bank_data': False}) is False
-
-
-def test_has_va_data_true_when_only_ib_va_entered():
-    fp = _fp(va_ib=12000.0, va_zvw=0.0)
-    assert _has_va_data(fp, {'has_bank_data': False}) is True
-
-
-def test_has_va_data_true_when_only_zvw_va_entered():
-    """The bug we're fixing: ZVW-only manual entry must register as VA."""
-    fp = _fp(va_ib=0.0, va_zvw=2400.0)
-    assert _has_va_data(fp, {'has_bank_data': False}) is True
-
-
-def test_has_va_data_true_when_only_bank_data():
-    """Bank-imported VA payments (no manual entry) still register."""
-    assert _has_va_data(None, {'has_bank_data': True}) is True
-    fp = _fp(va_ib=0.0, va_zvw=0.0)
-    assert _has_va_data(fp, {'has_bank_data': True}) is True
-
-
-def test_has_va_data_handles_missing_va_data_key():
-    """va_data without 'has_bank_data' key (defensive) should not crash."""
-    fp = _fp(va_ib=0.0, va_zvw=0.0)
-    assert _has_va_data(fp, {}) is False
-    fp2 = _fp(va_ib=100.0, va_zvw=0.0)
-    assert _has_va_data(fp2, {}) is True
+# === _has_va_data helper verwijderd in Sprint I T2.1 ===
+# Card 3 op /dashboard is in T1.4 vervangen door render_va_tile, die zelf
+# zijn eigen empty-state rendert (status='geen_data'). _has_va_data gating
+# is daardoor obsolete — niet opnieuw introduceren.
 
 
 

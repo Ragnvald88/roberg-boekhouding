@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import os
 import tempfile
+from datetime import date
 from pathlib import Path
 
 
@@ -106,6 +107,22 @@ def format_datum(iso_date: str) -> str:
         return f"{parts[2]}-{parts[1]}-{parts[0]}"
     # Already DD-MM-YYYY or unknown format — return as-is
     return iso_date
+
+
+_DUTCH_MAANDEN_KORT = (
+    'jan', 'feb', 'mrt', 'apr', 'mei', 'jun',
+    'jul', 'aug', 'sep', 'okt', 'nov', 'dec',
+)
+
+
+def format_datum_kort_nl(d: date) -> str:
+    """Format date as Dutch short '%-d {maand_kort}' (e.g. '5 mei')."""
+    return f'{d.day} {_DUTCH_MAANDEN_KORT[d.month - 1]}'
+
+
+def format_datum_jaar_nl(d: date) -> str:
+    """Format date as Dutch '%-d {maand_kort} {YYYY}' (e.g. '5 mei 2026')."""
+    return f'{d.day} {_DUTCH_MAANDEN_KORT[d.month - 1]} {d.year}'
 
 
 def contrast_text_color(hex_color: str) -> str:

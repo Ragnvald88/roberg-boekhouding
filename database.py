@@ -2893,8 +2893,9 @@ async def backfill_betalingskenmerken(db_path: Path = DB_PATH,
     async with get_db_ctx(db_path) as conn:
         cur = await conn.execute(
             """SELECT COUNT(*) FROM banktransacties
-               WHERE tegenrekening = 'NL86INGB0002445588'
-                 AND (betalingskenmerk IS NULL OR betalingskenmerk = '')"""
+               WHERE tegenrekening = ?
+                 AND (betalingskenmerk IS NULL OR betalingskenmerk = '')""",
+            (BELASTINGDIENST_IBAN,),
         )
         needs_backfill = (await cur.fetchone())[0]
     if needs_backfill == 0:

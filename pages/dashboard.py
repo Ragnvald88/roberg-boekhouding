@@ -32,7 +32,7 @@ from services.agenda import (
     get_urencriterium_projectie, get_zes_weken_prognose,
 )
 from services.dashboard import (
-    compute_belasting_reservering_progress, compute_sph_prognose,
+    compute_sph_prognose,
     compute_va_tracker,
     ActionRow, prioritise_actions, _seasonal_action_rows,
     tax_calendar, load_dashboard_widgets_config,
@@ -44,26 +44,6 @@ from components.dashboard_widgets import (
     render_cash_positie_tile, render_tax_calendar_tile,
     render_prive_zone, render_va_tile,
 )
-
-
-def _has_va_data(fp, va_data) -> bool:
-    """Return True iff any voorlopige aanslag is registered for the year.
-
-    Three independent sources count:
-    - manual IB-VA: fp.voorlopige_aanslag_betaald
-    - manual ZVW-VA: fp.voorlopige_aanslag_zvw  (was missed before; bug A5)
-    - bank-imported VA payments: va_data['has_bank_data']
-
-    fp may be None (no fiscale_params row yet for the year). va_data is
-    expected to be a dict with optional 'has_bank_data' key.
-    """
-    if not fp:
-        return bool(va_data.get('has_bank_data', False))
-    return bool(
-        (getattr(fp, 'voorlopige_aanslag_betaald', 0) or 0) > 0
-        or (getattr(fp, 'voorlopige_aanslag_zvw', 0) or 0) > 0
-        or va_data.get('has_bank_data', False)
-    )
 
 
 @ui.page('/')

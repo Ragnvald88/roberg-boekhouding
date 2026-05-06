@@ -21,7 +21,7 @@ from components.fiscal_utils import (
     fetch_fiscal_data, fiscale_params_to_dict, load_jaarafsluiting_data,
 )
 from components.layout import create_layout, page_title
-from components.utils import format_euro
+from components.utils import format_datum_kort_nl, format_euro
 from database import (
     get_fiscale_params, get_aangifte_documenten,
     add_aangifte_document, delete_aangifte_document,
@@ -31,6 +31,7 @@ from database import (
     get_va_betalingen,
     update_partner_inputs, DB_PATH,
     YearLockedError, assert_year_writable,
+    BELASTINGDIENST_IBAN,
 )
 from components.shared_ui import year_options
 from fiscal.berekeningen import bereken_volledig, bereken_box3
@@ -610,9 +611,11 @@ async def aangifte_page(jaar: int | None = None):
                 if va_data['has_bank_data'] or va_totaal > 0:
                     ui.separator().classes('q-my-sm')
                     if va_data.get('bankdata_tot_datum'):
+                        bankdata_str = format_datum_kort_nl(
+                            va_data['bankdata_tot_datum'])
                         ui.label(
                             f"Bankbetalingen aan Belastingdienst (t/m "
-                            f"{va_data['bankdata_tot_datum'].strftime('%-d %b')})"
+                            f"{bankdata_str})"
                         ).classes('text-sm text-weight-bold')
                     else:
                         ui.label('Bankbetalingen aan Belastingdienst') \
@@ -652,7 +655,7 @@ async def aangifte_page(jaar: int | None = None):
                             ui.button(
                                 'Controleer in transacties',
                                 on_click=lambda j=jaar: ui.navigate.to(
-                                    f'/transacties?search=NL86INGB0002445588'
+                                    f'/transacties?search={BELASTINGDIENST_IBAN}'
                                     f'&jaar={j}')
                             ).props('flat dense color=primary')
 
