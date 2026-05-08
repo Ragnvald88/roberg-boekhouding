@@ -1,0 +1,12 @@
+# Defense-in-depth: although AGENTS.md is now well under 32 KiB, raise the
+# cap so growth in docs/architecture/ (read by codex-review skill) doesn't
+# silently truncate. tests/test_documentation.py keeps the root file lean.
+project_doc_max_bytes = 65536
+
+[mcp_servers.sqlite]
+args = [
+    "mcp-server-sqlite",
+    "--db-path",
+    "/Users/macbookpro_ronald/Library/Application Support/Boekhouding/data/boekhouding.sqlite3",
+]
+command = "uvx"

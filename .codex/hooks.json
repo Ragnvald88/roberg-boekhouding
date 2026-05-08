@@ -1,0 +1,20 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "'/Users/macbookpro_ronald/Library/CloudStorage/SynologyDrive-Main/06_Development/1_roberg-boekhouding/.codex/hooks/quality-gate.sh'",
+            "timeout": 180
+          },
+          {
+            "type": "command",
+            "command": "'/Users/macbookpro_ronald/Library/CloudStorage/SynologyDrive-Main/06_Development/1_roberg-boekhouding/.codex/hooks/codex-claude-review.sh'",
+            "timeout": 120
+          }
+        ]
+      }
+    ]
+  }
+}

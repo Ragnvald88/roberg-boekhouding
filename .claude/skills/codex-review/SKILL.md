@@ -1,6 +1,6 @@
 ---
 name: codex-review
-description: Use proactively after editing or writing any code file (.py, .html, .sql, .css) in the Boekhouding project — required before claiming a code-change task as "klaar"/done. Runs OpenAI Codex CLI as a second-opinion reviewer to catch bugs, SQL filter inconsistencies, year-locking violations, sign convention errors, pdf path resolution issues, NiceGUI pattern regressions, and CLAUDE.md-rule violations. Skip for docs-only changes (.md), comment-only edits, or pure config tweaks.
+description: Use proactively after editing or writing any code file (.py, .html, .sql, .css, .js) in the Boekhouding project — required before claiming a code-change task as "klaar"/done. Runs OpenAI Codex CLI as a second-opinion reviewer to catch bugs, SQL filter inconsistencies (ZICHTBARE_ZAKELIJKE_UITGAVE_FILTER, FACTUREERBARE_WERKDAG_FILTER), year-locking violations, sign convention errors, PDF path resolution issues, NiceGUI pattern regressions, and CLAUDE.md/AGENTS.md-rule violations. Codex reads CLAUDE.md root + docs/architecture/*.md (database/year-lock/agenda/transacties-kosten/visual-css/va-tracker/fiscal-engine/invoices/codex-collab) for full context. Skip for docs-only changes (.md), comment-only edits, or pure config tweaks.
 ---
 
 # Codex Auto-Review Skill
@@ -46,13 +46,15 @@ LINES=$(printf '%s\n' "$DIFF" | wc -l | tr -d ' ')
 **Belangrijk:** altijd `env -u OPENAI_API_KEY` prefix gebruiken. Dit dwingt subscription-auth (ChatGPT Plus/Pro) en voorkomt dat een per ongeluk geset env-var je API credits opeet.
 
 ```bash
-printf '%s\n' "$DIFF" | env -u OPENAI_API_KEY codex exec --sandbox read-only "Je krijgt een diff van het Boekhouding project (NiceGUI/Python/SQLite, eenmanszaak huisartswaarnemer). Review specifiek op:
+printf '%s\n' "$DIFF" | env -u OPENAI_API_KEY codex exec --sandbox read-only "Je krijgt een diff van het Boekhouding project (NiceGUI/Python/SQLite, eenmanszaak huisartswaarnemer). Lees CLAUDE.md root + docs/architecture/*.md voor full context. Review specifiek op:
 
 - **Bugs / off-by-one / edge cases** — vooral in datum/jaar-logica, factuur-status-transities, bank-tx koppelingen
-- **SQL-filter consistency** — \`status='concept'\` exclusions in revenue queries; sign conventions (\`bedrag < 0\` voor debits)
-- **Year-locking schendingen** — mutaties op definitieve jaren zonder \`assert_year_writable\` (gespecificeerd in CLAUDE.md K6)
-- **PDF path resolution** — alle row-menu actions moeten via \`_ensure_factuur_pdf\`; geen directe \`pdf_pad\` reads
-- **NiceGUI patterns** — \`q-btn-dropdown\` + \`\$parent.\$emit\` werkt NIET (teleport bug); \`ui.upload\` events moeten \`await e.file.read()\`; blocking I/O in \`asyncio.to_thread\`
+- **SQL-filter consistency** — \`ZICHTBARE_ZAKELIJKE_UITGAVE_FILTER\` (zie docs/architecture/database.md), \`FACTUREERBARE_WERKDAG_FILTER\`, \`status='concept'\` exclusions, sign conventions (\`bedrag < 0\` voor debits)
+- **Year-locking schendingen** — mutaties op definitieve jaren zonder \`assert_year_writable\` (zie docs/architecture/year-lock.md)
+- **PDF path resolution** — alle row-menu actions via \`_ensure_factuur_pdf\` (zie docs/architecture/invoices.md); geen directe \`pdf_pad\` reads
+- **NiceGUI patterns** — \`q-btn-dropdown\` + \`\$parent.\$emit\` werkt NIET; \`ui.upload\` events moeten \`await e.file.read()\`; \`linear_progress\` altijd \`show_value=False\`; blocking I/O in \`asyncio.to_thread\`
+- **CSS cascade-discipline** — Quasar \`.q-*\` overrides + app-classes-op-Quasar BUITEN \`@layer components\` (zie docs/architecture/visual-css.md)
+- **VA-tracker invarianten** — atomic upload pipeline, \`UNIQUE(document_id)\` schema, single-tx delete-with-cleanup (zie docs/architecture/va-tracker.md)
 - **Tests die mogelijk breken** — als je test_*.py imports of fixtures herkent
 
 Wees terse: alleen concrete bevindingen, met file:regel context als beschikbaar. MAX 5 bullets. Geen 'wat doet de code'-samenvatting, geen style-nits, geen voorgestelde refactors.
