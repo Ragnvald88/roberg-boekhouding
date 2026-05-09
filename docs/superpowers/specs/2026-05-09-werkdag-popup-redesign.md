@@ -1,6 +1,6 @@
 # Werkdag-popup redesign — spec
 
-**Status**: DRAFT
+**Status**: SHIPPED 2026-05-09 — pytest 1516 → 1557 (+41 tests). Master commits `4f5f3d2`, `f119623`, `267df9a`, `1f9cbd7`, `2853cb8`, `ae3ab66`.
 **Datum**: 2026-05-09
 **Doel**: De "Werkdag toevoegen / bewerken" dialog (`components/werkdag_form.py`) van een lineaire formulier-stack-met-separatoren omzetten naar een strakke, Apple-stijl sheet die de Sprint G `.settings-card` / `.settings-section` patterns volgt en aansluit bij de Sprint B design-tokens. Eindgebruiker is een huisartswaarnemer — invoer moet snel en rustig aanvoelen, geen bureaucratisch formulier.
 

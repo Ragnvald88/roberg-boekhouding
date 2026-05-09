@@ -79,3 +79,23 @@ Confirmed werkdag-pills in `_render_month_grid` zijn klikbaar + right-click cont
 **Click-bubbling fix** (regel 305 area): pill zit binnen clickable cell. Click handler MOET `js_handler='(e) => { e.stopPropagation(); emit(); }'` — anders fired ook cell-click → day-select rerender bovenop edit-dialog.
 
 **handle_pill_ontkoppel race-protection**: pre-dialog refetch is alleen voor UI-text (orphan vs concept). Atomic `unlink_werkdag_from_factuur` is de echte gate — als status tussen render en klik wijzigt naar verstuurd, weigert de helper alsnog.
+
+## Werkdag-popup (`components/werkdag_form.py`)
+
+Apple-stijl sheet (Sprint K-vervolg, 2026-05-09 redesign). Hergebruikt `.settings-section` patroon uit Sprint G. Drie secties: Basis (Datum + Klant + optionele Locatie), Werk (Activiteit + Uren + urennorm-checkbox), Vergoeding (Tarief + Km + Km-tarief in 3-kol grid). Dialog max-width 680px.
+
+**Header subtitle**: live Nederlandse datum ("zaterdag 9 mei 2026") via `format_datum_lang` (components/utils.py). Update via `datum_input.on_value_change`. CSS reserveert `min-height: 1.2em` op subtitle om layout-shift te voorkomen bij ongeldige/lege datum.
+
+**Activiteit-dropdown**: gebouwd via `build_code_options(existing_code)` in `domain/codes.py`. Voor edit-mode met legacy code (bv. `WDAGPRAKTIJK_77,50`) wordt een entry toegevoegd met humanized label via `humanize_legacy_code`. Bestaande DB-waarden veranderen NIET — alleen het rendered label. Lege code (`code=''`) krijgt expliciete `'(geen)'` keuze in dropdown zodat edit-save niet stilletjes naar `WERKDAG` muteert.
+
+**Save-flow activiteit**: `derive_activiteit(code, current_activiteit)` preserveert historische `werkdag.activiteit` voor legacy codes (anders zou edit-save ze met `CODES.get(code, fallback)` overschrijven naar generieke `Waarneming dagpraktijk`). Save-code-pad: `code = code_select.value if code_select.value is not None else 'WERKDAG'` (preserveert `''` expliciet, `None`=geen-selectie valt terug op WERKDAG).
+
+**Pattern-mode** (`prefill['pattern_id']` set, vanuit `/agenda` Bevestigen-flow): klant/code/uren/tarief/km/km-tarief/urennorm/opmerking allemaal disabled (`.props('disable')` op selects/checkboxes, `.props('readonly')` op inputs). Datum blijft editable. Footer-knop label: "Bevestigen" (icon check). Hint-banner (`.werkdag-pattern-hint`, info-soft bg) verklaart read-only state. Reden: `confirm_expected` accepteert geen overrides — user-edits zouden anders stil verloren gaan.
+
+**Totaal-strookje** (`.werkdag-totaal-strook`): teal-tinted (`var(--accent-soft)`), breakdown muted links + bedrag groot teal rechts (`tabular-nums`, `white-space: nowrap`). Lege state: "Vul uren en tarief in" + "€ 0,00".
+
+**Locatie-caption** (`.werkdag-locatie-caption`): muted "Retour: {km} km" zichtbaar als `retour_km > 0`, hidden bij 0 of geen locatie.
+
+**Default focus**: in add-mode zonder klant-prefill wordt focus naar `klant_select` gestuurd via `run_method('focus')` zodat user direct kan typen.
+
+**Textarea clamp**: `.q-field.werkdag-textarea .q-field__native` heeft `max-height: 96px` (~3 regels) zodat autogrow het footer niet uit beeld duwt.
