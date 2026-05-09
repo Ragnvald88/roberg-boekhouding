@@ -93,6 +93,308 @@ async def test_werkdag_delete(db):
 
 
 @pytest.mark.asyncio
+async def test_get_werkdag_by_id_returns_full_werkdag(db):
+    """Happy-path: roundtrip levert volledige Werkdag terug."""
+    from database import (
+        add_klant, add_werkdag, get_werkdag_by_id,
+    )
+    kid = await add_klant(db, naam='Test', tarief_uur=80, retour_km=10)
+    wid = await add_werkdag(
+        db, datum='2026-05-15', klant_id=kid, uren=8.0,
+        km=20, tarief=80, opmerking='Test')
+    w = await get_werkdag_by_id(db, werkdag_id=wid)
+    assert w is not None
+    assert w.id == wid
+    assert w.datum == '2026-05-15'
+    assert w.klant_id == kid
+    assert w.uren == 8.0
+    assert w.opmerking == 'Test'
+    assert w.klant_naam == 'Test'  # joined via _row_to_werkdag
+
+
+@pytest.mark.asyncio
+async def test_get_werkdag_by_id_returns_none_for_missing(db):
+    """Non-existent ID → None, geen exception."""
+    from database import get_werkdag_by_id
+    w = await get_werkdag_by_id(db, werkdag_id=99999)
+    assert w is None
+
+
+@pytest.mark.asyncio
+async def test_get_werkdag_by_id_computes_betaald_status(db):
+    """JOIN-and-CASE pad uniek voor deze helper: gefactureerd + betaald
+    levert computed_status='betaald'. Code-review #3 — locks in semantiek
+    die `_row_to_werkdag` tests via `get_werkdagen` niet expliciet dekken
+    voor de single-row variant."""
+    from database import (
+        add_klant, add_werkdag, add_factuur, mark_betaald,
+        get_werkdag_by_id, link_werkdagen_to_factuur,
+    )
+    kid = await add_klant(db, naam='Test', tarief_uur=80, retour_km=0)
+    wid = await add_werkdag(
+        db, datum='2026-05-15', klant_id=kid, uren=8.0, tarief=80)
+    await add_factuur(
+        db, nummer='2026-001', klant_id=kid, datum='2026-05-15',
+        totaal_bedrag=640, status='concept')
+    await link_werkdagen_to_factuur(
+        db, werkdag_ids=[wid], factuurnummer='2026-001')
+    facturen = await __import__('database').get_facturen(db)
+    fid = next(f.id for f in facturen if f.nummer == '2026-001')
+    await mark_betaald(db, factuur_id=fid, datum='2026-05-20')
+
+    w = await get_werkdag_by_id(db, werkdag_id=wid)
+    assert w is not None
+    assert w.factuurnummer == '2026-001'
+    assert w.status == 'betaald'
+
+
+@pytest.mark.asyncio
+async def test_duplicate_werkdag_copies_all_fields(db):
+    """Dupliceren kopieert alle velden behalve factuurnummer."""
+    from database import (
+        add_klant, add_klant_locatie, add_werkdag,
+        get_werkdag_by_id, duplicate_werkdag,
+    )
+    kid = await add_klant(db, naam='Test', tarief_uur=80, retour_km=10)
+    lid = await add_klant_locatie(
+        db, klant_id=kid, naam='Locatie A', retour_km=15)
+    src_id = await add_werkdag(
+        db, datum='2026-05-15', klant_id=kid,
+        code='WERKDAG', activiteit='Waarneming dagpraktijk',
+        locatie='Locatie A', locatie_id=lid,
+        uren=8.0, km=20, tarief=80, km_tarief=0.23,
+        opmerking='Bron-werkdag', urennorm=1,
+        factuurnummer='2026-001')
+
+    new_id = await duplicate_werkdag(
+        db, werkdag_id=src_id, target_datum='2026-05-22')
+
+    assert new_id != src_id
+    new_w = await get_werkdag_by_id(db, werkdag_id=new_id)
+    assert new_w is not None
+    assert new_w.datum == '2026-05-22'
+    assert new_w.klant_id == kid
+    assert new_w.code == 'WERKDAG'
+    assert new_w.activiteit == 'Waarneming dagpraktijk'
+    assert new_w.locatie == 'Locatie A'
+    assert new_w.locatie_id == lid
+    assert new_w.uren == 8.0
+    assert new_w.km == 20
+    assert new_w.tarief == 80
+    assert new_w.km_tarief == 0.23
+    assert new_w.opmerking == 'Bron-werkdag'
+    assert new_w.urennorm == 1
+    # Factuurnummer NIET meegekopieerd.
+    assert new_w.factuurnummer == ''
+
+    # Bron is ongewijzigd.
+    src_w = await get_werkdag_by_id(db, werkdag_id=src_id)
+    assert src_w.datum == '2026-05-15'
+    assert src_w.factuurnummer == '2026-001'
+
+
+@pytest.mark.asyncio
+async def test_duplicate_werkdag_raises_on_missing_source(db):
+    from database import duplicate_werkdag
+    with pytest.raises(ValueError, match='99999'):
+        await duplicate_werkdag(
+            db, werkdag_id=99999, target_datum='2026-05-22')
+
+
+@pytest.mark.asyncio
+async def test_duplicate_werkdag_raises_on_invalid_datum(db):
+    from database import (
+        add_klant, add_werkdag, duplicate_werkdag,
+    )
+    kid = await add_klant(db, naam='Test', tarief_uur=80, retour_km=0)
+    src = await add_werkdag(
+        db, datum='2026-05-15', klant_id=kid, uren=8, tarief=80)
+    # Tighten match — anders zou een onverwante ValueError elders in de
+    # setup ook silent-pass dit assertion.
+    with pytest.raises(ValueError, match='not-a-date'):
+        await duplicate_werkdag(
+            db, werkdag_id=src, target_datum='not-a-date')
+
+
+@pytest.mark.asyncio
+async def test_duplicate_werkdag_allows_blocker_on_target(db):
+    """Consistent met 'Extra werkdag' op blocker-dag (vakantie + dienst)."""
+    from database import (
+        add_klant, add_werkdag, duplicate_werkdag,
+        get_werkdag_by_id,
+    )
+    import services.agenda as agenda_svc
+    from datetime import date as _date_cls
+
+    kid = await add_klant(db, naam='Test', tarief_uur=80, retour_km=0)
+    src = await add_werkdag(
+        db, datum='2026-05-15', klant_id=kid, uren=8, tarief=80)
+    # Blocker op target-datum.
+    await agenda_svc.add_blocker(
+        db, datum=_date_cls(2026, 5, 22),
+        kind='vacation', label='Vakantie')
+    # Precondition: blocker is daadwerkelijk aangemaakt — anders test
+    # silent-pass via "duplicate naar lege dag" (= Task 3 happy-path).
+    blockers = await agenda_svc.list_blockers(
+        db, _date_cls(2026, 5, 22), _date_cls(2026, 5, 22))
+    assert len(blockers) == 1, 'precondition: blocker must exist'
+    # Dupliceren mag — geen exception.
+    new_id = await duplicate_werkdag(
+        db, werkdag_id=src, target_datum='2026-05-22')
+    new_w = await get_werkdag_by_id(db, werkdag_id=new_id)
+    assert new_w.datum == '2026-05-22'
+
+
+@pytest.mark.asyncio
+async def test_duplicate_werkdag_preserves_zero_km_tarief(db):
+    """ANW-werkdag heeft km_tarief=0 (geen reiskosten in tarief). MUST blijven 0
+    in dupliceren — codex catch: `or 0.23` zou dit naar 0.23 platslaan."""
+    from database import (
+        add_klant, add_werkdag, duplicate_werkdag, get_werkdag_by_id,
+    )
+    kid = await add_klant(db, naam='Test', tarief_uur=80, retour_km=0)
+    src = await add_werkdag(
+        db, datum='2026-05-15', klant_id=kid,
+        code='ANW', activiteit='ANW',
+        uren=12, tarief=80, km_tarief=0)
+    new_id = await duplicate_werkdag(
+        db, werkdag_id=src, target_datum='2026-05-22')
+    new_w = await get_werkdag_by_id(db, werkdag_id=new_id)
+    assert new_w.km_tarief == 0
+
+
+@pytest.mark.asyncio
+async def test_duplicate_werkdag_preserves_zero_urennorm(db):
+    """ACHTERWACHT/CONGRES-codes hebben urennorm=0 (telt niet voor 1225-norm).
+    MUST blijven 0 in dupliceren — codex catch: `or 1` zou 0 → 1 maken."""
+    from database import (
+        add_klant, add_werkdag, duplicate_werkdag, get_werkdag_by_id,
+    )
+    kid = await add_klant(db, naam='Test', tarief_uur=80, retour_km=0)
+    src = await add_werkdag(
+        db, datum='2026-05-15', klant_id=kid,
+        code='ACHTERWACHT', activiteit='Achterwacht',
+        uren=0, tarief=0, urennorm=0)
+    new_id = await duplicate_werkdag(
+        db, werkdag_id=src, target_datum='2026-05-22')
+    new_w = await get_werkdag_by_id(db, werkdag_id=new_id)
+    assert new_w.urennorm == 0
+
+
+@pytest.mark.asyncio
+async def test_duplicate_werkdag_allows_same_date(db):
+    """Dupliceren naar zelfde datum als bron — multi-shift dezelfde dag."""
+    from database import (
+        add_klant, add_werkdag, duplicate_werkdag, get_werkdag_by_id,
+    )
+    kid = await add_klant(db, naam='Test', tarief_uur=80, retour_km=0)
+    src = await add_werkdag(
+        db, datum='2026-05-15', klant_id=kid, uren=8, tarief=80)
+    new_id = await duplicate_werkdag(
+        db, werkdag_id=src, target_datum='2026-05-15')
+    assert new_id != src
+    new_w = await get_werkdag_by_id(db, werkdag_id=new_id)
+    assert new_w.datum == '2026-05-15'
+
+
+@pytest.mark.asyncio
+async def test_unlink_werkdag_from_factuur_clears_factuurnummer_for_concept(db):
+    """Concept-factuur unlink → factuurnummer leeg, factuur ongewijzigd."""
+    from database import (
+        add_klant, add_werkdag, add_factuur,
+        unlink_werkdag_from_factuur, get_werkdag_by_id, get_facturen,
+    )
+    kid = await add_klant(db, naam='Test', tarief_uur=80, retour_km=0)
+    wid = await add_werkdag(
+        db, datum='2026-05-15', klant_id=kid, uren=8, tarief=80,
+        factuurnummer='2026-001')
+    await add_factuur(
+        db, nummer='2026-001', klant_id=kid, datum='2026-05-15',
+        totaal_bedrag=640, status='concept')
+
+    await unlink_werkdag_from_factuur(db, werkdag_id=wid)
+
+    w = await get_werkdag_by_id(db, werkdag_id=wid)
+    assert w.factuurnummer == ''
+    facturen = await get_facturen(db)
+    assert any(f.nummer == '2026-001' for f in facturen)
+
+
+@pytest.mark.asyncio
+async def test_unlink_werkdag_from_factuur_clears_orphan_link(db):
+    """Orphan-factuurnummer (factuur_id IS NULL) — ontkoppel mag."""
+    from database import (
+        add_klant, add_werkdag, unlink_werkdag_from_factuur,
+        get_werkdag_by_id,
+    )
+    kid = await add_klant(db, naam='Test', tarief_uur=80, retour_km=0)
+    wid = await add_werkdag(
+        db, datum='2026-05-15', klant_id=kid, uren=8, tarief=80,
+        factuurnummer='2025-999')  # geen bijbehorende factuur-row
+    await unlink_werkdag_from_factuur(db, werkdag_id=wid)
+    w = await get_werkdag_by_id(db, werkdag_id=wid)
+    assert w.factuurnummer == ''
+
+
+@pytest.mark.asyncio
+async def test_unlink_werkdag_from_factuur_rejects_verstuurd(db):
+    """Verstuurde factuur kan NIET ontkoppeld worden — boekhoudkundig."""
+    from database import (
+        add_klant, add_werkdag, add_factuur,
+        unlink_werkdag_from_factuur, get_werkdag_by_id,
+    )
+    kid = await add_klant(db, naam='Test', tarief_uur=80, retour_km=0)
+    wid = await add_werkdag(
+        db, datum='2026-05-15', klant_id=kid, uren=8, tarief=80,
+        factuurnummer='2026-001')
+    await add_factuur(
+        db, nummer='2026-001', klant_id=kid, datum='2026-05-15',
+        totaal_bedrag=640, status='verstuurd')
+    with pytest.raises(ValueError, match='verstuurd'):
+        await unlink_werkdag_from_factuur(db, werkdag_id=wid)
+    w = await get_werkdag_by_id(db, werkdag_id=wid)
+    assert w.factuurnummer == '2026-001'  # ongewijzigd
+
+
+@pytest.mark.asyncio
+async def test_unlink_werkdag_from_factuur_rejects_betaald(db):
+    """Betaalde factuur — ontkoppelen ook geweigerd."""
+    from database import (
+        add_klant, add_werkdag, add_factuur,
+        unlink_werkdag_from_factuur, get_werkdag_by_id,
+    )
+    kid = await add_klant(db, naam='Test', tarief_uur=80, retour_km=0)
+    wid = await add_werkdag(
+        db, datum='2026-05-15', klant_id=kid, uren=8, tarief=80,
+        factuurnummer='2026-001')
+    await add_factuur(
+        db, nummer='2026-001', klant_id=kid, datum='2026-05-15',
+        totaal_bedrag=640, status='betaald')
+    with pytest.raises(ValueError, match='betaald'):
+        await unlink_werkdag_from_factuur(db, werkdag_id=wid)
+
+
+@pytest.mark.asyncio
+async def test_unlink_werkdag_from_factuur_rejects_no_factuurnummer(db):
+    """Werkdag zonder factuurkoppeling → ValueError."""
+    from database import (
+        add_klant, add_werkdag, unlink_werkdag_from_factuur,
+    )
+    kid = await add_klant(db, naam='Test', tarief_uur=80, retour_km=0)
+    wid = await add_werkdag(
+        db, datum='2026-05-15', klant_id=kid, uren=8, tarief=80)
+    with pytest.raises(ValueError, match='niet gekoppeld'):
+        await unlink_werkdag_from_factuur(db, werkdag_id=wid)
+
+
+@pytest.mark.asyncio
+async def test_unlink_werkdag_from_factuur_rejects_missing_werkdag(db):
+    from database import unlink_werkdag_from_factuur
+    with pytest.raises(ValueError, match='99999'):
+        await unlink_werkdag_from_factuur(db, werkdag_id=99999)
+
+
+@pytest.mark.asyncio
 async def test_werkdagen_filter_by_year(db):
     kid = await add_klant(db, naam="Test", tarief_uur=80, retour_km=44)
     await add_werkdag(db, datum="2025-06-15", klant_id=kid, uren=8, tarief=80)

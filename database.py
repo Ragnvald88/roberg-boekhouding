@@ -1486,6 +1486,149 @@ async def get_werkdagen(db_path: Path = DB_PATH, jaar: int = None,
         return [_row_to_werkdag(r) for r in rows]
 
 
+async def get_werkdag_by_id(
+        db_path: Path = DB_PATH, werkdag_id: int = 0) -> Werkdag | None:
+    """Single-row variant van get_werkdagen — voor edit/duplicate flows
+    die een Werkdag-shape verwachten (niet een lichte WerkdagPill).
+
+    Returns Werkdag of None als ID niet bestaat. Hergebruikt
+    `_row_to_werkdag` voor consistente type-shape met /werkdagen.
+    """
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            """SELECT w.*, k.naam as klant_naam,
+                      CASE
+                          WHEN w.factuurnummer = '' OR w.factuurnummer IS NULL
+                              THEN 'ongefactureerd'
+                          WHEN f.status = 'betaald' THEN 'betaald'
+                          ELSE 'gefactureerd'
+                      END as computed_status
+               FROM werkdagen w
+               JOIN klanten k ON w.klant_id = k.id
+               LEFT JOIN facturen f ON w.factuurnummer = f.nummer
+               WHERE w.id = ?""",
+            (werkdag_id,))
+        row = await cur.fetchone()
+    return _row_to_werkdag(row) if row else None
+
+
+async def duplicate_werkdag(
+        db_path: Path = DB_PATH, werkdag_id: int = 0,
+        target_datum: str = '') -> int:
+    """Kopieer een werkdag naar ``target_datum``.
+
+    Kopieert: klant_id, code, activiteit, locatie, locatie_id, uren, km,
+    tarief, km_tarief, opmerking, urennorm. Wist `factuurnummer` (nooit
+    meegekopieerd — dupliceren ≠ factuur-koppeling).
+
+    Year-lock: alleen op target_datum (bron is read-only). Source-datum
+    mag in definitief jaar zitten. Year-lock-check gebeurt vóór de
+    INSERT-connection — volgens bestaand pattern in `add_werkdag` etc.;
+    geen volledige atomicity vs gelijktijdige jaarafsluiting nodig
+    voor single-user lokale app.
+
+    Blocker/holiday op target-datum: niet gecheckt — consistent met
+    "Extra werkdag" knop in Day-Inspector die ook op blocker-dagen
+    werkdagen toestaat (vakantie + dienst is geldig scenario).
+
+    Raises:
+        ValueError: target_datum invalid format of bron bestaat niet.
+        YearLockedError: target_datum in definitief jaar.
+    """
+    _validate_datum(target_datum)
+    await assert_year_writable(db_path, target_datum)
+    async with get_db_ctx(db_path) as conn:
+        cur = await conn.execute(
+            "SELECT klant_id, code, activiteit, locatie, locatie_id, "
+            "       uren, km, tarief, km_tarief, opmerking, urennorm "
+            "FROM werkdagen WHERE id = ?",
+            (werkdag_id,))
+        src = await cur.fetchone()
+        if src is None:
+            raise ValueError(f"Werkdag {werkdag_id} bestaat niet")
+        # `is None`-checks (NIET `or default`): valide km_tarief=0 (ANW) of
+        # urennorm=0 (achterwacht/zero-uren codes) zijn truthy-falsy '0'
+        # die `or X` zou platslaan op `X` — domeinregel-bug.
+        cursor = await conn.execute(
+            """INSERT INTO werkdagen
+               (datum, klant_id, code, activiteit, locatie, uren, km,
+                tarief, km_tarief, factuurnummer, opmerking, urennorm,
+                locatie_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?, ?)""",
+            (target_datum, src['klant_id'],
+             src['code'] if src['code'] is not None else '',
+             src['activiteit'] if src['activiteit'] is not None
+                 else 'Waarneming dagpraktijk',
+             src['locatie'] if src['locatie'] is not None else '',
+             src['uren'],
+             src['km'] if src['km'] is not None else 0,
+             src['tarief'],
+             src['km_tarief'] if src['km_tarief'] is not None else 0.23,
+             src['opmerking'] if src['opmerking'] is not None else '',
+             src['urennorm'] if src['urennorm'] is not None else 1,
+             src['locatie_id']),
+        )
+        await conn.commit()
+        return cursor.lastrowid
+
+
+async def unlink_werkdag_from_factuur(
+        db_path: Path = DB_PATH, werkdag_id: int = 0) -> None:
+    """Atomair een werkdag loskoppelen van zijn factuur.
+
+    Toegestaan alleen voor orphan-link (factuur_id IS NULL) of een
+    concept-factuur. `BEGIN IMMEDIATE` rond SELECT-status + UPDATE
+    werkdagen sluit race af tussen status-check en de update — anders
+    kon een tussentijds verstuurde factuur alsnog losgekoppeld worden.
+
+    Year-lock guard via assert_year_writable op werkdag.datum (volgt
+    bestaand pattern in helpers).
+
+    Raises:
+        ValueError: werkdag bestaat niet, geen factuurkoppeling, of
+            factuur is verstuurd/betaald (alleen concept-status en
+            orphan-link toegestaan; "verlopen" is een UI-derived label,
+            geen DB-status).
+        YearLockedError: werkdag.datum in definitief jaar.
+    """
+    async with get_db_ctx(db_path) as conn:
+        await conn.execute("BEGIN IMMEDIATE")
+        try:
+            cur = await conn.execute(
+                "SELECT w.datum, w.factuurnummer, "
+                "       f.id AS factuur_id, f.status AS factuur_status "
+                "FROM werkdagen w "
+                "LEFT JOIN facturen f ON w.factuurnummer = f.nummer "
+                "WHERE w.id = ?", (werkdag_id,))
+            row = await cur.fetchone()
+            if row is None:
+                await conn.rollback()
+                raise ValueError(f"Werkdag {werkdag_id} bestaat niet")
+            if not row['factuurnummer']:
+                await conn.rollback()
+                raise ValueError(
+                    "Werkdag is niet gekoppeld aan een factuur")
+            factuur_id = row['factuur_id']
+            factuur_status = (row['factuur_status'] or '')
+            if factuur_id is not None and factuur_status != 'concept':
+                await conn.rollback()
+                raise ValueError(
+                    f"Factuur is '{factuur_status}'; ontkoppelen is "
+                    f"alleen toegestaan bij concept-facturen of orphan-"
+                    f"links (factuur ontbreekt)")
+            # assert_year_writable opent een eigen connectie. Veilig in
+            # WAL-mode: alleen SELECT op fiscale_params, geen self-lock
+            # tegen onze BEGIN IMMEDIATE writer-lock.
+            await assert_year_writable(db_path, row['datum'])
+            await conn.execute(
+                "UPDATE werkdagen SET factuurnummer = '' WHERE id = ?",
+                (werkdag_id,))
+            await conn.commit()
+        except Exception:
+            await conn.rollback()
+            raise
+
+
 async def get_werkdagen_met_factuur_status(
     db_path: Path = DB_PATH, jaar: int = 0, maand: int = 0
 ) -> list[WerkdagMetStatus]:

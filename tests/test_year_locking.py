@@ -134,6 +134,70 @@ async def test_delete_werkdag_rejected_in_definitief_year(db):
 
 
 @pytest.mark.asyncio
+async def test_duplicate_werkdag_rejects_target_in_definitief_year(db):
+    """Year-lock op target-datum: dupliceren naar definitief jaar weigeren."""
+    from database import add_klant, add_werkdag, duplicate_werkdag
+    kid = await add_klant(db, naam='Test', tarief_uur=80, retour_km=0)
+    await _seed_fiscale_params_row(db, 2024)
+    src = await add_werkdag(
+        db, datum='2026-05-15', klant_id=kid, uren=8, tarief=80)
+    await update_jaarafsluiting_status(db, 2024, 'definitief')
+
+    with pytest.raises(YearLockedError, match='2024'):
+        await duplicate_werkdag(
+            db, werkdag_id=src, target_datum='2024-12-15')
+    # Guard-before-write contract: no target row was inserted.
+    rows = await get_werkdagen(db)
+    assert all(w.datum != '2024-12-15' for w in rows)
+
+
+@pytest.mark.asyncio
+async def test_duplicate_werkdag_allows_source_in_definitief_year(db):
+    """Source mag in definitief jaar zitten — read-only voor dupliceren."""
+    from database import (
+        add_klant, add_werkdag, duplicate_werkdag,
+        get_werkdag_by_id,
+    )
+    kid = await add_klant(db, naam='Test', tarief_uur=80, retour_km=0)
+    # Voeg eerst werkdag in 2024 toe (jaar nog niet gesloten).
+    await _seed_fiscale_params_row(db, 2024)
+    src = await add_werkdag(
+        db, datum='2024-06-01', klant_id=kid, uren=8, tarief=80)
+    # Sluit jaar 2024 nu af.
+    await update_jaarafsluiting_status(db, 2024, 'definitief')
+
+    # Target in 2026 (writable) — dupliceren mag, ondanks bron in 2024.
+    new_id = await duplicate_werkdag(
+        db, werkdag_id=src, target_datum='2026-05-22')
+    new_w = await get_werkdag_by_id(db, werkdag_id=new_id)
+    assert new_w is not None
+    assert new_w.datum == '2026-05-22'
+
+
+@pytest.mark.asyncio
+async def test_unlink_werkdag_rejected_in_definitief_year(db):
+    """Year-lock op werkdag.datum: definitief jaar weigert unlink."""
+    from database import (
+        add_klant, add_werkdag, add_factuur,
+        unlink_werkdag_from_factuur, get_werkdag_by_id,
+    )
+    kid = await add_klant(db, naam='Test', tarief_uur=80, retour_km=0)
+    await _seed_fiscale_params_row(db, 2024)
+    wid = await add_werkdag(
+        db, datum='2024-12-15', klant_id=kid, uren=8, tarief=80,
+        factuurnummer='2024-099')
+    await add_factuur(
+        db, nummer='2024-099', klant_id=kid, datum='2024-12-15',
+        totaal_bedrag=640, status='concept')
+    await update_jaarafsluiting_status(db, 2024, 'definitief')
+
+    with pytest.raises(YearLockedError, match='2024'):
+        await unlink_werkdag_from_factuur(db, werkdag_id=wid)
+    w = await get_werkdag_by_id(db, werkdag_id=wid)
+    assert w.factuurnummer == '2024-099'  # ongewijzigd
+
+
+@pytest.mark.asyncio
 async def test_add_uitgave_rejected_in_definitief_year(db):
     await _seed_fiscale_params_row(db, 2025)
     await update_jaarafsluiting_status(db, 2025, 'definitief')

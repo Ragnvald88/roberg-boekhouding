@@ -12,7 +12,7 @@ from nicegui import ui
 
 from components.layout import create_layout, page_title
 from components.utils import contrast_text_color
-from database import DB_PATH, get_bedrijfsgegevens
+from database import DB_PATH, get_bedrijfsgegevens, YearLockedError
 import services.agenda as agenda_svc
 
 
@@ -61,8 +61,131 @@ def _pill_color_style(klant_color: str | None,
     return f'background: {klant_color}; color: {text_color};'
 
 
+def _pill_context_actions(pill) -> list[str]:
+    """Pure helper: geeft action-IDs terug voor right-click context-menu
+    op een confirmed werkdag-pill.
+
+    Action-IDs zijn stabiele strings (renderer mapt naar labels/icons/
+    callbacks). Volgorde is deterministic.
+
+    Visibility-rules (zie spec 2026-05-08-agenda-sprint-1-design.md §C):
+    - edit, duplicate: altijd
+    - delete: alleen als geen factuurnummer
+    - naar_facturen: alleen als factuur_id != None
+    - ontkoppel: alleen bij concept of orphan-link
+        (factuurnummer != '' EN (factuur_id is None OF
+         factuur_status == 'concept'))
+
+    Onbekende factuur_status met factuur_id != None gedraagt zich
+    defensief: wel naar_facturen, geen ontkoppel/delete.
+    """
+    actions = ['edit', 'duplicate']
+    has_factuurnummer = bool(getattr(pill, 'factuurnummer', '') or '')
+    factuur_id = getattr(pill, 'factuur_id', None)
+    factuur_status = getattr(pill, 'factuur_status', '') or ''
+
+    if not has_factuurnummer:
+        actions.append('delete')
+        return actions
+
+    # Heeft factuurnummer.
+    if factuur_id is not None:
+        actions.append('naar_facturen')
+
+    # Ontkoppel: orphan (factuur_id None) OF concept-factuur.
+    if factuur_id is None or factuur_status == 'concept':
+        actions.append('ontkoppel')
+
+    return actions
+
+
+def _pill_tooltip(pill) -> str:
+    """Pure helper: tooltip-tekst voor confirmed werkdag-pill.
+
+    Format:
+        {klant_naam_volledig}
+        {uren:.1f}u · €{bedrag:,.2f}
+        Status: {status_label}{factuur_extra}
+
+    Factuur-extra:
+        - concept → " · concept-factuur {nummer}"
+        - verstuurd/verlopen/betaald → " · Factuur {nummer}"
+        - ongefactureerd → ""
+
+    Geen tijden — werkdagen-tabel slaat geen start/eind times op
+    (spec §D: schema-change buiten Sprint 1).
+    """
+    klant = getattr(pill, 'klant_naam', '') or ''
+    uren = float(getattr(pill, 'uren', 0) or 0)
+    bedrag = float(getattr(pill, 'bedrag', 0) or 0)
+    status = getattr(pill, 'status_label', '') or ''
+    factuurnummer = getattr(pill, 'factuurnummer', '') or ''
+
+    bedrag_fmt = f'{bedrag:,.2f}'.replace(',', 'X').replace('.', ',') \
+        .replace('X', '.')
+
+    factuur_extra = ''
+    if factuurnummer:
+        if status == 'concept':
+            factuur_extra = f' · concept-factuur {factuurnummer}'
+        elif status in ('verstuurd', 'verlopen', 'betaald'):
+            factuur_extra = f' · Factuur {factuurnummer}'
+        else:
+            # Orphan-link: werkdag heeft factuurnummer maar geen
+            # matching factuur-row (status_label='ongefactureerd' via
+            # derive_werkdag_status_label). Context-menu biedt
+            # "Ontkoppel factuur" aan — zonder dit branche zou de
+            # tooltip die actie als verwarrend laten lijken (codex
+            # final review).
+            factuur_extra = f' · orphan-link {factuurnummer}'
+
+    return (
+        f'{klant}\n'
+        f'{uren:.1f}u · €{bedrag_fmt}\n'
+        f'Status: {status}{factuur_extra}'
+    )
+
+
+_CTX_MENU_LABELS = {
+    'edit': 'Bewerken',
+    'duplicate': 'Dupliceren',
+    'delete': 'Verwijderen',
+    'naar_facturen': 'Naar facturen',
+    'ontkoppel': 'Ontkoppel factuur',
+}
+
+
+def _render_context_menu_item(action_id, pill, on_edit, on_duplicate,
+                              on_delete, on_ontkoppel, on_naar_facturen):
+    """Render één q-item in de pill context-menu, gemapt op action_id.
+
+    NiceGUI 3.8.0 `ui.menu_item(text, on_click=..., auto_close=True)`
+    rendert als clickable q-item met v-close-popup. Geen icon — Sprint 1
+    KISS, plain text labels matchen de minimalistische agenda-pill UI.
+    """
+    label = _CTX_MENU_LABELS[action_id]
+    handler_map = {
+        'edit': on_edit,
+        'duplicate': on_duplicate,
+        'delete': on_delete,
+        'ontkoppel': on_ontkoppel,
+        'naar_facturen': on_naar_facturen,
+    }
+    handler = handler_map[action_id]
+    if handler is None:
+        return
+    if action_id == 'naar_facturen':
+        arg = getattr(pill, 'factuur_id', None)
+    else:
+        arg = pill.id
+    ui.menu_item(label, on_click=lambda _e=None, a=arg: handler(a))
+
+
 def _render_month_grid(container, view, on_day_click, selected: date,
-                        gebruik_klant_kleur: bool = False) -> None:
+                        gebruik_klant_kleur: bool = False,
+                        on_pill_edit=None, on_pill_duplicate=None,
+                        on_pill_delete=None, on_pill_ontkoppel=None,
+                        on_pill_naar_facturen=None) -> None:
     """Render 6×7 day grid + week-summary kolom rechts.
 
     view: MaandView from services.agenda.get_maand
@@ -71,6 +194,10 @@ def _render_month_grid(container, view, on_day_click, selected: date,
     gebruik_klant_kleur: Sprint D — bedrijfsgegevens-toggle. Als True en
         pill.klant_color is een geldig #RRGGBB → render pill met klant-
         kleur background; anders type-based .wd-{category} styling.
+
+    on_pill_*: callbacks voor confirmed pill-acties. None → geen handler
+        (test/legacy fallback). Expected pills krijgen geen pill-handlers —
+        bubblen naar cell-click voor Day-Inspector flow.
     """
     container.clear()
     first = date(view.jaar, view.maand, 1)
@@ -152,7 +279,8 @@ def _render_month_grid(container, view, on_day_click, selected: date,
                                 pill_classes = ['wd-pill', f'wd-{pill.category}']
                                 # ExpectedEntry has pattern_id; WerkdagPill
                                 # does not — distinguish via attribute presence.
-                                if hasattr(pill, 'pattern_id'):
+                                is_expected = hasattr(pill, 'pattern_id')
+                                if is_expected:
                                     pill_classes.append('expected')
                                 # Sprint D: defensieve klant-color overlay
                                 # (alleen op werkdag/expected pills, NIET op
@@ -162,13 +290,58 @@ def _render_month_grid(container, view, on_day_click, selected: date,
                                     getattr(pill, 'klant_color', None),
                                     gebruik_klant_kleur,
                                 )
-                                with ui.element('div').classes(
+                                pill_el = ui.element('div').classes(
                                     ' '.join(pill_classes)
-                                ).style(pill_style):
+                                ).style(pill_style)
+                                with pill_el:
                                     klant_short = pill.klant_naam[:10]
                                     ui.label(
                                         f'{klant_short} {pill.uren:.1f}u'
                                     )
+                                    # Tooltip + click + context-menu alleen
+                                    # voor confirmed pills (NIET expected).
+                                    if not is_expected:
+                                        tooltip_text = _pill_tooltip(pill)
+                                        # Quasar QTooltip default
+                                        # white-space: normal collapseert
+                                        # \n. pre-line preserveert de
+                                        # 3-regel layout uit _pill_tooltip.
+                                        ui.tooltip(tooltip_text).style(
+                                            'white-space: pre-line')
+                                        if on_pill_edit is not None:
+                                            wid = pill.id
+                                            pill_el.on(
+                                                'click',
+                                                lambda _e=None,
+                                                       w=wid: on_pill_edit(w),
+                                                js_handler=(
+                                                    '(e) => { '
+                                                    'e.stopPropagation(); '
+                                                    'emit(); }'),
+                                            )
+                                        # Context-menu (right-click) — alleen
+                                        # renderen wanneer er minstens één
+                                        # handler is gewired (test/legacy
+                                        # fallback met alle callbacks=None
+                                        # zou anders een lege q-menu attachen
+                                        # op elke pill — codex review I1).
+                                        any_handler = any(h is not None for h in (
+                                            on_pill_edit, on_pill_duplicate,
+                                            on_pill_delete, on_pill_ontkoppel,
+                                            on_pill_naar_facturen,
+                                        ))
+                                        if any_handler:
+                                            action_ids = _pill_context_actions(pill)
+                                            with ui.context_menu():
+                                                for aid in action_ids:
+                                                    _render_context_menu_item(
+                                                        aid, pill,
+                                                        on_pill_edit,
+                                                        on_pill_duplicate,
+                                                        on_pill_delete,
+                                                        on_pill_ontkoppel,
+                                                        on_pill_naar_facturen,
+                                                    )
                             if len(all_pills) > 3:
                                 ui.label(f'+{len(all_pills) - 3} meer').classes(
                                     'agenda-cell-overflow'
@@ -563,6 +736,156 @@ async def agenda_page():
         ids_csv = ','.join(str(i) for i in werkdag_ids)
         ui.navigate.to(f'/facturen?nieuw=1&werkdagen={ids_csv}')
 
+    async def handle_pill_edit(werkdag_id):
+        from database import get_werkdag_by_id
+        from components.werkdag_form import open_werkdag_dialog
+        w = await get_werkdag_by_id(DB_PATH, werkdag_id=werkdag_id)
+        if w is None:
+            ui.notify('Werkdag niet gevonden', type='warning')
+            return
+        await open_werkdag_dialog(on_save=render, werkdag=w)
+
+    async def handle_pill_duplicate(werkdag_id):
+        from database import get_werkdag_by_id, duplicate_werkdag
+        from components.shared_ui import date_input
+        w = await get_werkdag_by_id(DB_PATH, werkdag_id=werkdag_id)
+        if w is None:
+            ui.notify('Werkdag niet gevonden', type='warning')
+            return
+        # Default-target: bron-datum + 7 dagen.
+        try:
+            src_d = date.fromisoformat(w.datum)
+            default_target = (src_d + timedelta(days=7)).isoformat()
+        except (ValueError, TypeError):
+            default_target = date.today().isoformat()
+
+        with ui.dialog() as dlg, ui.card():
+            ui.label(
+                f'Werkdag van {w.datum} ({w.klant_naam}) dupliceren'
+            ).classes('text-base font-medium')
+            target = date_input(
+                'Naar datum', value=default_target,
+            )
+            with ui.row().classes('justify-end gap-2 mt-3'):
+                ui.button('Annuleren', on_click=lambda: dlg.submit(None)) \
+                    .props('flat')
+                ui.button('Dupliceren',
+                          on_click=lambda: dlg.submit(target.value)) \
+                    .props('color=primary')
+        result = await dlg
+        if not result:
+            return
+        try:
+            await duplicate_werkdag(
+                DB_PATH, werkdag_id=werkdag_id, target_datum=result)
+            ui.notify('Werkdag gedupliceerd', type='positive')
+            await render()
+        except YearLockedError as ex:
+            ui.notify(str(ex), type='warning')
+        except ValueError as ex:
+            ui.notify(f'Dupliceren mislukt: {ex}', type='negative')
+
+    async def handle_pill_delete(werkdag_id):
+        from database import get_werkdag_by_id, delete_werkdag
+        w = await get_werkdag_by_id(DB_PATH, werkdag_id=werkdag_id)
+        if w is None:
+            ui.notify('Werkdag niet gevonden', type='warning')
+            return
+        with ui.dialog() as dlg, ui.card():
+            ui.label(
+                f'Werkdag van {w.datum} bij {w.klant_naam} '
+                f'verwijderen?'
+            ).classes('text-base')
+            with ui.row().classes('justify-end gap-2 mt-3'):
+                ui.button('Annuleren',
+                          on_click=lambda: dlg.submit(False)).props('flat')
+                ui.button('Verwijderen',
+                          on_click=lambda: dlg.submit(True)) \
+                    .props('color=negative')
+        if not await dlg:
+            return
+        try:
+            await delete_werkdag(DB_PATH, werkdag_id=werkdag_id)
+            ui.notify('Werkdag verwijderd', type='positive')
+            await render()
+        except YearLockedError as ex:
+            ui.notify(str(ex), type='warning')
+        except ValueError as ex:
+            ui.notify(str(ex), type='negative')
+
+    async def handle_pill_ontkoppel(werkdag_id):
+        # Pre-dialog refetch is alleen voor de UI-tekst (welk factuur-
+        # nummer, orphan of concept). De ECHTE check-and-update gebeurt
+        # atomair in `unlink_werkdag_from_factuur` (BEGIN IMMEDIATE),
+        # zodat een race tijdens dialog-wachttijd (factuur wordt elders
+        # verstuurd) niet leidt tot onterecht ontkoppelen.
+        from database import unlink_werkdag_from_factuur, get_db_ctx
+        async with get_db_ctx(DB_PATH) as conn:
+            cur = await conn.execute(
+                "SELECT w.factuurnummer, "
+                "       f.id AS factuur_id, f.status AS factuur_status "
+                "FROM werkdagen w "
+                "LEFT JOIN facturen f ON w.factuurnummer = f.nummer "
+                "WHERE w.id = ?", (werkdag_id,))
+            row = await cur.fetchone()
+        if row is None:
+            ui.notify('Werkdag niet gevonden', type='warning')
+            return
+        if not row['factuurnummer']:
+            # Codebase-conventie: positive/warning/negative — geen 'info'.
+            ui.notify('Werkdag is niet gekoppeld aan een factuur',
+                      type='warning')
+            return
+        is_orphan = row['factuur_id'] is None
+        # Fast-fail bij stale UI: status veranderde tussen render en klik.
+        # Dit voorkomt een misleidende "concept-factuur"-dialog terwijl
+        # de helper toch zou weigeren. De atomic helper blijft de echte
+        # gate (post-dialog race wordt daar afgevangen).
+        if not is_orphan and (row['factuur_status'] or '') != 'concept':
+            ui.notify(
+                f"Factuur is '{row['factuur_status']}'; ontkoppelen kan "
+                f"alleen bij concept-facturen of orphan-links. "
+                f"Refresh de agenda.", type='warning')
+            await render()
+            return
+        factuur_descr = (
+            f'orphan-factuurnummer {row["factuurnummer"]}'
+            if is_orphan
+            else f'concept-factuur {row["factuurnummer"]}'
+        )
+        with ui.dialog() as dlg, ui.card():
+            ui.label(
+                f'Werkdag wordt losgekoppeld van {factuur_descr}.'
+            ).classes('text-base')
+            ui.label(
+                'De factuur en factuurregels blijven ongewijzigd. '
+                'Je kunt de werkdag opnieuw koppelen of de factuur '
+                'handmatig opschonen.'
+            ).classes('text-sm text-slate-600 mt-2')
+            with ui.row().classes('justify-end gap-2 mt-3'):
+                ui.button('Annuleren',
+                          on_click=lambda: dlg.submit(False)).props('flat')
+                ui.button('Ontkoppel',
+                          on_click=lambda: dlg.submit(True)) \
+                    .props('color=warning')
+        if not await dlg:
+            return
+        try:
+            await unlink_werkdag_from_factuur(
+                DB_PATH, werkdag_id=werkdag_id)
+            ui.notify('Werkdag ontkoppeld', type='positive')
+            await render()
+        except YearLockedError as ex:
+            ui.notify(str(ex), type='warning')
+        except ValueError as ex:
+            # Helper raised — bv. status veranderde tussen dialog en
+            # bevestiging naar verstuurd/betaald.
+            ui.notify(f'Ontkoppelen mislukt: {ex}', type='warning')
+
+    def handle_pill_naar_facturen(_factuur_id):
+        # Sprint 1: navigate generic. Deeplink (?nummer=…) is Sprint 2.
+        ui.navigate.to('/facturen')
+
     async def render():
         """Refetch data + re-render grid + inspector + urencriterium-strip."""
         anchor = state['anchor']
@@ -587,6 +910,15 @@ async def agenda_page():
             on_day_click=select_day,
             selected=state['selected'],
             gebruik_klant_kleur=gebruik_klant_kleur,
+            on_pill_edit=lambda wid: ui.timer(
+                0, lambda: handle_pill_edit(wid), once=True),
+            on_pill_duplicate=lambda wid: ui.timer(
+                0, lambda: handle_pill_duplicate(wid), once=True),
+            on_pill_delete=lambda wid: ui.timer(
+                0, lambda: handle_pill_delete(wid), once=True),
+            on_pill_ontkoppel=lambda wid: ui.timer(
+                0, lambda: handle_pill_ontkoppel(wid), once=True),
+            on_pill_naar_facturen=handle_pill_naar_facturen,
         )
 
         # Inspector
@@ -646,6 +978,11 @@ async def agenda_page():
     refs['next_btn'].on_click(go_next)
     refs['today_btn'].on_click(go_today)
     refs['refresh_btn'].on_click(lambda: ui.timer(0, render, once=True))
+    refs['new_btn'].on_click(
+        lambda: ui.timer(
+            0,
+            lambda: handle_add_werkdag(state['selected']),
+            once=True))
 
     # Initial render
     await render()
