@@ -997,7 +997,7 @@ async def test_kosten_investeringen_save_handler_catches_yearlocked():
 @pytest.mark.asyncio
 async def test_facturen_herinnering_handler_catches_yearlocked():
     """Source-pin: on_send_herinnering in pages/facturen.py wraps its
-    update_factuur_herinnering_datum call in try/except YearLockedError
+    add_factuur_herinnering call in try/except YearLockedError
     (Lane 1 follow-up; Lane 5 verification)."""
     from pathlib import Path
     src = Path(__file__).resolve().parents[1] / 'pages' / 'facturen.py'
@@ -1008,7 +1008,7 @@ async def test_facturen_herinnering_handler_catches_yearlocked():
     chunk = text[idx:idx + 4000]
     assert 'except YearLockedError' in chunk, (
         'on_send_herinnering must catch YearLockedError')
-    assert 'update_factuur_herinnering_datum' in chunk, (
+    assert 'add_factuur_herinnering' in chunk, (
         'on_send_herinnering must route through the year-locked helper')
 
 

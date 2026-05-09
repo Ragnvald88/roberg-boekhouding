@@ -9,7 +9,7 @@ Zodra `jaarafsluiting_status='definitief'` weigert elke mutatie op facturen, wer
 
 ## Volledige guarded mutation set (round-2 review 2026-04-27 + later)
 
-- Facturen: `add_factuur`, `update_factuur`, `update_factuur_status`, `update_factuur_herinnering_datum`, `delete_factuur`, `save_factuur_atomic`
+- Facturen: `add_factuur`, `update_factuur`, `update_factuur_status`, `add_factuur_herinnering` (audit-log helper), `delete_factuur`, `save_factuur_atomic`
 - Werkdagen: `add_werkdag`, `update_werkdag`, `delete_werkdag`, `link_werkdagen_to_factuur`
 - Uitgaven: `add_uitgave`, `update_uitgave`, `delete_uitgave`, `set/delete_afschrijving_override`
 - Banktransacties: `delete_banktransacties` (controleert óók datums van gekoppelde facturen ÉN gekoppelde uitgaven), `mark_banktx_genegeerd` (cross-year stealth-hide gedicht door óók uitgave-datum check)

@@ -25,8 +25,9 @@ from database import (
     get_bedrijfsgegevens, get_werkdagen,
     link_werkdagen_to_factuur, get_db_ctx, add_werkdag,
     get_fiscale_params, DB_PATH,
-    update_factuur_herinnering_datum, YearLockedError,
-    assert_year_writable,
+    add_factuur_herinnering, delete_last_factuur_herinnering,
+    get_factuur_herinneringen, get_herinneringen_by_factuur_ids,
+    YearLockedError, assert_year_writable,
 )
 
 log = logging.getLogger(__name__)
@@ -120,9 +121,74 @@ def _can_send_herinnering(row: dict) -> bool:
     """Can this factuur show 'Herinnering versturen' in the menu?
 
     Alleen voor verlopen facturen MET een bestaande PDF — herinnering-body
-    koppelt aan de originele factuur-PDF als attachment.
+    koppelt aan de originele factuur-PDF als attachment. Geen plafond op
+    aantal herinneringen — de gebruiker beslist wanneer te stoppen.
     """
     return bool(row.get('verlopen')) and bool(row.get('pdf_pad'))
+
+
+def _ordinal_nl(n: int) -> str:
+    """Dutch ordinal: 1→1e, 2→2e, 3→3e, ..."""
+    return f'{n}e'
+
+
+def _herinnering_menu_label(count: int, last_datum_fmt: str) -> str:
+    """Build the dynamic 'Herinnering versturen' menu-item label.
+
+    count = aantal eerder verzonden herinneringen.
+    last_datum_fmt = format_datum() van de meest recente verzending,
+    of '' als er nog geen is.
+    """
+    if count == 0:
+        return 'Herinnering versturen'
+    next_n = count + 1
+    suffix = (f' ({_ordinal_nl(count)}: {last_datum_fmt})'
+              if last_datum_fmt else '')
+    return f'{_ordinal_nl(next_n)} herinnering versturen{suffix}'
+
+
+def _herinnering_log_tooltip(entries: list[dict]) -> str:
+    """Build tooltip text from a list of {'niveau', 'verzonden_op'} dicts.
+
+    Returns 'Herinneringen: 1e: 24-04-2026 · 2e: 02-05-2026' or '' empty.
+    """
+    if not entries:
+        return ''
+    parts = [
+        f"{_ordinal_nl(e['niveau'])}: "
+        f"{format_datum(e['verzonden_op'])}"
+        for e in entries
+    ]
+    return 'Herinneringen: ' + ' · '.join(parts)
+
+
+def _herinnering_badge_label(count: int) -> str:
+    """Badge label for amber 'Herinnering N' state. Empty when count=0."""
+    return f'Herinnering {count}' if count > 0 else ''
+
+
+def _herinnering_undo_label(count: int) -> str:
+    """Menu-item label for undoing the most recent reminder.
+
+    Empty when count=0 (menu-item should be hidden).
+    """
+    if count <= 0:
+        return ''
+    if count == 1:
+        return 'Herinnering ongedaan maken'
+    return f'{_ordinal_nl(count)} herinnering ongedaan maken'
+
+
+def _herinnering_subject(nummer: str, niveau: int) -> str:
+    """Email-onderwerp voor een herinnering op niveau N (1-based).
+
+    1e blijft de bestaande sobere "Herinnering: Factuur X". Vanaf de 2e
+    krijgt de ontvanger een expliciete escalatie-aanduiding in het
+    subject — voorkomt dat hij denkt dat dit gewoon dezelfde mail is.
+    """
+    if niveau <= 1:
+        return f'Herinnering: Factuur {nummer}'
+    return f'{_ordinal_nl(niveau)} herinnering: Factuur {nummer}'
 
 
 def _find_pdf_by_filename(stored: str, base: Path) -> Path | None:
@@ -461,8 +527,7 @@ def _build_mail_body(nummer, bedrag, iban, bedrijfsnaam, naam, telefoon,
 
 def _build_herinnering_body(nummer, bedrag, datum, iban, bedrijfsnaam, naam,
                             telefoon, bg_email, betaallink=''):
-    """Build herinnering (reminder) email body as minimal HTML. See
-    `_build_mail_body` for rationale on HTML vs plain text."""
+    """First-reminder body: vriendelijk, "wellicht aan uw aandacht ontsnapt"."""
     esc = html.escape
     betaallink_block = (
         f'<p>U kunt ook eenvoudig betalen via '
@@ -482,6 +547,51 @@ def _build_herinnering_body(nummer, bedrag, datum, iban, bedrijfsnaam, naam,
         f'<p>Mocht de betaling reeds onderweg zijn, dan kunt u dit bericht '
         f'als niet verzonden beschouwen. Heeft u vragen, neem dan gerust '
         f'contact op.</p>'
+        f'<p>Met vriendelijke groet,</p>'
+        f'<p>{esc(naam)}<br>'
+        f'{esc(bedrijfsnaam)}<br>'
+        f'{tel_line}'
+        f'{esc(bg_email)}</p>'
+    )
+
+
+def _build_herinnering_body_v2(nummer, bedrag, datum, prev_datum_fmt,
+                               iban, bedrijfsnaam, naam, telefoon,
+                               bg_email, betaallink=''):
+    """Follow-up reminder body: refereert aan de datum van de meest recente
+    eerdere herinnering en zet een duidelijke termijn.
+
+    Gebruikt voor elke herinnering met count >= 1 (2e, 3e, ...).
+    ``prev_datum_fmt`` is ``format_datum()`` van de meest recente eerdere
+    herinnering (DD-MM-YYYY). De toon is feitelijker dan v1: geen
+    "wellicht ontsnapt aan uw aandacht" meer, wel expliciete betaaltermijn
+    en uitnodiging vragen binnen dezelfde termijn te stellen.
+
+    Betaallink staat inline in dezelfde alinea als rekeningnummer — een
+    follow-up moet beknopt zijn, geen losse alinea voor de link.
+    """
+    esc = html.escape
+    if betaallink:
+        betaallink_segment = (
+            f' Betalen kan ook eenvoudig via '
+            f'<a href="{esc(betaallink, quote=True)}">deze link</a>.'
+        )
+    else:
+        betaallink_segment = ''
+    tel_line = f'Tel: {esc(telefoon)}<br>' if telefoon else ''
+    return (
+        f'<p>Beste klant,</p>'
+        f'<p>Op {esc(prev_datum_fmt)} heb ik u een betalingsherinnering '
+        f'gestuurd voor factuur {esc(nummer)} van {esc(datum)} ter hoogte '
+        f'van {esc(bedrag)}. Volgens mijn administratie heb ik hiervoor '
+        f'nog geen betaling ontvangen.</p>'
+        f'<p>Ik verzoek u het bedrag binnen 7 dagen over te maken op '
+        f'rekeningnummer {esc(iban)} t.n.v. {esc(bedrijfsnaam)}, onder '
+        f'vermelding van factuurnummer {esc(nummer)}.{betaallink_segment}</p>'
+        f'<p>Mocht de betaling inmiddels onderweg zijn, dan kunt u dit '
+        f'bericht als niet verzonden beschouwen. Bij vragen of '
+        f'onduidelijkheden over de factuur hoor ik dat graag binnen '
+        f'dezelfde termijn.</p>'
         f'<p>Met vriendelijke groet,</p>'
         f'<p>{esc(naam)}<br>'
         f'{esc(bedrijfsnaam)}<br>'
@@ -731,11 +841,10 @@ async def facturen_page(nieuw: str | None = None,
         table.add_slot('body-cell-status', '''
             <q-td :props="props">
                 <q-badge v-if="props.row.status === 'betaald'" color="positive" label="Betaald" />
-                <q-badge v-else-if="props.row.verlopen" color="negative" label="Verlopen">
-                    <q-tooltip v-if="props.row.herinnering_datum">
-                        Herinnering verstuurd op {{ props.row.herinnering_datum }}
-                    </q-tooltip>
+                <q-badge v-else-if="props.row.herinnering_count > 0" color="warning" :label="props.row.herinnering_badge_label">
+                    <q-tooltip>{{ props.row.herinnering_log_tooltip }}</q-tooltip>
                 </q-badge>
+                <q-badge v-else-if="props.row.verlopen" color="negative" label="Verlopen" />
                 <q-badge v-else-if="props.row.status === 'verstuurd'" color="info" label="Verstuurd" />
                 <q-badge v-else color="grey-6" label="Concept" />
             </q-td>
@@ -800,7 +909,15 @@ async def facturen_page(nieuw: str | None = None,
                                     <q-icon name="notification_important" size="xs"
                                             color="warning" />
                                 </q-item-section>
-                                <q-item-section>Herinnering versturen</q-item-section>
+                                <q-item-section>{{ props.row.herinnering_menu_label }}</q-item-section>
+                            </q-item>
+                            <q-item v-if="props.row.herinnering_count > 0" clickable
+                                @click="() => $parent.$emit('undoherinnering', props.row)">
+                                <q-item-section side>
+                                    <q-icon name="undo" size="xs"
+                                            color="grey-7" />
+                                </q-item-section>
+                                <q-item-section>{{ props.row.herinnering_undo_label }}</q-item-section>
                             </q-item>
                             <q-item v-if="props.row.status === 'concept'" clickable
                                 @click="() => $parent.$emit('markverstuurd', props.row)">
@@ -890,6 +1007,9 @@ async def facturen_page(nieuw: str | None = None,
                 facturen = [f for f in facturen
                             if f.type == filter_type['value']]
 
+            herinneringen_by_id = await get_herinneringen_by_factuur_ids(
+                DB_PATH, [f.id for f in facturen])
+
             rows = []
             totaal = 0
             openstaand = 0
@@ -901,6 +1021,11 @@ async def facturen_page(nieuw: str | None = None,
                         (factuur_date + timedelta(days=14)).isoformat())
                 except (ValueError, TypeError):
                     vervaldatum_fmt = ''
+
+                hist = herinneringen_by_id.get(f.id, [])
+                count = len(hist)
+                last_datum_fmt = (format_datum(hist[-1]['verzonden_op'])
+                                  if hist else '')
 
                 row = {
                     'id': f.id,
@@ -921,7 +1046,13 @@ async def facturen_page(nieuw: str | None = None,
                     'type': f.type,
                     'bron': f.bron,
                     'regels_json': f.regels_json,
-                    'herinnering_datum': format_datum(f.herinnering_datum) if f.herinnering_datum else '',
+                    'herinnering_count': count,
+                    'herinnering_last_datum_fmt': last_datum_fmt,
+                    'herinnering_badge_label': _herinnering_badge_label(count),
+                    'herinnering_menu_label': _herinnering_menu_label(
+                        count, last_datum_fmt),
+                    'herinnering_undo_label': _herinnering_undo_label(count),
+                    'herinnering_log_tooltip': _herinnering_log_tooltip(hist),
                 }
                 row['can_send_mail'] = _can_send_mail(row)
                 row['can_send_herinnering'] = _can_send_herinnering(row)
@@ -1409,10 +1540,28 @@ async def facturen_page(nieuw: str | None = None,
                 if r and r['betaallink']:
                     betaallink = r['betaallink']
 
-            subject = f'Herinnering: Factuur {nummer}'
-            body = _build_herinnering_body(
-                nummer, bedrag, datum_fmt, iban, bedrijfsnaam, naam,
-                telefoon, bg_email_addr, betaallink)
+            # Pick body template + subject based on prior reminder count.
+            # Refetch the log from DB ipv het row dict gebruiken — anders
+            # kan een stale row (na een eerdere send vóór de refresh
+            # voltooid is) een verkeerd niveau in body/subject opleveren
+            # terwijl add_factuur_herinnering atomair het juiste niveau
+            # bepaalt. Race-window blijft theoretisch ~ms breed, maar
+            # voor een single-user lokale app is dit close-to-zero.
+            log = await get_factuur_herinneringen(
+                DB_PATH, factuur_id=row['id'])
+            prior_count = len(log)
+            next_niveau = prior_count + 1
+            subject = _herinnering_subject(nummer, next_niveau)
+            if prior_count == 0:
+                body = _build_herinnering_body(
+                    nummer, bedrag, datum_fmt, iban, bedrijfsnaam, naam,
+                    telefoon, bg_email_addr, betaallink)
+            else:
+                prev_datum_fmt = format_datum(log[-1]['verzonden_op'])
+                body = _build_herinnering_body_v2(
+                    nummer, bedrag, datum_fmt, prev_datum_fmt,
+                    iban, bedrijfsnaam, naam, telefoon, bg_email_addr,
+                    betaallink)
 
             pdf_path_abs = str(Path(pdf_path).resolve())
 
@@ -1427,20 +1576,21 @@ async def facturen_page(nieuw: str | None = None,
                     ui.notify(f'Mail.app fout: {err}', type='negative')
                     return
 
-                # Store herinnering date (year-locked helper).
-                # L1.4 (review A11): bypassing the helper would let a
-                # herinnering on a definitief-year factuur silently
-                # mutate metadata. The helper guards via factuur.datum.
+                # Append audit-log entry (year-locked helper). The helper
+                # runs SELECT MAX(niveau) + INSERT inside BEGIN IMMEDIATE,
+                # plus UNIQUE(factuur_id, niveau) — race-protected against
+                # parallel double-clicks.
                 try:
-                    await update_factuur_herinnering_datum(
+                    new_niveau = await add_factuur_herinnering(
                         DB_PATH, factuur_id=row['id'],
-                        datum=date.today().isoformat())
+                        verzonden_op=date.today().isoformat())
                 except YearLockedError as ex:
                     ui.notify(str(ex), type='warning')
                     return
 
-                ui.notify(f'Herinnering voor {nummer} geopend in Mail.app',
-                          type='positive')
+                ui.notify(
+                    f'{_ordinal_nl(new_niveau)} herinnering voor {nummer} '
+                    f'geopend in Mail.app', type='positive')
                 await refresh_table()
             except subprocess.TimeoutExpired:
                 ui.notify('Mail.app reageerde niet — probeer handmatig',
@@ -1448,12 +1598,35 @@ async def facturen_page(nieuw: str | None = None,
             except Exception as ex:
                 ui.notify(f'Fout bij openen Mail.app: {ex}', type='negative')
 
+        async def on_undo_herinnering(e):
+            """Roll back the most recent reminder log-entry — for the case
+            where Mail.app opened but the user closed the compose window
+            without actually sending."""
+            row = e.args
+            nummer = row['nummer']
+            try:
+                removed = await delete_last_factuur_herinnering(
+                    DB_PATH, factuur_id=row['id'])
+            except YearLockedError as ex:
+                ui.notify(str(ex), type='warning')
+                return
+            if removed is None:
+                ui.notify(
+                    f'Geen herinnering om ongedaan te maken voor {nummer}',
+                    type='info')
+            else:
+                ui.notify(
+                    f'{_ordinal_nl(removed)} herinnering voor {nummer} '
+                    f'ongedaan gemaakt', type='positive')
+            await refresh_table()
+
         table.on('markbetaald', on_mark_betaald)
         table.on('markonbetaald', on_mark_onbetaald)
         table.on('markverstuurd', on_mark_verstuurd)
         table.on('markconcept', on_mark_concept)
         table.on('sendmail', on_send_mail)
         table.on('sendherinnering', on_send_herinnering)
+        table.on('undoherinnering', on_undo_herinnering)
         table.on('deletefactuur', on_delete_factuur)
         table.on('download', on_download)
         table.on('edit', on_edit)

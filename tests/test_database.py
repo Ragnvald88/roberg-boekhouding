@@ -540,14 +540,33 @@ async def test_factuur_betaallink_persisted(db):
 
 
 @pytest.mark.asyncio
-async def test_facturen_herinnering_datum_column(db):
-    """herinnering_datum column exists with default empty string."""
+async def test_factuur_herinneringen_table_schema(db):
+    """factuur_herinneringen audit-log table replaces herinnering_datum.
+
+    Migration 43 creates the table with UNIQUE(factuur_id, niveau) for
+    race-protection and drops the legacy column.
+    """
     from database import get_db_ctx
     async with get_db_ctx(db) as conn:
         cur = await conn.execute("PRAGMA table_info(facturen)")
+        factuur_cols = [row['name'] for row in await cur.fetchall()]
+        assert 'herinnering_datum' not in factuur_cols, (
+            'Migration 43 should drop herinnering_datum column')
+
+        cur = await conn.execute(
+            "PRAGMA table_info(factuur_herinneringen)")
         cols = {row['name']: row for row in await cur.fetchall()}
-        assert 'herinnering_datum' in cols
-        assert cols['herinnering_datum']['dflt_value'] == "''"
+        assert {'id', 'factuur_id', 'verzonden_op', 'niveau',
+                'created_at'} <= set(cols)
+
+        cur = await conn.execute(
+            "PRAGMA index_list(factuur_herinneringen)")
+        indexes = [row['name'] for row in await cur.fetchall()]
+        # SQLite auto-names UNIQUE constraints sqlite_autoindex_*; check
+        # at least one unique index AND our explicit lookup index.
+        unique_idx = [n for n in indexes if 'autoindex' in n.lower()]
+        assert unique_idx, 'UNIQUE(factuur_id, niveau) constraint missing'
+        assert 'idx_factuur_herinneringen_factuur' in indexes
 
 
 @pytest.mark.asyncio

@@ -708,45 +708,316 @@ def test_herinnering_body_without_betaallink():
 
 
 # ============================================================
-# herinnering_datum integration tests
+# Herinnering audit-log integration tests (factuur_herinneringen)
 # ============================================================
 
 
 @pytest.mark.asyncio
-async def test_herinnering_datum_stored(seeded_db):
-    """Storing herinnering_datum updates the factuur record."""
-    from database import get_klanten, get_db_ctx
+async def test_herinnering_log_appends_entry(seeded_db):
+    """add_factuur_herinnering writes a log row keyed to the factuur."""
+    from database import get_klanten, add_factuur_herinnering, \
+        get_factuur_herinneringen
     klanten = await get_klanten(seeded_db)
     kid = klanten[0].id
 
-    await add_factuur(seeded_db, nummer='2026-010', klant_id=kid,
-                      datum='2026-01-01', totaal_bedrag=500,
-                      status='verstuurd')
+    fid = await add_factuur(seeded_db, nummer='2026-010', klant_id=kid,
+                            datum='2026-01-01', totaal_bedrag=500,
+                            status='verstuurd')
+    niveau = await add_factuur_herinnering(
+        seeded_db, factuur_id=fid, verzonden_op='2026-04-07')
+    assert niveau == 1
 
-    async with get_db_ctx(seeded_db) as conn:
-        await conn.execute(
-            "UPDATE facturen SET herinnering_datum = ? WHERE nummer = ?",
-            ('2026-04-07', '2026-010'))
-        await conn.commit()
-
-    facturen = await get_facturen(seeded_db)
-    f = next(f for f in facturen if f.nummer == '2026-010')
-    assert f.herinnering_datum == '2026-04-07'
+    log = await get_factuur_herinneringen(seeded_db, fid)
+    assert log == [{'niveau': 1, 'verzonden_op': '2026-04-07'}]
 
 
 @pytest.mark.asyncio
-async def test_herinnering_datum_default_empty(seeded_db):
-    """New facturen have empty herinnering_datum by default."""
-    from database import get_klanten
+async def test_herinnering_log_default_empty(seeded_db):
+    """A fresh factuur has no log entries until herinnering is sent."""
+    from database import get_klanten, get_factuur_herinneringen
     klanten = await get_klanten(seeded_db)
     kid = klanten[0].id
 
-    await add_factuur(seeded_db, nummer='2026-011', klant_id=kid,
-                      datum='2026-03-01', totaal_bedrag=300)
+    fid = await add_factuur(seeded_db, nummer='2026-011', klant_id=kid,
+                            datum='2026-03-01', totaal_bedrag=300)
 
-    facturen = await get_facturen(seeded_db)
-    f = next(f for f in facturen if f.nummer == '2026-011')
-    assert f.herinnering_datum == ''
+    log = await get_factuur_herinneringen(seeded_db, fid)
+    assert log == []
+
+
+@pytest.mark.asyncio
+async def test_herinneringen_batch_loader(seeded_db):
+    """get_herinneringen_by_factuur_ids returns dict keyed by factuur_id."""
+    from database import (get_klanten, add_factuur_herinnering,
+                          get_herinneringen_by_factuur_ids)
+    klanten = await get_klanten(seeded_db)
+    kid = klanten[0].id
+
+    fid_a = await add_factuur(seeded_db, nummer='2026-020', klant_id=kid,
+                              datum='2026-01-01', totaal_bedrag=200,
+                              status='verstuurd')
+    fid_b = await add_factuur(seeded_db, nummer='2026-021', klant_id=kid,
+                              datum='2026-01-02', totaal_bedrag=300,
+                              status='verstuurd')
+    fid_c = await add_factuur(seeded_db, nummer='2026-022', klant_id=kid,
+                              datum='2026-01-03', totaal_bedrag=400,
+                              status='verstuurd')
+    await add_factuur_herinnering(
+        seeded_db, factuur_id=fid_a, verzonden_op='2026-04-01')
+    await add_factuur_herinnering(
+        seeded_db, factuur_id=fid_a, verzonden_op='2026-05-01')
+    await add_factuur_herinnering(
+        seeded_db, factuur_id=fid_b, verzonden_op='2026-04-15')
+    # fid_c — no reminders sent.
+
+    batch = await get_herinneringen_by_factuur_ids(
+        seeded_db, [fid_a, fid_b, fid_c])
+    assert [e['niveau'] for e in batch[fid_a]] == [1, 2]
+    assert [e['verzonden_op'] for e in batch[fid_a]] == [
+        '2026-04-01', '2026-05-01']
+    assert batch[fid_b] == [{'niveau': 1, 'verzonden_op': '2026-04-15'}]
+    assert fid_c not in batch  # no entries → key absent
+
+
+def test_herinnering_menu_label_progression():
+    """_herinnering_menu_label scales label with prior count."""
+    from pages.facturen import _herinnering_menu_label
+    assert _herinnering_menu_label(0, '') == 'Herinnering versturen'
+    assert _herinnering_menu_label(1, '24-04-2026') == \
+        '2e herinnering versturen (1e: 24-04-2026)'
+    assert _herinnering_menu_label(2, '02-05-2026') == \
+        '3e herinnering versturen (2e: 02-05-2026)'
+
+
+def test_herinnering_log_tooltip_formats_entries():
+    """Tooltip joins entries with middle-dot separator."""
+    from pages.facturen import _herinnering_log_tooltip
+    assert _herinnering_log_tooltip([]) == ''
+    assert _herinnering_log_tooltip([
+        {'niveau': 1, 'verzonden_op': '2026-04-24'},
+        {'niveau': 2, 'verzonden_op': '2026-05-02'},
+    ]) == 'Herinneringen: 1e: 24-04-2026 · 2e: 02-05-2026'
+
+
+def test_herinnering_badge_label():
+    """Badge label is empty for count=0, 'Herinnering N' otherwise."""
+    from pages.facturen import _herinnering_badge_label
+    assert _herinnering_badge_label(0) == ''
+    assert _herinnering_badge_label(1) == 'Herinnering 1'
+    assert _herinnering_badge_label(3) == 'Herinnering 3'
+
+
+def test_herinnering_undo_label_progression():
+    """Undo-menu label scales with current count, empty when nothing logged."""
+    from pages.facturen import _herinnering_undo_label
+    assert _herinnering_undo_label(0) == ''
+    assert _herinnering_undo_label(1) == 'Herinnering ongedaan maken'
+    assert _herinnering_undo_label(2) == '2e herinnering ongedaan maken'
+    assert _herinnering_undo_label(3) == '3e herinnering ongedaan maken'
+
+
+def test_build_herinnering_body_v2_references_previous_reminder_date():
+    """v2 template refereert aan de datum van de meest recente eerdere
+    herinnering (geen "nogmaals"-formule meer)."""
+    from pages.facturen import _build_herinnering_body_v2
+    body = _build_herinnering_body_v2(
+        nummer='2026-005', bedrag='€ 800,00', datum='15 maart 2026',
+        prev_datum_fmt='24-04-2026',
+        iban='NL00RABO0123456789', bedrijfsnaam='Testpraktijk',
+        naam='Dr. Test', telefoon='', bg_email='test@test.nl',
+    )
+    assert 'Op 24-04-2026 heb ik u een betalingsherinnering gestuurd' in body
+    assert 'factuur 2026-005' in body
+    assert '€ 800,00' in body
+    # Geen restjes van het oude vriendelijke v2-template.
+    assert 'nogmaals een vriendelijke' not in body
+    assert 'binnen 7 dagen' in body
+    assert 'binnen dezelfde termijn' in body
+
+
+def test_build_herinnering_body_v2_inlines_betaallink():
+    """Betaallink staat inline na rekeningnummer-zin, niet in losse alinea."""
+    from pages.facturen import _build_herinnering_body_v2
+    body = _build_herinnering_body_v2(
+        nummer='2026-005', bedrag='€ 800,00', datum='15 maart 2026',
+        prev_datum_fmt='24-04-2026',
+        iban='NL00RABO0123456789', bedrijfsnaam='Testpraktijk',
+        naam='Dr. Test', telefoon='', bg_email='test@test.nl',
+        betaallink='https://betaalverzoek.example/?id=abc',
+    )
+    # Inline: de zin "factuurnummer ..." en " Betalen kan ook eenvoudig"
+    # staan in dezelfde <p>-tag — geen </p><p> tussen.
+    assert ('factuurnummer 2026-005. Betalen kan ook eenvoudig via '
+            '<a href="https://betaalverzoek.example/?id=abc">deze link</a>'
+            ) in body
+
+
+def test_herinnering_subject_progression():
+    """Subject is sober 'Herinnering' voor de 1e, escaleert naar
+    '{N}e herinnering' vanaf de 2e."""
+    from pages.facturen import _herinnering_subject
+    assert _herinnering_subject('2026-024', 1) == \
+        'Herinnering: Factuur 2026-024'
+    assert _herinnering_subject('2026-024', 2) == \
+        '2e herinnering: Factuur 2026-024'
+    assert _herinnering_subject('2026-024', 3) == \
+        '3e herinnering: Factuur 2026-024'
+
+
+# ============================================================
+# End-to-end: prev_datum roundtrip DB → query → format → body
+# ============================================================
+# Critical invariant: de datum die in de 2e+ herinnering-body wordt
+# vermeld, MOET de echte datum zijn van de meest recente eerdere
+# herinnering zoals opgeslagen in factuur_herinneringen. Deze tests
+# doorlopen het volledige pad zoals de handler dat doet.
+
+
+@pytest.mark.asyncio
+async def test_v2_body_renders_first_reminder_date_when_sending_second(seeded_db):
+    """1e herinnering verstuurd op 2026-04-27 → 2e herinnering body
+    bevat 'Op 27-04-2026 heb ik u een betalingsherinnering gestuurd'."""
+    from database import (get_klanten, add_factuur_herinnering,
+                          get_factuur_herinneringen)
+    from pages.facturen import _build_herinnering_body_v2
+
+    klanten = await get_klanten(seeded_db)
+    kid = klanten[0].id
+    fid = await add_factuur(seeded_db, nummer='2026-100', klant_id=kid,
+                            datum='2026-04-10', totaal_bedrag=815.10,
+                            status='verstuurd')
+    # 1e herinnering: opgeslagen als ISO YYYY-MM-DD.
+    await add_factuur_herinnering(
+        seeded_db, factuur_id=fid, verzonden_op='2026-04-27')
+
+    # Repeat exact handler path: refetch → log[-1] → format_datum.
+    log = await get_factuur_herinneringen(seeded_db, fid)
+    assert len(log) == 1
+    assert log[-1]['verzonden_op'] == '2026-04-27'
+    prev_datum_fmt = format_datum(log[-1]['verzonden_op'])
+    assert prev_datum_fmt == '27-04-2026'
+
+    body = _build_herinnering_body_v2(
+        nummer='2026-100', bedrag='€ 815,10', datum='10-04-2026',
+        prev_datum_fmt=prev_datum_fmt,
+        iban='NL74RABO0344191680', bedrijfsnaam='RoBerg',
+        naam='Ronald', telefoon='', bg_email='r@example.nl',
+    )
+    assert 'Op 27-04-2026 heb ik u een betalingsherinnering gestuurd' in body
+    assert 'factuur 2026-100' in body
+    assert '€ 815,10' in body
+
+
+@pytest.mark.asyncio
+async def test_v2_body_uses_most_recent_date_when_sending_third(seeded_db):
+    """1e+2e herinnering opgeslagen → 3e body refereert aan 2e datum
+    (most recent), NIET aan 1e datum."""
+    from database import (get_klanten, add_factuur_herinnering,
+                          get_factuur_herinneringen)
+    from pages.facturen import _build_herinnering_body_v2
+
+    klanten = await get_klanten(seeded_db)
+    kid = klanten[0].id
+    fid = await add_factuur(seeded_db, nummer='2026-101', klant_id=kid,
+                            datum='2026-04-10', totaal_bedrag=500,
+                            status='verstuurd')
+    # Twee herinneringen — 1e op 27-04, 2e op 04-05.
+    await add_factuur_herinnering(
+        seeded_db, factuur_id=fid, verzonden_op='2026-04-27')
+    await add_factuur_herinnering(
+        seeded_db, factuur_id=fid, verzonden_op='2026-05-04')
+
+    log = await get_factuur_herinneringen(seeded_db, fid)
+    # Order MUST be ASC by niveau — log[-1] is highest niveau (most recent).
+    assert [e['niveau'] for e in log] == [1, 2]
+    assert log[-1]['niveau'] == 2
+    assert log[-1]['verzonden_op'] == '2026-05-04'  # 2e, niet 1e
+    prev_datum_fmt = format_datum(log[-1]['verzonden_op'])
+
+    body = _build_herinnering_body_v2(
+        nummer='2026-101', bedrag='€ 500,00', datum='10-04-2026',
+        prev_datum_fmt=prev_datum_fmt,
+        iban='NL00RABO0123456789', bedrijfsnaam='Test',
+        naam='Dr. T', telefoon='', bg_email='t@t.nl',
+    )
+    assert 'Op 04-05-2026 heb ik u een betalingsherinnering' in body
+    # En NIET de 1e datum.
+    assert '27-04-2026' not in body
+
+
+@pytest.mark.asyncio
+async def test_v2_body_after_undo_uses_pre_undo_date(seeded_db):
+    """Undo van 2e + nieuwe 2e verzonden → body refereert aan 1e datum
+    (1e bleef staan na undo). Verifieert dat de delete het log-pad niet
+    corrumpeert."""
+    from database import (get_klanten, add_factuur_herinnering,
+                          delete_last_factuur_herinnering,
+                          get_factuur_herinneringen)
+    from pages.facturen import _build_herinnering_body_v2
+
+    klanten = await get_klanten(seeded_db)
+    kid = klanten[0].id
+    fid = await add_factuur(seeded_db, nummer='2026-102', klant_id=kid,
+                            datum='2026-04-10', totaal_bedrag=500,
+                            status='verstuurd')
+    await add_factuur_herinnering(
+        seeded_db, factuur_id=fid, verzonden_op='2026-04-27')  # 1e
+    await add_factuur_herinnering(
+        seeded_db, factuur_id=fid, verzonden_op='2026-05-04')  # 2e
+    removed = await delete_last_factuur_herinnering(
+        seeded_db, factuur_id=fid)
+    assert removed == 2
+
+    # Nu: log heeft alleen nog 1e. Bij next send (de "nieuwe 2e"), refereer
+    # we aan de 1e datum.
+    log = await get_factuur_herinneringen(seeded_db, fid)
+    assert len(log) == 1
+    assert log[-1]['niveau'] == 1
+    assert log[-1]['verzonden_op'] == '2026-04-27'
+
+    prev_datum_fmt = format_datum(log[-1]['verzonden_op'])
+    body = _build_herinnering_body_v2(
+        nummer='2026-102', bedrag='€ 500,00', datum='10-04-2026',
+        prev_datum_fmt=prev_datum_fmt,
+        iban='NL00RABO0123456789', bedrijfsnaam='Test',
+        naam='Dr. T', telefoon='', bg_email='t@t.nl',
+    )
+    assert 'Op 27-04-2026 heb ik u een betalingsherinnering' in body
+    # 04-05-2026 is verwijderd, mag NIET meer in body verschijnen.
+    assert '04-05-2026' not in body
+
+
+@pytest.mark.asyncio
+async def test_iso_date_roundtrip_preserves_full_date(seeded_db):
+    """Edge-case datums: 1 januari, 31 december, dubbel-cijfer dag/maand —
+    moeten allemaal correct door de keten heen."""
+    from database import (get_klanten, add_factuur_herinnering,
+                          get_factuur_herinneringen)
+
+    klanten = await get_klanten(seeded_db)
+    kid = klanten[0].id
+
+    test_cases = [
+        ('2026-01-01', '01-01-2026'),
+        ('2026-12-31', '31-12-2026'),
+        ('2025-09-09', '09-09-2025'),
+        ('2026-05-04', '04-05-2026'),
+    ]
+    for i, (iso, expected_fmt) in enumerate(test_cases):
+        fid = await add_factuur(
+            seeded_db, nummer=f'2026-2{i:02d}', klant_id=kid,
+            datum='2026-04-10', totaal_bedrag=100, status='verstuurd')
+        await add_factuur_herinnering(
+            seeded_db, factuur_id=fid, verzonden_op=iso)
+
+        log = await get_factuur_herinneringen(seeded_db, fid)
+        # DB ronde: ISO blijft ISO.
+        assert log[-1]['verzonden_op'] == iso, (
+            f"DB roundtrip corrupt voor {iso}: kreeg "
+            f"{log[-1]['verzonden_op']!r}")
+        # Format ronde: ISO → DD-MM-YYYY.
+        assert format_datum(log[-1]['verzonden_op']) == expected_fmt, (
+            f"format_datum corrupt voor {iso}")
 
 
 # === Edit-menu visibility rules ===

@@ -733,6 +733,51 @@ MIGRATIONS = [
             ON voorlopige_aanslagen(jaar, soort)
             WHERE is_active = 1""",
     ]),
+    (42, "voorlopige_aanslagen_document_id_nullable", [
+        # Sprint J post-merge — document_id wordt nullable zodat handmatig
+        # ingevoerde beschikkingen (via /va-tracker dialog) als rij kunnen
+        # bestaan zonder PDF-source. SQLite ondersteunt geen ALTER COLUMN
+        # voor NOT NULL drop; recreate-table-pattern vereist.
+        # UNIQUE(document_id) blijft werken want SQLite behandelt elke
+        # NULL als uniek (multiple NULL allowed) maar non-NULL waarden
+        # blijven uniek geforceerd. UNIQUE(aanslagnummer) blijft als
+        # primary key voor revisie-detectie + idempotency.
+        # Bestaande data: document_id is overal NOT NULL (er waren geen
+        # manual rows mogelijk vóór deze migratie); copy is veilig.
+        # PRAGMA foreign_keys is OFF tijdens recreate — anders weigert
+        # SQLite de oude tabel te droppen vanwege FK-references van
+        # andere tabellen (geen in dit geval, maar defensive).
+        "PRAGMA foreign_keys = OFF",
+        """CREATE TABLE voorlopige_aanslagen_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            jaar INTEGER NOT NULL,
+            soort TEXT NOT NULL CHECK (soort IN ('ib', 'zvw')),
+            document_id INTEGER REFERENCES aangifte_documenten(id) ON DELETE CASCADE,
+            aanslagnummer TEXT NOT NULL,
+            dagtekening TEXT NOT NULL,
+            bedrag REAL NOT NULL CHECK (bedrag >= 0),
+            betalingskenmerk TEXT NOT NULL,
+            termijnen INTEGER NOT NULL DEFAULT 11
+                CHECK (termijnen BETWEEN 1 AND 12),
+            is_active INTEGER NOT NULL DEFAULT 1
+                CHECK (is_active IN (0, 1)),
+            created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP),
+            UNIQUE(aanslagnummer),
+            UNIQUE(document_id)
+        )""",
+        """INSERT INTO voorlopige_aanslagen_new
+           SELECT id, jaar, soort, document_id, aanslagnummer, dagtekening,
+                  bedrag, betalingskenmerk, termijnen, is_active, created_at
+           FROM voorlopige_aanslagen""",
+        "DROP TABLE voorlopige_aanslagen",
+        "ALTER TABLE voorlopige_aanslagen_new RENAME TO voorlopige_aanslagen",
+        # Re-create de partial unique idx — DROP TABLE wist 'm.
+        """CREATE UNIQUE INDEX idx_va_active
+            ON voorlopige_aanslagen(jaar, soort)
+            WHERE is_active = 1""",
+        "PRAGMA foreign_keys = ON",
+    ]),
+    (43, "add_factuur_herinneringen_table", None),
 ]
 
 
@@ -1032,7 +1077,52 @@ async def _seed_klant_aliases_from_local(conn) -> None:
             (klant_id, type_name, pattern.strip()))
 
 
-_MIGRATION_CALLABLES = {7: _run_migration_7, 8: _run_migration_8, 18: _run_migration_18, 20: _run_migration_20, 21: _run_migration_21, 27: _run_migration_27, 34: _seed_klant_aliases_from_local}
+async def _run_migration_43(conn) -> None:
+    """Audit-log voor herinneringen + escalatie-templates.
+
+    Replaces the single `facturen.herinnering_datum` column with a
+    log-table `factuur_herinneringen`. UNIQUE(factuur_id, niveau)
+    plus BEGIN IMMEDIATE in the helper protect against race-condition
+    double-inserts. Backfill is idempotent (NOT EXISTS guard + UNIQUE
+    constraint), DROP COLUMN is conditional on column existence so
+    the migration tolereert mixed states (e.g. partial reapply).
+    """
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS factuur_herinneringen (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            factuur_id INTEGER NOT NULL
+                REFERENCES facturen(id) ON DELETE CASCADE,
+            verzonden_op TEXT NOT NULL,
+            niveau INTEGER NOT NULL CHECK (niveau >= 1),
+            created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP),
+            UNIQUE (factuur_id, niveau)
+        )
+    """)
+    await conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_factuur_herinneringen_factuur "
+        "ON factuur_herinneringen(factuur_id)")
+
+    cur = await conn.execute("PRAGMA table_info(facturen)")
+    cols = [row[1] for row in await cur.fetchall()]
+    if 'herinnering_datum' in cols:
+        # Idempotent backfill — NOT EXISTS guards re-runs, UNIQUE
+        # constraint is the hard floor.
+        await conn.execute("""
+            INSERT OR IGNORE INTO factuur_herinneringen
+                (factuur_id, verzonden_op, niveau)
+            SELECT f.id, f.herinnering_datum, 1
+            FROM facturen f
+            WHERE COALESCE(f.herinnering_datum, '') <> ''
+              AND NOT EXISTS (
+                SELECT 1 FROM factuur_herinneringen h
+                WHERE h.factuur_id = f.id AND h.niveau = 1
+              )
+        """)
+        await conn.execute(
+            "ALTER TABLE facturen DROP COLUMN herinnering_datum")
+
+
+_MIGRATION_CALLABLES = {7: _run_migration_7, 8: _run_migration_8, 18: _run_migration_18, 20: _run_migration_20, 21: _run_migration_21, 27: _run_migration_27, 34: _seed_klant_aliases_from_local, 43: _run_migration_43}
 
 
 async def init_db(db_path: Path = DB_PATH) -> None:
@@ -1437,7 +1527,6 @@ def _row_to_factuur(r) -> Factuur:
         type=r['type'] or 'factuur',
         bron=r['bron'] if 'bron' in r.keys() else 'app',
         betaallink=r['betaallink'] if 'betaallink' in r.keys() else '',
-        herinnering_datum=r['herinnering_datum'] if 'herinnering_datum' in r.keys() else '',
         regels_json=r['regels_json'] if 'regels_json' in r.keys() else '',
     )
 
@@ -2092,28 +2181,131 @@ async def update_factuur(db_path: Path = DB_PATH, factuur_id: int = 0,
         await conn.commit()
 
 
-async def update_factuur_herinnering_datum(
-        db_path: Path, factuur_id: int, datum: str) -> None:
-    """Set herinnering_datum on a factuur. Year-locked against the factuur datum.
+async def add_factuur_herinnering(
+        db_path: Path, factuur_id: int, verzonden_op: str) -> int:
+    """Append a reminder log-entry for ``factuur_id``.
 
-    L1.4 (review A11): the page-side handler `pages/facturen.py:on_send_herinnering`
-    used to do a raw `UPDATE facturen SET herinnering_datum=...` directly,
-    bypassing assert_year_writable. A herinnering on a closed-jaar factuur
-    is a stealth metadata mutation; route through this helper so the guard
-    runs.
+    `verzonden_op` records when Mail.app was opened with the reminder
+    composed — same semantic as the legacy `herinnering_datum` field.
+    Whether the user actually clicked Send is unknowable to the app.
+
+    Returns the new niveau (1 for first reminder, 2 for second, …).
+
+    Race-protected: SELECT MAX(niveau) and INSERT run inside one
+    `BEGIN IMMEDIATE` transaction. UNIQUE(factuur_id, niveau) is the
+    backstop. Year-locked against `facturen.datum` so a definitief-jaar
+    factuur cannot get new audit entries.
+    """
+    async with get_db_ctx(db_path) as conn:
+        await conn.execute("BEGIN IMMEDIATE")
+        try:
+            cur = await conn.execute(
+                "SELECT datum FROM facturen WHERE id = ?", (factuur_id,))
+            row = await cur.fetchone()
+            if row is None:
+                await conn.rollback()
+                raise ValueError(f"Factuur {factuur_id} bestaat niet")
+            await assert_year_writable(db_path, row['datum'])
+
+            cur = await conn.execute(
+                "SELECT COALESCE(MAX(niveau), 0) AS max_niveau "
+                "FROM factuur_herinneringen WHERE factuur_id = ?",
+                (factuur_id,))
+            max_row = await cur.fetchone()
+            new_niveau = (max_row['max_niveau'] or 0) + 1
+
+            await conn.execute(
+                "INSERT INTO factuur_herinneringen "
+                "(factuur_id, verzonden_op, niveau) VALUES (?, ?, ?)",
+                (factuur_id, verzonden_op, new_niveau))
+            await conn.commit()
+            return new_niveau
+        except Exception:
+            await conn.rollback()
+            raise
+
+
+async def delete_last_factuur_herinnering(
+        db_path: Path, factuur_id: int) -> int | None:
+    """Remove the most recent reminder log-entry for ``factuur_id``.
+
+    Use-case: ``add_factuur_herinnering`` logt zodra Mail.app opent, maar
+    de gebruiker kan de compose-window sluiten zonder op Send te klikken.
+    Dan staat er een audit-entry zonder dat er een mail is verzonden.
+    Deze helper draait die laatste entry terug.
+
+    Returns the niveau that was removed, of ``None`` als er geen log was.
+    Atomair (BEGIN IMMEDIATE) en year-locked tegen ``facturen.datum``.
+    """
+    async with get_db_ctx(db_path) as conn:
+        await conn.execute("BEGIN IMMEDIATE")
+        try:
+            cur = await conn.execute(
+                "SELECT datum FROM facturen WHERE id = ?", (factuur_id,))
+            row = await cur.fetchone()
+            if row is None:
+                await conn.rollback()
+                raise ValueError(f"Factuur {factuur_id} bestaat niet")
+            await assert_year_writable(db_path, row['datum'])
+
+            cur = await conn.execute(
+                "SELECT id, niveau FROM factuur_herinneringen "
+                "WHERE factuur_id = ? ORDER BY niveau DESC LIMIT 1",
+                (factuur_id,))
+            last = await cur.fetchone()
+            if last is None:
+                await conn.commit()
+                return None
+
+            await conn.execute(
+                "DELETE FROM factuur_herinneringen WHERE id = ?",
+                (int(last['id']),))
+            await conn.commit()
+            return int(last['niveau'])
+        except Exception:
+            await conn.rollback()
+            raise
+
+
+async def get_factuur_herinneringen(
+        db_path: Path, factuur_id: int) -> list[dict]:
+    """Return all reminders for ``factuur_id`` in niveau-order.
+
+    Each item is a dict with keys ``niveau`` and ``verzonden_op``.
     """
     async with get_db_ctx(db_path) as conn:
         cur = await conn.execute(
-            "SELECT datum FROM facturen WHERE id = ?", (factuur_id,))
-        row = await cur.fetchone()
-    if row is None:
-        return
-    await assert_year_writable(db_path, row['datum'])
+            "SELECT niveau, verzonden_op FROM factuur_herinneringen "
+            "WHERE factuur_id = ? ORDER BY niveau ASC",
+            (factuur_id,))
+        rows = await cur.fetchall()
+    return [{'niveau': r['niveau'], 'verzonden_op': r['verzonden_op']}
+            for r in rows]
+
+
+async def get_herinneringen_by_factuur_ids(
+        db_path: Path, factuur_ids: list[int]) -> dict[int, list[dict]]:
+    """Batch-load reminders for many facturen at once (page-render path).
+
+    Returns ``{factuur_id: [{'niveau': N, 'verzonden_op': ISO}, ...]}``.
+    Missing keys mean no reminders sent. Empty input → empty dict.
+    """
+    if not factuur_ids:
+        return {}
+    placeholders = ','.join('?' for _ in factuur_ids)
     async with get_db_ctx(db_path) as conn:
-        await conn.execute(
-            "UPDATE facturen SET herinnering_datum = ? WHERE id = ?",
-            (datum, factuur_id))
-        await conn.commit()
+        cur = await conn.execute(
+            f"SELECT factuur_id, niveau, verzonden_op "
+            f"FROM factuur_herinneringen "
+            f"WHERE factuur_id IN ({placeholders}) "
+            f"ORDER BY factuur_id, niveau",  # noqa: S608 - placeholders only
+            factuur_ids)
+        rows = await cur.fetchall()
+    result: dict[int, list[dict]] = {}
+    for r in rows:
+        result.setdefault(r['factuur_id'], []).append(
+            {'niveau': r['niveau'], 'verzonden_op': r['verzonden_op']})
+    return result
 
 
 async def delete_factuur(db_path: Path = DB_PATH, factuur_id: int = 0) -> None:

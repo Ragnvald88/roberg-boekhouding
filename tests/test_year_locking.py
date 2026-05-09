@@ -19,7 +19,8 @@ from database import (
     set_afschrijving_override, delete_afschrijving_override,
     get_afschrijving_overrides,
     add_aangifte_document, delete_aangifte_document, get_aangifte_documenten,
-    update_factuur_herinnering_datum,
+    add_factuur_herinnering, delete_last_factuur_herinnering,
+    get_factuur_herinneringen,
     add_klant_locatie, delete_klant_locatie, get_klant_locaties,
     get_db_ctx,
 )
@@ -1033,26 +1034,44 @@ async def test_delete_aangifte_document_nonexistent_does_not_raise(db):
     await delete_aangifte_document(db, doc_id=99999)
 
 
-# === L1.4 (A11): update_factuur_herinnering_datum helper ===
+# === add_factuur_herinnering helper (replaces L1.4 single-field helper) ===
 
 @pytest.mark.asyncio
-async def test_update_factuur_herinnering_datum_writes_value(db):
-    """Concept-year factuur: helper writes the herinnering_datum normally."""
+async def test_add_factuur_herinnering_writes_log_entry(db):
+    """Concept-year factuur: helper appends an audit-log entry with niveau=1."""
     kid = await add_klant(db, naam='Test', tarief_uur=80, retour_km=0)
     fid = await add_factuur(
         db, nummer='2025-H1', klant_id=kid, datum='2025-06-01',
         totaal_bedrag=100.00, status='verstuurd')
-    await update_factuur_herinnering_datum(db, factuur_id=fid, datum='2026-04-27')
-    async with get_db_ctx(db) as conn:
-        cur = await conn.execute(
-            "SELECT herinnering_datum FROM facturen WHERE id = ?", (fid,))
-        row = await cur.fetchone()
-    assert row['herinnering_datum'] == '2026-04-27'
+    new_niveau = await add_factuur_herinnering(
+        db, factuur_id=fid, verzonden_op='2026-04-27')
+    assert new_niveau == 1
+
+    log = await get_factuur_herinneringen(db, fid)
+    assert log == [{'niveau': 1, 'verzonden_op': '2026-04-27'}]
 
 
 @pytest.mark.asyncio
-async def test_update_factuur_herinnering_datum_rejected_in_definitief_year(db):
-    """Helper must guard via the factuur's datum, not the new herinnering datum."""
+async def test_add_factuur_herinnering_increments_niveau(db):
+    """Two calls produce niveau 1 then 2 — log accumulates."""
+    kid = await add_klant(db, naam='Test', tarief_uur=80, retour_km=0)
+    fid = await add_factuur(
+        db, nummer='2025-H2', klant_id=kid, datum='2025-06-01',
+        totaal_bedrag=100.00, status='verstuurd')
+    n1 = await add_factuur_herinnering(
+        db, factuur_id=fid, verzonden_op='2026-04-27')
+    n2 = await add_factuur_herinnering(
+        db, factuur_id=fid, verzonden_op='2026-05-04')
+    assert (n1, n2) == (1, 2)
+
+    log = await get_factuur_herinneringen(db, fid)
+    assert [e['niveau'] for e in log] == [1, 2]
+    assert [e['verzonden_op'] for e in log] == ['2026-04-27', '2026-05-04']
+
+
+@pytest.mark.asyncio
+async def test_add_factuur_herinnering_rejected_in_definitief_year(db):
+    """Helper guards via the factuur's datum, not the verzonden_op date."""
     kid = await add_klant(db, naam='Test', tarief_uur=80, retour_km=0)
     await _seed_fiscale_params_row(db, 2024)
     fid = await add_factuur(
@@ -1060,14 +1079,110 @@ async def test_update_factuur_herinnering_datum_rejected_in_definitief_year(db):
         totaal_bedrag=100.00, status='verstuurd')
     await update_jaarafsluiting_status(db, 2024, 'definitief')
     with pytest.raises(YearLockedError, match='2024'):
-        await update_factuur_herinnering_datum(
-            db, factuur_id=fid, datum='2026-04-27')
-    # Field was not written.
+        await add_factuur_herinnering(
+            db, factuur_id=fid, verzonden_op='2026-04-27')
+    # No log entry was written.
+    log = await get_factuur_herinneringen(db, fid)
+    assert log == []
+
+
+@pytest.mark.asyncio
+async def test_delete_last_factuur_herinnering_removes_max_niveau(db):
+    """delete_last_* removes the highest-niveau row and returns its niveau."""
+    kid = await add_klant(db, naam='Test', tarief_uur=80, retour_km=0)
+    fid = await add_factuur(
+        db, nummer='2025-U1', klant_id=kid, datum='2025-06-01',
+        totaal_bedrag=100.00, status='verstuurd')
+    await add_factuur_herinnering(
+        db, factuur_id=fid, verzonden_op='2026-04-27')
+    await add_factuur_herinnering(
+        db, factuur_id=fid, verzonden_op='2026-05-04')
+
+    removed = await delete_last_factuur_herinnering(db, factuur_id=fid)
+    assert removed == 2
+
+    log = await get_factuur_herinneringen(db, fid)
+    assert log == [{'niveau': 1, 'verzonden_op': '2026-04-27'}]
+
+
+@pytest.mark.asyncio
+async def test_delete_last_factuur_herinnering_returns_none_when_empty(db):
+    """No-op if no log entries exist."""
+    kid = await add_klant(db, naam='Test', tarief_uur=80, retour_km=0)
+    fid = await add_factuur(
+        db, nummer='2025-U2', klant_id=kid, datum='2025-06-01',
+        totaal_bedrag=100.00, status='verstuurd')
+
+    removed = await delete_last_factuur_herinnering(db, factuur_id=fid)
+    assert removed is None
+
+
+@pytest.mark.asyncio
+async def test_delete_last_factuur_herinnering_rejected_in_definitief_year(db):
+    """Year-locked: deletion of a log entry on a definitief-jaar factuur
+    is a stealth metadata mutation — must be refused."""
+    kid = await add_klant(db, naam='Test', tarief_uur=80, retour_km=0)
+    await _seed_fiscale_params_row(db, 2024)
+    fid = await add_factuur(
+        db, nummer='2024-U1', klant_id=kid, datum='2024-12-15',
+        totaal_bedrag=100.00, status='verstuurd')
+    await add_factuur_herinnering(
+        db, factuur_id=fid, verzonden_op='2026-04-27')
+    await update_jaarafsluiting_status(db, 2024, 'definitief')
+
+    with pytest.raises(YearLockedError, match='2024'):
+        await delete_last_factuur_herinnering(db, factuur_id=fid)
+    log = await get_factuur_herinneringen(db, fid)
+    assert len(log) == 1  # entry survives
+
+
+@pytest.mark.asyncio
+async def test_undo_then_resend_picks_up_at_next_niveau(db):
+    """After undo, the next add_* call gets the previously-removed niveau."""
+    kid = await add_klant(db, naam='Test', tarief_uur=80, retour_km=0)
+    fid = await add_factuur(
+        db, nummer='2025-U3', klant_id=kid, datum='2025-06-01',
+        totaal_bedrag=100.00, status='verstuurd')
+    n1 = await add_factuur_herinnering(
+        db, factuur_id=fid, verzonden_op='2026-04-27')
+    n2 = await add_factuur_herinnering(
+        db, factuur_id=fid, verzonden_op='2026-05-04')
+    assert (n1, n2) == (1, 2)
+
+    removed = await delete_last_factuur_herinnering(db, factuur_id=fid)
+    assert removed == 2
+
+    # Resend → niveau 2 again, with new datum.
+    n3 = await add_factuur_herinnering(
+        db, factuur_id=fid, verzonden_op='2026-05-08')
+    assert n3 == 2
+    log = await get_factuur_herinneringen(db, fid)
+    assert [e['niveau'] for e in log] == [1, 2]
+    assert log[1]['verzonden_op'] == '2026-05-08'
+
+
+@pytest.mark.asyncio
+async def test_add_factuur_herinnering_unique_niveau_constraint(db):
+    """UNIQUE(factuur_id, niveau) is the race-condition backstop.
+
+    Manually inserting niveau=1 twice for the same factuur must fail —
+    the UNIQUE constraint is what protects against parallel handler
+    invocations seeing the same MAX(niveau) value.
+    """
+    import sqlite3
+    kid = await add_klant(db, naam='Test', tarief_uur=80, retour_km=0)
+    fid = await add_factuur(
+        db, nummer='2025-H3', klant_id=kid, datum='2025-06-01',
+        totaal_bedrag=100.00, status='verstuurd')
+    await add_factuur_herinnering(
+        db, factuur_id=fid, verzonden_op='2026-04-27')
     async with get_db_ctx(db) as conn:
-        cur = await conn.execute(
-            "SELECT herinnering_datum FROM facturen WHERE id = ?", (fid,))
-        row = await cur.fetchone()
-    assert (row['herinnering_datum'] or '') == ''
+        with pytest.raises(sqlite3.IntegrityError):
+            await conn.execute(
+                "INSERT INTO factuur_herinneringen "
+                "(factuur_id, verzonden_op, niveau) VALUES (?, ?, ?)",
+                (fid, '2026-04-28', 1))
+            await conn.commit()
 
 
 # === L1.5 (A12): delete_klant_locatie year-lock via werkdagen ===
