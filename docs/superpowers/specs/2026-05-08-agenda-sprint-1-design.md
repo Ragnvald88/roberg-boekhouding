@@ -1,6 +1,6 @@
 # Agenda Sprint 1 — Bug-fix + klikbare pills + context-menu
 
-**Status**: Draft (concept)
+**Status**: SHIPPED 2026-05-09 (commit `617798c`) — pytest 1485 → 1516, 4 codex-rondes op spec, 4 codex-rondes op plan, per-task spec+code-quality reviews via subagent-driven-development.
 **Datum**: 2026-05-08
 
 ## Aanleiding

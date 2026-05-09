@@ -62,3 +62,20 @@ Dagpraktijk = teal (#0F766E), anw = paars (#7E22CE), overig = grijs. CSS classes
 ## View-switcher pattern
 
 Tussen `/werkdagen` en `/agenda` cross-link buttons in beide page-toolbars (`Kalenderweergave` ↔ `Lijstweergave`). Geen tab-merge — `/agenda` heeft eigen concepten (recurring patterns, blockers, holidays, urencriterium-projectie) die niet "lijst-filters op werkdagen" zijn.
+
+## Pill-interactiviteit (Sprint 1)
+
+Confirmed werkdag-pills in `_render_month_grid` zijn klikbaar + right-click context-menu. Expected (recurring) pills zijn dat NIET — die bubblen door naar cell-click → Day-Inspector flow.
+
+**Pure helpers** in `pages/agenda.py`:
+- `_pill_context_actions(pill) → list[str]` — visibility-matrix, retourneert action-IDs `['edit', 'duplicate', 'delete'|'naar_facturen'|'ontkoppel']`. Renderer mapt naar labels.
+- `_pill_tooltip(pill) → str` — 3-regel formatter. **Gebruik `ui.tooltip(text).style('white-space: pre-line')`** — Quasar QTooltip default `white-space: normal` collapseert `\n` naar één regel.
+
+**DB-helpers** (`database.py`, year-locked):
+- `get_werkdag_by_id(db, werkdag_id)` — single-row variant van `get_werkdagen` voor edit/duplicate-flows die volle `Werkdag`-shape vereisen (niet de lichte `WerkdagPill`).
+- `duplicate_werkdag(db, werkdag_id, target_datum)` — kopieert klant/code/uren/locatie/etc., wist `factuurnummer`. **`is None`-checks** ipv `or default` voor `km_tarief` en `urennorm` — ANW heeft `km_tarief=0`, achterwacht `urennorm=0`; truthy-falsy-check zou die platslaan.
+- `unlink_werkdag_from_factuur(db, werkdag_id)` — atomair (`BEGIN IMMEDIATE`), alleen toegestaan voor concept-factuur of orphan-link (`factuur_id IS NULL`). Boekhoudkundig: NIET voor verstuurd/betaald.
+
+**Click-bubbling fix** (regel 305 area): pill zit binnen clickable cell. Click handler MOET `js_handler='(e) => { e.stopPropagation(); emit(); }'` — anders fired ook cell-click → day-select rerender bovenop edit-dialog.
+
+**handle_pill_ontkoppel race-protection**: pre-dialog refetch is alleen voor UI-text (orphan vs concept). Atomic `unlink_werkdag_from_factuur` is de echte gate — als status tussen render en klik wijzigt naar verstuurd, weigert de helper alsnog.
