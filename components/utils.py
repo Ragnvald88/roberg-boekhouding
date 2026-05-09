@@ -125,6 +125,31 @@ def format_datum_jaar_nl(d: date) -> str:
     return f'{d.day} {_DUTCH_MAANDEN_KORT[d.month - 1]} {d.year}'
 
 
+_DUTCH_WEEKDAGEN = (
+    'maandag', 'dinsdag', 'woensdag', 'donderdag',
+    'vrijdag', 'zaterdag', 'zondag',
+)
+_DUTCH_MAANDEN_LANG = (
+    'januari', 'februari', 'maart', 'april', 'mei', 'juni',
+    'juli', 'augustus', 'september', 'oktober', 'november', 'december',
+)
+
+
+def format_datum_lang(iso_date: str) -> str:
+    """ISO YYYY-MM-DD → 'weekdag D maand YYYY' (Nederlands lang).
+
+    - '2026-05-09' → 'zaterdag 9 mei 2026'
+    - Lege of ongeldige input → ''
+    """
+    if not iso_date:
+        return ''
+    try:
+        d = date.fromisoformat(iso_date)
+    except (ValueError, TypeError):
+        return ''
+    return f'{_DUTCH_WEEKDAGEN[d.weekday()]} {d.day} {_DUTCH_MAANDEN_LANG[d.month - 1]} {d.year}'
+
+
 def contrast_text_color(hex_color: str) -> str:
     """Return 'white' or 'black' as readable text-color on hex_color background.
 
