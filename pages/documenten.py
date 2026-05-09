@@ -162,8 +162,8 @@ async def _auto_backfill_va_for_jaar(jaar: int) -> None:
     Soft-fail: parse-error op één doc blokkeert niet anderen. Year-locked:
     process_voorlopige_aanslag_upload weigert per-doc.
     """
-    from services.va_backfill import backfill_voorlopige_aanslag_documents
-    summary = await backfill_voorlopige_aanslag_documents(DB_PATH, jaar)
+    from services.va_backfill import ensure_va_backfill
+    summary = await ensure_va_backfill(DB_PATH, jaar)
     if summary.total == 0:
         return  # niets te doen, silent
     # Alleen succes-notifies — failed/skipped/locked blijven als log-only.
@@ -290,13 +290,22 @@ async def _post_save_va_parse(
             type='info')
         return
 
-    # 6. inserted / replaced
-    action_label = (
-        'vervangen' if result['action'] == 'replaced' else 'bijgewerkt')
-    ui.notify(
-        f"VA {parsed.soort.upper()} {action_label} naar "
-        f"€{parsed.bedrag:.0f}, {parsed.termijnen} termijnen",
-        type='positive')
+    # 6. inserted / replaced / parsed_archived
+    if result['action'] == 'parsed_archived':
+        # Manual was actief — nieuwe parsed-data ligt in archief.
+        ui.notify(
+            f'PDF gelezen ({parsed.soort.upper()}: €{parsed.bedrag:.0f}, '
+            f'{parsed.termijnen} termijnen) maar handmatige invoer blijft '
+            f'actief. Verwijder handmatige invoer in /va-tracker om de '
+            f'PDF-data te activeren.',
+            type='info', timeout=8000)
+    else:
+        action_label = (
+            'vervangen' if result['action'] == 'replaced' else 'bijgewerkt')
+        ui.notify(
+            f"VA {parsed.soort.upper()} {action_label} naar "
+            f"€{parsed.bedrag:.0f}, {parsed.termijnen} termijnen",
+            type='positive')
 
 
 @ui.page('/documenten')

@@ -58,6 +58,21 @@ class BackfillSummary:
                 + len(self.failed) + len(self.locked))
 
 
+async def ensure_va_backfill(
+    db_path: Path = DB_PATH, jaar: int = 0,
+) -> BackfillSummary:
+    """Public alias voor backfill_voorlopige_aanslag_documents.
+
+    Bedoeld als de single entry-point voor pages die page-load auto-process
+    willen triggeren. /documenten en /va-tracker roepen beide deze helper —
+    één functie, één naam, één gedrag.
+
+    Idempotent: bij geen ongekoppelde docs is dit een goedkope LEFT-JOIN
+    + early return.
+    """
+    return await backfill_voorlopige_aanslag_documents(db_path, jaar)
+
+
 async def backfill_voorlopige_aanslag_documents(
     db_path: Path = DB_PATH, jaar: int = 0,
 ) -> BackfillSummary:

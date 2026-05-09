@@ -2508,6 +2508,338 @@ async def test_process_voorlopige_aanslag_upload_idempotent_on_duplicate_aanslag
 
 
 @pytest.mark.asyncio
+async def test_process_voorlopige_aanslag_upload_skips_when_manual_has_same_aanslagnummer(db):
+    """Manual VA met aanslagnummer X → daarna PDF-upload zelfde X → skip
+    zonder TypeError.
+
+    Regression: vóór deze fix deed line 3304 ``int(existing['document_id'])``
+    op een NULL-veld (manual VA → document_id IS NULL na mig 42), wat
+    crashte met TypeError. De caller (documenten.py) vangt alleen
+    ValueError/YearLockedError af, dus dat zou de upload-flow laten
+    crashen voor de gebruiker.
+    """
+    from database import (
+        upsert_manual_voorlopige_aanslag,
+        process_voorlopige_aanslag_upload,
+        get_active_voorlopige_aanslag,
+    )
+    await upsert_fiscale_params(
+        db_path=db, **_minimal_fiscale_params_kwargs(2026))
+
+    # 1. Handmatige VA met een aanslagnummer dat een gebruiker daarna
+    # ook in een PDF tegenkomt.
+    aanslagnr = '1244.12.646.H.60.01'
+    manual = await upsert_manual_voorlopige_aanslag(
+        db_path=db, jaar=2026, soort='ib',
+        aanslagnummer=aanslagnr, bedrag=12345.67,
+        betalingskenmerk='0124412647060001',
+        dagtekening=_date_cls(2026, 1, 31), termijnen=10,
+    )
+    manual_beschikking_id = manual['beschikking_id']
+
+    # 2. PDF-upload met zelfde aanslagnummer.
+    doc = await _add_va_doc(db, 2026, 'ib')
+    parsed = _FakeParsed(
+        jaar=2026, soort='ib', aanslagnummer=aanslagnr,
+        dagtekening=_date_cls(2026, 1, 31), bedrag=30670.0,
+        betalingskenmerk='0124412647060001', termijnen=11)
+    result = await process_voorlopige_aanslag_upload(
+        db_path=db, document_id=doc, parsed=parsed)
+
+    # Skip-resultaat moet NULL existing_document_id meegeven (manual heeft
+    # geen doc) — caller behandelt None == doc_id als False → echte
+    # duplicate-cleanup, manual blijft winnen.
+    assert result['action'] == 'skip'
+    assert result['beschikking_id'] == manual_beschikking_id
+    assert result['existing_document_id'] is None
+
+    # Active blijft de manual rij (document_id IS NULL).
+    active = await get_active_voorlopige_aanslag(db, 2026, 'ib')
+    assert active['id'] == manual_beschikking_id
+    assert active['document_id'] is None
+    assert active['bedrag'] == 12345.67
+
+
+@pytest.mark.asyncio
+async def test_upsert_manual_voorlopige_aanslag_no_existing(db):
+    """Manual create vanaf scratch (geen vorige active) — fp gesynced."""
+    from database import (
+        upsert_manual_voorlopige_aanslag, get_active_voorlopige_aanslag,
+        get_fiscale_params,
+    )
+    await upsert_fiscale_params(
+        db_path=db, **_minimal_fiscale_params_kwargs(2026))
+
+    result = await upsert_manual_voorlopige_aanslag(
+        db_path=db, jaar=2026, soort='ib',
+        aanslagnummer='MANUAL-2026-IB-A',
+        bedrag=12345.67,
+        betalingskenmerk='0124412647060001',
+        dagtekening=_date_cls(2026, 1, 31),
+        termijnen=10,
+    )
+    assert result['action'] == 'manual_inserted'
+
+    active = await get_active_voorlopige_aanslag(db, 2026, 'ib')
+    assert active is not None
+    assert active['document_id'] is None  # manual marker
+    assert active['bedrag'] == 12345.67
+    assert active['termijnen'] == 10
+
+    fp = await get_fiscale_params(db, 2026)
+    assert fp.voorlopige_aanslag_betaald == 12345.67
+    assert fp.voorlopige_aanslag_ib_termijnen == 10
+
+
+@pytest.mark.asyncio
+async def test_upsert_manual_replaces_active_parsed_with_archive(db):
+    """Manual entry over een active parsed → parsed wordt gearchiveerd
+    (is_active=0), manual wordt nieuwe active."""
+    from database import (
+        process_voorlopige_aanslag_upload, upsert_manual_voorlopige_aanslag,
+        get_active_voorlopige_aanslag,
+    )
+    await upsert_fiscale_params(
+        db_path=db, **_minimal_fiscale_params_kwargs(2026))
+
+    doc = await _add_va_doc(db, 2026, 'ib')
+    parsed = _FakeParsed(
+        jaar=2026, soort='ib', aanslagnummer='1244.12.646.H.60.01',
+        dagtekening=_date_cls(2026, 1, 31), bedrag=30670.0,
+        betalingskenmerk='0124412647060001', termijnen=11)
+    r1 = await process_voorlopige_aanslag_upload(
+        db_path=db, document_id=doc, parsed=parsed)
+    assert r1['action'] == 'inserted'
+
+    # Manual override
+    await upsert_manual_voorlopige_aanslag(
+        db_path=db, jaar=2026, soort='ib',
+        aanslagnummer='OVERRIDE-1', bedrag=99999.0,
+        betalingskenmerk='', dagtekening=_date_cls(2026, 1, 31),
+        termijnen=11,
+    )
+    active = await get_active_voorlopige_aanslag(db, 2026, 'ib')
+    assert active['document_id'] is None
+    assert active['bedrag'] == 99999.0
+
+    # Parsed-archief check: 2 rows total, only manual active
+    async with get_db_ctx(db) as conn:
+        cur = await conn.execute(
+            "SELECT COUNT(*) AS n FROM voorlopige_aanslagen "
+            "WHERE jaar=2026 AND soort='ib'")
+        assert (await cur.fetchone())['n'] == 2
+        cur = await conn.execute(
+            "SELECT COUNT(*) AS n FROM voorlopige_aanslagen "
+            "WHERE jaar=2026 AND soort='ib' AND is_active=1")
+        assert (await cur.fetchone())['n'] == 1
+
+
+@pytest.mark.asyncio
+async def test_upsert_manual_in_place_update_same_aanslagnummer(db):
+    """Tweede call met zelfde aanslagnummer + (jaar, soort) → update-in-place
+    (action='manual_updated'), geen extra row."""
+    from database import (
+        upsert_manual_voorlopige_aanslag, get_active_voorlopige_aanslag,
+    )
+    await upsert_fiscale_params(
+        db_path=db, **_minimal_fiscale_params_kwargs(2026))
+
+    r1 = await upsert_manual_voorlopige_aanslag(
+        db_path=db, jaar=2026, soort='ib',
+        aanslagnummer='SAME-NR', bedrag=10000.0,
+        betalingskenmerk='', dagtekening=_date_cls(2026, 1, 31),
+        termijnen=11,
+    )
+    assert r1['action'] == 'manual_inserted'
+    first_id = r1['beschikking_id']
+
+    r2 = await upsert_manual_voorlopige_aanslag(
+        db_path=db, jaar=2026, soort='ib',
+        aanslagnummer='SAME-NR', bedrag=20000.0,
+        betalingskenmerk='', dagtekening=_date_cls(2026, 2, 15),
+        termijnen=10,
+    )
+    assert r2['action'] == 'manual_updated'
+    assert r2['beschikking_id'] == first_id
+
+    active = await get_active_voorlopige_aanslag(db, 2026, 'ib')
+    assert active['bedrag'] == 20000.0
+    assert active['termijnen'] == 10
+
+
+@pytest.mark.asyncio
+async def test_upsert_manual_rejects_aanslagnummer_used_elsewhere(db):
+    """Aanslagnummer al in gebruik onder andere (jaar, soort) of als parsed
+    → ValueError (caller moet kiezen)."""
+    from database import (
+        process_voorlopige_aanslag_upload, upsert_manual_voorlopige_aanslag,
+    )
+    await upsert_fiscale_params(
+        db_path=db, **_minimal_fiscale_params_kwargs(2026))
+
+    doc = await _add_va_doc(db, 2026, 'ib')
+    parsed = _FakeParsed(
+        jaar=2026, soort='ib', aanslagnummer='1244.12.646.H.60.01',
+        dagtekening=_date_cls(2026, 1, 31), bedrag=30670.0,
+        betalingskenmerk='0124412647060001', termijnen=11)
+    await process_voorlopige_aanslag_upload(
+        db_path=db, document_id=doc, parsed=parsed)
+
+    # Try manual met zelfde aanslagnummer onder zvw → conflict
+    with pytest.raises(ValueError, match='al in gebruik'):
+        await upsert_manual_voorlopige_aanslag(
+            db_path=db, jaar=2026, soort='zvw',
+            aanslagnummer='1244.12.646.H.60.01', bedrag=2808.0,
+            betalingskenmerk='', dagtekening=_date_cls(2026, 1, 31),
+            termijnen=11,
+        )
+
+
+@pytest.mark.asyncio
+async def test_upsert_manual_validates_input(db):
+    """Form-validation: bedrag, aanslagnummer, termijnen, kenmerk."""
+    from database import upsert_manual_voorlopige_aanslag
+    await upsert_fiscale_params(
+        db_path=db, **_minimal_fiscale_params_kwargs(2026))
+
+    base = dict(
+        db_path=db, jaar=2026, soort='ib',
+        aanslagnummer='VALID-NR', bedrag=1000.0, betalingskenmerk='',
+        dagtekening=_date_cls(2026, 1, 31), termijnen=11,
+    )
+    # Soort onbekend
+    with pytest.raises(ValueError, match='Onbekende VA soort'):
+        await upsert_manual_voorlopige_aanslag(**{**base, 'soort': 'btw'})
+    # Bedrag <= 0
+    with pytest.raises(ValueError, match='Bedrag'):
+        await upsert_manual_voorlopige_aanslag(**{**base, 'bedrag': 0})
+    # Aanslagnummer < 5 chars
+    with pytest.raises(ValueError, match='Aanslagnummer'):
+        await upsert_manual_voorlopige_aanslag(**{**base, 'aanslagnummer': 'ab'})
+    # Termijnen out of range
+    with pytest.raises(ValueError, match='termijnen'):
+        await upsert_manual_voorlopige_aanslag(**{**base, 'termijnen': 13})
+    # Kenmerk wrong length
+    with pytest.raises(ValueError, match='Betalingskenmerk'):
+        await upsert_manual_voorlopige_aanslag(**{**base,
+                                                  'betalingskenmerk': '12345'})
+
+
+@pytest.mark.asyncio
+async def test_remove_manual_restores_archived_parsed(db):
+    """Remove manual met parsed-archief → parsed weer active + fp gesynced."""
+    from database import (
+        process_voorlopige_aanslag_upload, upsert_manual_voorlopige_aanslag,
+        remove_manual_voorlopige_aanslag, get_active_voorlopige_aanslag,
+        get_fiscale_params,
+    )
+    await upsert_fiscale_params(
+        db_path=db, **_minimal_fiscale_params_kwargs(2026))
+
+    # Setup: parsed → manual override
+    doc = await _add_va_doc(db, 2026, 'ib')
+    parsed = _FakeParsed(
+        jaar=2026, soort='ib', aanslagnummer='1244.12.646.H.60.01',
+        dagtekening=_date_cls(2026, 1, 31), bedrag=30670.0,
+        betalingskenmerk='0124412647060001', termijnen=11)
+    await process_voorlopige_aanslag_upload(
+        db_path=db, document_id=doc, parsed=parsed)
+    await upsert_manual_voorlopige_aanslag(
+        db_path=db, jaar=2026, soort='ib',
+        aanslagnummer='MANUAL', bedrag=99999.0,
+        betalingskenmerk='', dagtekening=_date_cls(2026, 1, 31),
+        termijnen=11,
+    )
+
+    # Remove manual → parsed wordt hersteld
+    result = await remove_manual_voorlopige_aanslag(
+        db_path=db, jaar=2026, soort='ib')
+    assert result['action'] == 'restored_parsed'
+
+    active = await get_active_voorlopige_aanslag(db, 2026, 'ib')
+    assert active['document_id'] == doc
+    assert active['bedrag'] == 30670.0
+
+    fp = await get_fiscale_params(db, 2026)
+    assert fp.voorlopige_aanslag_betaald == 30670.0
+
+
+@pytest.mark.asyncio
+async def test_remove_manual_clears_fp_when_no_archive(db):
+    """Remove manual zonder parsed-archief → fp gecleared."""
+    from database import (
+        upsert_manual_voorlopige_aanslag, remove_manual_voorlopige_aanslag,
+        get_active_voorlopige_aanslag, get_fiscale_params,
+    )
+    await upsert_fiscale_params(
+        db_path=db, **_minimal_fiscale_params_kwargs(2026))
+
+    await upsert_manual_voorlopige_aanslag(
+        db_path=db, jaar=2026, soort='ib',
+        aanslagnummer='MANUAL-ONLY', bedrag=12345.0,
+        betalingskenmerk='', dagtekening=_date_cls(2026, 1, 31),
+        termijnen=11,
+    )
+    result = await remove_manual_voorlopige_aanslag(
+        db_path=db, jaar=2026, soort='ib')
+    assert result['action'] == 'cleared'
+
+    assert await get_active_voorlopige_aanslag(db, 2026, 'ib') is None
+    fp = await get_fiscale_params(db, 2026)
+    assert fp.voorlopige_aanslag_betaald == 0
+
+
+@pytest.mark.asyncio
+async def test_remove_manual_raises_when_no_active_manual(db):
+    """Remove manual zonder active manual → ValueError (caller-fout)."""
+    from database import remove_manual_voorlopige_aanslag
+    await upsert_fiscale_params(
+        db_path=db, **_minimal_fiscale_params_kwargs(2026))
+
+    with pytest.raises(ValueError, match='Geen actieve handmatige'):
+        await remove_manual_voorlopige_aanslag(
+            db_path=db, jaar=2026, soort='ib')
+
+
+@pytest.mark.asyncio
+async def test_process_upload_parsed_archived_when_manual_active(db):
+    """Active manual + nieuwe PDF-upload → action='parsed_archived',
+    nieuwe rij is_active=0, manual blijft winnen."""
+    from database import (
+        upsert_manual_voorlopige_aanslag, process_voorlopige_aanslag_upload,
+        get_active_voorlopige_aanslag, get_fiscale_params,
+    )
+    await upsert_fiscale_params(
+        db_path=db, **_minimal_fiscale_params_kwargs(2026))
+
+    # Manual eerst
+    await upsert_manual_voorlopige_aanslag(
+        db_path=db, jaar=2026, soort='ib',
+        aanslagnummer='MANUAL-FIRST', bedrag=12000.0,
+        betalingskenmerk='', dagtekening=_date_cls(2026, 1, 31),
+        termijnen=11,
+    )
+    # Dan PDF upload
+    doc = await _add_va_doc(db, 2026, 'ib')
+    parsed = _FakeParsed(
+        jaar=2026, soort='ib', aanslagnummer='1244.12.646.H.60.01',
+        dagtekening=_date_cls(2026, 1, 31), bedrag=30670.0,
+        betalingskenmerk='0124412647060001', termijnen=11)
+    result = await process_voorlopige_aanslag_upload(
+        db_path=db, document_id=doc, parsed=parsed)
+    assert result['action'] == 'parsed_archived'
+
+    # Active blijft manual
+    active = await get_active_voorlopige_aanslag(db, 2026, 'ib')
+    assert active['document_id'] is None
+    assert active['bedrag'] == 12000.0
+
+    # fp blijft op manual-waarden
+    fp = await get_fiscale_params(db, 2026)
+    assert fp.voorlopige_aanslag_betaald == 12000.0
+
+
+@pytest.mark.asyncio
 async def test_get_active_voorlopige_aanslag_returns_active_only(db):
     """get_active filtert op is_active=1 — inactive rows worden niet returned."""
     from database import (

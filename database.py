@@ -3476,6 +3476,10 @@ async def process_voorlopige_aanslag_upload(
             # hetzelfde doc — call A insert, call B ziet duplicate. Zonder
             # existing_document_id zou B het juist net-ingevoegde doc deleten
             # en daarmee A's net gemaakte VA-row CASCADE-mee-deleten.
+            # Mig 42 maakt document_id nullable (handmatige VA-rij heeft
+            # NULL): existing_document_id mag dan None zijn. Caller behandelt
+            # `None == doc_id` als False → echte duplicate → cleanup van
+            # net-geüploade doc (manual blijft winnen, gewenst gedrag).
             cur = await conn.execute(
                 "SELECT id, document_id FROM voorlopige_aanslagen "
                 "WHERE aanslagnummer = ?",
@@ -3484,53 +3488,298 @@ async def process_voorlopige_aanslag_upload(
             existing = await cur.fetchone()
             if existing:
                 await conn.execute("ROLLBACK")
+                existing_doc_id = existing['document_id']
                 return {'action': 'skip',
                         'beschikking_id': int(existing['id']),
-                        'existing_document_id': int(existing['document_id'])}
+                        'existing_document_id': (
+                            int(existing_doc_id)
+                            if existing_doc_id is not None else None)}
 
-            # 3. Detecteer huidige active → 'replaced' vs 'inserted'.
+            # 3. Detecteer huidige active. Als active een manual entry is
+            # (document_id IS NULL), gaat de nieuwe parsed-rij als
+            # is_active=0 in — manual blijft winnen tot user 'm verwijdert
+            # via remove_manual_voorlopige_aanslag. Deze invariant zorgt
+            # dat een handmatige correctie niet stilletjes overschreven
+            # wordt door een later (her)geprocesste PDF.
             cur = await conn.execute(
-                "SELECT id FROM voorlopige_aanslagen "
+                "SELECT id, document_id FROM voorlopige_aanslagen "
                 "WHERE jaar = ? AND soort = ? AND is_active = 1",
                 (parsed.jaar, parsed.soort),
             )
             old_active = await cur.fetchone()
-            action = 'replaced' if old_active else 'inserted'
+            manual_active = (
+                old_active is not None
+                and old_active['document_id'] is None
+            )
 
-            # 4. Deactivate oude active (max 1 dankzij idx_va_active).
-            if old_active:
-                await conn.execute(
-                    "UPDATE voorlopige_aanslagen SET is_active = 0 "
-                    "WHERE id = ?",
-                    (int(old_active['id']),),
-                )
+            if manual_active:
+                # Manual wint — nieuwe parsed gaat archive-modus in.
+                insert_active = 0
+                action = 'parsed_archived'
+            else:
+                # Standaard: deactivate vorige parsed-active + nieuwe wordt
+                # active. (max 1 active dankzij idx_va_active partial idx.)
+                insert_active = 1
+                action = 'replaced' if old_active else 'inserted'
+                if old_active:
+                    await conn.execute(
+                        "UPDATE voorlopige_aanslagen SET is_active = 0 "
+                        "WHERE id = ?",
+                        (int(old_active['id']),),
+                    )
 
-            # 5. INSERT nieuwe active.
+            # 5. INSERT nieuwe rij. is_active wordt dynamisch gezet
+            # afhankelijk van of er een active manual is.
             cur = await conn.execute(
                 """INSERT INTO voorlopige_aanslagen
                    (jaar, soort, document_id, aanslagnummer, dagtekening,
                     bedrag, betalingskenmerk, termijnen, is_active)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (parsed.jaar, parsed.soort, document_id,
                  parsed.aanslagnummer, parsed.dagtekening.isoformat(),
                  float(parsed.bedrag), parsed.betalingskenmerk,
-                 int(parsed.termijnen)),
+                 int(parsed.termijnen), insert_active),
             )
             beschikking_id = cur.lastrowid
 
-            # 6. Sync fiscale_params. Veldnamen via _va_fp_field_names
-            # gevalideerd → veilig om te string-substitueren in SQL
-            # (bedrag/termijnen-waarden blijven ?-params).
-            await conn.execute(
-                "UPDATE fiscale_params SET "
-                f"{fp_bedrag_field} = ?, {fp_termijnen_field} = ? "
-                "WHERE jaar = ?",
-                (float(parsed.bedrag), int(parsed.termijnen), parsed.jaar),
-            )
+            # 6. Sync fiscale_params alleen als nieuwe rij actief wordt.
+            # Bij parsed_archived (manual wint) blijft fp op manual-waarden.
+            if insert_active == 1:
+                await conn.execute(
+                    "UPDATE fiscale_params SET "
+                    f"{fp_bedrag_field} = ?, {fp_termijnen_field} = ? "
+                    "WHERE jaar = ?",
+                    (float(parsed.bedrag), int(parsed.termijnen), parsed.jaar),
+                )
 
             await conn.execute("COMMIT")
             return {'action': action,
                     'beschikking_id': int(beschikking_id)}
+        except Exception:
+            await conn.execute("ROLLBACK")
+            raise
+
+
+async def upsert_manual_voorlopige_aanslag(
+    db_path: Path = DB_PATH,
+    *,
+    jaar: int,
+    soort: str,
+    aanslagnummer: str,
+    bedrag: float,
+    betalingskenmerk: str = '',
+    dagtekening,  # date
+    termijnen: int = 11,
+) -> dict:
+    """Atomic create-or-replace van een handmatige voorlopige_aanslagen-rij.
+
+    Gemarkeerd via document_id IS NULL. Vorige active rij voor (jaar, soort)
+    — parsed of manual — wordt gedeactiveerd. fp wordt gesynced naar de
+    handmatige waarden.
+
+    Validation:
+      - soort ∈ {'ib', 'zvw'}
+      - bedrag > 0
+      - aanslagnummer min 5 chars (BD-formaat is 18+ maar we accepteren
+        synthetische placeholders zonder UI-blokkade)
+      - termijnen ∈ [1, 12]
+      - betalingskenmerk: leeg of exact 16 digits (genormaliseerd)
+
+    Existing-aanslagnummer-resolution:
+      - Match same (jaar, soort) + manual: in-place update + reactivate
+      - Match elders: ValueError (UNIQUE-conflict — user moet kiezen)
+
+    Returns: {'action': 'manual_inserted'|'manual_updated',
+              'beschikking_id': int}
+    """
+    soort = str(soort).lower().strip()
+    if soort not in ('ib', 'zvw'):
+        raise ValueError(
+            f"Onbekende VA soort: {soort!r} (verwacht 'ib' of 'zvw')")
+    if not (bedrag and float(bedrag) > 0):
+        raise ValueError("Bedrag moet groter dan 0 zijn")
+    aanslagnummer = (aanslagnummer or '').strip()
+    if len(aanslagnummer) < 5:
+        raise ValueError(
+            "Aanslagnummer is te kort (minimaal 5 tekens, "
+            "BD-formaat 1234.12.345.H.60.01)")
+    if not (1 <= int(termijnen) <= 12):
+        raise ValueError(
+            f"Aantal termijnen moet tussen 1 en 12 liggen (kreeg {termijnen})")
+    kenmerk = (betalingskenmerk or '').strip()
+    if kenmerk:
+        norm = _normalize_va_kenmerk(kenmerk)
+        if len(norm) != 16:
+            raise ValueError(
+                "Betalingskenmerk moet leeg of exact 16 cijfers zijn "
+                "(BD-formaat 0124 4126 4706 0001)")
+        kenmerk = norm
+
+    await assert_year_writable(db_path, jaar)
+    fp_bedrag_field, fp_termijnen_field = _va_fp_field_names(soort)
+
+    async with get_db_ctx(db_path) as conn:
+        await conn.execute("BEGIN IMMEDIATE")
+        try:
+            # Aanslagnummer-uniqueness: existing row for this number?
+            cur = await conn.execute(
+                "SELECT id, jaar, soort, document_id "
+                "FROM voorlopige_aanslagen WHERE aanslagnummer = ?",
+                (aanslagnummer,),
+            )
+            existing = await cur.fetchone()
+            if existing is not None:
+                same_slot = (int(existing['jaar']) == int(jaar)
+                             and existing['soort'] == soort)
+                is_manual = existing['document_id'] is None
+                if not (same_slot and is_manual):
+                    # Conflict: aanslagnummer al in gebruik elders/parsed.
+                    bron = ('PDF-beschikking' if not is_manual
+                            else 'andere handmatige invoer')
+                    raise ValueError(
+                        f"Aanslagnummer {aanslagnummer!r} is al in gebruik "
+                        f"({bron}, jaar {existing['jaar']} "
+                        f"{existing['soort'].upper()}). Verwijder die eerst "
+                        f"of kies een ander aanslagnummer."
+                    )
+                # Same slot + manual → update-in-place
+                await conn.execute(
+                    """UPDATE voorlopige_aanslagen SET
+                       bedrag = ?, betalingskenmerk = ?, dagtekening = ?,
+                       termijnen = ?, is_active = 1
+                       WHERE id = ?""",
+                    (float(bedrag), kenmerk, dagtekening.isoformat(),
+                     int(termijnen), int(existing['id'])),
+                )
+                # Deactivate andere active voor (jaar, soort) — defensive.
+                await conn.execute(
+                    "UPDATE voorlopige_aanslagen SET is_active = 0 "
+                    "WHERE jaar = ? AND soort = ? AND id != ? "
+                    "  AND is_active = 1",
+                    (int(jaar), soort, int(existing['id'])),
+                )
+                await conn.execute(
+                    "UPDATE fiscale_params SET "
+                    f"{fp_bedrag_field} = ?, {fp_termijnen_field} = ? "
+                    "WHERE jaar = ?",
+                    (float(bedrag), int(termijnen), int(jaar)),
+                )
+                await conn.execute("COMMIT")
+                return {'action': 'manual_updated',
+                        'beschikking_id': int(existing['id'])}
+
+            # No existing aanslagnummer → fresh INSERT, deactivate vorige.
+            await conn.execute(
+                "UPDATE voorlopige_aanslagen SET is_active = 0 "
+                "WHERE jaar = ? AND soort = ? AND is_active = 1",
+                (int(jaar), soort),
+            )
+            cur = await conn.execute(
+                """INSERT INTO voorlopige_aanslagen
+                   (jaar, soort, document_id, aanslagnummer, dagtekening,
+                    bedrag, betalingskenmerk, termijnen, is_active)
+                   VALUES (?, ?, NULL, ?, ?, ?, ?, ?, 1)""",
+                (int(jaar), soort, aanslagnummer, dagtekening.isoformat(),
+                 float(bedrag), kenmerk, int(termijnen)),
+            )
+            beschikking_id = cur.lastrowid
+            await conn.execute(
+                "UPDATE fiscale_params SET "
+                f"{fp_bedrag_field} = ?, {fp_termijnen_field} = ? "
+                "WHERE jaar = ?",
+                (float(bedrag), int(termijnen), int(jaar)),
+            )
+            await conn.execute("COMMIT")
+            return {'action': 'manual_inserted',
+                    'beschikking_id': int(beschikking_id)}
+        except Exception:
+            await conn.execute("ROLLBACK")
+            raise
+
+
+async def remove_manual_voorlopige_aanslag(
+    db_path: Path = DB_PATH,
+    *,
+    jaar: int,
+    soort: str,
+) -> dict:
+    """Verwijder de actieve handmatige beschikking voor (jaar, soort).
+
+    Restore-pad: als er een gearchiveerde parsed-rij bestaat (is_active=0,
+    document_id IS NOT NULL), wordt die geactiveerd en fp gesynced naar de
+    parsed-waarden. Anders wordt fp gecleared (bedrag=0, termijnen=11).
+
+    Raises ValueError als er geen actieve manual voor (jaar, soort) is —
+    voorkomt dat de UI per ongeluk een parsed-rij deactiveert.
+
+    Returns: {'action': 'restored_parsed'|'cleared',
+              'beschikking_id': int|None}
+    """
+    soort = str(soort).lower().strip()
+    if soort not in ('ib', 'zvw'):
+        raise ValueError(
+            f"Onbekende VA soort: {soort!r} (verwacht 'ib' of 'zvw')")
+
+    await assert_year_writable(db_path, jaar)
+    fp_bedrag_field, fp_termijnen_field = _va_fp_field_names(soort)
+
+    async with get_db_ctx(db_path) as conn:
+        await conn.execute("BEGIN IMMEDIATE")
+        try:
+            # 1. Active manual zoeken.
+            cur = await conn.execute(
+                "SELECT id FROM voorlopige_aanslagen "
+                "WHERE jaar = ? AND soort = ? AND is_active = 1 "
+                "  AND document_id IS NULL",
+                (int(jaar), soort),
+            )
+            manual = await cur.fetchone()
+            if manual is None:
+                raise ValueError(
+                    f"Geen actieve handmatige beschikking voor "
+                    f"jaar={jaar} soort={soort.upper()}")
+
+            # 2. Deactivate manual.
+            await conn.execute(
+                "UPDATE voorlopige_aanslagen SET is_active = 0 WHERE id = ?",
+                (int(manual['id']),),
+            )
+
+            # 3. Restore meest recente gearchiveerde parsed (als bestaat).
+            cur = await conn.execute(
+                "SELECT id, bedrag, termijnen FROM voorlopige_aanslagen "
+                "WHERE jaar = ? AND soort = ? AND is_active = 0 "
+                "  AND document_id IS NOT NULL "
+                "ORDER BY created_at DESC, id DESC LIMIT 1",
+                (int(jaar), soort),
+            )
+            parsed = await cur.fetchone()
+            if parsed is not None:
+                await conn.execute(
+                    "UPDATE voorlopige_aanslagen SET is_active = 1 "
+                    "WHERE id = ?",
+                    (int(parsed['id']),),
+                )
+                await conn.execute(
+                    "UPDATE fiscale_params SET "
+                    f"{fp_bedrag_field} = ?, {fp_termijnen_field} = ? "
+                    "WHERE jaar = ?",
+                    (float(parsed['bedrag']), int(parsed['termijnen']),
+                     int(jaar)),
+                )
+                await conn.execute("COMMIT")
+                return {'action': 'restored_parsed',
+                        'beschikking_id': int(parsed['id'])}
+
+            # 4. Geen parsed-archief — fp clearen.
+            await conn.execute(
+                "UPDATE fiscale_params SET "
+                f"{fp_bedrag_field} = 0, {fp_termijnen_field} = 11 "
+                "WHERE jaar = ?",
+                (int(jaar),),
+            )
+            await conn.execute("COMMIT")
+            return {'action': 'cleared', 'beschikking_id': None}
         except Exception:
             await conn.execute("ROLLBACK")
             raise
@@ -3610,25 +3859,38 @@ async def delete_aangifte_document_with_va_cleanup(
                 "DELETE FROM aangifte_documenten WHERE id = ?", (doc_id,))
 
             # 2. Voor VA-docs: check of andere actieve beschikking
-            # voor (jaar, soort) overblijft; zo nee → clear fp.
+            # (manual of parsed) voor (jaar, soort) overblijft; zo nee →
+            # clear fp. Manual-active wordt door de UI als bron getoond,
+            # dus die blijft fp-truth en moet NIET worden gewist.
             if is_va:
                 cur = await conn.execute(
-                    "SELECT id FROM voorlopige_aanslagen "
+                    "SELECT id, bedrag, termijnen FROM voorlopige_aanslagen "
                     "WHERE jaar = ? AND soort = ? AND is_active = 1",
                     (va_jaar, va_soort),
                 )
                 remaining = await cur.fetchone()
                 if remaining is None:
-                    # Geen andere actieve VA voor (jaar, soort) — reset
-                    # fp om stale waarde te voorkomen. Veldnamen zijn
-                    # via _va_fp_field_names gevalideerd; waarden zijn
-                    # ?-params.
+                    # Geen actieve VA over → fp resetten. Veldnamen via
+                    # _va_fp_field_names; waarden via ?-params.
                     await conn.execute(
                         "UPDATE fiscale_params SET "
                         f"{fp_bedrag_field} = 0, "
                         f"{fp_termijnen_field} = 11 "
                         "WHERE jaar = ?",
                         (va_jaar,),
+                    )
+                else:
+                    # Andere active VA blijft over (manual of andere
+                    # parsed) — sync fp naar die rij. Voorkomt stale fp
+                    # als de net-gedelete'de rij de bron was van fp en
+                    # er nog een handmatige rij bestond met andere bedrag.
+                    await conn.execute(
+                        "UPDATE fiscale_params SET "
+                        f"{fp_bedrag_field} = ?, "
+                        f"{fp_termijnen_field} = ? "
+                        "WHERE jaar = ?",
+                        (float(remaining['bedrag']),
+                         int(remaining['termijnen']), va_jaar),
                     )
 
             await conn.execute("COMMIT")

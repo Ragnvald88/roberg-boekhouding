@@ -24,6 +24,7 @@ Year-lock policy: bij definitief jaar wordt upload-knop disabled +
 tooltip (NIET hidden) — spec § 350. DB-mutaties zijn server-side al
 beschermd.
 """
+import logging
 from datetime import date
 from pathlib import Path
 
@@ -33,11 +34,17 @@ from components.layout import create_layout, page_title
 from components.utils import format_euro, format_datum_kort_nl
 from database import (
     DB_PATH,
+    YearLockedError,
     get_active_voorlopige_aanslag,
+    get_aangifte_documenten,
     get_fiscale_params,
     get_va_betalingen_detail,
+    remove_manual_voorlopige_aanslag,
+    upsert_manual_voorlopige_aanslag,
 )
 from services.dashboard import compute_va_termijnen_schedule
+
+log = logging.getLogger(__name__)
 
 AANGIFTE_DIR = DB_PATH.parent / 'aangifte'
 
@@ -122,17 +129,48 @@ def _show_pdf_preview(url: str, bestandsnaam: str) -> None:
     dlg.open()
 
 
-def _per_soort_state(beschikking, fp_bedrag: float,
-                     bank_total: float) -> str:
-    """Per-soort state: no_data | fp_only | fp_and_bank | active.
+def _per_soort_state(beschikking, fp_bedrag: float, bank_total: float,
+                     has_doc_unparsed: bool) -> str:
+    """Per-soort state — 6 mogelijke waarden:
 
-    Bepaalt welke card-vorm en disclaimer-tekst gerenderd wordt.
+    - parsed_active: active VA-rij met document_id != NULL (PDF geparsed)
+    - manual_active: active VA-rij met document_id IS NULL (handmatig)
+    - doc_unparsed:  aangifte_doc bestaat (categorie='voorlopige_aanslag',
+                     documenttype matcht soort) maar geen active VA-rij —
+                     parser is mislukt of nog niet gedraaid
+    - fp_only:       fp.voorlopige_aanslag_* > 0, geen doc, geen bank
+    - fp_and_bank:   fp > 0, geen doc, wel bank-betalingen
+    - no_data:       niets bekend
+
+    `has_doc_unparsed` moet door de caller bepaald worden via
+    get_aangifte_documenten + filtering op documenttype (`va_ib_beschikking`
+    of `va_zvw_beschikking`).
     """
     if beschikking is not None:
-        return 'active'
+        if beschikking.get('document_id') is not None:
+            return 'parsed_active'
+        return 'manual_active'
+    if has_doc_unparsed:
+        return 'doc_unparsed'
     if fp_bedrag > 0:
         return 'fp_and_bank' if bank_total > 0 else 'fp_only'
     return 'no_data'
+
+
+def _simplify_state_for_hero(state: str) -> str:
+    """Map granulaire per-soort state naar oude 4-state-set voor hero/CTAs.
+
+    parsed_active + manual_active → 'active' (voldoende data)
+    doc_unparsed                  → 'fp_only' (toon dezelfde "moet uploaden"
+                                    tekst — al staat de PDF er, hij is niet
+                                    verwerkt en de user moet ingrijpen)
+    fp_*/no_data                  → unchanged
+    """
+    if state in ('parsed_active', 'manual_active'):
+        return 'active'
+    if state == 'doc_unparsed':
+        return 'fp_only'
+    return state
 
 
 def _page_state(ib_state: str, zvw_state: str) -> str:
@@ -235,6 +273,17 @@ async def va_tracker_page(jaar: int):
     """Drill-down view voor de Voorlopige Aanslag van één boekjaar."""
     create_layout(f'Voorlopige aanslag {jaar}', '/va-tracker')
 
+    # Auto-backfill VA-PDFs voordat we renderen — anders ziet user "PDF
+    # nog niet geüpload" terwijl de PDF wel op disk staat (root-cause van
+    # 2026-05-06 user-feedback). Idempotent: bij geen ongekoppelde docs
+    # is dit een goedkope LEFT-JOIN. Wraps soft-fail (parse-error blokkeert
+    # geen page-render).
+    try:
+        from services.va_backfill import ensure_va_backfill
+        await ensure_va_backfill(DB_PATH, jaar)
+    except Exception:  # pragma: no cover — defense
+        log.exception('ensure_va_backfill faalde bij /va-tracker/%s', jaar)
+
     fp = await get_fiscale_params(DB_PATH, jaar)
     is_locked = (
         fp is not None
@@ -244,6 +293,31 @@ async def va_tracker_page(jaar: int):
     ib_b = await get_active_voorlopige_aanslag(DB_PATH, jaar, 'ib')
     zvw_b = await get_active_voorlopige_aanslag(DB_PATH, jaar, 'zvw')
     bank_detail = await get_va_betalingen_detail(DB_PATH, jaar)
+
+    # Detecteer aangifte_documenten zonder corresponderende active VA-rij —
+    # signaal voor "PDF gevonden, niet herkend"-state. Bewaar ook doc_id
+    # zodat de soort-card "Open PDF" kan tonen voor unparsed docs.
+    docs = await get_aangifte_documenten(DB_PATH, jaar)
+    ib_doc_id = next(
+        (d.id for d in docs
+         if d.categorie == 'voorlopige_aanslag'
+         and d.documenttype == 'va_ib_beschikking'),
+        None,
+    )
+    zvw_doc_id = next(
+        (d.id for d in docs
+         if d.categorie == 'voorlopige_aanslag'
+         and d.documenttype == 'va_zvw_beschikking'),
+        None,
+    )
+    ib_doc_unparsed = ib_doc_id is not None and ib_b is None
+    zvw_doc_unparsed = zvw_doc_id is not None and zvw_b is None
+    # Voor "Open PDF" in unparsed-state geven we doc_id alleen mee als de
+    # state inderdaad 'doc_unparsed' wordt — anders krijgt parsed_active
+    # de wrong doc_id. Het is veiliger om doc_id ALLEEN bij unparsed door
+    # te geven; bij parsed_active gebruikt soort-card beschikking.document_id.
+    ib_unparsed_doc_id = ib_doc_id if ib_doc_unparsed else None
+    zvw_unparsed_doc_id = zvw_doc_id if zvw_doc_unparsed else None
 
     today = date.today()
 
@@ -260,9 +334,13 @@ async def va_tracker_page(jaar: int):
     ib_betaald = sum(float(t['bedrag']) for t in ib_bank)
     zvw_betaald = sum(float(t['bedrag']) for t in zvw_bank)
 
-    ib_state = _per_soort_state(ib_b, ib_verplicht, ib_betaald)
-    zvw_state = _per_soort_state(zvw_b, zvw_verplicht, zvw_betaald)
-    page_state_str = _page_state(ib_state, zvw_state)
+    ib_state = _per_soort_state(
+        ib_b, ib_verplicht, ib_betaald, ib_doc_unparsed)
+    zvw_state = _per_soort_state(
+        zvw_b, zvw_verplicht, zvw_betaald, zvw_doc_unparsed)
+    page_state_str = _page_state(
+        _simplify_state_for_hero(ib_state),
+        _simplify_state_for_hero(zvw_state))
 
     # Totals voor hero
     totaal_verplicht = ib_verplicht + zvw_verplicht
@@ -344,23 +422,29 @@ async def va_tracker_page(jaar: int):
             is_locked=is_locked,
         )
 
-        # === Per-soort summary-cards (NIET expansions, side-by-side)
-        if page_state_str != 'empty':
-            with ui.row().classes('w-full gap-4 flex-wrap'):
-                with ui.column().classes('flex-1').style('min-width: 280px;'):
-                    await _render_soort_card(
-                        soort='ib', state=ib_state,
-                        beschikking=ib_b, verplicht=ib_verplicht,
-                        betaald=ib_betaald, bank_count=len(ib_bank),
-                        jaar=jaar, is_locked=is_locked,
-                    )
-                with ui.column().classes('flex-1').style('min-width: 280px;'):
-                    await _render_soort_card(
-                        soort='zvw', state=zvw_state,
-                        beschikking=zvw_b, verplicht=zvw_verplicht,
-                        betaald=zvw_betaald, bank_count=len(zvw_bank),
-                        jaar=jaar, is_locked=is_locked,
-                    )
+        # === Per-soort summary-cards (NIET expansions, side-by-side).
+        # Cards renderen ook in 'empty' page-state (als er geen data
+        # bekend is) — gebruiker moet altijd het "Bewerk handmatig"-pad
+        # zien om manueel een beschikking in te voeren.
+        with ui.row().classes('w-full gap-4 flex-wrap'):
+            with ui.column().classes('flex-1').style('min-width: 280px;'):
+                await _render_soort_card(
+                    soort='ib', state=ib_state,
+                    beschikking=ib_b, verplicht=ib_verplicht,
+                    betaald=ib_betaald, bank_count=len(ib_bank),
+                    jaar=jaar, is_locked=is_locked,
+                    ib_doc_unparsed_doc_id=ib_unparsed_doc_id,
+                    zvw_doc_unparsed_doc_id=zvw_unparsed_doc_id,
+                )
+            with ui.column().classes('flex-1').style('min-width: 280px;'):
+                await _render_soort_card(
+                    soort='zvw', state=zvw_state,
+                    beschikking=zvw_b, verplicht=zvw_verplicht,
+                    betaald=zvw_betaald, bank_count=len(zvw_bank),
+                    jaar=jaar, is_locked=is_locked,
+                    ib_doc_unparsed_doc_id=ib_unparsed_doc_id,
+                    zvw_doc_unparsed_doc_id=zvw_unparsed_doc_id,
+                )
 
         # === Termijnen / Indicatieve planning (alleen als bedragen bekend)
         # Per-soort indicatief-flag (Codex round-1 fix: was page-wide,
@@ -508,74 +592,95 @@ def _render_hero(*, state: str, jaar: int,
                 ).props('outline color=primary')
 
 
+_STATE_BADGE = {
+    'parsed_active': ('check_circle', 'positive', 'Beschikking geüpload'),
+    'manual_active': ('edit_note', 'info', 'Handmatige invoer'),
+    'doc_unparsed': ('warning', 'warning', 'PDF gevonden, niet herkend'),
+    'fp_only': ('warning', 'warning', 'Handmatig (uit Aangifte)'),
+    'fp_and_bank': ('warning', 'warning', 'Handmatig (uit Aangifte)'),
+    'no_data': ('cancel', 'grey-6', 'Geen data'),
+}
+
+
 async def _render_soort_card(*, soort: str, state: str,
                               beschikking: dict | None,
                               verplicht: float, betaald: float,
                               bank_count: int, jaar: int,
+                              ib_doc_unparsed_doc_id: int | None = None,
+                              zvw_doc_unparsed_doc_id: int | None = None,
                               is_locked: bool) -> None:
-    """Render één soort-summary-card (IB of ZVW). NIET expansion — alle
-    info altijd zichtbaar (user-feedback: "geen extra klikjes").
+    """Render één soort-summary-card (IB of ZVW).
 
-    User-feedback 2026-05-06: card moet expliciet tonen of PDF geüpload
-    is, en zo ja álle relevante velden uit de beschikking (aanslagnummer,
-    betalingskenmerk, dagtekening). Zo niet: prominent upload-CTA per
-    soort (niet alleen via hero) met deep-link naar /documenten.
+    State-driven rendering — 6 states (zie _per_soort_state):
+      parsed_active: PDF herkend, alle velden zichtbaar + Open-PDF + Bewerk
+      manual_active: handmatige invoer, velden zichtbaar + Bewerk + Verwijder
+      doc_unparsed:  PDF op disk maar parser faalt; toon Open-PDF + Bewerk
+      fp_only/fp_and_bank: legacy /aangifte-input, toon bedrag + Bewerk + Upload
+      no_data:       geen info, toon alleen Bewerk + Upload
+
+    Bewerk-handmatig is in alle states beschikbaar (mits niet locked).
     """
     meta = _SOORT_META[soort]
     soort_upper = soort.upper()
+    icon_name, color_class, badge_text = _STATE_BADGE.get(
+        state, _STATE_BADGE['no_data'])
+
+    # Pick the unparsed doc_id for the right soort (used for "Open PDF" in
+    # doc_unparsed-state).
+    unparsed_doc_id = (ib_doc_unparsed_doc_id if soort == 'ib'
+                       else zvw_doc_unparsed_doc_id)
+
     with ui.card().classes('w-full q-pa-md').style('height: 100%;'):
-        # === Header: icon + label + uploaded-status badge
+        # === Header: icon + label + status-badge
         with ui.row().classes('items-center gap-2 w-full'):
             ui.icon(meta['icon']).classes('text-primary')
             ui.label(meta['label']).classes(
                 'text-subtitle1 text-weight-medium')
             ui.space()
-            if state == 'active':
-                with ui.row().classes('items-center gap-1'):
-                    ui.icon('check_circle').classes('text-positive')
-                    ui.label('Beschikking geüpload').classes(
-                        'text-caption text-positive')
-            elif state == 'no_data':
-                with ui.row().classes('items-center gap-1'):
-                    ui.icon('cancel').classes('text-grey-6')
-                    ui.label('Geen data').classes('text-caption text-grey-6')
-            else:  # fp_only / fp_and_bank
-                with ui.row().classes('items-center gap-1'):
-                    ui.icon('warning').classes('text-warning')
-                    ui.label('PDF nog niet geüpload').classes(
-                        'text-caption text-warning')
+            with ui.row().classes('items-center gap-1'):
+                ui.icon(icon_name).classes(f'text-{color_class}')
+                ui.label(badge_text).classes(
+                    f'text-caption text-{color_class}')
 
         ui.separator().classes('q-my-sm')
 
-        # === No-data state — minimal + upload-CTA
+        # === Body — afhankelijk van state
         if state == 'no_data':
             ui.label(
                 f'Geen verwacht bedrag bekend voor {soort_upper}.'
             ).classes('text-sm text-grey-7')
             ui.label(
-                'Vul handmatig in via Aangifte, of upload de '
-                'beschikking-PDF.'
+                'Vul handmatig in (knop hieronder), of upload de '
+                'beschikking-PDF via Documenten.'
             ).classes('text-sm text-grey-7 q-mt-xs')
-            _render_per_soort_upload_button(soort, jaar, is_locked)
-            return
-
-        # === Active state — toon volledige beschikking-details
-        # Stacked layout (label-boven / value-onder) ipv justify-between:
-        # voorkomt dat lange waarden (kenmerk 19 chars, aanslagnummer
-        # 18+ chars) tegen het label aandrukken op smalle cards (Codex
-        # round-2 layout-responsiveness fix).
-        if state == 'active' and beschikking is not None:
-            aanslagnummer = beschikking.get('aanslagnummer', '?')
-            kenmerk_raw = beschikking.get('betalingskenmerk', '')
+        elif state == 'doc_unparsed':
+            ui.label(
+                'De PDF staat op schijf maar de parser kon er geen '
+                'beschikking-gegevens uit halen.'
+            ).classes('text-sm text-warning')
+            ui.label(
+                'Open de PDF om de waarden af te lezen, of bewerk '
+                'handmatig hieronder.'
+            ).classes('text-sm text-grey-7 q-mt-xs')
+            if verplicht > 0:
+                ui.label(
+                    f'Vorige bekend: {format_euro(verplicht)} '
+                    f'(uit Aangifte)'
+                ).classes('text-caption text-grey-6 q-mt-xs')
+        elif state in ('parsed_active', 'manual_active'):
+            # Volledige beschikking-velden — stacked layout voorkomt overflow
+            aanslagnummer = (beschikking.get('aanslagnummer', '?')
+                             if beschikking else '?')
+            kenmerk_raw = (beschikking.get('betalingskenmerk', '')
+                           if beschikking else '')
             kenmerk_disp = _format_kenmerk_display(kenmerk_raw)
-            dagtekening_str = '?'
-            if beschikking.get('dagtekening'):
+            dagtekening_str = '—'
+            if beschikking and beschikking.get('dagtekening'):
                 try:
                     dagtekening_str = format_datum_kort_nl(
                         date.fromisoformat(beschikking['dagtekening']))
                 except (TypeError, ValueError):
                     dagtekening_str = str(beschikking['dagtekening'])
-
             with ui.column().classes('w-full gap-2'):
                 _render_stacked_field('Bedrag', format_euro(verplicht),
                                       mono=False, emphasize=True)
@@ -586,22 +691,23 @@ async def _render_soort_card(*, soort: str, state: str,
                 _render_stacked_field('Dagtekening', dagtekening_str,
                                       mono=False)
         else:
-            # === fp_only / fp_and_bank — toon handmatig + bank-summary
+            # fp_only / fp_and_bank — handmatig bedrag uit /aangifte
             with ui.column().classes('w-full gap-1'):
                 with ui.row().classes('items-baseline justify-between w-full'):
                     ui.label('Handmatig bedrag').classes(
                         'text-sm text-grey-7')
                     ui.label(format_euro(verplicht)).classes(
                         'text-sm text-weight-medium')
-                ui.label('(uit Aangifte)').classes(
+                ui.label('(uit Aangifte — vul hieronder volledig in '
+                         'voor termijn-tracking)').classes(
                     'text-caption text-grey-6')
 
         ui.separator().classes('q-my-sm')
 
-        # === Betaald + Resterend + Progress (alle states behalve no_data)
+        # === Betaald + Resterend + Progress (alle states; ook bij no_data
+        # tonen 'Betaald €0' is niet stoorend en houdt layout consistent)
         resterend = max(verplicht - betaald, 0.0)
         pct = betaald / verplicht if verplicht > 0 else 0.0
-
         with ui.column().classes('w-full gap-1'):
             with ui.row().classes('items-baseline justify-between w-full'):
                 ui.label(
@@ -623,20 +729,53 @@ async def _render_soort_card(*, soort: str, state: str,
         ui.label(f'{int(pct * 100)}% betaald').classes(
             'text-caption text-grey-7')
 
-        # === Footer-actie: Open PDF (active) of Upload-CTA (anders)
-        if state == 'active' and beschikking is not None \
-                and beschikking.get('document_id'):
-            resolved = await _resolve_doc_url_and_name(
-                beschikking['document_id'])
-            if resolved is not None:
-                doc_url, doc_name = resolved
-                ui.button(
-                    'Open PDF', icon='picture_as_pdf',
-                    on_click=lambda u=doc_url, n=doc_name: _show_pdf_preview(
-                        u, n),
-                ).props('flat dense color=primary').classes('q-mt-sm')
-        elif state in ('fp_only', 'fp_and_bank'):
-            _render_per_soort_upload_button(soort, jaar, is_locked)
+        # === Footer-actions — varieert per state
+        with ui.row().classes('w-full gap-2 q-mt-sm flex-wrap'):
+            # Open PDF — voor parsed_active EN doc_unparsed
+            doc_id_for_open = None
+            if state == 'parsed_active' and beschikking is not None:
+                doc_id_for_open = beschikking.get('document_id')
+            elif state == 'doc_unparsed':
+                doc_id_for_open = unparsed_doc_id
+            if doc_id_for_open:
+                resolved = await _resolve_doc_url_and_name(doc_id_for_open)
+                if resolved is not None:
+                    doc_url, doc_name = resolved
+                    ui.button(
+                        'Open PDF', icon='picture_as_pdf',
+                        on_click=lambda u=doc_url, n=doc_name:
+                            _show_pdf_preview(u, n),
+                    ).props('flat dense color=primary')
+
+            # Bewerk handmatig — in alle states (mits niet locked)
+            edit_btn = ui.button(
+                'Bewerk handmatig', icon='edit',
+                on_click=lambda s=soort, j=jaar, b=beschikking, v=verplicht:
+                    _open_edit_dialog(jaar=j, soort=s,
+                                      current_active=b, fp_bedrag=v),
+            ).props('flat dense color=primary')
+            if is_locked:
+                edit_btn.props('disable')
+                edit_btn.tooltip(
+                    'Jaar afgesloten — heropen via Jaarafsluiting voor '
+                    'wijzigingen')
+
+            # Manual-only: Verwijder handmatige invoer
+            if state == 'manual_active':
+                rm_btn = ui.button(
+                    'Verwijder handmatig', icon='delete',
+                    on_click=lambda s=soort, j=jaar:
+                        _confirm_remove_manual(jaar=j, soort=s),
+                ).props('flat dense color=negative')
+                if is_locked:
+                    rm_btn.props('disable')
+                    rm_btn.tooltip(
+                        'Jaar afgesloten — heropen via Jaarafsluiting')
+
+            # Upload-CTA — alleen in fp_*/no_data (in doc_unparsed staat de
+            # PDF al; user moet 'm bewerken of vervangen via /documenten)
+            if state in ('fp_only', 'fp_and_bank', 'no_data'):
+                _render_per_soort_upload_button(soort, jaar, is_locked)
 
 
 def _render_stacked_field(label: str, value: str,
@@ -778,3 +917,199 @@ def _render_termijn_status(row, *, is_active: bool) -> None:
         ).classes('text-caption text-negative')
     else:  # toekomst
         ui.label('toekomst').classes('text-caption text-grey')
+
+
+# === Edit-dialog + remove-confirm ============================================
+
+def _prefill_from_active(active: dict | None) -> dict:
+    """Pak prefill-waarden uit een active beschikking (parsed of manual).
+
+    Used als de user een 'Bewerk handmatig' opent op een soort waar al een
+    active rij bestaat — form pre-populates met de huidige waarden zodat de
+    user kan verfijnen i.p.v. opnieuw typen.
+    """
+    if active is None:
+        return {}
+    out = {
+        'aanslagnummer': active.get('aanslagnummer', '') or '',
+        'bedrag': float(active.get('bedrag') or 0.0),
+        'betalingskenmerk': active.get('betalingskenmerk', '') or '',
+        'termijnen': int(active.get('termijnen') or 11),
+    }
+    if active.get('dagtekening'):
+        try:
+            out['dagtekening'] = date.fromisoformat(active['dagtekening'])
+        except (TypeError, ValueError):
+            out['dagtekening'] = date.today()
+    return out
+
+
+def _open_edit_dialog(*, jaar: int, soort: str,
+                      current_active: dict | None,
+                      fp_bedrag: float) -> None:
+    """Open het 'Bewerk handmatig'-dialog voor één (jaar, soort).
+
+    Pre-fill priority:
+      1. current_active (parsed of manual) → alle velden
+      2. fp_bedrag        → alleen bedrag-veld
+      3. anders empty form (aanslagnr blank, termijnen=11, dagtekening=today)
+
+    Submit roept upsert_manual_voorlopige_aanslag aan en doet
+    ui.navigate.to (page-reload) zodat de hele page met nieuwe data
+    rendert. Bij ValueError: rode notify, dialog blijft open.
+    """
+    pre = _prefill_from_active(current_active)
+    soort_upper = soort.upper()
+    is_overwrite_parsed = (current_active is not None
+                           and current_active.get('document_id') is not None)
+
+    with ui.dialog() as dlg, ui.card().classes('w-full max-w-md q-pa-md'):
+        ui.label(
+            f'Handmatige beschikking — {soort_upper} {jaar}'
+        ).classes('text-h6')
+
+        if is_overwrite_parsed:
+            with ui.row().classes('items-start gap-2 q-mt-xs '
+                                  'items-center q-pa-sm').style(
+                    'background: var(--bg-warning-soft); '
+                    'border-radius: 6px;'):
+                ui.icon('warning').classes('text-warning')
+                ui.label(
+                    'Dit overschrijft de huidige PDF-data. De PDF blijft '
+                    'als archief — verwijder de handmatige invoer om de '
+                    'PDF-data te herstellen.'
+                ).classes('text-sm text-grey-8')
+
+        ui.label(
+            'Vul de gegevens van de Belastingdienst-beschikking in.'
+        ).classes('text-caption text-grey-7 q-mt-xs')
+
+        # Form fields
+        bedrag_input = ui.number(
+            label='Bedrag (€) *',
+            value=pre.get('bedrag') or float(fp_bedrag or 0.0) or None,
+            min=0.01, step=1.00, format='%.2f',
+        ).classes('w-full')
+        aanslag_input = ui.input(
+            label='Aanslagnummer *',
+            value=pre.get('aanslagnummer') or '',
+            placeholder='bv. 1244.12.646.H.60.01',
+        ).classes('w-full')
+        kenmerk_input = ui.input(
+            label='Betalingskenmerk (optioneel, 16 cijfers)',
+            value=pre.get('betalingskenmerk') or '',
+            placeholder='bv. 0124 4126 4706 0001',
+        ).classes('w-full')
+        with ui.row().classes('w-full gap-2 no-wrap'):
+            datum_input = ui.input(
+                label='Dagtekening',
+                value=(pre.get('dagtekening') or date.today()).isoformat(),
+                placeholder='YYYY-MM-DD',
+            ).classes('flex-1').props('type=date')
+            termijnen_input = ui.number(
+                label='Termijnen',
+                value=pre.get('termijnen') or 11,
+                min=1, max=12, step=1, format='%d',
+            ).classes('w-32')
+
+        async def on_save():
+            # Form-validation in UI (loud-fail; DB heeft eigen validators).
+            try:
+                bedrag = float(bedrag_input.value or 0)
+                aanslag = (aanslag_input.value or '').strip()
+                kenmerk = (kenmerk_input.value or '').strip()
+                term = int(termijnen_input.value or 11)
+                d_str = (datum_input.value or '').strip()
+                if not d_str:
+                    raise ValueError('Dagtekening verplicht')
+                dagtek = date.fromisoformat(d_str)
+            except (TypeError, ValueError) as ex:
+                ui.notify(f'Ongeldige invoer: {ex}', type='negative')
+                return
+
+            try:
+                result = await upsert_manual_voorlopige_aanslag(
+                    db_path=DB_PATH, jaar=jaar, soort=soort,
+                    aanslagnummer=aanslag, bedrag=bedrag,
+                    betalingskenmerk=kenmerk, dagtekening=dagtek,
+                    termijnen=term,
+                )
+            except YearLockedError as ex:
+                ui.notify(str(ex), type='warning')
+                return
+            except ValueError as ex:
+                ui.notify(str(ex), type='negative')
+                return
+            except Exception as ex:  # pragma: no cover — defense
+                log.exception('upsert_manual_voorlopige_aanslag faalde')
+                ui.notify(f'Onverwachte fout: {ex}', type='negative')
+                return
+
+            dlg.close()
+            action_label = ('bijgewerkt' if result['action'] == 'manual_updated'
+                            else 'opgeslagen')
+            ui.notify(
+                f'Handmatige {soort_upper}-beschikking {action_label} '
+                f'(€{bedrag:.0f}, {term} termijnen)',
+                type='positive',
+            )
+            # Reload zodat alle delen van de page met nieuwe DB-state renderen.
+            ui.navigate.to(f'/va-tracker/{jaar}')
+
+        with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
+            ui.button('Annuleren',
+                      on_click=dlg.close).props('flat')
+            ui.button('Opslaan', icon='save',
+                      on_click=on_save).props('color=primary unelevated')
+    dlg.open()
+
+
+def _confirm_remove_manual(*, jaar: int, soort: str) -> None:
+    """Dialog die bevestigt of de handmatige invoer mag worden verwijderd.
+
+    Uitleg: na verwijdering wordt het meest recente parsed-archief
+    geactiveerd (als bestaat), anders wordt fp gecleared. UI maakt deze
+    fall-back expliciet zodat de user begrijpt wat er gebeurt.
+    """
+    soort_upper = soort.upper()
+    with ui.dialog() as dlg, ui.card().classes('w-full max-w-sm q-pa-md'):
+        ui.label(
+            f'Handmatige {soort_upper}-invoer verwijderen?'
+        ).classes('text-h6')
+        ui.label(
+            'Als er een eerder PDF-resultaat in het archief staat, wordt '
+            'die automatisch hersteld. Anders blijft het bedrag op 0.'
+        ).classes('text-sm text-grey-7 q-mt-xs')
+
+        async def on_confirm():
+            try:
+                result = await remove_manual_voorlopige_aanslag(
+                    db_path=DB_PATH, jaar=jaar, soort=soort)
+            except YearLockedError as ex:
+                ui.notify(str(ex), type='warning')
+                return
+            except ValueError as ex:
+                ui.notify(str(ex), type='negative')
+                return
+            except Exception as ex:  # pragma: no cover — defense
+                log.exception('remove_manual_voorlopige_aanslag faalde')
+                ui.notify(f'Onverwachte fout: {ex}', type='negative')
+                return
+            dlg.close()
+            if result['action'] == 'restored_parsed':
+                ui.notify(
+                    f'Handmatige {soort_upper}-invoer verwijderd; '
+                    f'PDF-data hersteld vanuit archief.',
+                    type='positive')
+            else:
+                ui.notify(
+                    f'Handmatige {soort_upper}-invoer verwijderd.',
+                    type='info')
+            ui.navigate.to(f'/va-tracker/{jaar}')
+
+        with ui.row().classes('w-full justify-end gap-2 q-mt-md'):
+            ui.button('Annuleren',
+                      on_click=dlg.close).props('flat')
+            ui.button('Verwijderen', icon='delete',
+                      on_click=on_confirm).props('color=negative unelevated')
+    dlg.open()
