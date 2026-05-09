@@ -13,7 +13,11 @@ _KM_TARIEF_FALLBACK = 0
 
 # Activiteitscodes — single source of truth in domain.codes (UI-free).
 # Re-export here for backcompat with callers that import from this module.
-from domain.codes import CODES, ZERO_UREN_CODES as _ZERO_UREN_CODES
+from domain.codes import (
+    CODES,
+    ZERO_UREN_CODES as _ZERO_UREN_CODES,
+    derive_activiteit,
+)
 
 async def open_werkdag_dialog(on_save=None, werkdag=None, prefill: dict | None = None):
     """Open dialog for adding or editing a werkdag.
@@ -272,8 +276,14 @@ async def open_werkdag_dialog(on_save=None, werkdag=None, prefill: dict | None =
                 ui.notify('Vul een tarief in', type='warning')
                 return
             k = klant_data[kid]
-            code = code_select.value or 'WERKDAG'
-            activiteit = CODES.get(code, 'Waarneming dagpraktijk')
+            # Code: preserve '' explicit (build_code_options biedt '(geen)' aan
+            # in dropdown bij edit van een werkdag met code=''). None betekent
+            # 'no selection at all' (valt terug op WERKDAG default).
+            code = code_select.value if code_select.value is not None else 'WERKDAG'
+            activiteit = derive_activiteit(
+                code=code,
+                current_activiteit=werkdag.activiteit if is_edit else None,
+            )
 
             # Determine locatie text from selected location
             loc_id = locatie_select.value
