@@ -510,6 +510,96 @@ body {
 .q-card.dashboard-hero-tile.is-tekort {
     border-left: 3px solid var(--q-negative);
 }
+
+/* === Sprint K-vervolg — werkdag-popup redesign (2026-05-09)
+   Apple-stijl sheet, hergebruikt Sprint B/G design-tokens.
+   Alle selectors BUITEN @layer components voor Quasar-cascade-veiligheid. */
+.q-card.werkdag-dialog-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0;
+    overflow: hidden;
+    max-width: 680px;
+    width: 100%;
+}
+.werkdag-dialog-header {
+    padding: 20px 24px 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-height: 70px;
+}
+.werkdag-dialog-title {
+    font-size: 1.15rem;
+    font-weight: 650;
+    color: var(--text);
+}
+.werkdag-dialog-subtitle {
+    font-size: 0.9rem;
+    color: var(--muted);
+    min-height: 1.2em;
+}
+.werkdag-dialog-body {
+    padding: 20px 24px;
+}
+.werkdag-dialog-footer {
+    padding: 14px 24px 18px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+.werkdag-pattern-hint {
+    background: var(--bg-info-soft);
+    border: 1px solid rgba(37, 99, 235, 0.18);
+    border-radius: 10px;
+    padding: 10px 14px;
+    color: var(--muted);
+    font-size: 0.85rem;
+    line-height: 1.4;
+    margin-bottom: 16px;
+}
+.werkdag-locatie-caption {
+    color: var(--muted);
+    font-size: 0.85rem;
+    margin-top: 4px;
+}
+.werkdag-totaal-strook {
+    background: var(--accent-soft);
+    border: 1px solid rgba(15, 118, 110, 0.18);
+    border-radius: 10px;
+    padding: 14px 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-top: 4px;
+}
+.werkdag-totaal-label {
+    color: var(--text);
+    font-size: 0.95rem;
+    font-weight: 600;
+}
+.werkdag-totaal-breakdown {
+    color: var(--muted);
+    font-size: 0.85rem;
+    font-variant-numeric: tabular-nums;
+    word-wrap: break-word;
+}
+.werkdag-totaal-bedrag {
+    color: var(--accent);
+    font-size: 1.25rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+.q-field.werkdag-textarea .q-field__native {
+    min-height: 36px;
+    max-height: 96px;
+    overflow-y: auto;
+}
 ''', shared=True)
 
 # Sprint B: Google Fonts CDN-link voor JetBrains Mono verwijderd —
