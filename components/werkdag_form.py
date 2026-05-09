@@ -261,6 +261,21 @@ async def open_werkdag_dialog(on_save=None, werkdag=None, prefill: dict | None =
                         code_select.value = code_key
                         break
 
+        # Pattern-mode (vanuit /agenda Bevestigen-flow): velden read-only.
+        # confirm_expected accepteert geen overrides; user-edits zouden
+        # anders stil verloren gaan. Datum blijft editable zodat de
+        # gebruiker op een andere dag kan bevestigen.
+        if pattern_id is not None:
+            klant_select.props('disable')
+            locatie_select.props('disable')
+            code_select.props('disable')
+            uren_input.props('readonly')
+            tarief_input.props('readonly')
+            km_input.props('readonly')
+            km_tarief_input.props('readonly')
+            urennorm_check.props('disable')
+            opmerking_input.props('readonly')
+
         # Initial calculation
         update_totaal()
 
@@ -367,8 +382,13 @@ async def open_werkdag_dialog(on_save=None, werkdag=None, prefill: dict | None =
                     'Opslaan & Nieuw', icon='add',
                     on_click=lambda: save(and_new=True),
                 ).props('outline color=primary')
+            # Pattern-mode toont "Bevestigen" ipv "Opslaan" zodat het
+            # visueel duidelijk is dat dit geen vrije save maar een patroon-
+            # bevestiging is.
+            primary_label = 'Bevestigen' if pattern_id is not None else 'Opslaan'
+            primary_icon = 'check' if pattern_id is not None else 'save'
             ui.button(
-                'Opslaan', icon='save',
+                primary_label, icon=primary_icon,
                 on_click=lambda: save(and_new=False),
             ).props('color=primary')
 
